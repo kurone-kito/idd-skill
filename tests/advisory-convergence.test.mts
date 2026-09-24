@@ -111,12 +111,26 @@ function baseOptions(
   };
 }
 
+// kurone-kito/idd-skill#3258: a recognized, clean `ccr-overview-v2` body
+// with no "Previously missed" section -- the default body every
+// `copilotReview()` call below now carries unless it explicitly overrides
+// `body`. Before #3258, an omitted body classified as `unrecognized`,
+// which the fail-closed rule this issue adds would now block; giving the
+// vast majority of existing fixtures (which only care about `itemCount`/
+// threads/claim/waiver evidence, not body-shape parsing) a minimal
+// recognized shape keeps them testing what they always tested. Tests that
+// specifically exercise body-shape parsing pass an explicit `body:`
+// override, which wins (spread after this default).
+const MINIMAL_V2_REVIEW_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n';
+
 function copilotReview(overrides: Record<string, unknown> = {}) {
   return {
     author: { login: COPILOT_LOGIN },
     submittedAt: RECENT,
     commitId: HEAD,
     itemCount: 0,
+    body: MINIMAL_V2_REVIEW_BODY,
     ...overrides,
   };
 }
@@ -2346,13 +2360,19 @@ test('reasons: itemCount 0 with NO suppressed-comments section still converges n
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: '<details>\n<summary>Some unrelated collapsed section</summary>\nnothing suppressed here\n</details>',
+          // #3258: v2-marker-prefixed so this stays a RECOGNIZED shape --
+          // the unrelated collapsed section must not be mistaken for a
+          // real "Previously missed" summary, which is what this test
+          // actually proves (a recognized-shape body with an unrelated
+          // section still converges).
+          body: `${MINIMAL_V2_REVIEW_BODY}\n<details>\n<summary>Some unrelated collapsed section</summary>\nnothing suppressed here\n</details>`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2360,15 +2380,22 @@ test('reasons: itemCount 0 with NO suppressed-comments section still converges n
   assert.deepEqual(verdict.reasons, []);
 });
 
-test('reasons: itemCount 0 with an empty/absent body still converges normally (no false block)', () => {
+test('reasons: itemCount 0 with a literal empty body does NOT converge (fail-closed, unrecognized shape, #3258)', () => {
+  // Before #3258, an absent/empty body silently converged (there was
+  // nothing to false-block on). The Groom-hearing maintainer decision
+  // reverses that: a Copilot review body matching no known shape is now
+  // fail-closed until a trusted review-ack covers it.
   const verdict = computeAdvisoryConvergenceVerdict(
-    baseInputs({ reviews: [copilotReview({ itemCount: 0 })] }), // no body key
+    baseInputs({ reviews: [copilotReview({ itemCount: 0, body: '' })] }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
   assert.equal(verdict.review.suppressedCount, 0);
-  assert.equal(verdict.converged, true);
-  assert.equal(verdict.ready, true);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /bodyShape: unrecognized/);
 });
 
 test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summary> tag does NOT false-block (prose-quoted-example class, #1614)', () => {
@@ -2377,18 +2404,22 @@ test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summ
   // real GitHub-rendered suppressed-comments heading -- the parser must
   // require the literal <summary>...</summary> wrapper, not a bare
   // substring match, or reviewing THIS pull request could self-block it.
+  // #3258: v2-marker-prefixed so the body is a recognized shape and this
+  // test still isolates the prose-quoting question from the new
+  // unrecognized-shape fail-closed rule.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: 'nit: the test fixture hardcodes the string "Suppressed comments (1)" -- consider extracting it into a shared constant.',
+          body: `${MINIMAL_V2_REVIEW_BODY}\nnit: the test fixture hardcodes the string "Suppressed comments (1)" -- consider extracting it into a shared constant.`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2399,19 +2430,21 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a code 
   // A reviewer discussing this exact detection logic could quote the real
   // HTML tags back in inline code or a fenced block rather than plain
   // prose -- the <summary> anchoring alone does not exclude that case;
-  // parseSuppressedCommentCount must strip code regions first.
+  // parseSuppressedCommentCount must strip code regions first. #3258:
+  // v2-marker-prefixed for the same reason as the test above.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: 'consider guarding against a body that contains `<summary>Suppressed comments (1)</summary>` as a quoted example rather than a real heading.',
+          body: `${MINIMAL_V2_REVIEW_BODY}\nconsider guarding against a body that contains \`<summary>Suppressed comments (1)</summary>\` as a quoted example rather than a real heading.`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2425,6 +2458,7 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a fence
         copilotReview({
           itemCount: 0,
           body: [
+            MINIMAL_V2_REVIEW_BODY,
             'Example of the shape to guard against:',
             '```html',
             '<summary>Suppressed comments (1)</summary>',
@@ -2436,6 +2470,7 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a fence
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
@@ -2543,13 +2578,16 @@ test('review: a review body that merely QUOTES the error template inside other p
   // quote the sentence back in ordinary review prose alongside other
   // commentary -- whole-body equality (rather than a substring search)
   // already excludes that case, the same protection #1880's suppressed-
-  // comments heading needed explicit code-region stripping for.
+  // comments heading needed explicit code-region stripping for. #3258:
+  // v2-marker-prefixed so this stays a recognized shape, isolating the
+  // prose-quoting question from the new unrecognized-shape fail-closed
+  // rule.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: `nit: consider quoting "${COPILOT_ERROR_REVIEW_BODY}" verbatim in the regression test instead of paraphrasing it.`,
+          body: `${MINIMAL_V2_REVIEW_BODY}\nnit: consider quoting "${COPILOT_ERROR_REVIEW_BODY}" verbatim in the regression test instead of paraphrasing it.`,
         }),
       ],
     }),
@@ -2558,6 +2596,7 @@ test('review: a review body that merely QUOTES the error template inside other p
   assertValidVerdict(verdict);
   assert.equal(verdict.review.found, true);
   assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
@@ -2578,6 +2617,290 @@ test('review: #1880 suppressed-comments case is unaffected by the #3015 error-re
   assert.equal(verdict.review.satisfied, false);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, false);
+});
+
+// --- 9e. Copilot review-body shape classification (#3258) ------------------
+//
+// Fixtures trimmed (badge-image `<picture>` markup stripped, structural text
+// kept) from real Copilot review bodies fetched live via
+// `gh api repos/kurone-kito/idd-skill/pulls/<n>/reviews/<id>`.
+
+// PR #3196 review 5288008196 (v2, "Previously missed (1)", 2026-09-23).
+const V2_PREVIOUSLY_MISSED_1_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '### Needs a closer look',
+  '',
+  'Address the documented instruction ambiguities and add the missing',
+  'policy-schema coverage.',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary>Add schema tests for valid and malformed union values</summary>',
+  '',
+  '`schemas/policy.schema.json:353`',
+  '',
+  'The new union constraints are not exercised through the policy schema.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+// PR #3174 review 5269880575 (v2, "Resolved since last review (2)" +
+// "Previously missed (2)", 2026-09-21) -- the resolved section's own count
+// (2) coincidentally matches the previously-missed count; suppressedCount
+// must come from "Previously missed" only.
+const V2_RESOLVED_AND_PREVIOUSLY_MISSED_2_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '### Needs a closer look',
+  '',
+  'Add cursor-repeat guards to both pagination implementations to prevent',
+  'hangs on malformed or replayed responses.',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+  '',
+  '<details>',
+  '<summary><strong>Resolved since last review (2)</strong></summary>',
+  '',
+  '- [Move hostname options before graphql to support GHES](#discussion_r4064687646)',
+  '- [Place gh api hostname flags before the graphql endpoint](#discussion_r4064687609)',
+  '</details>',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (2)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary>Generated helper can loop forever on repeated pagination cursors</summary>',
+  '',
+  '`scripts/authoring-owner-provenance.mjs:633`',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Pagination loop fails to reject repeated cursors</summary>',
+  '',
+  '`src/scripts/authoring-owner-provenance.mts:775`',
+  '</details>',
+  '</details>',
+].join('\n');
+
+// PR #3095 review 5233995834 (legacy, "### Suppressed comments (1)" inside
+// a "Review details" block, 2026-09-17).
+const LEGACY_SUPPRESSED_1_BODY = [
+  '### Needs a closer look',
+  '',
+  'The regular-comment carve-out lacks a corresponding response and',
+  'transition path for resolving maintainer decisions.',
+  '',
+  '<details>',
+  '<summary>Pull request overview</summary>',
+  '',
+  'Updates E1 review-item filtering to retain plain comments awaiting',
+  'maintainer decisions.',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (1)',
+  '',
+  '**idd-template/.github/instructions/idd-review-snapshot.instructions.md:219**',
+  '* Once this clause keeps a plain comment with an AMD reply in',
+  '  `ReviewItems_snapshot`, the E6 re-entry state machine still only',
+  '  covers an resolving maintainer-decision thread.',
+  '',
+  '- **Files reviewed:** 4/4 changed files',
+  '- **Comments generated:** 0',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
+
+// PR #3108 review 5236485791 (legacy, "### Suppressed comments (3)" with a
+// nested "**Previously missed (3)**" bold line, 2026-09-20) -- the nested
+// line must NOT be separately added: suppressedCount stays 3, not 6.
+const LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY = [
+  '### Needs a closer look',
+  '',
+  'There are a few small but real edge-case mismatches that can cause',
+  'incorrect host selection behavior under valid inputs.',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (3)',
+  '',
+  '**Previously missed (3)** — in code that has not changed since the',
+  'last review.',
+  '',
+  '**idd-template/.github/workflows/idd-advisory-convergence.yml:591**',
+  '* This step intends to mirror the trim check, but treats a',
+  '  whitespace-only value as set.',
+  '**scripts/gh-exec.mjs:116**',
+  '* Same issue as the TypeScript source.',
+  '**src/scripts/gh-exec.mts:165**',
+  '* Only treats a literal flag token as already having a hostname.',
+  '',
+  '- **Files reviewed:** 4/4 changed files',
+  '- **Comments generated:** 0 new',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
+
+for (const [label, body, expectedSuppressedCount, expectedShape] of [
+  [
+    'PR #3196 review 5288008196 (v2 Previously missed)',
+    V2_PREVIOUSLY_MISSED_1_BODY,
+    1,
+    'overview-v2',
+  ],
+  [
+    'PR #3174 review 5269880575 (v2, Resolved+Previously missed both (2))',
+    V2_RESOLVED_AND_PREVIOUSLY_MISSED_2_BODY,
+    2,
+    'overview-v2',
+  ],
+  [
+    'PR #3095 review 5233995834 (legacy Review details)',
+    LEGACY_SUPPRESSED_1_BODY,
+    1,
+    'overview-legacy',
+  ],
+  [
+    'PR #3108 review 5236485791 (legacy, nested Previously missed not double-counted)',
+    LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY,
+    3,
+    'overview-legacy',
+  ],
+] as const) {
+  test(`review-body shape (#3258): ${label} -> suppressedCount ${expectedSuppressedCount}, no ack does not converge`, () => {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({ reviews: [copilotReview({ itemCount: 0, body })] }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    assert.equal(verdict.review.bodyShape, expectedShape);
+    assert.equal(verdict.review.suppressedCount, expectedSuppressedCount);
+    assert.equal(verdict.review.satisfied, false);
+    assert.equal(verdict.converged, false);
+    assert.equal(verdict.ready, false);
+  });
+
+  test(`review-body shape (#3258): ${label} -> converges after a trusted review-ack posted after the review`, () => {
+    const ackAfterReview = '2026-07-11T10:30:00Z'; // after copilotReview()'s default RECENT submittedAt
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [copilotReview({ itemCount: 0, body })],
+        comments: [
+          {
+            author: { login: TRUSTED },
+            body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+            createdAt: ackAfterReview,
+          },
+        ],
+      }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    assert.equal(verdict.review.suppressedCount, expectedSuppressedCount);
+    assert.equal(verdict.review.satisfied, true);
+    assert.equal(verdict.converged, true);
+    assert.equal(verdict.ready, true);
+  });
+}
+
+test('review-body shape (#3258): a v2 body with NO "Previously missed" section still yields suppressedCount 0 and bodyShape overview-v2, satisfied', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: MINIMAL_V2_REVIEW_BODY })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+// A plausible but non-template Copilot error sentence -- differs from the
+// exact #3015 `COPILOT_ERROR_REVIEW_BODY` template, so `isCopilotErrorReviewBody`
+// does not match it either; it carries no v2/legacy signal, so it classifies
+// as `unrecognized`.
+const UNRECOGNIZED_SHAPE_BODY =
+  'Copilot was unable to complete this review due to an internal ' +
+  'processing error. Please retry the review request.';
+
+test('review-body shape (#3258): an on-HEAD Copilot review with an unrecognized body shape does NOT converge until a trusted review-ack exists', () => {
+  const withoutAck = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: UNRECOGNIZED_SHAPE_BODY })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(withoutAck);
+  assert.equal(withoutAck.review.bodyShape, 'unrecognized');
+  assert.equal(withoutAck.review.suppressedCount, 0);
+  assert.equal(withoutAck.review.satisfied, false);
+  assert.equal(withoutAck.converged, false);
+  assert.equal(withoutAck.ready, false);
+  assert.match(withoutAck.reasons.join('\n'), /bodyShape: unrecognized/);
+  assert.match(formatAssertNextActions(withoutAck), /unrecognized body shape/);
+
+  const ackAfterReview = '2026-07-11T10:30:00Z';
+  const withAck = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: UNRECOGNIZED_SHAPE_BODY })],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+          createdAt: ackAfterReview,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(withAck);
+  assert.equal(withAck.review.satisfied, true);
+  assert.equal(withAck.converged, true);
+  assert.equal(withAck.ready, true);
+});
+
+test('review-body shape (#3258): the same unrecognized body from a configured non-Copilot primaryBotLogin is NOT blocked by this rule', () => {
+  const nonCopilotLogin = 'coderabbitai[bot]';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: nonCopilotLogin },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: UNRECOGNIZED_SHAPE_BODY,
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: nonCopilotLogin }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
 });
 
 test('dispositionEvidence: exposes missingRegularCommentCount feeding sameHeadReroll.eligible, plus its missingThreadCount sibling', () => {
@@ -5978,7 +6301,10 @@ test('formatAssertNextActions is empty when the verdict is ready (#2142)', () =>
           submittedAt: RECENT,
           commitId: HEAD,
           itemCount: 0,
-          body: '',
+          // #3258: a recognized shape -- an empty body is now fail-closed
+          // (unrecognized), which this "verdict is ready" fixture must not
+          // trigger.
+          body: MINIMAL_V2_REVIEW_BODY,
         },
       ],
     }),
@@ -6181,7 +6507,10 @@ test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', ()
           submittedAt: RECENT,
           commitId: HEAD,
           itemCount: 0,
-          body: '',
+          // #3258: a recognized shape -- see the sibling
+          // formatAssertNextActions test above for why an empty body no
+          // longer fits this "ready" fixture.
+          body: MINIMAL_V2_REVIEW_BODY,
         },
       ],
     }),

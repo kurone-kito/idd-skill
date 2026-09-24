@@ -18,65 +18,51 @@
 // shared GitHub port adapter -- #2267, replacing the direct `ghGraphql`
 // call this file used before -- `protocol-helpers.mts`'s shared
 // `isCopilotReviewerLogin` (and, as of #3015, its sibling
-// `isCopilotErrorReviewBody`), and -- as of #1880 -- `markdown-code.mts`'s
-// shared `stripMarkdownCodeRegions`) so a read-only, low-dependency caller
-// like `rerun-advisory-convergence.mts` can import it without also pulling
-// in `advisory-convergence.mts`'s full claim/waiver/disposition machinery
-// -- see that file's own module-header "Reuse map" comment. `markdown-
-// code.mts` has no imports of its own, so this adds no heavy dependency
-// surface to that caller either.
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+// `isCopilotErrorReviewBody`, now re-exported there from
+// `copilot-review-body.mts`), and -- as of #1880, now via
+// `copilot-review-body.mts`'s shared classifier (#3258) -- Markdown
+// code-region stripping) so a read-only, low-dependency caller like
+// `rerun-advisory-convergence.mts` can import it without also pulling in
+// `advisory-convergence.mts`'s full claim/waiver/disposition machinery --
+// see that file's own module-header "Reuse map" comment.
+// `copilot-review-body.mts` itself only imports `markdown-code.mts` (which
+// has no imports of its own), so this adds no heavy dependency surface to
+// that caller either.
+import { classifyCopilotReviewBody } from './copilot-review-body.mjs';
 import {
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
 } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
-/** Matches GitHub Copilot's `<summary>Suppressed comments (N)</summary>`
- * heading, case-insensitively -- the only structured signal a suppressed
- * finding leaves in the review body (#1880). Anchored to the surrounding
- * `<summary>`/`</summary>` tags, not a bare `Suppressed comments (N)`
- * substring search: this file's own diff (this pattern, its doc comments,
- * and the regression test fixture) now contains that literal phrase, and
- * an advisory bot reviewing THIS pull request could quote it back in
- * ordinary prose (e.g. discussing the test fixture) without wrapping it in
- * the real HTML tags -- the same prose-quoted-example false-positive class
- * a marker parser elsewhere in this codebase already hit once
- * (kurone-kito/idd-skill#1614). Requiring the literal tag pair keeps a
- * plain-text mention from matching -- but is not sufficient alone: see
- * {@link parseSuppressedCommentCount}'s own code-region stripping for the
- * remaining case (the literal tags quoted INSIDE a code span/fence). */
-const SUPPRESSED_COMMENTS_HEADING_PATTERN =
-  /<summary>\s*suppressed comments \((\d+)\)\s*<\/summary>/i;
+// Re-exported (#3258) so an existing importer of the review-body shape
+// classifier from THIS file (its original documented home per the issue's
+// Proposed change) gets the same symbols `copilot-review-body.mts` exports
+// directly.
+export { classifyCopilotReviewBody } from './copilot-review-body.mjs';
 /**
- * Parse the `Suppressed comments (N)` count GitHub Copilot embeds in a
- * review's top-level body when it folds a low-confidence finding into a
- * collapsed `<details>` block instead of posting it as a separate review
+ * Parse the thread-less ("suppressed") finding count GitHub Copilot embeds
+ * in a review's top-level body instead of posting it as a separate review
  * comment (kurone-kito/idd-skill#1880). Returns `0` when the body carries
- * no such section, including an absent/empty/unparseable body -- unlike
- * `itemCount`, there is no distinct "unknown" state to preserve here: a
- * missing section unambiguously means zero suppressed comments.
+ * no recognized such section, including an absent/empty/unparseable body,
+ * or a recognized-but-unrelated body shape -- unlike `itemCount`, there is
+ * no distinct "unknown" state to preserve here: no recognized section
+ * unambiguously means zero (thread-less) suppressed comments this function
+ * can attribute to a specific count.
  *
- * Strips fenced/inline Markdown code regions (`stripMarkdownCodeRegions`,
- * markdown-code.mts) before matching, so a review body that quotes the
- * literal `<summary>Suppressed comments (N)</summary>` tag pair inside
- * backticks or a fenced code block (e.g. an advisory bot discussing this
- * exact detection logic, as happened on this PR's own #1884 Copilot
- * review) is not mistaken for a real suppressed-comments section -- the
- * `<summary>`/`</summary>` anchoring above narrows the prose-quoting risk
- * but does not by itself exclude a code-quoted example; stripping the code
- * regions first closes that gap the same way #1614's marker-parser fix did.
- * Real GitHub-rendered `<details>`/`<summary>` markup is raw HTML, never
- * inside a code span/fence, so this never blanks the genuine heading.
+ * Delegates to {@link classifyCopilotReviewBody} (copilot-review-body.mts,
+ * #3258), which recognizes both the current `ccr-overview-v2` shape's
+ * `Previously missed (N)` section and the legacy overview's `Suppressed
+ * comments (N)` heading (plus the original, even-older bare August
+ * `<summary>Suppressed comments (N)</summary>` form the original #1880 fix
+ * matched) -- see that module for the full shape-detection rationale,
+ * including the code-region-stripping step that keeps a review body
+ * merely QUOTING one of these patterns (e.g. an advisory bot discussing
+ * this exact detection logic, as happened on this PR's own #1884 Copilot
+ * review) from being mistaken for a real section.
  */
 export function parseSuppressedCommentCount(body) {
-  if (typeof body !== 'string' || body.length === 0) return 0;
-  const match = stripMarkdownCodeRegions(body).match(
-    SUPPRESSED_COMMENTS_HEADING_PATTERN,
-  );
-  if (!match) return 0;
-  const count = Number(match[1]);
-  return Number.isFinite(count) ? count : 0;
+  return classifyCopilotReviewBody(body).suppressedCount;
 }
 /**
  * `true` when `author` is a verified Copilot (or the configured primary
@@ -142,6 +128,7 @@ export function resolveLatestCopilotReviewClause(
       itemCount: null,
       submittedAt: '',
       suppressedCount: 0,
+      bodyShape: null,
       satisfied: false,
     };
   }
@@ -152,24 +139,27 @@ export function resolveLatestCopilotReviewClause(
       ? Number(latest.itemCount)
       : null
     : null;
-  // #1880: gated by `matchesHead`, mirroring `itemCount` above -- moot for
-  // `satisfied` itself (already gated by `matchesHead &&`), but keeps an
-  // off-HEAD review's report fields consistent with each other rather than
-  // parsing a body this clause is about to ignore anyway.
-  const suppressedCount = matchesHead
-    ? parseSuppressedCommentCount(latest.body)
-    : 0;
+  // #1880 / #3258: gated by `matchesHead`, mirroring `itemCount` above --
+  // moot for `satisfied` itself (already gated by `matchesHead &&`), but
+  // keeps an off-HEAD review's report fields consistent with each other
+  // rather than classifying a body this clause is about to ignore anyway.
+  // Classified once so `suppressedCount` and `bodyShape` cannot disagree.
+  const bodyClassification = matchesHead
+    ? classifyCopilotReviewBody(latest.body)
+    : null;
+  const suppressedCount = bodyClassification?.suppressedCount ?? 0;
   return {
     found: true,
     // #2050: also gated by `matchesHead` -- an off-HEAD review's own id is
     // never meaningful evidence for the caller's thread-scoping, mirroring
-    // `itemCount`/`suppressedCount` above.
+    // `itemCount`/`suppressedCount`/`bodyShape` above.
     reviewId: matchesHead ? String(latest.id ?? '') : '',
     commitId,
     matchesHead,
     itemCount,
     submittedAt: String(latest.submittedAt ?? ''),
     suppressedCount,
+    bodyShape: bodyClassification?.shape ?? null,
     satisfied: matchesHead && itemCount === 0 && suppressedCount === 0,
   };
 }
