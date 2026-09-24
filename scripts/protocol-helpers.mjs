@@ -3392,6 +3392,21 @@ const EXACT_COPILOT_REVIEWER_LOGINS = new Set([
   'copilot-pull-request-reviewer[bot]',
 ]);
 /**
+ * Normalize a configured `primaryBotLogin` for comparison against
+ * {@link DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN}: trim, lower-case, and fall
+ * back to the default when blank. Shared by {@link isCopilotReviewerLogin}
+ * and `findLastCopilotReviewCommit` (kurone-kito/idd-skill#3265 E2 review)
+ * so the two "is this the default Copilot bot, or a configured non-Copilot
+ * one" decisions cannot drift apart.
+ */
+function normalizePrimaryBotLogin(primaryBotLogin) {
+  return (
+    String(primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
+  );
+}
+/**
  * Match a review/reviewer login against the configured primary advisory bot.
  *
  * `primaryBotLogin` defaults to Copilot so existing callers stay behavior-
@@ -3409,10 +3424,7 @@ export function isCopilotReviewerLogin(
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
-  const configured =
-    String(primaryBotLogin ?? '')
-      .trim()
-      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const configured = normalizePrimaryBotLogin(primaryBotLogin);
   if (configured === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
     return EXACT_COPILOT_REVIEWER_LOGINS.has(normalized);
   }
@@ -3452,12 +3464,9 @@ export function findLastCopilotReviewCommit(
   reviews,
   primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ) {
-  const configuredBotLogin =
-    String(primaryBotLogin ?? '')
-      .trim()
-      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const isDefaultCopilotBot =
-    configuredBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+    normalizePrimaryBotLogin(primaryBotLogin) ===
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const latest = reviews
     .filter((review) => {
       if (
