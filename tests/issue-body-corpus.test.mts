@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  bodySha256,
   type CorpusEntry,
   type CorpusIndexEntry,
   computeExpectedVerdict,
@@ -219,6 +220,53 @@ test('every corpus entry has a unique id matching its own filename', () => {
       `${id}.json's own "id" field ("${entry.id}") does not match its filename`,
     );
   }
+});
+
+// #3288 C1 review: --refresh's skip logic (snapshot-issue-body-corpus.mts)
+// keys on the stored bodySha256 matching a freshly recomputed one -- a
+// hand-edited or stale hash would silently break that refresh contract with
+// nothing else catching it, since the verdict-comparison test above only
+// ever reads the stored body, never re-derives its own hash.
+test("every corpus entry's bodySha256 matches sha256(body)", () => {
+  const mismatches: string[] = [];
+  for (const entry of loadAllEntries()) {
+    const recomputed = bodySha256(entry.body);
+    if (recomputed !== entry.bodySha256) {
+      mismatches.push(
+        `${entry.id}: stored bodySha256=${entry.bodySha256} recomputed=${recomputed}`,
+      );
+    }
+  }
+  assert.deepEqual(mismatches, [], mismatches.join('\n'));
+});
+
+// #3288 C1 review: the corpus's own "expected verdict matches today's
+// helpers" sweep below only ever checks frozen-vs-recomputed EQUALITY, so a
+// future gate change that makes a "negative" entry start passing would be
+// silently accepted as a new frozen "expected" via --update-expected,
+// defeating this category's whole selection purpose ("the current helpers
+// still rate it non-ready") with nothing to notice. This test checks that
+// purpose directly, against each entry's OWN currently-stored "expected"
+// (not a live recompute -- that is the sweep below's job).
+test('every "negative" entry\'s stored expected verdict still rates non-ready', () => {
+  const stillReady: string[] = [];
+  for (const entry of loadAllEntries()) {
+    if (entry.category !== 'negative') {
+      continue;
+    }
+    const rendersReady =
+      entry.expected.viability.passed &&
+      Object.values(entry.expected.triage).every((result) => result !== 'fail');
+    if (rendersReady) {
+      stillReady.push(entry.id);
+    }
+  }
+  assert.deepEqual(
+    stillReady,
+    [],
+    `"negative" entries whose stored expected now rates ready (violates ` +
+      `their own selection rule): ${stillReady.join(', ')}`,
+  );
 });
 
 test("every corpus entry's stored expected verdict matches today's A4/A4.5 helpers", () => {
