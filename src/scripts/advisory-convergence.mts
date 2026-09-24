@@ -1823,8 +1823,32 @@ export function computeAdvisoryConvergenceVerdict(
   // `review-ack` covers it.
   const suppressedClauseSatisfied =
     review.suppressedCount === 0 || hasValidReviewAck;
+  // #3258 (Groom-hearing maintainer decision): a Copilot review body that
+  // matches none of `classifyCopilotReviewBody`'s known shapes
+  // (review-clause.mts / copilot-review-body.mts) is treated fail-closed --
+  // Clause 1 stays unsatisfied until a valid trusted `review-ack` for HEAD
+  // exists, the same `hasValidReviewAck` check `suppressedClauseSatisfied`
+  // above already uses. `unrecognized` always reports `suppressedCount: 0`
+  // (classifyCopilotReviewBody's own contract), so this term and
+  // `suppressedClauseSatisfied` above are mutually exclusive on that
+  // dimension -- this term is the ONLY thing that can fail an
+  // otherwise-clean (`itemCount: 0`, `suppressedCount: 0`) review shaped
+  // this way. Scoped to the Copilot default only: a configured non-Copilot
+  // `primaryBotLogin` (the `external-bot` review policy, #2137) has no
+  // known body shapes at all (that bot's reviews may legitimately have an
+  // empty body, e.g. CodeRabbit's reply-only reviews), so this rule leaves
+  // that case untouched, matching today's behavior.
+  const isCopilotDefaultPrimaryBot =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const unrecognizedBodyBlocksClause =
+    isCopilotDefaultPrimaryBot &&
+    review.bodyShape === 'unrecognized' &&
+    !hasValidReviewAck;
   const reviewSatisfied =
-    review.matchesHead && itemCountClauseSatisfied && suppressedClauseSatisfied;
+    review.matchesHead &&
+    itemCountClauseSatisfied &&
+    suppressedClauseSatisfied &&
+    !unrecognizedBodyBlocksClause;
 
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
   // `threadClause` and the disposition-aware overrides above are available
@@ -1864,10 +1888,33 @@ export function computeAdvisoryConvergenceVerdict(
     review.suppressedCount > 0 && !hasValidReviewAck
       ? '; post a trusted review-ack marker after this review to cover the suppressed comment(s)'
       : '';
+  // #3258: named once, appended (never substituted) into whichever branch
+  // below fires, so an unrecognized-body review that ALSO carries posted
+  // items still reports its item count -- see the module-header rationale
+  // on `unrecognizedBodyBlocksClause` above for why this term and the
+  // `itemCount === 0 && suppressedCount > 0` branch immediately below are
+  // mutually exclusive (an `unrecognized` shape always reports
+  // `suppressedCount: 0`).
+  const unrecognizedBodySuffix = unrecognizedBodyBlocksClause
+    ? ' (this review also carries an unrecognized body shape, bodyShape: unrecognized -- a trusted review-ack is required regardless of thread disposition)'
+    : '';
   if (!scopeBlocksConvergenceEval && !pending && !reviewSatisfied) {
     if (review.itemCount === 0 && review.suppressedCount > 0) {
       reasons.push(
         `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread${ackSuffix}`,
+      );
+    } else if (
+      review.itemCount === 0 &&
+      review.suppressedCount === 0 &&
+      unrecognizedBodyBlocksClause
+    ) {
+      // #3258 (Groom-hearing maintainer decision): an otherwise-clean
+      // review (0 posted items, 0 suppressed) whose body shape this gate
+      // does not recognize at all -- named explicitly rather than falling
+      // into the generic `itemCountReason` wording below, which would
+      // read as a contradiction ("0 actionable items" yet not converged).
+      reasons.push(
+        `latest ${primaryBotLogin} review on current HEAD has a body shape this gate does not recognize (bodyShape: unrecognized) -- treated as fail-closed until a trusted review-ack marker is posted for it`,
       );
     } else {
       const itemCountReason =
@@ -1904,8 +1951,8 @@ export function computeAdvisoryConvergenceVerdict(
         : `only ${latestReviewThreadIds.size} of ${review.itemCount} items have ${primaryBotLogin}-authored review-thread evidence`;
       reasons.push(
         zeroThreadEvidence || partialResolvedCoverage
-          ? `${itemCountReason}${suppressedSuffix}${ackSuffix} -- ${threadEvidenceGap}; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
-          : `${itemCountReason}${suppressedSuffix}${ackSuffix}`,
+          ? `${itemCountReason}${suppressedSuffix}${ackSuffix}${unrecognizedBodySuffix} -- ${threadEvidenceGap}; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+          : `${itemCountReason}${suppressedSuffix}${ackSuffix}${unrecognizedBodySuffix}`,
       );
     }
   }
@@ -4363,13 +4410,25 @@ export function collectAssertNextActions(
     });
   }
 
-  if (verdict.review.suppressedCount > 0) {
+  // #3258: reuses the existing ACK_SUPPRESSED token (no new schema-enum /
+  // pinned-token-list entry) for the sibling "unrecognized body shape"
+  // fail-closed case -- both point at the same recovery action (read the
+  // body, post a trusted review-ack), so a shape-naming summary is enough
+  // to satisfy "the review-ack next action names the unrecognized shape"
+  // without a second token. `!verdict.review.satisfied` avoids firing this
+  // once a review-ack has already cleared the review (`bodyShape` would
+  // then no longer be the reason `ready` is false, if it is false at all).
+  const unrecognizedBodyNeedsAck =
+    bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
+    verdict.review.bodyShape === 'unrecognized' &&
+    !verdict.review.satisfied;
+  if (verdict.review.suppressedCount > 0 || unrecognizedBodyNeedsAck) {
     const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
-    items.push({
-      token: T.ACK_SUPPRESSED,
-      summary: `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`,
-      pointer,
-    });
+    const summary =
+      verdict.review.suppressedCount > 0
+        ? `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
+        : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
+    items.push({ token: T.ACK_SUPPRESSED, summary, pointer });
   }
 
   if (verdict.terminal.state === 'COPILOT_UNAVAILABLE') {

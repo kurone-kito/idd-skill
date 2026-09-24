@@ -570,9 +570,9 @@ for the same steps. See
 run order. `--import` and `--verify` both require
 `--source <path-to-a-cloned-idd-skill-tree>` and therefore only replace
 the Option B local-clone flow, never Option A's remote fetch;
-`--substitute` takes no `--source` at all (it only rewrites an already-
-imported `--target` tree) and works the same regardless of how that tree
-was populated. `--hear` and `--record-policy` also take no `--source`.
+`--substitute` takes no `--source` at all (it rewrites only already-
+imported files, scoped to the running clone's own core file set).
+`--hear` and `--record-policy` also take no `--source`.
 Each mode prints a JSON verdict and exits `0` (converged), `1` (a
 blocking or residue finding — nothing is written), or `2` (a usage
 error), so an agent can gate on the exit code without parsing prose.
@@ -634,9 +634,9 @@ error), so an agent can gate on the exit code without parsing prose.
   `--fix-validate-commands`, `--pre-push-validate-commands`,
   `--post-fix-validate-commands`, `--install-deps-command`, which always
   win over a transcript value when both are present), then rewrites
-  the target tree in place. Add `--dry-run` to print the plan without
-  writing; apply mode refuses to write anything while any placeholder
-  would remain unresolved.
+  only imported files, reporting the rest. Add `--dry-run` to print the
+  plan without writing; apply mode refuses to write anything while any
+  placeholder would remain unresolved.
 
   ```sh
   node scripts/idd-onboard.mjs --substitute --target <target-repo> \

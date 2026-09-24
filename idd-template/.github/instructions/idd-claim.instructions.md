@@ -226,9 +226,9 @@ issue (different slug variants).
      claim**: stop unless this session proves owner resume or an authorized
      forced handoff. With helpers, `resume-claim-routing.mjs
      --fresh-claim-gate` reports `local_worktree_occupied` (including an
-     `evidence.local_worktree.status` of `unreadable`); route to operator
-     recovery unless the documented forced-handoff path is authorized
-     (#3141, Round 21 report).
+     `evidence.local_worktree.status` of `unreadable`); route to §LWR
+     (`docs/idd-resume-detail.md`) unless the documented forced-handoff
+     path is authorized (#3141).
    - **A matching branch corresponds to an inheritable claim or trusted
      forced-handoff evidence, with no live local worktree**: proceed — the
      branch is expected.

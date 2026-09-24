@@ -85,7 +85,7 @@
     "review": {
       "type": "object",
       "description": "Clause 1 evidence: identity and HEAD-coverage of the primary bot's latest review, by fetch order.",
-      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "satisfied"],
+      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "bodyShape", "satisfied"],
       "additionalProperties": false,
       "properties": {
         "found": {
@@ -117,6 +117,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "Count parsed from a `Suppressed comments (N)` heading in the latest review's body (read only when matchesHead is true; 0 otherwise), 0 when no such section is present -- kurone-kito/idd-skill#1880. GitHub Copilot can fold a finding into this collapsed body section instead of posting it as a comment, which itemCount (comments.totalCount) never reflects."
+        },
+        "bodyShape": {
+          "type": ["string", "null"],
+          "enum": ["overview-v2", "overview-legacy", "error", "unrecognized", null],
+          "description": "kurone-kito/idd-skill#3258: the recognized Copilot review-body shape used to compute suppressedCount, read only when matchesHead is true; null when !found or off-HEAD. 'error' is reachable only in principle -- resolveLatestCopilotReviewClause already excludes an error-bodied review before it can become the selected latest one. 'unrecognized' (a body matching no known shape) makes satisfied false until a trusted review-ack covers it, scoped to the Copilot default primaryBotLogin only."
         },
         "satisfied": {
           "type": "boolean",

@@ -227,12 +227,15 @@ After successful verification, run `idd-resume.instructions.md` Step 1
 to preserve closed/merged cleanup and `roadmap-audit/*` special-case
 routing before continuing to Step 2/Step 3.
 
-## Hold behavior (when S2/S3 is not satisfied)
+## Hold behavior (when S2/S3/S4 is not satisfied)
 
 In this non-owned-claim path, do not post hold notes on the issue/PR.
-Record evidence in session logs only and stop. Posting hold notes here
-would violate the shared claim revalidation gate and can reset
-quiet-window evidence.
+Record evidence in session logs only and stop; when the hold traces to
+a `local_worktree_occupied` stop (S3's gate or S4's re-check), that
+evidence is the §LWR wake-condition record
+(`docs/idd-resume-detail.md`). Posting hold
+notes here would violate the shared claim revalidation gate and can
+reset quiet-window evidence.
 
 Keep claim safety strict: no early takeover before the shared stale
 threshold.

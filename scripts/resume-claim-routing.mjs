@@ -70,21 +70,39 @@ if (import.meta.main) {
  * evidence naming that PR:
  *
  * - forced-handoff mode disabled → never honor;
- * - no open linked PR backs the claim (`expectedLinkedPrReferences`
- *   empty, including the fail-safe lookup-error case) → honor an
- *   `issue-only` handoff as before;
+ * - no open linked PR backs the claim, and the lookup that produced that
+ *   empty result actually succeeded (`expectedLinkedPrReferences` empty,
+ *   `linkedPrLookupFailed` false/omitted) → honor an `issue-only` handoff
+ *   as before;
  * - an open linked PR backs the claim → require `contextScope` of
  *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
+ * - `linkedPrLookupFailed: true` (#3276, Groom hearing 2026-09-24): the
+ *   lookup itself failed, so PR state is unknown rather than genuinely
+ *   empty. An `issue-plus-pr` handoff still delegates to the shared gate
+ *   above unchanged -- this decision covers `issue-only` handoffs only,
+ *   and `expectedLinkedPrReferences` is empty either way on a failed
+ *   lookup, so an `issue-plus-pr` marker naming any PR would fail to
+ *   match a real backing PR regardless; that pre-existing shortcut is
+ *   left as-is rather than widened or narrowed here. An `issue-only`
+ *   handoff against an enabled mode is rejected outright instead of
+ *   falling into the empty-set-means-honor-it shortcut.
  */
 export function buildForcedHandoffEnabledGate(options) {
   // Delegate to the shared builder so resume routing and the merge-gate /
   // write-side helpers cannot drift. Resume routing never passes
   // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
   // an issue-only handoff against a PR-backed claim is rejected.
-  return buildForcedHandoffEnableGate({
+  const sharedGate = buildForcedHandoffEnableGate({
     forcedHandoffEnabled: options.forcedHandoffEnabled,
     expectedLinkedPrReferences: options.expectedLinkedPrReferences,
   });
+  if (!options.linkedPrLookupFailed) {
+    return sharedGate;
+  }
+  return (forcedHandoff) =>
+    forcedHandoff.contextScope === 'issue-plus-pr'
+      ? sharedGate(forcedHandoff)
+      : false;
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =
@@ -105,9 +123,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const events = normalizeEvents(input.events).filter((event) =>
     trustedAuthor(event.author?.login ?? ''),
   );
+  const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
     isAuthorizedForcedHandoff,
+    linkedPrLookupFailed,
   });
   const claimIdChecked = normalizeToken(input.claimId);
   const sameSecondContenders = state.activeClaim
@@ -281,6 +301,30 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       }
     }
   }
+  // #3276: neither side of an issue-only forced handoff that was blocked
+  // solely because the linked-PR lookup failed (PR state unknown) may read
+  // as an ordinary claim-state outcome for a --claim-id check -- not the
+  // displaced original owner's `already_owned`, and not the would-be
+  // successor's generic non-stale/disputed stop. `resolveClaimState`
+  // already recorded every such blocked marker while folding events (see
+  // its `onIgnoredForcedHandoff` handler); only one whose `oldClaimId`
+  // still equals the (unchanged, since the transfer was blocked) final
+  // active claim is a live match -- a marker recorded earlier in history
+  // for a claim that has since moved on for an unrelated reason is not.
+  const linkedPrLookupFailureMatch =
+    claimIdChecked && state.activeClaim
+      ? (state.linkedPrLookupFailureRejections ?? []).find(
+          (forcedHandoff) =>
+            forcedHandoff.oldClaimId === state.activeClaim?.claimId &&
+            (forcedHandoff.oldClaimId === claimIdChecked ||
+              forcedHandoff.newClaimId === claimIdChecked),
+        )
+      : undefined;
+  if (linkedPrLookupFailureMatch) {
+    routeState = 'disputed';
+    action = 'stop';
+    reason = 'forced-handoff-linked-pr-lookup-failed';
+  }
   return {
     state: routeState,
     action,
@@ -312,7 +356,19 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
-      forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
+      // #3276: explicitly null under the override above, not merely relying
+      // on state.appliedForcedHandoff already being null because the
+      // transfer never applied (true today, but this keeps the field
+      // correct even if a future change to the fold logic ever left a
+      // stale appliedForcedHandoff value around a blocked marker).
+      forced_handoff: linkedPrLookupFailureMatch
+        ? null
+        : toForcedHandoffEvidence(state.appliedForcedHandoff),
+      // #3276: always present (byte-stable), not only when a lookup was
+      // attempted -- 'ok' covers both "no lookup ran" (forced-handoff mode
+      // disabled) and "the lookup succeeded", matching the Proposed
+      // change's `evidence.linked_pr_lookup: "failed"` example field.
+      linked_pr_lookup: linkedPrLookupFailed ? 'failed' : 'ok',
       ...(state.releasedClaim
         ? {
             released_claim: {
@@ -455,12 +511,15 @@ function runCli() {
   const permissionCache = new Map();
   // A forced handoff that displaces a PR-backed claim must carry
   // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
-  // so the gate below can enforce it (fail-safe to no enforcement). Skip
-  // the lookup entirely when forced-handoff mode is off — the gate never
+  // so the gate below can enforce it (fail-safe to no enforcement, except
+  // #3276's own new issue-only-on-failure rejection below). Skip the
+  // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
-  const expectedLinkedPrReferences = forcedHandoffEnabled
+  const linkedPrLookup = forcedHandoffEnabled
     ? fetchOpenLinkedPrReferences(port, args.issue)
-    : new Set();
+    : { references: new Set(), lookupFailed: false };
+  const expectedLinkedPrReferences = linkedPrLookup.references;
+  const linkedPrLookupFailed = linkedPrLookup.lookupFailed;
   const routingEvents = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
@@ -476,6 +535,7 @@ function runCli() {
     isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
       forcedHandoffEnabled,
       expectedLinkedPrReferences,
+      linkedPrLookupFailed,
     }),
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
@@ -503,6 +563,7 @@ function runCli() {
         inspectLocalWorktreeBranch(claim.branch),
       );
     },
+    linkedPrLookupFailed,
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -559,6 +620,7 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
     typeof options.isAuthorizedForcedHandoff === 'function'
       ? options.isAuthorizedForcedHandoff
       : () => false;
+  const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   // hasNewFormatClaim drives the new-format vs legacy-only mode. Detect
   // it by scanning before delegating to the canonical parser so the
   // wrapper can return the right legacy-fallback shape.
@@ -576,6 +638,11 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       parseLegacyClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
   );
   const warnings = [];
+  // #3276: forced-handoff markers rejected specifically because
+  // `linkedPrLookupFailed` blocked an issue-only handoff (never a
+  // genuinely disabled mode -- see onIgnoredForcedHandoff below), for
+  // evaluateResumeClaimRouting's own --claim-id override.
+  const linkedPrLookupFailureRejections = [];
   const onAnomalousHeartbeat = ({ claimId, activeBranch, heartbeatBranch }) => {
     warnings.push(
       `ignored anomalous heartbeat for ${claimId}: branch ${heartbeatBranch} != ${activeBranch}`,
@@ -583,6 +650,48 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
   };
   const onIgnoredForcedHandoff = ({ reason, forcedHandoff, event }) => {
     if (reason === 'mode-disabled') {
+      // The gate returns false for two distinct reasons that both surface
+      // here as the same generic 'mode-disabled' event (applyClaimEvent
+      // does not distinguish them): a genuinely disabled forced-handoff
+      // mode, or #3276's new lookup-failure rejection. `linkedPrLookupFailed`
+      // can only be true when the lookup actually ran, which only happens
+      // when forced-handoff mode is enabled -- so its presence here
+      // unambiguously means the latter, never the former, for an
+      // issue-only marker.
+      //
+      // #3276 (CodeRabbit review, PR #3386): applyClaimEvent checks
+      // isForcedHandoffEnabled BEFORE the author/forcedBy match and
+      // authorization checks (the 'author-forced-by-mismatch' /
+      // 'forced-by-unauthorized' branches below), so a forged or
+      // unauthorized issue-only marker would otherwise reach here too --
+      // recorded as though it were a genuinely valid handoff blocked only
+      // by the lookup failure, even though it would be rejected as forged/
+      // unauthorized regardless of the lookup outcome. Only record (and
+      // warn about) a lookup-failure rejection for a marker that is
+      // otherwise genuinely valid, by independently re-deriving the same
+      // two checks `resolveClaimState` always applies for this file
+      // (`requireAuthorMatchesForcedBy: true` below) before deciding.
+      const authorMatchesForcedBy =
+        String(event.author?.login ?? '')
+          .trim()
+          .toLowerCase() ===
+        String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+      const otherwiseValidHandoff =
+        authorMatchesForcedBy &&
+        isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event);
+      if (
+        linkedPrLookupFailed &&
+        forcedHandoff.contextScope !== 'issue-plus-pr' &&
+        otherwiseValidHandoff
+      ) {
+        linkedPrLookupFailureRejections.push(forcedHandoff);
+        warnings.push(
+          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: linked-PR lookup failed (PR state unknown), issue-only handoff not honored`,
+        );
+        return;
+      }
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
       );
@@ -631,6 +740,7 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       legacyClaim: null,
       legacyReleased: false,
       hasLegacyClaimMarker,
+      linkedPrLookupFailureRejections,
     };
   }
   const orderedEvents = [...events].sort(compareEvents);
@@ -644,6 +754,7 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
     hasLegacyClaimMarker,
+    linkedPrLookupFailureRejections,
   };
 }
 function findSameSecondContenders(events, activeClaim) {
@@ -1009,48 +1120,101 @@ function normalizeToken(value) {
   const token = String(value ?? '').trim();
   return token.length > 0 ? token : '';
 }
+/** Fold one raw CONNECTED_EVENT/DISCONNECTED_EVENT timeline node into the
+ * running connected/state maps {@link fetchOpenLinkedPrReferences} reconciles
+ * afterward. The last connect/disconnect event per PR wins (the timeline is
+ * chronological, and pagination preserves that order across pages). */
+function applyConnectedPrEventNode(node, connected, states) {
+  const record = node;
+  const subject = record?.subject;
+  if (subject?.__typename !== 'PullRequest') {
+    return;
+  }
+  const number =
+    typeof subject.number === 'number' ? subject.number : Number.NaN;
+  if (!Number.isInteger(number)) {
+    return;
+  }
+  if (record?.__typename === 'ConnectedEvent') {
+    connected.set(number, true);
+    states.set(number, String(subject.state ?? ''));
+  } else if (record?.__typename === 'DisconnectedEvent') {
+    connected.set(number, false);
+  }
+}
 /**
  * Resolve the set of open pull requests that back this issue's claim, as
- * normalized PR references. Uses a precise signal — a PR connected to the
- * issue via `CONNECTED_EVENT` (reconciled against later
- * `DISCONNECTED_EVENT`s) that is currently `OPEN` — rather than a bare
- * cross-reference/mention, so an unrelated open PR merely mentioning the
- * issue does not falsely block a legitimate `issue-only` forced handoff.
- * Fails safe to an empty set (no enforcement) on any lookup error.
+ * normalized PR references, plus whether the lookup itself failed. Uses a
+ * precise signal — a PR connected to the issue via `CONNECTED_EVENT`
+ * (reconciled against later `DISCONNECTED_EVENT`s) that is currently `OPEN`
+ * — rather than a bare cross-reference/mention, so an unrelated open PR
+ * merely mentioning the issue does not falsely block a legitimate
+ * `issue-only` forced handoff.
+ *
+ * #3276: paginates {@link ProviderPort.getConnectedPullRequestEventsPage}
+ * (which throws on a failed or malformed page, matching
+ * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
+ * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle` --
+ * removing the prior silent `last:100` truncation as a side effect. A
+ * genuine lookup failure now surfaces as `lookupFailed: true` with an empty
+ * `references` set, distinct from a successful lookup that legitimately
+ * found no connected PR (`lookupFailed: false`, empty set). Callers must not
+ * treat the two the same -- see
+ * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
-function fetchOpenLinkedPrReferences(port, issueNumber) {
+export function fetchOpenLinkedPrReferences(port, issueNumber) {
   const references = new Set();
   if (!Number.isInteger(issueNumber)) {
-    return references;
+    return { references, lookupFailed: false };
   }
-  // Number.isInteger(issueNumber) above already excludes null; TS can't
-  // narrow a plain boolean-returning call the way a type predicate would.
-  const nodes = port.getConnectedPullRequestEventsSingle(issueNumber);
-  // The last connect/disconnect event per PR wins (timeline is chronological).
   const connected = new Map();
   const states = new Map();
-  for (const node of nodes) {
-    const record = node;
-    const subject = record?.subject;
-    if (subject?.__typename !== 'PullRequest') {
-      continue;
+  try {
+    let after = null;
+    // #3276 (CodeRabbit review, PR #3386): the adapter returns whatever
+    // cursor the GraphQL response carries with no progress guarantee of its
+    // own -- a repeated non-empty cursor (immediate or a multi-cursor
+    // cycle) would otherwise make this loop request the same page
+    // indefinitely. Track every cursor seen and throw on a repeat rather
+    // than imposing an arbitrary page cap, which could wrongly reject a
+    // genuinely long timeline.
+    const seenCursors = new Set();
+    for (;;) {
+      // Number.isInteger(issueNumber) above already excludes null; TS can't
+      // narrow a plain boolean-returning call the way a type predicate would.
+      const page = port.getConnectedPullRequestEventsPage(issueNumber, after);
+      for (const node of page.events) {
+        applyConnectedPrEventNode(node, connected, states);
+      }
+      if (!page.hasNextPage) {
+        break;
+      }
+      const nextCursor = page.endCursor ?? null;
+      if (!nextCursor) {
+        // hasNextPage with no endCursor: reconciling a truncated timeline
+        // could miss a later CONNECTED/DISCONNECTED event and silently read
+        // as a smaller, wrong PR set -- exactly the ambiguity this issue
+        // exists to close. Throw so the caller treats it as a lookup
+        // failure instead of trusting the partial stream.
+        throw new Error(
+          'incomplete connected-PR pagination: hasNextPage with no endCursor',
+        );
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(
+          'non-progressing connected-PR pagination: repeated endCursor',
+        );
+      }
+      seenCursors.add(nextCursor);
+      after = nextCursor;
     }
-    const number =
-      typeof subject.number === 'number' ? subject.number : Number.NaN;
-    if (!Number.isInteger(number)) {
-      continue;
-    }
-    if (record?.__typename === 'ConnectedEvent') {
-      connected.set(number, true);
-      states.set(number, String(subject.state ?? ''));
-    } else if (record?.__typename === 'DisconnectedEvent') {
-      connected.set(number, false);
-    }
+  } catch {
+    return { references: new Set(), lookupFailed: true };
   }
   for (const [number, isConnected] of connected) {
     if (isConnected && states.get(number) === 'OPEN') {
       references.add(normalizeLinkedPrReference(number));
     }
   }
-  return references;
+  return { references, lookupFailed: false };
 }

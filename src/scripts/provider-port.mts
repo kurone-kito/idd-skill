@@ -547,8 +547,15 @@ export interface ProviderPort {
   /**
    * work-items. Single unpaginated `last:100` CONNECTED/DISCONNECTED
    * timeline fetch; adapter swallows failures and returns an empty array
-   * (fail-open) -- matches `resume-claim-routing.mts`'s existing shape
-   * exactly. NOT the same operation as
+   * (fail-open) -- a genuine lookup failure is therefore indistinguishable
+   * from "no connected PR" here, so this method is unsuitable for a trust
+   * decision that must tell the two apart. `resume-claim-routing.mts`'s
+   * `fetchOpenLinkedPrReferences` used to call this method but moved to
+   * the paginated, throw-on-failure {@link getConnectedPullRequestEventsPage}
+   * instead (#3276), which also removes this method's silent `last:100`
+   * truncation; no caller uses this method today. Kept on the port
+   * interface for now rather than removed, since no other caller needs
+   * the change and removal is unrelated cleanup. NOT the same operation as
    * {@link getConnectedPullRequestEventsPage}: different query,
    * different pagination, different failure philosophy -- see #2266's B2
    * plan critique-driven revision for why these stay separate.

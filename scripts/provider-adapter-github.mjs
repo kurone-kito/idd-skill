@@ -1184,6 +1184,10 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         endCursor: connection.pageInfo?.endCursor ?? null,
       };
     },
+    // See provider-port.mts's doc comment on this method: no caller uses it
+    // today (#3276 moved resume-claim-routing.mts's sole call site to
+    // getConnectedPullRequestEventsPage below, which throws on failure
+    // instead of this method's fail-open empty-array swallow).
     getConnectedPullRequestEventsSingle(number) {
       try {
         const parsed = JSON.parse(
@@ -1237,14 +1241,46 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         apiArgs.push('-f', `after=${after}`);
       }
       const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      // #3276 (Copilot review, PR #3386): a top-level GraphQL `errors` entry
+      // can accompany a partial `data` object that still looks like a valid
+      // (even if empty) timelineItems connection -- check errors first, the
+      // same choke point every other GraphQL-backed method in this file
+      // uses, so a failed lookup never falls through to the connection
+      // validation below as though it had succeeded.
+      assertNoGraphqlErrors(parsed, 'getConnectedPullRequestEventsPage');
       const connection = parsed.data?.repository?.issue?.timelineItems;
-      if (!connection) {
-        throw new Error('timelineItems: connection is null/absent');
+      // #3276 (Copilot review, PR #3386): a present `timelineItems`
+      // connection with a missing/malformed `nodes` or `pageInfo` field is
+      // malformed GraphQL data (a partial/truncated response), not a
+      // legitimately empty terminal page -- validate explicitly instead of
+      // defaulting each field independently to `[]`/`false`/`null`, which
+      // would otherwise let fetchOpenLinkedPrReferences
+      // (resume-claim-routing.mts) read a malformed page as
+      // `lookupFailed: false` and still honor an issue-only forced handoff
+      // the lookup never actually resolved. `hasNextPage` specifically must
+      // be checked as a boolean, not merely that `pageInfo` exists -- a
+      // `pageInfo: {}` shape would otherwise pass a bare truthiness check
+      // and `hasNextPage ?? false` would silently read unknown pagination
+      // state as terminal. Mirrors the established fail-closed pattern in
+      // authoring-owner-provenance.mts's page validation.
+      if (
+        !connection ||
+        !Array.isArray(connection.nodes) ||
+        connection.pageInfo == null ||
+        typeof connection.pageInfo !== 'object' ||
+        typeof connection.pageInfo.hasNextPage !== 'boolean'
+      ) {
+        throw new Error(
+          'timelineItems: connection is null/absent or malformed (missing nodes/pageInfo/hasNextPage)',
+        );
       }
       return {
-        events: connection.nodes ?? [],
-        hasNextPage: connection.pageInfo?.hasNextPage ?? false,
-        endCursor: connection.pageInfo?.endCursor ?? null,
+        events: connection.nodes,
+        hasNextPage: connection.pageInfo.hasNextPage,
+        endCursor:
+          typeof connection.pageInfo.endCursor === 'string'
+            ? connection.pageInfo.endCursor
+            : null,
       };
     },
     listIssueNumbersClosedByOpenChangeRequests(limit) {

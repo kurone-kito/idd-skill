@@ -63,6 +63,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { resolveBundleRoot } from './bundle-root.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import { NON_TTY_ERROR } from './force-handoff.mts';
 import { safeGhText } from './gh-exec.mts';
@@ -913,7 +914,11 @@ function isProbablyBinary(content: Buffer): boolean {
  * binary files and `SCAN_EXCLUDED_PATHS`) and collect every
  * placeholder-shaped `{{...}}` token per file, in ascending path order.
  * Symlinks are deliberately not followed: imported template files are
- * regular files, and following links could escape the target tree.
+ * regular files, and following links could escape the target tree. This
+ * function stays whole-tree and scope-agnostic on purpose (#3291): a
+ * caller that needs to distinguish an imported file from an adopter-owned
+ * one narrows the result afterward via `partitionScansByScope`, so the
+ * walk itself never has to know the manifest.
  */
 export function scanPlaceholderTokens(
   targetDir: string,
@@ -1004,17 +1009,24 @@ export interface UnknownTokenEntry {
   occurrences: number;
 }
 
-/** The full dry-run/apply plan for one target tree. */
+/**
+ * The full dry-run/apply plan for one target tree, over whichever scans
+ * the caller passes in. `buildSubstitutionPlan` itself is scope-agnostic
+ * -- it never reads the filesystem or knows about
+ * `SCAN_EXCLUDED_PATHS`/scope narrowing; every caller (`--substitute`,
+ * `checkPlaceholderResidue`) pre-filters via `partitionScansByScope`
+ * (#3291) before calling this, so only in-scope scans ever reach it.
+ */
 export interface SubstitutionPlan {
   entries: SubstitutionPlanEntry[];
   /** Unresolved onboarding placeholders — blocking (exit 1). */
   residue: SubstitutionResidueEntry[];
   /**
-   * Placeholder-shaped tokens outside the seven — informational only.
-   * Wave 1 cannot tell an adopter's own template token (handlebars,
-   * mustache, …) from copied-template residue because the copy stage
-   * that records the imported file set is a later wave, so these are
-   * reported for the operator instead of failing the run.
+   * Placeholder-shaped tokens outside the seven, found in an IN-SCOPE
+   * file — informational only. A token found in an OUT-OF-SCOPE file
+   * instead lands in the caller's own `outOfScopeTokens`
+   * (`partitionScansByScope`/`PlaceholderResidueResult`, #3291), never
+   * here, regardless of whether it happens to match one of the seven.
    */
   unknownTokens: UnknownTokenEntry[];
 }
@@ -1938,30 +1950,114 @@ export function checkManifestCompleteness(
   return { missingSource, missingTarget };
 }
 
-/** Placeholder-residue result: blocking residue plus informational tokens. */
-export interface PlaceholderResidueResult {
-  residue: SubstitutionResidueEntry[];
-  unknownTokens: UnknownTokenEntry[];
+/**
+ * The set of target-relative paths the placeholder scanner treats as
+ * in-scope (#3291): exactly the imported manifest's own target paths,
+ * minus `SCAN_EXCLUDED_PATHS`. Built from `resolveImportFiles`'s already-
+ * resolved file list -- callers do that I/O and pass `.files` in, so this
+ * stays a pure set-builder with no filesystem access of its own. The
+ * `SCAN_EXCLUDED_PATHS` subtraction lives here (not left to each caller)
+ * because several of its entries -- the `docs/onboarding/*.md` meta-docs
+ * -- ARE part of the core manifest, so omitting the subtraction here
+ * would silently widen scope back to files the scanner must still never
+ * read for substitution purposes.
+ */
+export function resolvePlaceholderScanScope(
+  files: readonly ManifestFile[],
+): ReadonlySet<string> {
+  const scope = new Set<string>();
+  for (const file of files) {
+    if (!SCAN_EXCLUDED_PATHS.has(file.targetPath)) {
+      scope.add(file.targetPath);
+    }
+  }
+  return scope;
+}
+
+/** A scan's tokens partitioned by whether its file is in `scope`. */
+export interface ScopedPlaceholderScans {
+  /** Scans whose file is in scope -- feed these into `buildSubstitutionPlan`. */
+  inScope: PlaceholderFileScan[];
+  /**
+   * Every token occurrence (known onboarding placeholder or not) found in
+   * a file OUTSIDE `scope` -- informational only, never contributes to a
+   * `SubstitutionPlan`'s `entries`/`residue`/`unknownTokens` (#3291): an
+   * adopter-owned file `--import` never copied is not this scanner's to
+   * rewrite or to flag as blocking residue, even when it happens to
+   * contain a `{{ONBOARDING_TOKEN}}`-shaped string of its own.
+   */
+  outOfScopeTokens: UnknownTokenEntry[];
 }
 
 /**
- * Scan the target tree for leftover `{{...}}` tokens after onboarding.
- * Reuses wave 1's `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner
- * rather than a new scan: verify mode has no resolved substitution values to
- * consult (an empty resolution), so `buildSubstitutionPlan` puts every
- * occurrence of one of the seven onboarding placeholder tokens into
- * `residue` — the correct outcome here, since a converged onboarding run
- * should have already replaced them. Other `{{...}}`-shaped tokens land in
- * `unknownTokens`, informational just as they are for `--substitute`.
+ * Split `scans` into the files `scope` covers and everything else,
+ * flattening every out-of-scope file's tokens into `outOfScopeTokens`
+ * (#3291). `scanPlaceholderTokens`/`buildSubstitutionPlan` keep scanning
+ * and planning exactly as before -- this is a thin pre-filter in front of
+ * them, not a change to either, so no existing direct caller of either
+ * function is affected.
+ */
+export function partitionScansByScope(
+  scans: readonly PlaceholderFileScan[],
+  scope: ReadonlySet<string>,
+): ScopedPlaceholderScans {
+  const inScope: PlaceholderFileScan[] = [];
+  const outOfScopeTokens: UnknownTokenEntry[] = [];
+  for (const scan of scans) {
+    if (scope.has(scan.file)) {
+      inScope.push(scan);
+      continue;
+    }
+    for (const [token, occurrences] of scan.tokens) {
+      outOfScopeTokens.push({ file: scan.file, token, occurrences });
+    }
+  }
+  return { inScope, outOfScopeTokens };
+}
+
+/**
+ * Placeholder-residue result: blocking residue plus informational tokens
+ * (`unknownTokens` for an in-scope file's non-onboarding `{{...}}` token,
+ * `outOfScopeTokens` for ANY `{{...}}` token -- known or not -- found
+ * outside the imported file set; #3291).
+ */
+export interface PlaceholderResidueResult {
+  residue: SubstitutionResidueEntry[];
+  unknownTokens: UnknownTokenEntry[];
+  outOfScopeTokens: UnknownTokenEntry[];
+}
+
+/**
+ * Scan the target tree for leftover `{{...}}` tokens after onboarding,
+ * scoped to `scope` (#3291: the imported manifest's own target paths --
+ * see `resolvePlaceholderScanScope`). Reuses wave 1's
+ * `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner rather than a
+ * new scan: verify mode has no resolved substitution values to consult
+ * (an empty resolution), so `buildSubstitutionPlan` puts every occurrence
+ * of one of the seven onboarding placeholder tokens found in an IN-SCOPE
+ * file into `residue` -- the correct outcome here, since a converged
+ * onboarding run should have already replaced them. An in-scope file's
+ * other `{{...}}`-shaped tokens land in `unknownTokens`; ANY token found
+ * outside `scope` lands in `outOfScopeTokens` instead, informational only
+ * and never blocking, matching `--substitute`'s own scope contract.
  */
 export function checkPlaceholderResidue(
   targetRoot: string,
+  scope: ReadonlySet<string>,
 ): PlaceholderResidueResult {
-  const plan = buildSubstitutionPlan(scanPlaceholderTokens(targetRoot), {
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scanPlaceholderTokens(targetRoot),
+    scope,
+  );
+  const plan = buildSubstitutionPlan(inScope, {
     values: {},
     unresolved: [],
   });
-  return { residue: plan.residue, unknownTokens: plan.unknownTokens };
+  return {
+    residue: plan.residue,
+    unknownTokens: plan.unknownTokens,
+    outOfScopeTokens,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2333,7 +2429,20 @@ export function runVerify(
     targetRoot,
     profile,
   );
-  const placeholderResidue = checkPlaceholderResidue(targetRoot);
+  // #3291: a second `resolveImportFiles` call, deliberately -- keeping
+  // `checkManifestCompleteness`'s own `(sourceRoot, targetRoot, profile?)`
+  // signature untouched (5 tests call it directly) costs one extra
+  // manifest resolution per `--verify` run rather than a signature change
+  // that would ripple through those callers. `--verify` is not a hot
+  // loop, and the vendored-node profile's extra helper-bundle walk this
+  // duplicates is a small, bounded read.
+  const placeholderScanScope = resolvePlaceholderScanScope(
+    resolveImportFiles(sourceRoot, profile).files,
+  );
+  const placeholderResidue = checkPlaceholderResidue(
+    targetRoot,
+    placeholderScanScope,
+  );
   const helperLoad = checkHelperLoad(targetRoot, profile);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
   const packagePinWarning = checkPackagePinWarning(targetRoot);
@@ -3840,10 +3949,37 @@ async function runCli(): Promise<void> {
     ...args.overrides,
   };
   const resolution = resolvePlaceholderValues(targetDir, mergedOverrides);
-  const plan = buildSubstitutionPlan(
+  // #3291: --substitute takes no --source, so its scan scope always comes
+  // from the RUNNING CLI's own idd-skill package root -- never an
+  // adopter-supplied tree. Resolved via the shared, marker-first
+  // `resolveBundleRoot` (#3238) rather than a nearest-`package.json`
+  // walk of its own (2026-09-24 review): a nearest-`package.json` walk
+  // can stop at an outer workspace/package ancestor before reaching the
+  // actual idd-skill (or vendored-node bundle) root, reading the wrong
+  // `audit/sync-manifest.json` or none at all. A tree with neither the
+  // bundle marker nor `package.json` anywhere in the (bounded) walk
+  // fails closed here, naming the tried root, and reaches main()'s
+  // exit-2 usage-error handling rather than ever falling back to
+  // scanning the whole --target tree.
+  let scanSourceRoot: string;
+  let scanScope: ReadonlySet<string>;
+  try {
+    scanSourceRoot = resolveBundleRoot(import.meta.dirname);
+    scanScope = resolvePlaceholderScanScope(
+      resolveImportFiles(scanSourceRoot).files,
+    );
+  } catch (error) {
+    throw new Error(
+      `--substitute could not resolve its own core file set: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
     scanPlaceholderTokens(targetDir),
-    resolution,
+    scanScope,
   );
+  const plan = buildSubstitutionPlan(inScope, resolution);
   // #2671: planned before any write below (and before the canWrite check),
   // so a malformed `labels.*` value (e.g. a control character rejected by
   // `buildUntrustedLabelerGuardWorkflowContent`) throws and aborts the
@@ -3869,6 +4005,14 @@ async function runCli(): Promise<void> {
     plan: plan.entries,
     residue: plan.residue,
     unknownTokens: plan.unknownTokens,
+    // #3291: every `{{...}}`-shaped token found outside the imported
+    // core file set -- informational only, never written, never
+    // blocking (see resolvePlaceholderScanScope/partitionScansByScope).
+    outOfScopeTokens,
+    scope: {
+      sourceRoot: scanSourceRoot,
+      inScopeFileCount: scanScope.size,
+    },
     skippedPaths: listSkippedPlaceholderPaths(targetDir),
     filesChanged,
     // Folds in untrustedLabelerGuardWritten (#2684 review): a caller

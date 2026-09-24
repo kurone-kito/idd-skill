@@ -89,9 +89,9 @@ On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 | `non_inheritable` / `stop` | Forced-handoff: retry below; else STOP — live competitor claim                         |
 | `disputed` / `stop`        | STOP — contested claim                                                                 |
 
-`local_worktree_occupied` / `stop` → STOP — recover; verify claim-id
+`local_worktree_occupied` / `stop` → STOP — see §LWR; verify claim-id
 against occupied, unreadable, or unknown local worktree state
-(#3141, Round 21 report).
+(#3141).
 
 Forced-handoff: pass `new_claim_id` into Step 1. On
 `non_inheritable`/`stop`, `stale`/`takeover`, or
@@ -107,15 +107,13 @@ worktree; child issues are not locked).
 
 Written table (`instructions-only` profile only): first matching row.
 
-A stale or released claim with a local worktree is STOP — verify claim-id.
-
 | Claim state                                                                                 | Action                                                        |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Active claim = this session's verified `{claim-id}` and branch starts with `roadmap-audit/` | Re-run A1.5 only → STOP                                       |
 | Active claim = this session's verified `{claim-id}`                                         | → Step 2                                                      |
 | Forced-handoff names this session's verified `{claim-id}` as displaced                      | STOP — displaced; no push/comment/resolve/merge               |
 | Forced-handoff recovery confirmed for this session                                          | A5 re-claim after GitHub shows handoff → Step 2               |
-| Stale/released + local worktree occupied or unreadable                                      | STOP — recover; verify owner                                  |
+| Stale/released + local worktree occupied or unreadable                                      | STOP — see §LWR; verify owner                                 |
 | No active claim                                                                             | A5 re-claim → Step 2                                          |
 | Active non-stale claim (other session, < 24 h)                                              | STOP                                                          |
 | Active stale claim (other session, ≥ 24 h) and branch starts with `roadmap-audit/`          | A5 takeover `supersedes: <prior-id>`; re-run A1.5 only → STOP |

@@ -885,6 +885,182 @@ test('getConnectedPullRequestEventsPage throws when the connection itself is nul
   );
 });
 
+// #3276: a genuine `gh` process failure (not merely a malformed/null JSON
+// body) during the connected-PR lookup must also propagate, not read as an
+// empty event list. resume-claim-routing.mts's `fetchOpenLinkedPrReferences`
+// is this method's sole caller and relies on that propagation to
+// distinguish "lookup failed" (PR state unknown) from "no connected PR"
+// (a genuinely empty, successful result) -- see `getConnectedPullRequestEventsSingle`'s
+// doc comment on this file's own `getConnectedPullRequestEventsSingle`
+// implementation for the fail-open shape this method deliberately does not
+// share.
+test('getConnectedPullRequestEventsPage propagates a gh process failure instead of swallowing it as an empty result', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('gh: simulated process failure');
+      },
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /simulated process failure/,
+  );
+});
+
+// #3276 (Copilot review, PR #3386): a present `timelineItems` connection
+// with a missing `nodes` or `pageInfo` field is malformed GraphQL data, not
+// a legitimately empty terminal page. Before the fix, each field defaulted
+// independently (`[]`, `false`, `null`), so this shape read as a successful
+// empty page instead of throwing -- exactly the ambiguity
+// fetchOpenLinkedPrReferences (resume-claim-routing.mts) relies on this
+// method NOT having.
+test('getConnectedPullRequestEventsPage throws when the connection is present but nodes is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+test('getConnectedPullRequestEventsPage throws when the connection is present but pageInfo is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+// #3276 round 2 (Copilot review, PR #3386): `pageInfo` being present is not
+// enough -- a `pageInfo: {}` shape (missing `hasNextPage`) previously passed
+// the bare-truthiness check above and `hasNextPage ?? false` silently read
+// unknown pagination state as a terminal page. Validate `hasNextPage` as an
+// actual boolean.
+test('getConnectedPullRequestEventsPage throws when pageInfo is present but hasNextPage is not a boolean', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                  pageInfo: { endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+// A non-string endCursor (e.g. a stray number) must not be trusted verbatim
+// as the pagination cursor either -- normalize to null rather than passing
+// through a malformed value.
+test('getConnectedPullRequestEventsPage normalizes a non-string endCursor to null', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: 12345 },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getConnectedPullRequestEventsPage(1048, null), {
+    events: [],
+    hasNextPage: false,
+    endCursor: null,
+  });
+});
+
+// #3276 round 3 (Copilot review, PR #3386, High severity): a top-level
+// GraphQL `errors` entry can accompany a partial `data` object that still
+// looks like a valid connection -- this method must check `errors` first,
+// the same choke point every other GraphQL-backed method in this file uses
+// (`assertNoGraphqlErrors`), so a failed lookup never falls through to the
+// connection validation as though it had succeeded.
+test('getConnectedPullRequestEventsPage throws on a top-level GraphQL errors entry even with a valid-looking connection', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+          errors: [{ message: 'simulated partial-failure GraphQL error' }],
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /getConnectedPullRequestEventsPage failed: simulated partial-failure GraphQL error/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
 // no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's

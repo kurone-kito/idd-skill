@@ -134,6 +134,10 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.connectedPrEventsSingle?.[number] ?? [];
     },
     getConnectedPullRequestEventsPage(number) {
+      const errorMessage = fixture.connectedPrEventPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.connectedPrEventPages?.[number] ?? [];
       const index = connectedPageCallIndex[number] ?? 0;
       connectedPageCallIndex[number] = index + 1;
