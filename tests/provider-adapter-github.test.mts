@@ -862,6 +862,63 @@ test('getConnectedPullRequestEventsPage propagates a gh process failure instead 
   );
 });
 
+// #3276 (Copilot review, PR #3386): a present `timelineItems` connection
+// with a missing `nodes` or `pageInfo` field is malformed GraphQL data, not
+// a legitimately empty terminal page. Before the fix, each field defaulted
+// independently (`[]`, `false`, `null`), so this shape read as a successful
+// empty page instead of throwing -- exactly the ambiguity
+// fetchOpenLinkedPrReferences (resume-claim-routing.mts) relies on this
+// method NOT having.
+test('getConnectedPullRequestEventsPage throws when the connection is present but nodes is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\)/,
+  );
+});
+
+test('getConnectedPullRequestEventsPage throws when the connection is present but pageInfo is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\)/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
 // no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's

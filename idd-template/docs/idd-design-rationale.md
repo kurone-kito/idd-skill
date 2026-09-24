@@ -285,12 +285,14 @@ closed) instead of the prior fail-open behavior, and neither side of a
 handoff blocked this way (the displaced original owner's `oldClaimId` nor
 the would-be successor's `newClaimId`) may read a `--claim-id` check as an
 ordinary claim-state outcome — both route to an explicit `stop` with a
-dedicated `forced-handoff-linked-pr-lookup-failed` reason, unconditionally
-and permanently for that exact `newClaimId` (it was never activated, so no
-legitimate session should ever check ownership under it again; a genuine
-later takeover still reaches `already-claimed` → `stale-reclaimable` via
-`--fresh-claim-gate` and a freshly minted claim-id, which the override
-never touches). Scoped to
+dedicated `forced-handoff-linked-pr-lookup-failed` reason, for as long as
+the rejected marker's `oldClaimId` still names the current active claim
+(re-derived live on every `--claim-id` check, not a one-time flag —
+`evaluateResumeClaimRouting`, `src/scripts/resume-claim-routing.mts:459-466`).
+A later, unrelated claim transition makes that historical marker no longer
+a live match, so it stops applying; a genuine takeover still reaches
+`already-claimed` → `stale-reclaimable` via `--fresh-claim-gate` and a
+freshly minted claim-id, which the override never touches. Scoped to
 `issue-only` handoffs only, matching the Groom hearing decision that
 introduced it: `buildForcedHandoffEnabledGate`'s wrapper delegates an
 `issue-plus-pr` handoff straight to the pre-existing shared gate

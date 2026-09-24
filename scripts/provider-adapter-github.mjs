@@ -1240,13 +1240,27 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }
       const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
       const connection = parsed.data?.repository?.issue?.timelineItems;
-      if (!connection) {
-        throw new Error('timelineItems: connection is null/absent');
+      // #3276 (Copilot review, PR #3386): a present `timelineItems`
+      // connection with a missing `nodes` or `pageInfo` field is malformed
+      // GraphQL data (a partial/truncated response), not a legitimately
+      // empty terminal page -- validate both explicitly instead of
+      // defaulting each to `[]`/`false`/`null`, which would otherwise let
+      // fetchOpenLinkedPrReferences (resume-claim-routing.mts) read a
+      // malformed page as `lookupFailed: false` and still honor an
+      // issue-only forced handoff the lookup never actually resolved.
+      if (
+        !connection ||
+        !Array.isArray(connection.nodes) ||
+        !connection.pageInfo
+      ) {
+        throw new Error(
+          'timelineItems: connection is null/absent or malformed (missing nodes/pageInfo)',
+        );
       }
       return {
-        events: connection.nodes ?? [],
-        hasNextPage: connection.pageInfo?.hasNextPage ?? false,
-        endCursor: connection.pageInfo?.endCursor ?? null,
+        events: connection.nodes,
+        hasNextPage: connection.pageInfo.hasNextPage ?? false,
+        endCursor: connection.pageInfo.endCursor ?? null,
       };
     },
     listIssueNumbersClosedByOpenChangeRequests(limit) {
