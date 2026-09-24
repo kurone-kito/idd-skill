@@ -3082,7 +3082,10 @@ export function buildSubIssueLoader(port: ProviderPort) {
  *
  * Replaces a full open-issue scan (which fetched every open issue's
  * `body` just to detect a root) with one cheap server-side search unioned
- * with configured legacy roots, the SAME open-root set as before:
+ * with configured legacy roots. The root set is the marker-identified
+ * open issues plus configured `discover.legacyRoots` -- a label-only open
+ * issue is deliberately NOT a root (#3286: the roadmap label no longer
+ * identifies a root by itself):
  *
  *   1. Marker roots — `gh search issues --match body "<...>roadmap-id"
  *      --state open` narrows to open issues whose body text contains the
@@ -3105,9 +3108,12 @@ export function buildSubIssueLoader(port: ProviderPort) {
  *      race-closed marker root already is.
  *
  * The candidate sets are unioned and deduped by number, then sorted
- * ascending. The output is the identical `number[]` (deduped, ascending) the
- * previous scan returned, so the downstream union/provenance/ranking is
- * byte-stable.
+ * ascending. The output shape is a deduped, ascending `number[]` -- the
+ * same contract the loader has always returned, so downstream
+ * union/provenance/ranking code needs no change -- but the root
+ * **membership** itself is narrower than before this file's #3286
+ * change: an open issue reachable only via the (now-removed) label
+ * search no longer appears here.
  *
  * Result-cap boundary: `gh search` is hard-capped at
  * {@link GH_SEARCH_RESULT_CAP} results per query. When the body-marker
