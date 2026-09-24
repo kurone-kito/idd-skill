@@ -347,6 +347,21 @@ Depends on kurone-kito/idd-skill#303
   );
 });
 
+test('#3284 review fix: a visible dependency preceded by an inline HTML comment is still anchored', () => {
+  // The anchor check must read the HTML-comment-masked view, not the
+  // default `maskedLine` (comments visible): `<!-- note -->` is invisible
+  // prose GitHub never renders, so it must not count as an
+  // anchor-breaking prefix any more than it counts as a
+  // keyword-suppressing one.
+  assert.deepEqual(extractKeywordReferences('<!-- note --> Blocked by #12'), [
+    {
+      target: 12,
+      relationship: 'dependency',
+      evidence: '<!-- note --> Blocked by #12',
+    },
+  ]);
+});
+
 test('extractKeywordReferences stops before incidental narrative mentions', () => {
   const body = `
 Refs #401; similar to #402
@@ -3848,6 +3863,31 @@ test('--with-readiness on a single root annotates only open execution-leaf nodes
     ),
     false,
   );
+});
+
+test('#3284 review fix: --with-readiness resolves a same-repo qualified Blocked-by the same way the graph traversal does', async () => {
+  // Before this fix, `annotateReadiness` never threaded `currentRepo`
+  // into `evaluateDiscoverReadiness`, so a `Blocked by owner/repo#N` line
+  // naming the SAME repository resolved to a real graph edge (via
+  // `currentRepoRef`) but reported unresolvable in the readiness
+  // annotation for the very same node -- a cross-path disagreement this
+  // issue exists to eliminate.
+  const issues = new Map<number, unknown>([
+    [940, roadmapIssue(940, '- [ ] #941', 'epic-same-repo-qualified')],
+    [941, executionIssue(941, 'Blocked by kurone-kito/idd-skill#942')],
+    [942, executionIssue(942, 'open blocker')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(940, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    readiness: readinessResolution(),
+  });
+
+  const leaf = graph.nodes.find((node) => node.number === 941);
+  assert.deepEqual(leaf?.readiness?.reasons, ['blocked_by_open_issue:#942']);
+  assert.equal(leaf?.readiness?.ready, false);
 });
 
 const delay = (ms: number) =>

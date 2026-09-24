@@ -22,6 +22,7 @@ import {
   type CollaboratorPermissionCache,
   collaboratorPermission,
 } from './collaborator-permission.mts';
+import { extractDependencyReferences } from './dependency-grammar.mts';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -214,7 +215,25 @@ export type OrphanClassification =
     }
   | { orphan: false; reason: 'blocked_by_open_reference'; details: number }
   | { orphan: false; reason: 'open_dependency_reference'; details: number }
-  | { orphan: false; reason: 'unresolvable_reference'; details: number[] };
+  | {
+      orphan: false;
+      reason: 'unresolvable_reference';
+      details: OrphanUnresolvedReference[];
+    };
+
+/**
+ * One reference `classifyIssue` could not resolve, fail-safe (#3284,
+ * Copilot review PR #3415): a local `#N` the issue-state lookup could not
+ * resolve (`issue-not-found-or-inaccessible`, the pre-existing case), or a
+ * `dependency-grammar.mts` token naming a repository other than
+ * `options.currentRepo` (`cross_repository_reference`) -- previously
+ * silently dropped from `blockedRefs`/`dependencyRefs` instead of keeping
+ * the issue non-selectable.
+ */
+export interface OrphanUnresolvedReference {
+  reference: number | string;
+  reason: 'issue-not-found-or-inaccessible' | 'cross_repository_reference';
+}
 
 interface OrphanIssueInput {
   number: number;
@@ -368,7 +387,7 @@ interface FilteredIssueEntry {
   title: unknown;
   state: unknown;
   reason: OrphanFilteredReason;
-  details: string | number | number[] | null;
+  details: string | number | number[] | OrphanUnresolvedReference[] | null;
   url: unknown;
 }
 
@@ -788,11 +807,36 @@ export function classifyIssue(
     body,
     options.currentRepo,
   );
-  if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
+  // #3284 (Copilot review, PR #3415): `blockedRefs`/`dependencyRefs` above
+  // only ever carry resolved *local* numbers -- a `Blocked by`/`Depends
+  // on` line naming another repository (or a qualified token when
+  // `options.currentRepo` is unset) resolves to nothing there, so without
+  // this the issue's own dependency-grammar fail-safe contract (a
+  // cross-repository blocker keeps the issue non-selectable) was silently
+  // lost here: an issue whose only declared dependency was cross-repo
+  // read as having no dependencies at all.
+  const crossRepoUnresolvable = [
+    ...extractDependencyReferences(body, 'Blocked by', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+    ...extractDependencyReferences(body, 'Depends on', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+  ];
+  if (
+    blockedRefs.length === 0 &&
+    dependencyRefs.length === 0 &&
+    crossRepoUnresolvable.length === 0
+  ) {
     return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
 
-  const unresolved: number[] = [];
+  const unresolved: OrphanUnresolvedReference[] = crossRepoUnresolvable.map(
+    (token) => ({
+      reference: token.token,
+      reason: 'cross_repository_reference',
+    }),
+  );
 
   for (const ref of blockedRefs) {
     const state = resolveIssueState(
@@ -808,7 +852,10 @@ export function classifyIssue(
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
 
@@ -829,15 +876,27 @@ export function classifyIssue(
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
 
   if (unresolved.length > 0) {
+    const dedupeKeys = new Set<string>();
+    const details = unresolved.filter((entry) => {
+      const key = `${entry.reason}:${entry.reference}`;
+      if (dedupeKeys.has(key)) {
+        return false;
+      }
+      dedupeKeys.add(key);
+      return true;
+    });
     return {
       orphan: false,
       reason: 'unresolvable_reference',
-      details: [...new Set(unresolved)],
+      details,
     };
   }
 
@@ -912,7 +971,7 @@ export async function filterOrphanIssues(
   const orphans: OrphanCandidate[] = [];
   const unresolvable: {
     issue: number;
-    reference: number;
+    reference: number | string;
     reason: string;
   }[] = [];
   const warnings: (
@@ -1029,11 +1088,11 @@ export async function filterOrphanIssues(
     }
 
     if (result.reason === 'unresolvable_reference') {
-      for (const number of result.details ?? []) {
+      for (const entry of result.details ?? []) {
         unresolvable.push({
           issue: issue.number,
-          reference: number,
-          reason: 'issue-not-found-or-inaccessible',
+          reference: entry.reference,
+          reason: entry.reason,
         });
       }
     }

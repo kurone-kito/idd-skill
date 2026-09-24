@@ -254,13 +254,21 @@ export function extractDependencyReferences(
     const lineResult = consumeDependencyReferenceList(match[1], options);
     numbers.push(...lineResult.numbers);
     unresolvable.push(...lineResult.unresolvable);
-    const continuation = consumeDependencyContinuationRefLines(
-      lines,
-      index + 1,
-      options,
-    );
-    numbers.push(...continuation.numbers);
-    unresolvable.push(...continuation.unresolvable);
+    // #2441's line-wrap sweep only applies when the keyword line's own
+    // reference list is the *entire* rest of the line -- trailing prose
+    // (`Blocked by #10.`) means the next line is unrelated text, not a
+    // GitHub-wrapped continuation, so sweeping it in would over-capture.
+    // Mirrors the same guard `discover-roadmap-graph.mts`'s dependency
+    // handling already applies at its own match position.
+    if (lineResult.remaining.trim() === '') {
+      const continuation = consumeDependencyContinuationRefLines(
+        lines,
+        index + 1,
+        options,
+      );
+      numbers.push(...continuation.numbers);
+      unresolvable.push(...continuation.unresolvable);
+    }
   }
   return { numbers, unresolvable };
 }

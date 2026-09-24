@@ -401,6 +401,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       options.readiness,
       loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
   return {
@@ -756,6 +757,12 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
  */
 export async function enumerateAllRoadmapsGraph(options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // #3284 (Copilot review, PR #3415): threaded into `annotateReadiness`
+  // below so the union's own readiness annotation resolves a qualified
+  // `owner/repo#N` dependency token against the same repository each
+  // per-root `enumerateRoadmapGraph` call already uses for its own
+  // `currentRepoRef`.
+  const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
   // Resolve the configured suitability floor (normalized to an integer
   // 1-5, falling back to the default when unset) once, then rank unscored
   // leaves at that configured floor.
@@ -915,6 +922,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       options.readiness,
       options.loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
   const scoredLeafCount = leaves.filter((leaf) =>
@@ -1064,7 +1072,13 @@ function normalizeOpenRoadmapRootNumbers(roots) {
  * the readiness classification (labels + dependencies) does not read the
  * score.
  */
-async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
+async function annotateReadiness(
+  entries,
+  readiness,
+  loadIssue,
+  markerPrefix,
+  currentRepo,
+) {
   const openEntries = entries.filter(
     (entry) => String(entry.state).toUpperCase() === 'OPEN',
   );
@@ -1087,6 +1101,14 @@ async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
       markerPrefix,
+      // #3284 (Copilot review, PR #3415): without this, a `Blocked
+      // by`/`Depends on` line naming this same repository
+      // (`owner/repo#N`) resolves to a real graph edge via
+      // `currentRepoRef` above but reports unresolvable here, splitting
+      // the same node's readiness annotation from the graph's own
+      // traversal -- exactly the cross-path disagreement this issue
+      // exists to eliminate.
+      currentRepo: currentRepo || undefined,
       now: readiness.nowIso,
     },
   );
@@ -1954,21 +1976,27 @@ export function extractKeywordReferences(body, options = {}) {
         // #2799 regression test for the resulting behavior on a body
         // that narrates a dependency in prose and also restates it as a
         // standalone line.
+        //
+        // The anchor check (and the segment below it) both read from
+        // `dependencyMaskedLines` (HTML comments additionally masked),
+        // never the default `maskedLine` -- an HTML comment is invisible
+        // prose that must not count as an anchor-breaking prefix any
+        // more than it counts as a keyword-suppressing one (Copilot
+        // review, PR #3415): `<!-- note --> Blocked by #12` is a genuine
+        // anchored dependency once the comment is masked away, even
+        // though `maskedLine` alone (comments visible, matching every
+        // other keyword's own unchanged behavior) would see a non-blank
+        // prefix and wrongly reject it.
+        const dependencyMaskedLine = dependencyMaskedLines[lineIndex] ?? '';
         const dependencyLineAnchorRe =
           /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?$/u;
-        if (!dependencyLineAnchorRe.test(maskedLine.slice(0, matchIndex))) {
+        if (
+          !dependencyLineAnchorRe.test(
+            dependencyMaskedLine.slice(0, matchIndex),
+          )
+        ) {
           continue;
         }
-        // A mention hidden inside an HTML comment must still be
-        // suppressed (the two Background-table rows the issue documents)
-        // -- `maskedLine` above only masks code regions (HTML comments
-        // stay visible, matching every other keyword's own unchanged
-        // behavior), so re-derive the segment from
-        // `dependencyMaskedLines` (the same line, HTML comments
-        // additionally masked) at the same offsets instead of widening
-        // the shared per-body masking every other keyword here still
-        // relies on.
-        const dependencyMaskedLine = dependencyMaskedLines[lineIndex] ?? '';
         if (
           dependencyMaskedLine.slice(matchIndex, segmentStart).trim() === ''
         ) {

@@ -17,6 +17,7 @@ import {
 } from './autopilot-suitability.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
+import { extractDependencyReferences } from './dependency-grammar.mjs';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -488,10 +489,33 @@ export function classifyIssue(issue, options) {
     body,
     options.currentRepo,
   );
-  if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
+  // #3284 (Copilot review, PR #3415): `blockedRefs`/`dependencyRefs` above
+  // only ever carry resolved *local* numbers -- a `Blocked by`/`Depends
+  // on` line naming another repository (or a qualified token when
+  // `options.currentRepo` is unset) resolves to nothing there, so without
+  // this the issue's own dependency-grammar fail-safe contract (a
+  // cross-repository blocker keeps the issue non-selectable) was silently
+  // lost here: an issue whose only declared dependency was cross-repo
+  // read as having no dependencies at all.
+  const crossRepoUnresolvable = [
+    ...extractDependencyReferences(body, 'Blocked by', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+    ...extractDependencyReferences(body, 'Depends on', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+  ];
+  if (
+    blockedRefs.length === 0 &&
+    dependencyRefs.length === 0 &&
+    crossRepoUnresolvable.length === 0
+  ) {
     return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
-  const unresolved = [];
+  const unresolved = crossRepoUnresolvable.map((token) => ({
+    reference: token.token,
+    reason: 'cross_repository_reference',
+  }));
   for (const ref of blockedRefs) {
     const state = resolveIssueState(
       ref,
@@ -506,7 +530,10 @@ export function classifyIssue(issue, options) {
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
   for (const ref of dependencyRefs) {
@@ -526,14 +553,26 @@ export function classifyIssue(issue, options) {
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
   if (unresolved.length > 0) {
+    const dedupeKeys = new Set();
+    const details = unresolved.filter((entry) => {
+      const key = `${entry.reason}:${entry.reference}`;
+      if (dedupeKeys.has(key)) {
+        return false;
+      }
+      dedupeKeys.add(key);
+      return true;
+    });
     return {
       orphan: false,
       reason: 'unresolvable_reference',
-      details: [...new Set(unresolved)],
+      details,
     };
   }
   // Reaching here means blockedRefs/dependencyRefs was non-empty (the
@@ -704,11 +743,11 @@ export async function filterOrphanIssues(issues, options = {}) {
       }
     }
     if (result.reason === 'unresolvable_reference') {
-      for (const number of result.details ?? []) {
+      for (const entry of result.details ?? []) {
         unresolvable.push({
           issue: issue.number,
-          reference: number,
-          reason: 'issue-not-found-or-inaccessible',
+          reference: entry.reference,
+          reason: entry.reason,
         });
       }
     }

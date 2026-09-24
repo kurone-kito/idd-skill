@@ -261,3 +261,15 @@ test('#3284 parity: extractBlockedByIssueNumbers, the orphan filter, and extract
     );
   }
 });
+
+test('#3284 review fix: trailing prose on the keyword line suppresses the continuation sweep', () => {
+  // A keyword line that is NOT entirely a reference list (trailing prose
+  // or punctuation after the last token) is not a GitHub-wrapped list
+  // (#2441), so the immediately-following bare-`#N` line must not be
+  // swept in as a continuation -- it is unrelated text. Verified against
+  // a real bug: the unconditional sweep previously captured #20 here too.
+  assert.deepEqual(
+    extractDependencyReferences('Blocked by #10.\n#20', 'Blocked by'),
+    { numbers: [10], unresolvable: [] },
+  );
+});
