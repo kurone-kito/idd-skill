@@ -226,6 +226,12 @@ const OPERATIONAL_MARKER_ENTRIES = [
       /^<!--\s*idd-local-validation-evidence:\s+\S+\s+head:[0-9a-f]{40}\s+commands:\S+\s+covers:\S+\s+outcome:(?:pass|fail)\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-local-validation-evidence:/i,
   },
+  {
+    label: '<!-- idd-out-of-loop:',
+    pattern:
+      /^<!--\s*idd-out-of-loop:\s+\S+\s+pr:\d+\s+reason:bootstrap\s+at:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-out-of-loop:/i,
+  },
 ];
 /**
  * Frozen, exported view of {@link OPERATIONAL_MARKER_ENTRIES}. This array is
@@ -364,6 +370,12 @@ const MARKER_HIDE_POLICY_ENTRIES = [
     policy: 'wired',
     reason:
       'idd-local-validation-evidence family, grouped by embedded HEAD SHA mismatch (mirroring the shipped advisory-wait AW3-H rule). Hidden at post time by local-validation-evidence.mts itself (code-automated, right after its own --record --apply POST succeeds) -- roadmap #2751 Track 3 (#2755).',
+  },
+  {
+    label: '<!-- idd-out-of-loop:',
+    policy: 'excluded',
+    reason:
+      'Live authorization evidence for the bootstrap PR, like the idd-external-check-waiver marker above (kurone-kito/idd-skill#3328) -- pre-merge-readiness/resolve-review-thread re-read it fresh on every --claimless call, so hiding it would remove active authorization state the same way hiding a still-relevant waiver would.',
   },
 ];
 /**
@@ -1329,6 +1341,55 @@ export function parseLocalValidationEvidenceComment(body, createdAt) {
     commandSet,
     covers,
     outcome: match[5].toLowerCase(),
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+/**
+ * Render a `<!-- idd-out-of-loop: ... -->` marker (kurone-kito/idd-skill#3328).
+ * `reason` is a closed one-value enum (`'bootstrap'` only) on purpose: the
+ * Groom-hearing ruling this issue implements authorizes the marker "only for
+ * the bootstrap PR", so the grammar accepts exactly `reason:bootstrap` --
+ * widening this would need a fresh maintainer decision, not a payload
+ * change here.
+ */
+export function renderOutOfLoopMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const prNumber = normalizePositiveIntegerToken(payload?.prNumber);
+  const reason = String(payload?.reason ?? '').trim();
+  const at = normalizeSecondPrecisionIsoTimestamp(payload?.at);
+  if (!agentId || prNumber === null || reason !== 'bootstrap' || !at) {
+    throw new Error('invalid out-of-loop marker payload');
+  }
+  return [
+    `<!-- idd-out-of-loop: ${agentId} pr:${prNumber} reason:${reason} at:${at} -->`,
+    '',
+    `_${agentId}: this PR runs outside the IDD claim loop -- IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+export function parseOutOfLoopMarker(body, createdAt) {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-out-of-loop:\\s+(\\S+)\\s+pr:(\\d+)\\s+reason:(bootstrap)\\s+at:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const prNumber = normalizePositiveIntegerToken(match[2]);
+  const reason = match[3].toLowerCase();
+  const at = normalizeSecondPrecisionIsoTimestamp(match[4]);
+  if (!agentId || prNumber === null || !at) {
+    return null;
+  }
+  return {
+    agentId,
+    prNumber,
+    reason,
+    at,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
