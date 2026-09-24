@@ -252,9 +252,11 @@ Apply one outcome:
      create no more issues and report the created issue link. While
      the roadmap-audit claim is still this session's, also route the
      gap through the existing "Non-autonomous gaps found" outcome —
-     comment with the decision and apply the configured needs-decision
-     label; if the claim was lost, skip that outcome and only report.
-     If just one of the two links fails, report it and continue.
+     comment with the decision, apply the configured needs-decision
+     label, and stop before A2 for this roadmap exactly as that
+     outcome already does; if the claim was lost, skip that outcome
+     and only report. If just one of the two links fails, report it
+     and continue.
   4. New follow-up issue bodies must still reference the roadmap (for
      example `Refs #NNN`) as reader provenance (#1278); a later audit
      now rediscovers the follow-up through the sub-issue link or the
