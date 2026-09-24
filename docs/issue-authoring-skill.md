@@ -1147,13 +1147,21 @@ this matches the mandatory Stage 2 sweep's own fixed classifier
 (`classifyAuthoringMarkerFamily` in `marker-helpers.mts`) so the two
 procedures never disagree about which prior record is eligible.
 `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
-`protocol-helpers.mts`) implements that check: it parses the candidate,
-re-renders the parsed fields with `renderAuthoringOwnerMarker` /
-`renderAuthoringPublicationIntentMarker`, and requires the result to equal
-the candidate's body exactly. A candidate that deviates from the template in
-any way -- reordered or extra fields, altered spacing, trailing content, a
-different visible note -- is never minimized; leave it visible rather than
-guessing. Skip the just-posted comment itself and any candidate whose
+`protocol-helpers.mts`) implements the byte-exact-template half of that
+check: it parses the candidate, re-renders the parsed fields with
+`renderAuthoringOwnerMarker` / `renderAuthoringPublicationIntentMarker`,
+and requires the result to equal the candidate's body exactly. A
+candidate that deviates from the template in any way -- reordered or
+extra fields, altered spacing, trailing content, a different visible
+note -- is never minimized; leave it visible rather than guessing. Apply
+the continuity-chain-identity half directly: parse each byte-exact
+candidate the same way (`parseAuthoringOwnerComment` /
+`parseAuthoringPublicationIntentComment`) and compare its `target=` field
+(plus `token=` for `authoring-publication-intent`) against the
+just-posted record's own fields -- the identical field comparison
+`classifyAuthoringMarkerFamily`'s own (module-private)
+`resolveAuthoringMarkerIdentity` performs internally for the Stage 2
+sweep. Skip the just-posted comment itself and any candidate whose
 `isMinimized` is already `true` (idempotent; the minimize helper's own probe
 already enforces this).
 
