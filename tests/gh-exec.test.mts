@@ -277,6 +277,74 @@ process.stdout.write('{}');
   }
 });
 
+test('ghTextUnbounded adds --hostname immediately after the api subcommand on a GHES GITHUB_SERVER_URL, and never on github.com (#3336)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghTextUnbounded(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      ghTextUnbounded(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextUnbounded never adds a second --hostname when the caller already spliced its own resolved value (#3336)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghTextUnbounded([
+        'api',
+        'graphql',
+        '--hostname',
+        'ghes.example.com',
+        '-f',
+        'query=query { viewer { login } }',
+      ]);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghTextUnbounded reads a response far larger than any fixed maxBuffer guess, via a temp file (#2935 review, rounds 4-6)', () => {
   // 40 MiB: bigger than ghText's default 1 MiB AND bigger than every
   // fixed maxBuffer this codebase tried and had second-guessed away
@@ -727,6 +795,79 @@ process.stdout.write('{}');
   }
 });
 
+// #3336: table-driven guard covering every exported `gh api` transport
+// wrapper in this module under a GHES `GITHUB_SERVER_URL`, so a future
+// wrapper that skips host resolution fails this test instead of silently
+// querying github.com on a GHES Actions runner. Each per-wrapper test
+// above already pins the exact insertion position; this one only checks
+// presence, uniformly, across all six.
+test('every exported gh api wrapper resolves the GHES host (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  const wrappers: { name: string; stdout: string; invoke: () => unknown }[] = [
+    {
+      name: 'ghText',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghText(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghTextAsync',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghTextAsync(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghTextUnbounded',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghTextUnbounded(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghApiJson',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghApiJson('repos/o/r/issues/1'),
+    },
+    {
+      name: 'ghApiJsonWithHeaders',
+      stdout: `process.stdout.write('HTTP/2.0 200 OK\\n\\n{}');`,
+      invoke: () => ghApiJsonWithHeaders('repos/o/r/issues/1'),
+    },
+    {
+      name: 'ghGraphql',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghGraphql('query { viewer { login } }', {}),
+    },
+  ];
+  try {
+    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
+    for (const wrapper of wrappers) {
+      const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+${wrapper.stdout}
+`);
+      try {
+        await wrapper.invoke();
+        const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+        assert.ok(
+          argv.includes('--hostname') && argv.includes('ghes.example.com'),
+          `${wrapper.name} did not include a resolved --hostname: ${JSON.stringify(
+            argv,
+          )}`,
+        );
+      } finally {
+        restore();
+      }
+    }
+  } finally {
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson (paginated) parses NDJSON output, flattening array lines', () => {
   const restore = stubGh(`
 process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ id: 3 })].join('\\n'));
@@ -877,6 +1018,83 @@ process.stdout.write('  hello async  \\n');
       'name',
     ]);
   } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextAsync adds --hostname immediately after the api subcommand on a GHES GITHUB_SERVER_URL, and never on github.com (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  try {
+    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
+    await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+    process.env.GITHUB_SERVER_URL = 'https://github.com';
+    await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextAsync never adds a second --hostname when the caller already spliced its own resolved value (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  try {
+    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
+    await ghTextAsync([
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+  } finally {
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
