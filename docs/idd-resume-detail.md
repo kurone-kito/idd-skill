@@ -297,8 +297,15 @@ could ever observe it as 'alive'".
    confirm no session is still working in the worktree — the helpers
    never check process liveness (see the citation above).
 3. **Preserve.** Check for an in-progress rebase, merge, cherry-pick, or
-   bisect first (see §W2); if found, back up the pre-operation branch
-   ref, not the detached HEAD. Inspect
+   bisect using git state, not a literal `.git/...` path — `.git` at a
+   linked worktree's root is a file, not a directory, so a hardcoded
+   path check silently never matches: `git -C <path> rev-parse -q
+   --verify MERGE_HEAD` (merge), `test -d "$(git -C <path> rev-parse
+   --git-path rebase-merge)"` or `rebase-apply` (rebase), `git -C
+   <path> rev-parse -q --verify CHERRY_PICK_HEAD` (cherry-pick), or
+   `git -C <path> rev-parse --git-path BISECT_LOG` existing (bisect).
+   Any match means back up the pre-operation branch tip before
+   continuing. Inspect
    `git -C <path> status --porcelain --ignored`,
    unpushed commits (`git -C <path> log @{u}..HEAD`, or all commits
    when there is no upstream), and `git -C <path> stash list`. Save

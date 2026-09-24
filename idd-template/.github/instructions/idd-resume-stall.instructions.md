@@ -228,7 +228,7 @@ After successful verification, run `idd-resume.instructions.md` Step 1
 to preserve closed/merged cleanup and `roadmap-audit/*` special-case
 routing before continuing to Step 2/Step 3.
 
-## Hold behavior (when S2/S3 is not satisfied)
+## Hold behavior (when S2/S3/S4 is not satisfied)
 
 In this non-owned-claim path, do not post hold notes on the issue/PR.
 Record evidence in session logs only and stop; when the hold traces to
