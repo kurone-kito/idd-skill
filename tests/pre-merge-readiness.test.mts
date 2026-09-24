@@ -11542,6 +11542,81 @@ test('collectPreMergeReadiness: --claimless still refuses a PR whose only closin
   );
 });
 
+test('collectPreMergeReadiness: --claimless still refuses when a collaborator-trusted claim lives only on the closing issue, not the PR (C1 critique round 2 regression guard)', () => {
+  // The claimed path's own collaborator-trust auto-discovery scans both
+  // the PR's comments and the claimed issue's comments -- but under
+  // --claimless, the (nonexistent) "claimed issue" comments are always
+  // [], so before this fix a collaborator whose only claim comment lived
+  // on the CLOSING issue was invisible to trustedMarkerLogins, letting a
+  // valid out-of-loop marker silently override their real active claim.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    collaboratorPermissions: {
+      'collab-user': {
+        outcome: 'found',
+        permission: 'write',
+        roleName: 'write',
+      },
+    },
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+      7: [
+        {
+          id: 2,
+          body: '<!-- claimed-by: collab-agent clm-collab supersedes: none 2026-07-01T00:00:00Z branch: issue/7-x -->\n\n_collab-agent: issue claim — IDD automation marker. Do not edit._',
+          createdAt: '2026-07-01T00:00:00Z',
+          updatedAt: '2026-07-01T00:00:00Z',
+          authorLogin: 'collab-user',
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({ markerTrust: { allowCollaboratorMarkers: true } }),
+      ),
+    /active claim state is present/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // kurone-kito/idd-skill#2911: stale-self-waiver merge blocker.
 //

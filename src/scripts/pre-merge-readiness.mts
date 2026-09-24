@@ -942,33 +942,64 @@ export function collectPreMergeReadiness(
       owner,
       repo,
     );
+    // kurone-kito/idd-skill#3328 (C1 critique pass, round 2): the claimed
+    // path's own collaborator-trust auto-discovery scans BOTH the PR's
+    // comments and the claimed issue's comments (`claimComments` above) --
+    // but under --claimless, `claimComments` is always `[]`, so a
+    // collaborator whose only claim comment lives on the CLOSING issue
+    // (never the PR) was invisible to `trustedMarkerLogins`, silently
+    // reading their real active claim as untrusted noise and letting a
+    // marker wrongly override it. Read each closing issue's comments once
+    // here, and when collaborator trust is enabled, fold the same
+    // discovery over them too before resolving claim state -- restoring
+    // the "an active claim always wins over a marker" invariant this file
+    // documents. Any read failure fails the whole check closed to
+    // `'unknown'`, the same way a single-issue read failure already did.
+    const closingIssueCommentsByNumber = new Map<
+      number,
+      IssueCommentPayload[]
+    >();
+    let closingIssueReadFailed = false;
+    for (const issueNumber of closingIssueNumbers ?? []) {
+      try {
+        closingIssueCommentsByNumber.set(
+          issueNumber,
+          port.listWorkItemComments(issueNumber).map(toIssueCommentPayload),
+        );
+      } catch {
+        closingIssueReadFailed = true;
+        break;
+      }
+    }
+    const closingIssueTrustedMarkerLogins =
+      !closingIssueReadFailed && collaboratorTrustEnabled
+        ? normalizeTrustedMarkerLogins([
+            ...trustedMarkerLogins,
+            ...resolveTrustedCollaboratorMarkerLogins(
+              port,
+              [...closingIssueCommentsByNumber.values()].flat(),
+            ),
+          ])
+        : trustedMarkerLogins;
     const isTrustedIssueAuthor = (login: string): boolean =>
-      trustedMarkerLogins.includes(
+      closingIssueTrustedMarkerLogins.includes(
         String(login ?? '')
           .trim()
           .toLowerCase(),
       );
-    let closingIssueClaimState: PrClosingIssueClaimState = 'none';
-    // No closing-issue reads needed when the classifier already fails
-    // closed to in-loop regardless of claim state (closingIssueNumbers is
-    // null).
-    for (const issueNumber of closingIssueNumbers ?? []) {
-      try {
-        const issueEvents = port
-          .listWorkItemComments(issueNumber)
-          .map(toIssueCommentPayload)
-          .map(normalizeComment);
-        if (resolveActiveClaim(issueEvents, isTrustedIssueAuthor)) {
+    let closingIssueClaimState: PrClosingIssueClaimState =
+      closingIssueReadFailed ? 'unknown' : 'none';
+    if (!closingIssueReadFailed) {
+      for (const issueComments of closingIssueCommentsByNumber.values()) {
+        if (
+          resolveActiveClaim(
+            issueComments.map(normalizeComment),
+            isTrustedIssueAuthor,
+          )
+        ) {
           closingIssueClaimState = 'present';
           break;
         }
-      } catch {
-        // A closing issue's own comments could not be read -- the claim
-        // state is unresolvable, which classifyPrLoopMembership treats the
-        // same way as `'present'` (fail closed: an unresolvable claim
-        // state always wins over a marker).
-        closingIssueClaimState = 'unknown';
-        break;
       }
     }
     outOfLoopMembership = classifyPrLoopMembership({
@@ -976,7 +1007,13 @@ export function collectPreMergeReadiness(
       closingIssueNumbers,
       closingIssueClaimState,
       prComments: normalizedComments,
-      trustedMarkerLogins,
+      // The extended set (folding in any closing-issue-comment-discovered
+      // collaborator) is a strict superset of `trustedMarkerLogins` -- safe
+      // to reuse here too: it only ever widens who is trusted, never
+      // narrows, and using one consistent trust set for both the claim
+      // check above and this marker check avoids the two sub-decisions
+      // silently disagreeing on who counts as trusted.
+      trustedMarkerLogins: closingIssueTrustedMarkerLogins,
     });
     if (outOfLoopMembership.membership === 'in-loop') {
       throw new Error(
