@@ -14,7 +14,6 @@
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
-import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -138,9 +137,20 @@ function resolveOwnerRepoFromRef(repoRef) {
  * `pre-merge-readiness.mts`) -- default resolves the real base64 `.content`
  * field via `gh api .../contents/.github/idd/config.json`.
  *
+ * `ref` (#3252) must be a value the PR under evaluation cannot itself
+ * steer -- the PR's base branch (falling back to the repository's live
+ * default branch), never its head SHA and never a local worktree read.
+ * This mirrors `loadTrustedIddConfig`'s own trust-boundary contract
+ * (`idd-config.mts`) exactly, including its 404-is-absent /
+ * non-404-rethrows split below; this function keeps its own
+ * injectable-fetch body -- rather than delegating to
+ * `loadTrustedIddConfig` outright -- so the four direct unit tests below
+ * (404 default, non-404 rethrow, empty-content, valid-decode) keep
+ * pinning this exact decode-and-classify logic, not a different reader's.
+ *
  * A confirmed `404` means the target ref has no policy file: falls back to
- * the same distributed defaults `loadIddConfig()` uses for the local-repo
- * path. Any other fetch failure is ambiguous or malformed and rethrows
+ * the same distributed defaults as the repository's default local config.
+ * Any other fetch failure is ambiguous or malformed and rethrows
  * (fail-closed) rather than silently mapping onto the permissive
  * `auto-admin-retry` default -- the #1521-adjacent fail-open corner #1708
  * pins with direct tests (previously exercised only via a full
@@ -155,15 +165,15 @@ function resolveOwnerRepoFromRef(repoRef) {
 export function resolveRemoteSoloCodeownerAdminFallbackMode(
   prNumber,
   repoRef,
-  headSha,
-  fetchEncodedConfig = (scopedRepoRef, ref) => {
+  ref,
+  fetchEncodedConfig = (scopedRepoRef, scopedRef) => {
     const outcome = createGithubProviderAdapter(
       '',
       '',
     ).getRepositoryFileContentAtRef(
       scopedRepoRef,
       '.github/idd/config.json',
-      ref,
+      scopedRef,
     );
     if (outcome.outcome === 'not-found') {
       const notFound = new Error('Not Found (HTTP 404)');
@@ -175,10 +185,10 @@ export function resolveRemoteSoloCodeownerAdminFallbackMode(
 ) {
   let config;
   try {
-    const encodedConfig = fetchEncodedConfig(repoRef, headSha);
+    const encodedConfig = fetchEncodedConfig(repoRef, ref);
     if (!encodedConfig) {
       throw new Error(
-        `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+        `target repository policy is empty for PR #${prNumber} at ${ref}`,
       );
     }
     config = JSON.parse(
@@ -231,11 +241,31 @@ const defaultDeps = {
       repo,
     ).mergeChangeRequestAdminAtRepo(owner, repo, prNumber, headSha);
   },
-  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) =>
-    repoRef
-      ? resolveRemoteSoloCodeownerAdminFallbackMode(prNumber, repoRef, headSha)
-      : normalizePolicyConfig(loadIddConfig()).mergeGate
-          .soloCodeownerAdminFallback,
+  // #3252: always a trusted-ref remote read, scoped to `repoRef` when set
+  // or the current-directory repo otherwise (`resolveOwnerRepoFromRef`
+  // already implements that split for every other dep above) -- never a
+  // local worktree read, which during F3 is checked out on the PR's own
+  // branch and so would let the PR under merge steer this policy.
+  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, baseRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    const scopedRepoRef = `${owner}/${repo}`;
+    const resolvedRef =
+      baseRef ||
+      createGithubProviderAdapter(owner, repo).getRepositoryDefaultBranch(
+        owner,
+        repo,
+      );
+    if (!resolvedRef) {
+      throw new Error(
+        `cannot resolve a trusted ref for the admin-fallback policy read: PR #${prNumber} has no base ref and ${scopedRepoRef}'s live default branch could not be determined`,
+      );
+    }
+    return resolveRemoteSoloCodeownerAdminFallbackMode(
+      prNumber,
+      scopedRepoRef,
+      resolvedRef,
+    );
+  },
   getLocalHeadState: () => {
     try {
       const branch = execFileSync(
@@ -387,10 +417,19 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     }
     let fallbackMode;
     try {
+      // #3252: the base ref, never the head SHA -- read from the SAME
+      // freshly re-collected `revalidated` report the eligibility check
+      // above uses, not the earlier (possibly stale) `report`.
+      const revalidatedDevelopmentBranchTarget = asRecord(
+        revalidated.developmentBranchTarget,
+      );
+      const baseRef = String(
+        revalidatedDevelopmentBranchTarget.baseRefName ?? '',
+      );
       fallbackMode = deps.resolveSoloCodeownerAdminFallbackMode(
         args.prNumber,
         args.repoRef,
-        prHeadSha,
+        baseRef,
       );
     } catch (policyError) {
       verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${ghErrorText(policyError) || 'unknown error'}; no merge`;

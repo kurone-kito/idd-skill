@@ -1133,15 +1133,29 @@ test('--apply does not retry with --admin when the repository opts into hold-and
   assert.equal(exitCode, 1);
 });
 
+// #3252: `computePreMergeReadinessBlockers`'s development-branch-target
+// gate (protocol-helpers.mts) treats an absent `developmentBranchTarget`
+// as no gate at all, but a PRESENT one with a mismatched/absent `status`
+// as an `unavailable` blocker -- so every admin-fallback fixture below
+// that adds this field must give it a PASSING shape (`branch ===
+// baseRefName`, `status` one of `'configured'`/`'default'`). Every other
+// test in this file keeps omitting the field entirely.
+function passingDevelopmentBranchTarget(
+  baseRefName: string,
+): Record<string, unknown> {
+  return { status: 'default', branch: baseRefName, baseRefName };
+}
+
 test('--apply scopes admin-fallback policy resolution to the target repository', () => {
   const report = soloCodeownerDeadlockReport();
+  report.developmentBranchTarget = passingDevelopmentBranchTarget('main');
   let policyArgs: [number, string | null, string][] | undefined;
   const { deps, calls } = depsFor(report, {
     mergePr: () => {
       throw baseBranchPolicyMergeError();
     },
-    resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
-      policyArgs = [[prNumber, repoRef, headSha]];
+    resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, baseRef) => {
+      policyArgs = [[prNumber, repoRef, baseRef]];
       return 'hold-and-report';
     },
   });
@@ -1150,11 +1164,67 @@ test('--apply scopes admin-fallback policy resolution to the target repository',
     deps,
   );
 
-  assert.deepEqual(policyArgs, [[994, 'acme/widget', HEAD]]);
+  // #3252: the resolver receives the PR's base ref ('main'), never the
+  // head SHA (`HEAD`) and never a local worktree read.
+  assert.deepEqual(policyArgs, [[994, 'acme/widget', 'main']]);
   assert.equal(verdict.merged, false);
   assert.deepEqual(calls.adminMerged, []);
   assert.match(verdict.mergeResult, /base branch policy prohibits the merge/);
   assert.equal(exitCode, 1);
+});
+
+test('--apply resolves the admin-fallback policy against the base ref even without --owner/--repo', () => {
+  const report = soloCodeownerDeadlockReport();
+  report.developmentBranchTarget = passingDevelopmentBranchTarget('main');
+  let policyArgs: [number, string | null, string][] | undefined;
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, baseRef) => {
+      policyArgs = [[prNumber, repoRef, baseRef]];
+      return 'hold-and-report';
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  // No --owner/--repo: `repoRef` is null (current-directory repo), but
+  // the third argument is still the resolved base ref, never the head
+  // SHA and never the un-scoped local `.github/idd/config.json`.
+  assert.deepEqual(policyArgs, [[994, null, 'main']]);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply never lets a head-branch config value reach the verdict, only the base-ref value', () => {
+  const report = soloCodeownerDeadlockReport();
+  report.developmentBranchTarget = passingDevelopmentBranchTarget('main');
+  // Simulate the pre-#3252 bug: a config read keyed on the head SHA would
+  // report 'hold-and-report' (blocking the retry); the base-ref value is
+  // the opposite, 'auto-admin-retry'. Only the base-ref value may ever
+  // reach the verdict.
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: (_prNumber, _repoRef, baseRef) =>
+      baseRef === 'main' ? 'auto-admin-retry' : 'hold-and-report',
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.adminFallbackUsed, true);
+  assert.equal(verdict.merged, true);
+  assert.deepEqual(calls.adminMerged, [
+    '994:1111111111111111111111111111111111111111',
+  ]);
+  assert.equal(exitCode, 0);
 });
 
 test('--apply fails closed when the target admin-fallback policy is unreadable', () => {
