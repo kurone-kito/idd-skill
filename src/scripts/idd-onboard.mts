@@ -3742,6 +3742,19 @@ export function runRecordPolicyCli(
       targetDir,
       args.writePolicyDoc,
     );
+    // #3292 review (Copilot): reject a --write-policy-doc destination
+    // that resolves to .github/idd/config.json itself, unconditionally
+    // -- --force must never permit this. Without this check, --force
+    // would pass assertPolicyDocNotClobbered's content guard (it
+    // short-circuits before even reading the file), then the Markdown
+    // document write below would immediately overwrite the config
+    // write that already landed on the very same path, leaving the
+    // required config.json invalid.
+    if (policyDocDestination === resolve(configPath)) {
+      throw new Error(
+        `--write-policy-doc must not resolve to .github/idd/config.json itself: ${args.writePolicyDoc}`,
+      );
+    }
     assertPolicyDocNotClobbered(policyDocDestination, args.force);
     // Create a missing parent directory before either write below (#3292
     // review, CodeRabbit): the ancestor check inside
@@ -3756,8 +3769,23 @@ export function runRecordPolicyCli(
     mkdirSync(dirname(policyDocDestination), { recursive: true });
   }
   if (canWrite) {
+    // #3292 review (Copilot): re-run the ancestor/leaf confinement
+    // check immediately before each write below, narrowing the gap
+    // between it and the earlier check to a single-statement TOCTOU
+    // window -- the same belt-and-suspenders precedent
+    // assertSafeGuardWorkflowDestination's own doc comment already
+    // documents for applyUntrustedLabelerGuardPlan's write. This
+    // narrows, but does not eliminate, a concurrent symlink-swap race;
+    // no no-follow/atomic-write primitive exists anywhere in this
+    // module (a larger hardening effort across every write path here,
+    // out of scope for this issue).
+    assertSafePlainFileDestination(targetDir, '.github/idd/config.json');
     writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`);
     if (policyDocDestination) {
+      assertSafePlainFileDestination(
+        targetDir,
+        relative(targetDir, policyDocDestination).split(sep).join('/'),
+      );
       writeFileSync(
         policyDocDestination,
         buildPolicyDocWithSentinel(policyDocument),

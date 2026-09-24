@@ -6136,6 +6136,42 @@ test('bin/idd-onboard.mjs --record-policy refuses when .github/idd/config.json i
   assert.equal(readFileSync(outsideConfigPath, 'utf8'), outsideConfigContent);
 });
 
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/config.json refuses the internal-file collision instead of clobbering config.json (#3292 review, Copilot)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      configPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+});
+
 // Permission-denied is a distinct failure from ENOENT and must fail closed
 // (never silently treated as "absent"). Skipped when running as root or on
 // a platform where chmod does not restrict the owning user's own access
