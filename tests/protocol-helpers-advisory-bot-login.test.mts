@@ -4,6 +4,7 @@ import {
   computeSecondaryAdvisoryReviewSettlement,
   foldSecondaryAdvisoryReviewSettlements,
   isConfiguredAdvisoryBotLogin,
+  isCopilotReviewerLogin,
   isGateAdvisoryBotLogin,
   normalizeTrustedMarkerLogins,
 } from '../src/scripts/protocol-helpers.mts';
@@ -551,5 +552,60 @@ test('foldSecondaryAdvisoryReviewSettlements: three distinct logins all declined
       headCommittedAt: HEAD_COMMITTED_AT,
     }),
     { settledAt: null, declined: true },
+  );
+});
+
+// #3262: `isCopilotReviewerLogin` for a configured non-Copilot primary bot
+// must match a bare login against a `[bot]`-suffixed configured login only
+// when `authorType` proves it is a genuine bot -- and must match a
+// `[bot]`-suffixed observed login against a bare configured login
+// unconditionally, since a user login cannot contain `[`.
+
+test('#3262: isCopilotReviewerLogin matches a bot-suffixed configured login against a bare observed login only with authorType Bot', () => {
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai', 'coderabbitai[bot]', 'Bot'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai', 'coderabbitai[bot]', 'User'),
+    false,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai', 'coderabbitai[bot]'),
+    false,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai', 'coderabbitai[bot]', null),
+    false,
+  );
+});
+
+test('#3262: isCopilotReviewerLogin matches a bare configured login against a bot-suffixed observed login regardless of authorType', () => {
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai[bot]', 'coderabbitai', 'Bot'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai[bot]', 'coderabbitai'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai[bot]', 'coderabbitai', 'User'),
+    true,
+  );
+});
+
+test('#3262: isCopilotReviewerLogin rejects a registrable lookalike for either configured spelling', () => {
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai1', 'coderabbitai[bot]', 'Bot'),
+    false,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai1', 'coderabbitai', 'Bot'),
+    false,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai1[bot]', 'coderabbitai', 'Bot'),
+    false,
   );
 });

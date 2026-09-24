@@ -1907,6 +1907,10 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         commitId: 'deadbeef',
         commentCount: 2,
         body: 'first page review',
+        // #3262: no `comments.nodes` in this fixture (only `totalCount`),
+        // so the connection reads as truncated (2 comments claimed, 0
+        // nodes fetched) -- fails closed to `replyOnly: false`.
+        replyOnly: false,
       },
       {
         id: 'PRR_2',
@@ -1916,11 +1920,101 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         commitId: 'deadbeef',
         commentCount: 0,
         body: null,
+        replyOnly: false,
       },
     ],
     headCommittedAt: '2026-01-01T00:00:00Z',
   });
   assert.equal(call, 2);
+});
+
+test('#3262: getChangeRequestReviewsWithHeadCommitDate derives replyOnly from the comments.nodes replyTo selection', () => {
+  const page = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviews: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'PRR_full',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:00:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 2,
+                  nodes: [{ replyTo: null }, { replyTo: null }],
+                },
+                body: 'full review',
+              },
+              {
+                id: 'PRR_reply_only',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:17:35Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 1,
+                  nodes: [{ replyTo: { id: 'RT_1' } }],
+                },
+                body: '',
+              },
+              {
+                // No comments at all: never reply-only.
+                id: 'PRR_empty',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:18:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: { totalCount: 0, nodes: [] },
+                body: '',
+              },
+              {
+                // Truncated connection (more comments than fetched nodes):
+                // fails closed to `replyOnly: false`.
+                id: 'PRR_truncated',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:19:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 3,
+                  nodes: [{ replyTo: { id: 'RT_2' } }],
+                },
+                body: '',
+              },
+            ],
+          },
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-09-20T06:00:00Z' } }],
+          },
+        },
+      },
+    },
+  });
+  let capturedArgs: readonly unknown[] = [];
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return page;
+      },
+    }),
+  );
+  const { reviews } = port.getChangeRequestReviewsWithHeadCommitDate(3160);
+  assert.deepEqual(
+    reviews.map((review) => ({ id: review.id, replyOnly: review.replyOnly })),
+    [
+      { id: 'PRR_full', replyOnly: false },
+      { id: 'PRR_reply_only', replyOnly: true },
+      { id: 'PRR_empty', replyOnly: false },
+      { id: 'PRR_truncated', replyOnly: false },
+    ],
+  );
+  const queryArg = capturedArgs.find(
+    (arg): arg is string => typeof arg === 'string' && arg.startsWith('query='),
+  );
+  assert.match(queryArg ?? '', /comments\(first:\s*100\)/);
+  assert.match(queryArg ?? '', /replyTo\s*\{\s*id\s*\}/);
 });
 
 test('getChangeRequestAuthor maps login/__typename, and null when absent', () => {

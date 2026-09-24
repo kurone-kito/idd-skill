@@ -328,6 +328,15 @@ export interface ProviderReviewClauseNode {
   commitId: string | null;
   commentCount: number | null;
   body: string | null;
+  /** #3262: `true` when this review's comments connection was not
+   * truncated, carries at least one comment, and every comment is a reply
+   * to an existing thread (a bot replying inside a thread instead of
+   * posting a fresh review) -- see `review-clause.mts`'s
+   * `ReviewPayload.replyOnly` for how this is consumed. Optional (unlike
+   * this interface's other fields) so every existing fixture literal that
+   * predates #3262 -- built without this field -- keeps typechecking;
+   * absent reads the same as `false` ("not reply-only"). */
+  replyOnly?: boolean;
 }
 
 /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */

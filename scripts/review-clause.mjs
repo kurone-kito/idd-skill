@@ -90,10 +90,10 @@ export function parseSuppressedCommentCount(body) {
  * selects that field.
  */
 export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
-  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin)) {
+  const typename = author?.__typename;
+  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  const typename = author?.__typename;
   return typename === undefined || typename === null || typename === 'Bot';
 }
 /** Evaluate Clause 1 against the single, absolute-latest Copilot review --
@@ -120,7 +120,13 @@ export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
  * exist, not merely as an off-HEAD review -- so it can neither win this
  * "latest" selection itself nor mask an earlier genuine review of the same
  * HEAD underneath it. See that function's doc comment for the observed
- * incident and matching rationale. */
+ * incident and matching rationale.
+ *
+ * #3262: a reply-only review (every comment a reply to an existing
+ * thread, {@link ReviewPayload.replyOnly}) is excluded the same way --
+ * it originates no thread of its own, so it can never satisfy the
+ * item-count/thread-count parity `advisory-convergence.mts` checks, and
+ * would otherwise mask an earlier genuine full review of the same HEAD. */
 export function resolveLatestCopilotReviewClause(
   reviews,
   prHeadSha,
@@ -130,7 +136,8 @@ export function resolveLatestCopilotReviewClause(
     .filter(
       (review) =>
         isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
-        !isCopilotErrorReviewBody(review.body),
+        !isCopilotErrorReviewBody(review.body) &&
+        review.replyOnly !== true,
     )
     .at(-1);
   if (!latest) {
@@ -205,6 +212,7 @@ export function fetchReviewsAndHeadCommit(
     commitId: node.commitId,
     itemCount: node.commentCount,
     body: node.body,
+    replyOnly: node.replyOnly,
   }));
   return { reviews, headCommittedAt };
 }
