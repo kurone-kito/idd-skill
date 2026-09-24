@@ -1616,3 +1616,44 @@ test('findHtmlCommentRanges still masks a list-marker opener padded with a singl
     { start: 2, end: body.length },
   ]);
 });
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" on a list-item continuation line indented to the inherited content column (Copilot review round 3, PR #3413)', () => {
+  // "-    item" opens a list item whose content column is 5 (marker "-"
+  // plus its own 4-column padding); a following line with no marker of
+  // its own, indented to exactly that column, is still a valid
+  // block-opener position within the list item's content zone. `gh api
+  // markdown` confirms "-    item\n     <!-- x\n\nAfter" swallows the
+  // rest of the document -- neither the literal "<!--" text nor the
+  // "After" paragraph render. Before this fix, the position check only
+  // examined the physical line in isolation and had no inherited-indent
+  // awareness, so this continuation opener was wrongly left unmasked.
+  const body = '-    item\n     <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 15, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" over-indented 4+ columns past the inherited list-content indent', () => {
+  // 9 columns of indentation (content column 5 plus 4 more) is beyond
+  // the "at most 3 extra columns" a continuation opener allows -- `gh
+  // api markdown` confirms this renders the "<!--" as literal text
+  // inside the list item's own paragraph, with "After" rendering as its
+  // own separate paragraph outside the list (not swallowed).
+  const body =
+    '-    item\n         <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks an under-indented line that exits the list item as a fresh top-level opener', () => {
+  // 2 columns of indentation is below the list item's own content
+  // column (5), so this line no longer continues that item's content
+  // zone -- but 2 columns is still within the ordinary top-level "at
+  // most 3 leading spaces" rule, so it opens a fresh, unrelated
+  // top-level HTML block instead. `gh api markdown` confirms this still
+  // swallows the rest of the document (no literal "<!--" text and no
+  // "After" paragraph render).
+  const body = '-    item\n  <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 12, end: body.length },
+  ]);
+});

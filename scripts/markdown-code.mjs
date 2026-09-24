@@ -1236,18 +1236,6 @@ function isHtmlBlockContainerEnded(
 // treated the same as a genuine line-start one, masking real content
 // after it.
 //
-// Not covered: a list-item CONTINUATION line that carries no marker of
-// its own and relies on an earlier line's inherited list-content
-// indentation (e.g. a second paragraph two lines below a `- ` bullet,
-// indented to match). Recognizing that shape needs the same forward,
-// multi-line list-content-indent tracking {@link findHtmlBlockRanges}
-// already carries via {@link createListContentIndentTrackerState};
-// this function deliberately stays a flat, position-only scan rather
-// than gaining that state machine, since every caller that also needs
-// full generic/raw-text HTML block awareness already has it available
-// through the separate `htmlBlocks: 'mask'` option, which does track
-// it.
-//
 // CodeRabbit review, same PR, same round: a list marker's own required
 // padding is bounded to 1-4 columns of indentation (CommonMark's list
 // item rule 1; a bare tab counts as up to 4 columns via the usual
@@ -1259,24 +1247,87 @@ function isHtmlBlockContainerEnded(
 // paragraph OUTSIDE the list, i.e. NOT swallowed). Reuses
 // parseListItemContainer's own markerEndColumns/spacingColumns
 // derivation so both call sites agree on the same boundary.
-function isAtHtmlBlockOpenerPosition(text, openIndex) {
+//
+// Copilot review round 3, same PR: a list-item CONTINUATION line that
+// carries no marker of its own and relies on an earlier line's
+// inherited list-content indentation (e.g. `-    item` followed by a
+// line indented to column 5 with no marker) is also a valid opener
+// position -- `gh api markdown` confirms it still swallows the rest of
+// the document. `lineListContentIndents`, precomputed once per
+// {@link findHtmlCommentRanges} call via the same forward,
+// per-line-only tracker helpers {@link findHtmlBlockRanges} uses
+// ({@link createListContentIndentTrackerState},
+// {@link resetListContentIndentTrackerForLine},
+// {@link adoptListContentIndentForLine} -- no fence/HTML-block
+// coupling needed, unlike that function's own loop), supplies the
+// inherited content indent applicable to the physical line containing
+// `openIndex`, reset exactly as {@link findHtmlBlockRanges} resets it
+// (container-depth mismatch, an indentation drop, or two consecutive
+// blank lines). A continuation line qualifies when its own
+// (blockquote-stripped) leading whitespace reaches that indent, plus
+// at most 3 more columns -- the same "at most 3 leading spaces" rule a
+// bare or list-opening line already applies past its own required
+// prefix.
+function isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents) {
   const lineStart = text.lastIndexOf('\n', openIndex - 1) + 1;
   const { content } = parseContainerLine(text.slice(lineStart, openIndex));
   if (/^ {0,3}$/.test(content)) {
     return true;
   }
   const listItem = parseListItemMatch(content);
-  if (listItem === null || listItem.content !== '') {
+  if (listItem !== null && listItem.content === '') {
+    const markerEndColumns =
+      indentationColumns(listItem.markerIndent) + listItem.marker.length;
+    const spacingColumns =
+      indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
+    return spacingColumns <= 4;
+  }
+  const inheritedContentIndent = lineListContentIndents.get(lineStart);
+  if (
+    inheritedContentIndent === undefined ||
+    inheritedContentIndent === null ||
+    /[^ ]/.test(content)
+  ) {
     return false;
   }
-  const markerEndColumns =
-    indentationColumns(listItem.markerIndent) + listItem.marker.length;
-  const spacingColumns =
-    indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
-  return spacingColumns <= 4;
+  const columns = indentationColumns(content) - inheritedContentIndent;
+  return columns >= 0 && columns <= 3;
+}
+/**
+ * Precomputes, for every physical line's start offset in `text`, the
+ * list-content indent a continuation line at that offset would inherit
+ * (or `null` when no list item's content zone is active there) --
+ * {@link isAtHtmlBlockOpenerPosition}'s own per-call input, built once
+ * up front rather than per `<!--` occurrence. A standalone forward pass
+ * using only the list-content-indent tracker half of
+ * {@link findHtmlBlockRanges}'s loop, with none of that function's own
+ * fence/HTML-block bookkeeping -- this scan does not need it, since it
+ * only ever reads `lineTracker.contentIndent`, never the fence or
+ * HTML-block state those other fields drive.
+ */
+function computeLineListContentIndents(text) {
+  const indents = new Map();
+  const listTracker = createListContentIndentTrackerState();
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
+    const line = text.slice(lineStart, lineEnd);
+    const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
+    resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    indents.set(lineStart, listTracker.contentIndent);
+    adoptListContentIndentForLine(listTracker, containerLine);
+    if (newlineIndex === -1) {
+      break;
+    }
+    lineStart = newlineIndex + 1;
+  }
+  return indents;
 }
 export function findHtmlCommentRanges(text, ignoredOpenerRanges = []) {
   const ranges = [];
+  const lineListContentIndents = computeLineListContentIndents(text);
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
   while (openMatch) {
@@ -1293,7 +1344,10 @@ export function findHtmlCommentRanges(text, ignoredOpenerRanges = []) {
       continue;
     }
     const closeIndex = text.indexOf('-->', openIndex + 4);
-    if (closeIndex === -1 && !isAtHtmlBlockOpenerPosition(text, openIndex)) {
+    if (
+      closeIndex === -1 &&
+      !isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents)
+    ) {
       openPattern.lastIndex = openIndex + 4;
       openMatch = openPattern.exec(text);
       continue;
