@@ -545,6 +545,14 @@ Before selecting from the surviving viable issues, eliminate candidates
 with a concurrent active non-stale claim or an unsafe stale takeover, in
 ascending issue-number order:
 
+- **Parked-issue check (once per pass).** Run
+  `provider-outage-park.mjs --parked-issues`; a candidate in its
+  `parkedIssues` is **ineligible**, like a live claim. A failed or
+  malformed read counts as Step 1.5 exhaustion (last bullet's
+  routing). `parkedIssuesComplete: false` still skips listed issues —
+  name the gap in the run report; an unlisted parked issue may be
+  picked. Under `instructions-only`, no park helper runs and this
+  rule does not apply.
 - Scan the **top N** survivors (ordered by ascending issue number),
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
@@ -567,16 +575,12 @@ After scanning the current batch:
   continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until
   an eligible candidate is found.
 - **Entire viable candidate set exhausted** (all surviving viable
-  candidates are claimed): resolve the exit by scope (see the note
-  below).
-
-When the entire viable candidate set is exhausted (the last bullet
-above): if the A3.5 approval-needed bucket is non-empty, apply A3.5's
-own approval-needed routing, also reporting the claimed-survivor
-exhaustion (the approval hold takes precedence — not a true zero);
-otherwise apply Step 1's **exhaustion-exit routing** above, reporting
-that all viable issues are currently claimed in place of a discard
-criterion. Retry later.
+  candidates are claimed): if the A3.5 approval-needed bucket is
+  non-empty, apply A3.5's own approval-needed routing, also reporting
+  the claimed-survivor exhaustion (the approval hold takes precedence
+  — not a true zero); otherwise apply Step 1's **exhaustion-exit
+  routing** above, reporting that all viable issues are currently
+  claimed in place of a discard criterion. Retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
