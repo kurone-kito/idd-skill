@@ -6,10 +6,6 @@
 // the generated .mjs. See docs/typescript-sources.md.
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {
-  normalizeMarkerPrefix,
-  parseAuthoringBucketMarker,
-} from './audit-authored-issue.mjs';
 import { computeBranchName } from './branch-name.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
@@ -33,6 +29,10 @@ import {
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
+import {
+  normalizeMarkerPrefix,
+  parseAuthoringBucketMarker,
+} from './marker-helpers.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';

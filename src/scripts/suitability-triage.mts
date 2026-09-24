@@ -8,10 +8,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import {
-  normalizeMarkerPrefix,
-  parseAuthoringBucketMarker,
-} from './audit-authored-issue.mts';
 import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -39,6 +35,10 @@ import {
   type MarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
+import {
+  normalizeMarkerPrefix,
+  parseAuthoringBucketMarker,
+} from './marker-helpers.mts';
 import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
