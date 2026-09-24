@@ -627,11 +627,12 @@ agents do not need to infer what changed.
 inside an imported template file — for example a table noting which
 placeholder resolved to which value — spell the placeholder name
 without doubled braces (for example `REPO_NAME`, not `{{REPO_NAME}}`);
-`idd-onboard.mjs --verify` flags a literal, doubled-brace token there
-as leftover residue. This policy document and any custom
-`--write-policy-doc` target sit outside the imported set, so a literal
-`{{REPO_NAME}}` in either lands under `outOfScopeTokens` instead,
-never blocking. See
+`idd-onboard.mjs --verify` flags a doubled-brace token there as
+leftover residue. This policy document is a fixed scanner exclusion
+(tokens here are skipped, never scanned); a custom
+`--write-policy-doc` target sits outside the imported set instead, so
+the same token lands under `outOfScopeTokens` — non-blocking either
+way. See
 [Onboarding Reference — Placeholder Values](placeholders.md) for the
 full placeholder list.
 

@@ -82,7 +82,7 @@ const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
 
 /**
  * The real repo's own core (default-profile) placeholder-scan scope
- * (#3291) — the same set `--substitute`'s own `resolveRepoRoot(
+ * (#3291) — the same set `--substitute`'s own `resolveBundleRoot(
  * import.meta.dirname)` resolution lands on when run from this checkout,
  * and what `importAndSubstitute`'s default-profile import below produces.
  * Computed once (real filesystem read, not a fixture) and reused by every

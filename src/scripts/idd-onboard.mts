@@ -63,6 +63,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { resolveBundleRoot } from './bundle-root.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import { NON_TTY_ERROR } from './force-handoff.mts';
 import { safeGhText } from './gh-exec.mts';
@@ -1442,35 +1443,6 @@ interface SyncManifestGeneratedBlock {
 
 interface SyncManifest {
   generatedBlocks?: SyncManifestGeneratedBlock[];
-}
-
-/**
- * Walk up from `fromDir` looking for the nearest `package.json`, bounded
- * at 16 levels (matches the same private helper already duplicated in
- * `check-pnpm-boundary.mts`, `onboarding-hearing.mts`,
- * `snapshot-issue-body-corpus.mts`, `sync-docs.mts`, and
- * `update-fixtures.mts` -- no shared export exists yet, so this is a
- * sixth private copy, not a new one). `--substitute` (#3291) uses this
- * with `import.meta.dirname` to resolve the running CLI's OWN idd-skill
- * package root -- never an adopter-supplied `--source`, since
- * `--substitute` takes none -- as the source of its core-file-set scan
- * scope. Falls back to the top directory reached (never throws) when no
- * `package.json` is found in range; the caller's own manifest read then
- * fails closed with a clear error naming that path.
- */
-function resolveRepoRoot(fromDir: string): string {
-  let dir = fromDir;
-  for (let depth = 0; depth < 16; depth += 1) {
-    if (existsSync(join(dir, 'package.json'))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-  return dir;
 }
 
 /**
@@ -3979,23 +3951,20 @@ async function runCli(): Promise<void> {
   const resolution = resolvePlaceholderValues(targetDir, mergedOverrides);
   // #3291: --substitute takes no --source, so its scan scope always comes
   // from the RUNNING CLI's own idd-skill package root -- never an
-  // adopter-supplied tree -- resolved the same way
-  // onboarding-hearing.mts locates the hearing catalog. A tree with no
-  // readable audit/sync-manifest.json (an installed package missing its
-  // own manifest -- effectively unreachable in practice, since the
-  // package always ships it) fails closed here, naming the tried root,
-  // and reaches main()'s exit-2 usage-error handling rather than ever
-  // falling back to scanning the whole --target tree.
-  // #3291 (refined plan item 4): resolveRepoRoot itself never throws --
-  // it walks up looking for package.json and falls back to fromDir -- but
-  // it is called inside this try, alongside the resolveImportFiles call
-  // it feeds, so a hypothetical future failure in either step still
-  // reaches the same fail-closed usage-error message below rather than
-  // skipping it.
+  // adopter-supplied tree. Resolved via the shared, marker-first
+  // `resolveBundleRoot` (#3238) rather than a nearest-`package.json`
+  // walk of its own (2026-09-24 review): a nearest-`package.json` walk
+  // can stop at an outer workspace/package ancestor before reaching the
+  // actual idd-skill (or vendored-node bundle) root, reading the wrong
+  // `audit/sync-manifest.json` or none at all. A tree with neither the
+  // bundle marker nor `package.json` anywhere in the (bounded) walk
+  // fails closed here, naming the tried root, and reaches main()'s
+  // exit-2 usage-error handling rather than ever falling back to
+  // scanning the whole --target tree.
   let scanSourceRoot: string;
   let scanScope: ReadonlySet<string>;
   try {
-    scanSourceRoot = resolveRepoRoot(import.meta.dirname);
+    scanSourceRoot = resolveBundleRoot(import.meta.dirname);
     scanScope = resolvePlaceholderScanScope(
       resolveImportFiles(scanSourceRoot).files,
     );
