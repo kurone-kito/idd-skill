@@ -6,31 +6,20 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { inspectHelperRuntimeConfig } from './policy-helpers.mjs';
 
-// Resolve the package root by walking up to the nearest package.json.
-// This is location-independent, so it returns the same root whether this
-// module runs as the emitted scripts/helper-runtime-manifest.mjs (one
-// level deep), the src/scripts/helper-runtime-manifest.mts source under
-// Node type-stripping (two levels deep), or is imported by another
-// module — a fixed `..` from import.meta.dirname would resolve to src/
-// for the source.
-function resolveRepoRoot(fromDir) {
-  let dir = fromDir;
-  for (let depth = 0; depth < 16; depth += 1) {
-    if (existsSync(resolve(dir, 'package.json'))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-  return dir;
-}
-const PACKAGE_ROOT = resolveRepoRoot(import.meta.dirname);
+// Resolve the package/bundle root via the shared resolveBundleRoot (issue
+// #3238): the nearest ancestor containing schemas/policy.schema.json,
+// falling back to the nearest ancestor containing package.json. This is
+// location-independent, so it returns the same root whether this module
+// runs as the emitted scripts/helper-runtime-manifest.mjs (one level
+// deep), the src/scripts/helper-runtime-manifest.mts source under Node
+// type-stripping (two levels deep), or is imported by another module — a
+// fixed `..` from import.meta.dirname would resolve to src/ for the
+// source.
+const PACKAGE_ROOT = resolveBundleRoot(import.meta.dirname);
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
 // Exported so other onboarding-stage CLIs (e.g. idd-onboard.mts's --import
 // mode) can validate a --profile flag against the same canonical set
@@ -868,7 +857,16 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
     evidence,
   };
 }
-function buildCommandCatalog() {
+/**
+ * The catalog of every cataloged helper command, independent of
+ * `--profile` (unlike `managedFiles`/`collectVendoredFiles`, which only
+ * the `vendored-node` profile populates). A pure map over the static
+ * `HELPER_COMMANDS` table — no filesystem walk — so a caller that only
+ * needs `{id, entryPath, ...}` (for example `idd-onboard.mts`'s
+ * `--verify` helper-load check, issue #3238) can read it without paying
+ * for `collectVendoredFiles`'s heavier import-graph walk.
+ */
+export function buildCommandCatalog() {
   return HELPER_COMMANDS.map((command) => ({
     id: command.id,
     scriptName: command.scriptName,
