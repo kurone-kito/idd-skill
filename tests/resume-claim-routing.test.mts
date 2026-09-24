@@ -1097,15 +1097,44 @@ test('self-signed forced-handoff from same identity does not transfer ownership'
   assert.equal(result.active_claim?.claim_id, 'claim-A');
 });
 
-test('legacy freshness uses marker timestamp over comment metadata timestamp', () => {
+test('legacy freshness uses the comment created_at, not a stale embedded marker timestamp (#3271)', () => {
+  // The embedded timestamp is two days old -- a clock with no skew
+  // would read this as stale -- but the comment itself was posted one
+  // minute ago. Only the GitHub `created_at` may drive the verdict, so this
+  // must resolve as a live (non-stale) claim, not a takeover.
   const result = evaluateResumeClaimRouting(
     {
-      now: '2026-05-13T10:00:01Z',
+      now: '2026-05-13T10:00:00Z',
       events: [
         {
-          createdAt: '2026-05-13T09:59:59Z',
+          createdAt: '2026-05-13T09:59:00Z',
           author: { login: 'maintainer' },
-          body: '<!-- claimed-by: old-agent 2026-05-12T09:00:00Z branch: issue/9-task -->',
+          body: '<!-- claimed-by: old-agent 2026-05-11T09:59:00Z branch: issue/9-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'legacy-claim-non-stale');
+  assert.equal(result.active_claim?.created_at, '2026-05-13T09:59:00Z');
+});
+
+test('legacy staleness uses the comment created_at, not a future embedded marker timestamp (#3271)', () => {
+  // The embedded timestamp is in the future -- a skewed agent clock --
+  // but the comment itself was posted two days ago. Only the GitHub
+  // `created_at` may drive the verdict, so this must resolve as stale
+  // and eligible for takeover, not locked forever behind a future date.
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-11T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-20T10:00:00Z branch: issue/10-task -->',
         },
       ],
     },
@@ -1113,7 +1142,40 @@ test('legacy freshness uses marker timestamp over comment metadata timestamp', (
   );
 
   assert.equal(result.state, 'stale');
+  assert.equal(result.action, 'takeover');
   assert.equal(result.reason, 'legacy-claim-stale');
+  assert.equal(result.active_claim?.created_at, '2026-05-11T10:00:00Z');
+});
+
+test('legacy release created_at ordering wins even when its embedded timestamp predates the claim (#3271)', () => {
+  // The release's embedded timestamp (2026-05-10) predates the claim's
+  // own embedded timestamp (2026-05-15), which under embedded-time
+  // ordering would make the release look earlier than the claim and so
+  // fail the "strictly later" rule. The release comment's real
+  // created_at (09:00) is nonetheless later than the claim comment's
+  // (08:00), so the release must still apply.
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T12:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T08:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-15T00:00:00Z branch: issue/13-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: old-agent 2026-05-10T00:00:00Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'unclaimed');
+  assert.equal(result.reason, 'legacy-released');
+  assert.equal(result.active_claim, null);
 });
 
 test('legacy matching release remains valid after unrelated later unclaim', () => {

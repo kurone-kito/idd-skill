@@ -109,8 +109,22 @@ export interface ParsedReleaseMarker {
 /** Parsed claim-id-less marker retained for legacy routing compatibility. */
 export interface ParsedLegacyClaimMarker {
   agentId: string;
+  /**
+   * The comment's GitHub `created_at`, never the embedded timestamp --
+   * `idd-overview-core.instructions.md` ("Thresholds") and
+   * `idd-claim.instructions.md` ("Legacy claim migration") both require
+   * staleness and ordering decisions to ignore the embedded value, since it
+   * is chosen by the posting agent's own (potentially skewed) clock.
+   */
   createdAt: string;
   branch: string;
+  /**
+   * The raw timestamp embedded in the legacy marker body, retained only for
+   * marker-shape diagnostics. Never feed this into a staleness or ordering
+   * decision -- use `createdAt` instead. `null` when the embedded value did
+   * not parse as a valid timestamp.
+   */
+  embeddedTimestamp: string | null;
 }
 
 /** Minimal event shape consumed by the legacy claim-state resolver. */
@@ -1068,18 +1082,24 @@ export function parseLegacyClaimComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Age this claim by the comment's own GitHub `created_at`, never the
+    // embedded timestamp (see the field doc on `ParsedLegacyClaimMarker`).
+    // Fall back to the raw value only when it fails to normalize, mirroring
+    // the fail-open formatting behavior this replaces.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
     branch: match[3],
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
 export function parseLegacyReleaseComment(
   body: string,
   createdAt: string,
-): { agentId: string; createdAt: string } | null {
+): {
+  agentId: string;
+  createdAt: string;
+  embeddedTimestamp: string | null;
+} | null {
   const match = String(body ?? '')
     .trimEnd()
     .match(LEGACY_RELEASE_PATTERN);
@@ -1088,20 +1108,31 @@ export function parseLegacyReleaseComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Order this release by the comment's own GitHub `created_at`, never
+    // the embedded timestamp -- same rationale as the claim parser above.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
-/** Resolve the latest legacy claim and its matching later release. */
+/**
+ * Resolve the latest legacy claim and its matching later release.
+ *
+ * Both inputs and the "later" comparison below are keyed on each comment's
+ * GitHub `created_at` (via `parseLegacyClaimComment` /
+ * `parseLegacyReleaseComment`), never the embedded timestamp -- a release
+ * is treated as later than its claim only when the release comment's own
+ * `created_at` strictly postdates the claim comment's `created_at`.
+ */
 export function resolveLegacyClaimState(
   events: readonly LegacyClaimEventLike[],
 ): LegacyClaimState {
   let latestClaim: ParsedLegacyClaimMarker | null = null;
-  let latestMatchingRelease: { agentId: string; createdAt: string } | null =
-    null;
+  let latestMatchingRelease: {
+    agentId: string;
+    createdAt: string;
+    embeddedTimestamp: string | null;
+  } | null = null;
   const orderedEvents = events
     .map((event, index) => ({ event, index }))
     .sort((left, right) => {

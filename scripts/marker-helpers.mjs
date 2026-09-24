@@ -695,11 +695,13 @@ export function parseLegacyClaimComment(body, createdAt) {
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Age this claim by the comment's own GitHub `created_at`, never the
+    // embedded timestamp (see the field doc on `ParsedLegacyClaimMarker`).
+    // Fall back to the raw value only when it fails to normalize, mirroring
+    // the fail-open formatting behavior this replaces.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
     branch: match[3],
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 export function parseLegacyReleaseComment(body, createdAt) {
@@ -711,13 +713,21 @@ export function parseLegacyReleaseComment(body, createdAt) {
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Order this release by the comment's own GitHub `created_at`, never
+    // the embedded timestamp -- same rationale as the claim parser above.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
-/** Resolve the latest legacy claim and its matching later release. */
+/**
+ * Resolve the latest legacy claim and its matching later release.
+ *
+ * Both inputs and the "later" comparison below are keyed on each comment's
+ * GitHub `created_at` (via `parseLegacyClaimComment` /
+ * `parseLegacyReleaseComment`), never the embedded timestamp -- a release
+ * is treated as later than its claim only when the release comment's own
+ * `created_at` strictly postdates the claim comment's `created_at`.
+ */
 export function resolveLegacyClaimState(events) {
   let latestClaim = null;
   let latestMatchingRelease = null;
