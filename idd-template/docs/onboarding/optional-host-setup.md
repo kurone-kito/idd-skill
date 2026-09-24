@@ -241,7 +241,9 @@ inconsistency, missing required files) on every change. It is opt-in —
 add a workflow matching the repository's confirmed helper-runtime
 profile. Every profile shares the same trigger, permissions, and
 checkout step below; only the steps that run the helper differ, shown
-per profile beneath it:
+per profile beneath it — indent each profile's step list to match the
+`- uses: actions/checkout@v4` step above (formatters strip the
+standalone snippets below back to column 0):
 
 ```yaml
 name: IDD doctor health gate
@@ -259,7 +261,7 @@ jobs:
         with:
           ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
           persist-credentials: false
-      # <helper-invocation-steps> -- append your profile's steps below
+      # <helper-invocation-steps> -- paste your profile's steps here
 ```
 
 **`vendored-node`** — the helper bundle is copied into `scripts/`:
@@ -420,12 +422,14 @@ the active file lives. For example, with `.github/CODEOWNERS`:
 ```
 
 Replace `@maintainer-user` with an eligible non-author maintainer who
-has write access — a direct user, not a team: the autonomous pre-merge
-helper resolves direct user owners only, so a team-only owner leaves
-Code Owner approval ambiguous (use a direct owner for autonomous
-merging, or plan for a human merge until team resolution is supported;
-preventive, no observed incident yet). The PR author's own approval
-never counts toward required review or Code Owner gates. An approval
+has write access. For a team, use the full `@organization/team-name`
+form; the team must be visible and have explicit write access. The
+autonomous pre-merge helper resolves direct user owners only, so a
+team-only owner leaves Code Owner approval ambiguous (use a direct
+owner for autonomous merging, or plan for a human merge until team
+resolution is supported; preventive, no observed incident yet). The
+PR author's own approval never counts toward required review or Code
+Owner gates. An approval
 from an owner of some other changed path can satisfy a repository-wide
 Code Owner review without that owner having resolved for the protected
 paths — keep every possible owner within the same trust boundary, or
@@ -515,35 +519,31 @@ checkout to the trusted branch costs nothing functionally.
 
 Two automatic trigger types keep the required verdict current for now
 (see below): `pull_request` for the normal push case, and
-`pull_request_target` as its tamper-resistant counterpart (see
-Trusted-code checkout above -- a same-repository PR cannot edit
-`pull_request_target`'s own copy of this workflow file, unlike
-`pull_request`). Review-thread comments are
-**not** on that required job, and neither is Copilot's review
-submission (`pull_request_review`) — both instead refresh the
-existing HEAD-associated required run from the non-required companion
-`idd-advisory-convergence-comment.yml` workflow: an IDD-originated
-comment (a disposition prefix, the reply-identity stamp, or an
-operational marker the check already honors) calls
-`rerun-advisory-convergence --apply`, while a review submission calls
-`rerun-advisory-convergence --refresh-latest --apply` instead — a
-review needs a fresh evaluation even if the gate is already green or
-its rerun-once budget is already spent, which the plain `--apply`
-path does not provide. Neither call reports `ready` itself. Ordinary
-human prose (`LGTM`) does not create or
-cancel the required check.
+`pull_request_target` as its tamper-resistant counterpart (a
+same-repository PR cannot edit `pull_request_target`'s own copy of
+this workflow file, unlike `pull_request`; see Trusted-code checkout
+above). Review-thread comments and Copilot's review submission
+(`pull_request_review`) are **not** on that required job — both
+instead refresh the existing HEAD-associated required run via the
+non-required companion `idd-advisory-convergence-comment.yml`
+workflow: an IDD-originated comment (a disposition prefix, the
+reply-identity stamp, or an operational marker the check already
+honors) calls `rerun-advisory-convergence --apply`, while a review
+submission calls `rerun-advisory-convergence --refresh-latest --apply`
+instead — a review needs a fresh evaluation even when the gate is
+already green or its rerun-once budget is spent, which plain `--apply`
+does not provide. Neither call reports `ready` itself, and ordinary
+human prose (`LGTM`) does not create or cancel the required check.
 
-A thread being resolved or unresolved via the "Resolve conversation"
-button (`pull_request_review_thread`) is a real GitHub webhook event,
-but it is **not** one of the events GitHub Actions supports as a
-workflow `on:` trigger — including it makes the whole workflow file
-fail GitHub's schema validation (confirmed both against GitHub's own
+A thread resolved or unresolved via the "Resolve conversation" button
+(`pull_request_review_thread`) is a real GitHub webhook event, but not
+one GitHub Actions supports as a workflow `on:` trigger — including it
+fails GitHub's schema validation (confirmed both against GitHub's own
 trigger-events reference and empirically). Residual gap: if a
 Copilot-authored thread is resolved or reopened with no accompanying
-comment, push, or fresh Copilot review, this check keeps reporting
-its last computed verdict until a push, a Copilot review, an
-IDD-originated comment refresh, or a maintainer `workflow_dispatch`
-fires.
+comment, push, or fresh Copilot review, the check keeps reporting its
+last computed verdict until a push, a Copilot review, an IDD-originated
+comment refresh, or a maintainer `workflow_dispatch` fires.
 
 **Human-reply retrigger.** A casual human reply used to start the
 required `idd-advisory-convergence` job, fail or cancel the SHA
@@ -675,32 +675,28 @@ on that same run — for the required check to actually reflect it.
 no `pull_request` context of its own, so GitHub associates it with the
 dispatch ref rather than the PR's HEAD SHA, and the resulting run's
 conclusion can be invisible to that PR's required-check rollup. See
-[kurone-kito/idd-skill's own dogfooded copy of `.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
-header comment for the full finding — this deliberately links the
-upstream source repository's copy, not your own vendored workflow
-file: the fuller investigation prose lives only in that dogfooded
-original, and the portable stub this template mirrors at
-`.github/workflows/idd-advisory-convergence.yml` in your own
-repository does not carry it.
+this upstream repository's own dogfooded
+[`.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)
+header comment for the full finding — the fuller investigation prose
+lives only there, not in the portable stub your own vendored copy
+mirrors.
 
 **The self-waiver provenance artifact is unavailable on GHES.** The
 `idd-advisory-convergence-self-waiver` job's "Upload the posted
 marker's provenance artifact" step pins `actions/upload-artifact` v4+
-(currently `v7.0.1`), which needs the newer Artifacts service backend
-that GitHub Enterprise Server does not support; GHES instead needs the
-`v3.2.2` (or `v3.2.2-node20`) release, itself deprecated on
-github.com. Because the
-self-waiver mechanism fails closed, this never lets a forged waiver
-through on GHES — the upload step simply fails, or produces no
-artifact — but it does mean the self-referential-bootstrap-auto
-mechanism can never actually complete on a GHES-hosted adopter,
-degrading every genuine attempt to "no auto-waiver" and leaving only
-the maintainer-authorized waiver path for every such PR (found by a
-Codex review of kurone-kito/idd-skill#2914 during the
-kurone-kito/idd-skill#2912 fix cycle, 2026-09-11). See
-kurone-kito/idd-skill#2918 for the full tradeoff discussion and the
-rationale for keeping the pinned version rather than adding a
-runner-detection branch.
+(currently `v7.0.1`), needing the newer Artifacts service backend GHES
+does not support; GHES instead needs the `v3.2.2` (or `v3.2.2-node20`)
+release, itself deprecated on github.com. The self-waiver mechanism
+fails closed, so this never lets a forged waiver through — the upload
+step simply fails or produces no artifact — but it does mean the
+self-referential-bootstrap-auto mechanism can never actually complete
+on a GHES-hosted adopter, degrading every genuine attempt to
+"no auto-waiver" and leaving only the maintainer-authorized waiver
+path for every such PR (found by a Codex review of
+kurone-kito/idd-skill#2914 during the kurone-kito/idd-skill#2912 fix
+cycle, 2026-09-11). See kurone-kito/idd-skill#2918 for the tradeoff
+discussion and the rationale for keeping the pinned version rather
+than adding a runner-detection branch.
 
 ## Optional — mark the vendored helper bundle `linguist-vendored`
 
