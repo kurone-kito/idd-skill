@@ -57,6 +57,7 @@ import {
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mjs';
@@ -256,6 +257,96 @@ export function isTrustEvidenceComment(comment, isTrustedAuthor) {
     isTrustedAuthor(authorLogin) &&
     classifyCommentEditState(comment) === 'unedited'
   );
+}
+/**
+ * kurone-kito/idd-skill#3328: the single shared definition of "does this PR
+ * run outside the IDD claim loop" -- replaces the pre-existing divergent
+ * `pre-merge-readiness.mts` (`--claimless` #2017) and
+ * `resolve-review-thread.mts` (`isClaimlessEligible` #2616) definitions,
+ * both of which now delegate here. Pure and network-free: every input is
+ * already-fetched data, so a caller collects the closing-issue claim state
+ * and PR comments once and reuses this function for every downstream
+ * decision.
+ *
+ * Evaluated top-to-bottom, first match wins (mirrors the Groom-hearing
+ * ruling recorded on the issue):
+ *
+ * 1. `closingIssueNumbers === null` (closing references unreadable) ->
+ *    `'in-loop'`, fail closed -- mirrors the
+ *    [fail-closed default](../../.github/instructions/idd-overview-core.instructions.md#fail-closed-default).
+ * 2. `closingIssueNumbers` is empty -> `'out-of-loop-claimless'` (#2017,
+ *    unchanged: a PR with nothing to claim against was never IDD-claimed).
+ * 3. `closingIssueClaimState` is `'present'` or `'unknown'` -> `'in-loop'`
+ *    -- an active (or unresolvable) claim always wins over a marker; a
+ *    marker only ever matters once every closing issue is confirmed to
+ *    have no active claim.
+ * 4. `prComments` contains a comment that parses via
+ *    {@link parseOutOfLoopMarker}, whose `prNumber` equals `prNumber`, and
+ *    that passes {@link isTrustEvidenceComment} (trusted author AND
+ *    unedited) -> `'out-of-loop-authorized'`. Trust is decided by the
+ *    comment's GitHub author login (via `isTrustedAuthor`), never the
+ *    marker's own embedded `{agent-id}` text.
+ * 5. Otherwise -> `'in-loop'` (no active claim and no valid marker: still
+ *    ordinary claimed-loop territory, just presently unclaimed).
+ */
+export function classifyPrLoopMembership({
+  prNumber,
+  closingIssueNumbers,
+  closingIssueClaimState,
+  prComments,
+  trustedMarkerLogins,
+}) {
+  if (closingIssueNumbers === null) {
+    return {
+      membership: 'in-loop',
+      reason: 'closing issue references are unreadable (fail closed)',
+    };
+  }
+  if (closingIssueNumbers.length === 0) {
+    return {
+      membership: 'out-of-loop-claimless',
+      reason: 'no closing issue references (#2017)',
+    };
+  }
+  if (
+    closingIssueClaimState === 'present' ||
+    closingIssueClaimState === 'unknown'
+  ) {
+    return {
+      membership: 'in-loop',
+      reason: `a closing issue's active claim state is ${closingIssueClaimState}`,
+    };
+  }
+  const normalizedTrustedLogins = new Set(
+    normalizeTrustedMarkerLogins(trustedMarkerLogins),
+  );
+  const isTrustedAuthor = (login) =>
+    normalizedTrustedLogins.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  for (const comment of prComments ?? []) {
+    const marker = parseOutOfLoopMarker(
+      String(comment?.body ?? ''),
+      String(comment?.createdAt ?? comment?.created_at ?? ''),
+    );
+    if (
+      marker &&
+      marker.prNumber === prNumber &&
+      isTrustEvidenceComment(comment, isTrustedAuthor)
+    ) {
+      return {
+        membership: 'out-of-loop-authorized',
+        reason: `valid out-of-loop marker (reason:${marker.reason}) from ${marker.agentId}`,
+      };
+    }
+  }
+  return {
+    membership: 'in-loop',
+    reason:
+      'no closing issue has an active claim, and no valid out-of-loop marker was found',
+  };
 }
 export function summarizeExternalCheckWaivers(
   comments,
