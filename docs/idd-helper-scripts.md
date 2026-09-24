@@ -1083,17 +1083,22 @@ The adopted helper boundaries are intentionally narrow:
   unreplied comments, reviewer states, advisory state, CI, claim
   validation, and `waiverEvidence` (parsed external-check waiver comments
   classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
-  `unauthorized`, `malformed`, `notConfigured`, or `modeDisabled` —
-  `notConfigured` for a valid waiver naming a check the policy never
-  declared waivable in `ciGate.externalChecks.waivable`, `modeDisabled`
-  (`#2046`) for an otherwise-valid, configured-waivable waiver while
-  `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
-  (schema default: `disabled`) — mirroring `advisory-convergence.mjs`'s
-  own mode guard, so a `waivable` list left over from a prior
-  `maintainer-authorized` configuration can never make this gate report
-  a check covered on its own; only a `valid` waiver for a
-  configured-waivable check is reported with `coveredByWaiver: true` and
-  treated as passing by the CI gate)
+  `unauthorized`, `malformed`, `notConfigured`, `modeDisabled`, or
+  `edited` — `notConfigured` for a valid waiver naming a check the
+  policy never declared waivable in `ciGate.externalChecks.waivable`,
+  `modeDisabled` (`#2046`) for an otherwise-valid, configured-waivable
+  waiver while `ciGate.externalCheckWaivers.mode` is not
+  `maintainer-authorized` (schema default: `disabled`) — mirroring
+  `advisory-convergence.mjs`'s own mode guard, so a `waivable` list left
+  over from a prior `maintainer-authorized` configuration can never make
+  this gate report a check covered on its own; `edited` (`#3246`) for a
+  marker-shaped waiver comment whose GraphQL `lastEditedAt` is a
+  parseable timestamp (`editState: 'edited'`) or could not be resolved
+  (`editState: 'unknown'`) — checked before every other classification,
+  so a body-edited waiver never reaches `valid` regardless of author,
+  HEAD, claim, or expiry; only a `valid` waiver for a configured-waivable
+  check is reported with `coveredByWaiver: true` and treated as passing
+  by the CI gate)
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
