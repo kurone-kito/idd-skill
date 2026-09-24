@@ -1,0 +1,32 @@
+{
+  "id": "2377",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: bundle-work has essentially zero byte headroom left",
+  "labels": [
+    "documentation",
+    "enhancement",
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "# needs-decision: bundle-work has essentially zero byte headroom left\n\n## Background\n\n`audit/sync-manifest.json`'s `bundle-work` (`idd-overview-appendix` +\n`idd-overview-core` + `idd-work` instructions, `limitBytes: 45,000`)\nsits at **97.98% utilization** on current `main`\n(`5e958adb`, 2026-09-01T21:52:44+09:00):\n\n| File | Bytes (banner-stripped) |\n| --- | --- |\n| `idd-overview-appendix.instructions.md` | 7,108 |\n| `idd-overview-core.instructions.md` | 15,940 |\n| `idd-work.instructions.md` | 21,045 |\n| **Total** | **44,093** |\n\n(Reproduced via `stripGeneratedFromBanner` + `Buffer.byteLength`,\nmatching `collectContextCeilingViolations`'s own formula:\n`totalBytes * 100 > limitBytes * maxUtilizationPct` fails once\n`totalBytes` exceeds 44,100.)\n\nThat leaves **7 bytes** of headroom before the 98% hard-fail\n(`context-ceiling-200k`'s `maxUtilizationPct: 98`) — effectively none.\n`bundle-work`'s `limitBytes` (45,000) is still far below the shared\n196,000-byte `maxBundleLimitBytes` ceiling, so unlike #2181's\n`bundle-review` situation, a conventional `limitBytes` raise (the\nmechanical fix #2091 used for six bundles, and PR #2342 used for\n`bundle-review` again just today) is structurally available here — but\nper this repo's established practice (#2091, #2181), the amount and\nwhether-to-raise-vs-trim decision is a maintainer call, not one this\nsession should make unilaterally against a shared policy constant\n(`docs/policy-constants.md`).\n\n**How this was discovered**: while resolving a real `main`-advancing\nmerge conflict on PR #2374 (issue #2332, a B1 docs caveat adding one\nnew sentence to `idd-work.instructions.md`), the incoming `main` commit\n(PR #2372, unrelated `#2218` work) had **independently trimmed the same\n\"Harness-native worktree tools\" paragraph** I had trimmed for my own\nunrelated byte-budget funding. Both sessions converged on the same\nparagraph as the only visible remaining slack in the bundle — the\nstrongest available evidence that ad hoc per-PR trimming is exhausted\nas a strategy: any two sessions editing `bundle-work`'s files now\ncompete for the same handful of bytes, and a session can measure\nheadroom at claim time only to have another session's independent,\nunrelated PR consume it before merge.\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision among the\noptions below, the same pattern #2091 and #2181 used for the same\nclass of problem.\n\n### Options for a maintainer to choose among\n\n1. **Raise `bundle-work`'s `limitBytes`** (currently 45,000) to restore\n   working headroom, mirroring #2091's mechanical fix and PR #2342's\n   same-day precedent for `bundle-review`. `bundle-work` has ample room\n   under the 196,000-byte ceiling for this.\n2. **Trim existing content** in `bundle-work`'s three member files under\n   the manifest's documented `exemptBundles` content-diet lifecycle\n   (`docs/policy-constants.md`'s \"Exemption lifecycle\" section) —\n   requires a maintainer (or an explicitly maintainer-scoped follow-up\n   issue) to choose what substantive content to cut, since the corpus\n   is deliberate, cited contract text and the easy de-duplication\n   opportunities are already gone (see above).\n3. **Leave `bundle-work` as-is and accept the friction**: any future PR\n   touching `idd-overview-core`, `idd-overview-appendix`, or `idd-work`\n   instructions risks tipping the bundle over the 98% hard-fail and\n   getting blocked case-by-case, the same friction #2181 documented for\n   `bundle-review`.\n4. **Something else the maintainer prefers.**\n\n## Acceptance criteria\n\n- [ ] A maintainer states which option above to take (or a different\n      resolution) in a comment on this issue.\n- [ ] Close this issue once that decision is recorded. The chosen\n      option becomes a follow-up `ready` issue scoped to the exact\n      manifest/content change, mirroring how #2091 and #2181 were\n      resolved — this issue itself stays decision-only.\n\n## Impact\n\nThis currently blocks issue #2332 / PR #2374 (a B1 docs caveat adding\none sentence to `idd-work.instructions.md`) from merging without either\nfunding its own headroom (already attempted and consumed by the #2372\ncollision above) or waiting on this decision. PR #2374's merge attempt\nhas been held back to its pre-conflict commit rather than pushed with a\nfailing audit; #2332 has been unclaimed pending this decision.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. This is a policy/capacity\ntrade-off; the field evidence above is settled and does not need\nre-deriving._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "c86fd84ec4fe1ec6714ee08857d5014e9ef4a56bc01e05411e1a4cd8784d967a",
+  "fetchedAt": "2026-09-24T08:44:24.181Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

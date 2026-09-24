@@ -1,0 +1,28 @@
+{
+  "id": "2221",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: wake-up discipline recurrence persists after #2179/#2210",
+  "labels": [
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "## Background\n\nDelegated subagent workers repeatedly end their turn believing a\nbackground wait/CI-monitoring task will resume them automatically,\nwhen no such automatic resumption exists — the orchestrator has to\nactively poll live state and re-message the worker instead. This\npattern (tracked previously under #1733, #1384, #1387, #1807, and most\nrecently #2210) has been addressed several times through progressively\nstronger wording in the delegation-brief instructions.\n\nA newer, independently reported run — on an `idd-skill` v0.7.0 pin\nthat already includes the #2179/#2210 delegation-brief strengthening —\nobserved the same failure recurring in nearly every delegated worker\nacross roughly ten delegated tasks in one session, even with an\nexplicit warning in the brief that cited a concrete prior sibling\nfailure. Recovery required active orchestrator intervention (checking\nlive GitHub state and sending a targeted follow-up message) every\ntime, with no case of the wording alone preventing the recurrence.\nThis is a new, more direct data point than the earlier reports: it\nshows the failure surviving the most recent wording strengthening\nitself, on the exact wording that fix shipped, rather than on an\nolder or unpatched brief.\n\nAt least four other independently operated repositories reported the\nsame underlying pattern in the same broad window (worker turns ending\non a mistaken assumption that a background task will resume them).\n\n## Open question\n\nWording-only reinforcement of the delegation brief has now been tried\nseveral times, including the most recent round, and the pattern still\nrecurs at a similar rate. This suggests the remaining fix, if any,\nsits above the wording layer — for example, in how the delegation\nbrief's own dispatched workflow is shaped (a documented,\ncopy-pasteable non-blocking-snapshot-then-stop pattern was reported to\nwork reliably as a workaround in at least one of the independent\nreports), or in how the orchestration tooling itself constrains what a\ndelegated worker can end its turn believing.\n\nThis issue exists to record the accumulated evidence and open the\nquestion of which direction (further brief-template changes, a\ndifferent delegation shape, or a tooling-level constraint) is worth\npursuing next, rather than to propose or pre-select a specific fix.\n\n## What would close this issue\n\nA chosen direction is recorded (as a comment or an update to this\nissue), and any resulting concrete follow-up work is filed as its own\nseparate issue referencing this one.\n\n---\n\n_Autopilot suitability: 2 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 2 -->\n",
+  "bodySha256": "2a7c344c7c3871c3b1c6fb3b45c3ce7390a87f838416bc1b537cb322ee8d0584",
+  "fetchedAt": "2026-09-24T08:44:25.604Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

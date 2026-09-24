@@ -1,0 +1,32 @@
+{
+  "id": "2567",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: no bundle sharing idd-overview-core has headroom for the token-cost-report wiring",
+  "labels": [
+    "documentation",
+    "enhancement",
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "# needs-decision: no bundle sharing idd-overview-core has headroom for the token-cost-report wiring\n\n## Background\n\nRefs #2296. That roadmap's 5th success criterion --\n`node scripts/token-cost-report.mjs --check` becoming part of this\nrepository's dogfood validate commands -- requires adding\n`&& node scripts/token-cost-report.mjs --check` (~44 bytes) to the\n**pre-push-validate** row's command string in\n`idd-overview-core.instructions.md`'s Project commands table (the only\nplace that command chain is defined; `docs/token-cost.md`'s own \"How\nthe snapshot is produced\" section already documents this as deferred\nfor exactly this reason).\n\n`idd-overview-core.instructions.md` (with `idd-overview-appendix\n.instructions.md`) is a shared preamble across **five** context-ceiling\nbundles (`audit/sync-manifest.json`), and on current `main`\n(`b92f762c`, 2026-09-03) every one of them sits at or above the 98%\n`maxUtilizationPct` hard-fail threshold or within a few dozen bytes of\nit:\n\n| Bundle | Files | limitBytes | Live utilization (`node scripts/audit-docs.mjs --check`) |\n| --- | --- | --- | --- |\n| `bundle-discovery` | +`idd-claim`, `idd-discover`, `idd-suitability` | 109,700 | 95.48% |\n| `bundle-resume` | +`idd-resume` | 45,000 | 96.30% |\n| `bundle-work` | +`idd-work` | 49,500 | 97.90% |\n| `bundle-review` | +`idd-advisory-wait`, `idd-ci`, `idd-review-fix`, `idd-review-snapshot`, `idd-review-triage` | 138,000 | 97.87% |\n| `bundle-merge` | +`idd-advisory-wait`, `idd-ci`, `idd-merge-handoff`, `idd-merge`, `idd-pre-merge` | 122,000 | 98.00% |\n\nVerified empirically, not just estimated from the percentages above:\nadding the exact candidate string to `idd-overview-core\n.instructions.md`'s pre-push-validate row and re-running\n`node scripts/audit-docs.mjs --check` immediately fails with\n`bundle-merge utilization 98.04% exceeds 98% (119605/122000 bytes)` --\na hard CI failure, not a notice. `bundle-merge` already sat at exactly\n98.00% before this change (zero headroom under the hard-fail line), so\nany addition to a file it shares trips it first.\n\nThis is the same class of problem #2377 already resolved for\n`bundle-work` specifically (raising its `limitBytes` 45,000 -> 49,500,\nclosed 2026-09-03) -- but that decision did not, and could not, cover\n`bundle-merge`, `bundle-review`, `bundle-resume`, or `bundle-discovery`,\neach a separate `limitBytes` under the shared 196,000-byte\n`maxBundleLimitBytes` ceiling. Per this repository's established\npractice (#2091, #2181, #2377), the amount and\nwhether-to-raise-vs-trim-vs-relocate decision for a shared bundle is a\nmaintainer call, not one an autonomous session should make unilaterally\nagainst a shared policy constant (`docs/policy-constants.md`).\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision among the\noptions below, the same pattern #2091, #2181, and #2377 used for the\nsame class of problem.\n\n### Options for a maintainer to choose among\n\n1. **Raise the tightest affected bundle's (`bundle-merge`) `limitBytes`**\n   (currently 122,000) enough to restore working headroom across all\n   five affected bundles, mirroring #2377's `bundle-work` fix. All five\n   bundles above have room under the 196,000-byte ceiling for this.\n2. **Trim existing content** in `idd-overview-core.instructions.md` or\n   `idd-overview-appendix.instructions.md` to fund the new command\n   reference without raising any `limitBytes` -- requires a maintainer\n   (or an explicitly maintainer-scoped follow-up issue) to choose what\n   substantive content to cut from a file shared by every IDD phase.\n3. **Document the new validate step somewhere other than the shared\n   Project commands table** -- for example a source-repo-only doc that\n   is not part of any budgeted bundle -- if the maintainer judges that\n   still satisfies \"part of this repository's dogfood validate\n   commands.\" This changes the criterion's interpretation, not just its\n   placement, so it needs the same sign-off as the other options.\n4. **Accept the permanent deferral**: leave `docs/token-cost.md`'s\n   existing deferred-wiring note as the final state and treat roadmap\n   #2296's 5th criterion as satisfied by \"verified drift-free but not\n   wired into an automated gate,\" closing the roadmap on that basis.\n5. **Something else the maintainer prefers.**\n\n## Acceptance criteria\n\n- [ ] A maintainer states which option above to take (or a different\n      resolution) in a comment on this issue.\n- [ ] Close this issue once that decision is recorded. The chosen\n      option becomes a follow-up `ready` issue scoped to the exact\n      manifest/content/doc change, mirroring how #2091, #2181, and\n      #2377 were resolved -- this issue itself stays decision-only.\n\n## Impact\n\nThis is the sole remaining blocker on roadmap #2296's 5 success\ncriteria (the other 4 are met per the 2026-09-03 A1.5 re-audit). The\nroadmap stays open with `status:needs-decision` until this resolves.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. This is a policy/capacity\ntrade-off; the field evidence above is settled and does not need\nre-deriving._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "fca13dc2ba7088ce660196daef6e44d1740c0a2389dda8ca911c808f240d56ef",
+  "fetchedAt": "2026-09-24T08:44:23.474Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

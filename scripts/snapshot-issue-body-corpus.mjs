@@ -110,9 +110,10 @@ tests/issue-body-corpus.test.mts.
                         and was closed by at least one merged pull
                         request. A "negative" issue is refused unless it
                         carries the configured needs-decision or
-                        blocked-by-human label (or was closed as not
-                        planned) AND the current A4/A4.5 helpers still
-                        rate it non-ready.
+                        blocked-by-human label AND the current A4/A4.5
+                        helpers still rate it non-ready (a bare
+                        not-planned closure is not by itself sufficient
+                        -- see negativeRefusalReason's own doc comment).
   --note <text>         optional free-text "note" stored on every entry
                         added by this call (default: "").
   --refresh              re-fetch every existing merged/negative entry
@@ -350,15 +351,31 @@ export function mergedRefusalReason(issue) {
  * with synthetic accept/refuse cases.
  */
 export function negativeRefusalReason(issue, expected, labelsPolicy) {
+  // #3368 Copilot review round 5: the issue's own selection rule reads
+  // "carried [the configured label], OR was closed as not planned AFTER
+  // AN A4.5 REJECTION" -- a bare `stateReason === 'NOT_PLANNED'` proves
+  // only that the issue was closed without shipping, never that the
+  // closure specifically followed a suitability-style rejection (this
+  // repository's own real history shows NOT_PLANNED closures for
+  // unrelated reasons too: resolved-by-reference/superseded, or no
+  // recorded reasoning at all). No machine-parseable "A4.5 rejection"
+  // marker convention exists in this repository to verify that causal
+  // link mechanically (unlike the well-formed `claimed-by` grammar
+  // `parseClaimComment` checks above) -- accepting NOT_PLANNED alone
+  // risked vendoring an issue that was never actually rejected for
+  // suitability reasons. Require the configured label instead, the
+  // narrower and mechanically verifiable half of the selection rule; a
+  // maintainer/curator who has independently confirmed a specific
+  // NOT_PLANNED closure genuinely followed an A4.5-style rejection may
+  // still document that verification in the entry's own `note` when
+  // adding it by hand outside this refusal check.
   const hasNegativeLabel =
     issue.labels.includes(labelsPolicy.blockedByHumanLabelName) ||
     issue.labels.includes(labelsPolicy.needsDecisionLabelName);
-  const closedNotPlanned =
-    issue.state === 'CLOSED' && issue.stateReason === 'NOT_PLANNED';
-  if (!hasNegativeLabel && !closedNotPlanned) {
+  if (!hasNegativeLabel) {
     return (
       `carries neither "${labelsPolicy.blockedByHumanLabelName}" nor ` +
-      `"${labelsPolicy.needsDecisionLabelName}", and was not closed as not planned`
+      `"${labelsPolicy.needsDecisionLabelName}"`
     );
   }
   const rendersReady =

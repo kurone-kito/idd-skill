@@ -50,6 +50,11 @@
     "note": ""
   },
   {
+    "id": "1557",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
     "id": "1581",
     "category": "merged",
     "note": ""
@@ -175,6 +180,11 @@
     "note": ""
   },
   {
+    "id": "2221",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
     "id": "2239",
     "category": "merged",
     "note": ""
@@ -200,6 +210,16 @@
     "note": ""
   },
   {
+    "id": "2339",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2377",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
     "id": "2424",
     "category": "merged",
     "note": ""
@@ -218,6 +238,11 @@
     "id": "2553",
     "category": "merged",
     "note": ""
+  },
+  {
+    "id": "2567",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
   },
   {
     "id": "2592",
@@ -275,11 +300,6 @@
     "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
   },
   {
-    "id": "2674",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
-  },
-  {
     "id": "2696",
     "category": "merged",
     "note": ""
@@ -305,11 +325,6 @@
     "note": ""
   },
   {
-    "id": "2847",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
-  },
-  {
     "id": "2863",
     "category": "merged",
     "note": ""
@@ -325,29 +340,9 @@
     "note": "Merged/ready real issue fixing an error-handler message-loss bug in minimize-superseded-markers.mjs; today's A4 clear_verification criterion false-positives on its own error-handling description (known lexical-gate boundary gap)."
   },
   {
-    "id": "2959",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
-  },
-  {
-    "id": "2967",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
-  },
-  {
-    "id": "2975",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
-  },
-  {
     "id": "2982",
     "category": "merged",
     "note": ""
-  },
-  {
-    "id": "2996",
-    "category": "negative",
-    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
   },
   {
     "id": "3029",

@@ -375,7 +375,13 @@ test('negativeRefusalReason accepts an issue with the configured label and a non
   );
 });
 
-test('negativeRefusalReason accepts a not-planned closure with a non-ready verdict', () => {
+// #3368 Copilot review round 5: a bare NOT_PLANNED closure proves only
+// that the issue closed without shipping, never that it specifically
+// followed an A4.5-style rejection (this repository's own real history
+// has NOT_PLANNED closures for unrelated reasons too) -- so it must NOT
+// by itself satisfy the selection rule, even paired with a non-ready
+// verdict and no qualifying label.
+test('negativeRefusalReason refuses a bare not-planned closure with no qualifying label', () => {
   const issue: FetchedIssue = {
     ...BASE_FETCHED_ISSUE,
     labels: [],
@@ -385,13 +391,11 @@ test('negativeRefusalReason accepts a not-planned closure with a non-ready verdi
     viability: { passed: false, failedCriteria: ['clear_verification'] },
     triage: READY_EXPECTED.triage,
   };
-  assert.equal(
-    negativeRefusalReason(issue, nonReadyExpected, LABELS_POLICY),
-    null,
-  );
+  const reason = negativeRefusalReason(issue, nonReadyExpected, LABELS_POLICY);
+  assert.ok(reason && /carries neither/.test(reason), reason ?? '(no reason)');
 });
 
-test('negativeRefusalReason refuses an issue with neither the configured label nor a not-planned closure', () => {
+test('negativeRefusalReason refuses an issue with neither the configured label nor a qualifying closure', () => {
   const issue: FetchedIssue = {
     ...BASE_FETCHED_ISSUE,
     labels: ['bug'],
