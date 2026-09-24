@@ -490,8 +490,20 @@ export function collectPreMergeReadiness(
   // edit state) and the resolved trusted-marker-login set, neither of
   // which exists yet at this point in collection. `closingRefsAtEntry`
   // captures the raw, as-fetched value for that later check.
-  const closingRefsAtEntry = Array.isArray(snapshot.closingIssuesReferences)
-    ? snapshot.closingIssuesReferences
+  //
+  // Copilot review, PR #3421: `closingRefsReadable` is tracked
+  // SEPARATELY from the coerced-to-array `closingRefsAtEntry` -- a
+  // non-array `closingIssuesReferences` (the field itself unreadable or
+  // malformed) must not silently read as "genuinely no closing
+  // references" (the ordinary #2017 claimless case) the way coercing
+  // straight to `[]` and gating on its `.length` would. The out-of-loop
+  // block below gates on `closingRefsReadable` too, so an unreadable
+  // field still reaches `resolveClosingIssueNumbersForClassifier` (which
+  // itself now fails closed to `null` for a non-array input) instead of
+  // skipping classification entirely.
+  const closingRefsReadable = Array.isArray(snapshot.closingIssuesReferences);
+  const closingRefsAtEntry = closingRefsReadable
+    ? (snapshot.closingIssuesReferences as unknown[])
     : [];
 
   // #2373: EVERY config-driven gate below resolves `.github/idd/config.json`
@@ -920,25 +932,36 @@ export function collectPreMergeReadiness(
   ]);
 
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
-  // evaluated when claimless AND the PR actually has closing references --
-  // the common claimless case (no closing references at all) keeps the
-  // unchanged #2017 fast path below (`out-of-loop-claimless`, deriving
+  // evaluated when claimless AND (the PR actually has closing references
+  // OR the field itself could not be read) -- the common claimless case
+  // (a genuinely empty closing-reference array) keeps the unchanged #2017
+  // fast path below (`out-of-loop-claimless`, deriving
   // `closingIssueNumbers: []` the same way `classifyPrLoopMembership`
   // itself does). `closingRefsAtEntry` is the raw, as-fetched
   // `closingIssuesReferences` this file recorded at collection entry,
-  // before `comments`/`trustedMarkerLogins` existed to classify against.
+  // before `comments`/`trustedMarkerLogins` existed to classify against;
+  // `closingRefsReadable` is checked here too (Copilot review, PR #3421)
+  // so an unreadable field reaches the classifier (as `null`, fail-closed)
+  // instead of silently skipping classification via the coerced array's
+  // now-vacuous `.length > 0`.
   let outOfLoopMembership: PrLoopMembershipResult | null = null;
-  if (args.claimless && closingRefsAtEntry.length > 0) {
-    // C1 critique pass (live-reproduced): a same-repo-only extraction fed
-    // straight to the classifier would silently read a cross-repo-only (or
-    // all-malformed) closing reference as "no closing references",
-    // accepting --claimless with NO marker required for a PR the pre-#3328
-    // code always refused. resolveClosingIssueNumbersForClassifier reports
-    // `null` (unreadable) for exactly that case instead, which the
+  if (
+    args.claimless &&
+    (!closingRefsReadable || closingRefsAtEntry.length > 0)
+  ) {
+    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: a
+    // same-repo-only extraction fed straight to the classifier would
+    // silently read a cross-repo-only, partially-unresolvable, or
+    // unreadable closing reference as "no closing references", accepting
+    // --claimless with NO marker required for a PR the pre-#3328 code
+    // always refused. resolveClosingIssueNumbersForClassifier reports
+    // `null` (unreadable) for exactly those cases instead, which the
     // classifier fails closed to `in-loop` for -- reproducing the
-    // original refusal.
+    // original refusal. Pass the RAW value (not the coerced
+    // `closingRefsAtEntry`) so the function's own `Array.isArray` check
+    // sees the real shape.
     const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
-      closingRefsAtEntry,
+      snapshot.closingIssuesReferences,
       owner,
       repo,
     );

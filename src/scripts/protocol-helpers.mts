@@ -1132,40 +1132,55 @@ export function extractSameRepoClosingIssueNumbers(
 
 /**
  * kurone-kito/idd-skill#3328 (C1 critique pass, live-reproduced against
- * both `--claimless` consumers): derive `classifyPrLoopMembership`'s own
- * `closingIssueNumbers` input from an already-array-coerced
- * `closingIssuesReferences` value, distinguishing "genuinely no closing
- * references" from "closing references exist, but none resolve to a
- * same-repo issue number" (every entry cross-repo or otherwise
- * unparseable by {@link extractSameRepoClosingIssueNumbers}).
+ * both `--claimless` consumers, then further tightened per Copilot review
+ * on PR #3421): derive `classifyPrLoopMembership`'s own
+ * `closingIssueNumbers` input from a raw `closingIssuesReferences`
+ * passthrough, distinguishing three cases that must NOT collapse into
+ * each other:
  *
- * The two cases must NOT collapse to the same classifier input: before
- * #3328, both consumers refused `--claimless` outright whenever the RAW
- * `closingIssuesReferences` was non-empty, regardless of repo -- a
- * same-repo-only filter applied before the classifier would otherwise
- * silently treat a cross-repo-only (or all-malformed) closing reference
- * as `closingIssueNumbers: []`, which the classifier's own `'no closing
- * issue references'` row (#2017, unchanged) reads as
- * `out-of-loop-claimless` -- accepting `--claimless` with **no marker
- * required** for a PR the pre-#3328 code always refused. Returning
- * `null` here instead reproduces that original refusal: the classifier's
- * own `null` row fails closed to `'in-loop'`. A genuinely empty
- * `closingRefsArray` still returns `[]` (the unchanged claimless case).
+ * 1. **Genuinely no closing references** (a real, empty array) ->
+ *    `[]`, the unchanged `#2017` claimless case.
+ * 2. **The field itself is unreadable** (not an array at all -- a
+ *    malformed provider response, or a value this function was never
+ *    meant to see) -> `null`.
+ * 3. **Every entry resolves to a same-repo issue number** -> those
+ *    numbers.
+ *
+ * Any entry that does NOT resolve to a same-repo number -- cross-repo,
+ * or otherwise unparseable by
+ * {@link extractSameRepoClosingIssueNumbers} -- makes the WHOLE result
+ * `null`, even when other entries in the same array did resolve. Before
+ * #3328, both consumers refused `--claimless` outright whenever the raw
+ * `closingIssuesReferences` was non-empty, regardless of repo; a
+ * same-repo-only filter that silently drops an unresolved entry and
+ * returns the resolved subset would let the classifier -- and each
+ * consumer's own claim-state check -- run against an INCOMPLETE closing
+ * set, never checking the dropped entry's own claim state at all.
+ * `resolve-review-thread.mts` has no later closing-set gate to catch
+ * that gap the way `pre-merge-readiness.mts`'s own gate does, so this
+ * function fails the WHOLE result closed instead of accepting a partial
+ * one. `null` reproduces the pre-#3328 refusal either way: the
+ * classifier's own `null` row fails closed to `'in-loop'`.
  */
 export function resolveClosingIssueNumbersForClassifier(
-  closingRefsArray: readonly unknown[],
+  closingIssuesReferences: unknown,
   owner: string,
   repo: string,
 ): number[] | null {
-  if (closingRefsArray.length === 0) {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return null;
+  }
+  if (closingIssuesReferences.length === 0) {
     return [];
   }
   const sameRepoNumbers = extractSameRepoClosingIssueNumbers(
-    closingRefsArray,
+    closingIssuesReferences,
     owner,
     repo,
   );
-  return sameRepoNumbers.length === 0 ? null : sameRepoNumbers;
+  return sameRepoNumbers.length === closingIssuesReferences.length
+    ? sameRepoNumbers
+    : null;
 }
 
 export function summarizeExternalCheckWaivers(

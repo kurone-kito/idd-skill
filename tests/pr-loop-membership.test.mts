@@ -257,7 +257,7 @@ test('resolveClosingIssueNumbersForClassifier: an all-malformed non-empty array 
   );
 });
 
-test('resolveClosingIssueNumbersForClassifier: a mix of same-repo and cross-repo entries returns only the same-repo numbers', () => {
+test('resolveClosingIssueNumbersForClassifier: a mix of same-repo and cross-repo entries reports null (Copilot review, PR #3421) -- a partial match must not silently drop the unresolved entry', () => {
   const mixed = [
     { number: 7 },
     {
@@ -265,9 +265,24 @@ test('resolveClosingIssueNumbersForClassifier: a mix of same-repo and cross-repo
       repository: { name: 'other-repo', owner: { login: 'other-owner' } },
     },
   ];
-  assert.deepStrictEqual(
+  assert.strictEqual(
     resolveClosingIssueNumbersForClassifier(mixed, 'o', 'r'),
-    [7],
+    null,
+  );
+});
+
+test('resolveClosingIssueNumbersForClassifier: a non-array input reports null (unreadable), not [] (Copilot review, PR #3421)', () => {
+  assert.strictEqual(
+    resolveClosingIssueNumbersForClassifier(null, 'o', 'r'),
+    null,
+  );
+  assert.strictEqual(
+    resolveClosingIssueNumbersForClassifier(undefined, 'o', 'r'),
+    null,
+  );
+  assert.strictEqual(
+    resolveClosingIssueNumbersForClassifier('not-an-array', 'o', 'r'),
+    null,
   );
 });
 

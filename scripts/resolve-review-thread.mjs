@@ -245,21 +245,31 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
 export function isClaimlessEligible(port, pr, options = {}) {
   const closingRefs =
     port.getChangeRequestConvergenceView(pr).closingIssuesReferences;
-  const closingRefsArray = Array.isArray(closingRefs) ? closingRefs : [];
-  if (closingRefsArray.length === 0) {
+  // Copilot review, PR #3421: only a PROVEN, genuinely empty array takes
+  // the fast eligible-without-classification path -- a non-array
+  // `closingRefs` (the field itself unreadable/malformed) must not
+  // silently read as "no closing references" the way coercing straight
+  // to `[]` and checking `.length === 0` would. It instead falls through
+  // to the try block below, where `resolveClosingIssueNumbersForClassifier`
+  // reports `null` for a non-array input, which the classifier fails
+  // closed to `in-loop` for.
+  if (Array.isArray(closingRefs) && closingRefs.length === 0) {
     return true;
   }
   try {
-    // C1 critique pass (live-reproduced): a same-repo-only extraction fed
-    // straight to the classifier would silently read a cross-repo-only
-    // (or all-malformed) closing reference as "no closing references",
-    // accepting --claimless with NO marker required for a PR the
-    // pre-#3328 code always refused (kurone-kito/idd-skill#3328).
+    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: a
+    // same-repo-only extraction fed straight to the classifier would
+    // silently read a cross-repo-only, partially-unresolvable, or
+    // unreadable closing reference as "no closing references", accepting
+    // --claimless with NO marker required for a PR the pre-#3328 code
+    // always refused (kurone-kito/idd-skill#3328).
     // resolveClosingIssueNumbersForClassifier reports `null` (unreadable)
-    // for exactly that case instead, which the classifier fails closed to
-    // `in-loop` for -- reproducing the original refusal.
+    // for exactly those cases instead, which the classifier fails closed
+    // to `in-loop` for -- reproducing the original refusal. Pass the RAW
+    // `closingRefs` (not a pre-coerced array) so the function's own
+    // `Array.isArray` check sees the real shape.
     const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
-      closingRefsArray,
+      closingRefs,
       options.owner ?? '',
       options.repo ?? '',
     );

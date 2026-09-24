@@ -1919,12 +1919,16 @@ other case leaves the PR `in-loop`:
   invalid -- fail closed, the same rule
   `idd-external-check-waiver` evidence above already applies.
 
-Post it with `post-idd-marker --type out-of-loop --target pr <n>
---agent-id <id> --timestamp <iso8601> --apply`. `pr:` is derived from
-`--target pr <n>`'s own positional number, never a separately typed
-flag -- letting the operator type it twice would risk it silently
-disagreeing with the actual posting destination -- and `reason` is
-always the literal `bootstrap` the renderer hardcodes, never
+Post it with the profile-selected `post-idd-marker` command -- see
+[Post operational markers](#post-operational-markers-write-side) above
+for the source-repo / package-manager / ephemeral-npx forms;
+source-repo example: `node scripts/post-idd-marker.mjs --type
+out-of-loop --target pr <n> --agent-id <id> --timestamp <iso8601>
+--apply`. `pr:` is derived from `--target pr <n>`'s own positional
+number, never a separately typed flag -- letting the operator type it
+twice would risk it silently disagreeing with the actual posting
+destination -- and `reason` is always the literal `bootstrap` the
+renderer hardcodes, never
 user-supplied.
 
 `MARKER_HIDE_POLICY` (`marker-helpers.mts`) classifies

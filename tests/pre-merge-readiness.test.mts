@@ -11617,6 +11617,131 @@ test('collectPreMergeReadiness: --claimless still refuses when a collaborator-tr
   );
 });
 
+test('collectPreMergeReadiness: --claimless refuses a PR whose closingIssuesReferences field is unreadable (non-array), even with a valid marker (Copilot review, PR #3421)', () => {
+  // A non-array closingIssuesReferences must not silently read as "no
+  // closing references" (the ordinary #2017 claimless fast path) --
+  // that would skip classification entirely and accept --claimless with
+  // no marker required for a PR whose closing-reference field could not
+  // even be read.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        // Malformed on purpose: a real `gh pr view` failure mode this
+        // repo has seen elsewhere (a non-array where an array was
+        // expected), not a valid closingIssuesReferences shape.
+        closingIssuesReferences: null as unknown as unknown[],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless refuses a PR with a mix of same-repo and cross-repo closing references, even with a valid marker (Copilot review, PR #3421)', () => {
+  // A partial same-repo match must not silently drop the unresolved
+  // cross-repo entry and proceed on the resolved subset alone -- the
+  // dropped entry's own claim state (unknowable to this repo) was never
+  // checked.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [
+          { number: 7 },
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+      7: [],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // kurone-kito/idd-skill#2911: stale-self-waiver merge blocker.
 //
