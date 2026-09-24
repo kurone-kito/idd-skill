@@ -326,35 +326,51 @@ could ever observe it as 'alive'".
    (`idd-merge.instructions.md`; PR `#3354` review, Copilot):
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
+   - `git -C <path> log @{u}..HEAD` (or all commits when there is no
+     upstream) for this worktree's own unpushed commits (PR `#3354`
+     review, Copilot)
    - `git -C <path> submodule status --recursive`
    - `git -C <path> submodule foreach --recursive 'git status
      --porcelain --ignored --untracked-files=normal; git stash list;
      git rev-list --all --not --remotes --count'`
 
-   When the top-level status shows a line not prefixed `!!` (a
-   tracked or untracked change — `--ignored` always lists ignored
-   paths too, e.g. `node_modules/`, so their presence alone is not a
-   signal to stash), save it with `git -C <path> stash push
-   --include-untracked -m "idd-lwr <claim-id>"` — the message tags
-   this recovery's own entry so step 4 can verify that exact one,
-   since `stash` is repository-wide and a sibling worktree can add an
-   unrelated entry at any time (PR `#3354` review, Copilot). Stash
-   entries live in the shared repository, not the worktree's own
-   private admin directory, so they survive step 4's removal. If
-   `stash push` instead fails on unmerged paths the backed-up
-   operation left behind, fail closed: copy the conflicted files out
-   to a path outside `<path>` — mirroring F4's own "copy other work
-   to a different ref or path" rule — rather than treating the
-   branch-tip backup alone as sufficient preservation (PR `#3354`
-   review, Copilot). Preserve unpushed commits — this worktree's own
-   and every submodule's — on a backup ref or bundle instead of
-   pushing them to the issue branch. `--include-untracked` does not
-   stash ignored files, so copy those out separately too: secrets
-   (e.g. `.env`) — never commit or push them — and any other
-   non-reproducible ignored data. A worktree (and every submodule)
-   with no tracked or untracked change has nothing to stash: `stash
-   push` reports no local changes to save and creates no new entry,
-   so step 4 skips the stash check for it.
+   Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
+   found no lock (the legacy pre-claim-id release case has no
+   `<claim-id>` to tag with). Record the pre-step count of `git -C
+   <path> stash list` entries already carrying `<tag>` (normally `0`,
+   but a stale one can survive an earlier interrupted attempt at this
+   same recovery) as the baseline (PR `#3354` review, Copilot). When
+   the top-level status shows a line not prefixed `!!` (a tracked or
+   untracked change — `--ignored` always lists ignored paths too, e.g.
+   `node_modules/`, so their presence alone is not a signal to stash),
+   save it with `git -C <path> stash push --include-untracked -m
+   "<tag>"`, and do the same inside every submodule whose own status
+   showed a tracked or untracked change — including one `submodule
+   status` reports `-` (uninitialized), whose working-tree content
+   `submodule foreach` never visits, so inspect and preserve it
+   directly with the same top-level commands scoped to its own path
+   (PR `#3354` review, Copilot). The tag distinguishes this recovery's
+   own entries from a sibling worktree's (`stash` is repository-wide),
+   and the baseline count distinguishes a fresh success from a stale
+   leftover on a retried attempt. Stash entries live in the shared
+   repository, not the worktree's own private admin directory, so
+   they survive step 4's removal. If `stash push` instead fails on
+   unmerged paths the backed-up operation left behind, fail closed:
+   copy the conflicted files out to a path outside `<path>` —
+   mirroring F4's own "copy other work to a different ref or path"
+   rule — rather than treating the branch-tip backup alone as
+   sufficient preservation (PR `#3354` review, Copilot). Preserve
+   unpushed commits — this worktree's own and every submodule's — on
+   a backup ref (`git -C <path> update-ref refs/idd-lwr/<branch>
+   HEAD`, or the same scoped to a submodule's own path) or a bundle,
+   instead of pushing them to the issue branch (PR `#3354` review,
+   Copilot). `--include-untracked` does not stash ignored files, so
+   copy those out separately too: secrets (e.g. `.env`) — never
+   commit or push them — and any other non-reproducible ignored data.
+   A worktree (and every submodule) with no tracked or untracked
+   change has nothing to stash: `stash push` reports no local changes
+   to save and creates no new entry, so step 4 skips the stash check
+   for it.
 4. **Remove.** Immediately before removing anything — not step 1's
    earlier read — re-run its confirm-the-block check
    (`resume-claim-routing.mjs --issue <n>` and the `claim-lock` check
@@ -364,14 +380,16 @@ could ever observe it as 'alive'".
    changed since step 1, and `idd-merge.instructions.md`'s own F4
    worktree-removal step revalidates the claim and lock before every
    removal for the same reason (PR `#3354` review, Copilot). Then
-   confirm each step 3 action actually succeeded — the tagged
-   `idd-lwr <claim-id>` entry appears in `git -C <path> stash list`
-   (and each submodule's) only when step 3 found a change to stash,
-   any unmerged-path fallback copy landed outside `<path>`, unpushed
-   commits are visible on the backup ref or in the bundle, and any
-   copied-out ignored files landed outside the worktree — before
-   removing anything. Stop and do not run `git worktree remove`,
-   `--force` included, if any of them failed.
+   confirm each step 3 action actually succeeded — the `<tag>` entry
+   count in `git -C <path> stash list` (and each submodule's) rose by
+   exactly one past the baseline only where step 3 found a change to
+   stash, any unmerged-path fallback copy landed outside `<path>`,
+   `git -C <path> rev-parse --verify refs/idd-lwr/<branch>` resolves
+   (or the submodule-scoped equivalent) only where step 3 found
+   unpushed commits to back up, and any copied-out ignored files
+   landed outside the worktree — before removing anything. Stop and do
+   not run `git worktree remove`, `--force` included, if any of them
+   failed (PR `#3354` review, Copilot).
 
    If `<path>` is the primary worktree — the path the first `worktree`
    line of `git worktree list --porcelain` reports, distinct from
@@ -387,15 +405,23 @@ could ever observe it as 'alive'".
    note above if this file is entered without a fresh B1 pass — then
    confirm `resume-claim-routing.mjs` now reports this branch's
    `evidence.local_worktree.status` as `absent` before continuing to
-   step 5. If step 1's `claim-lock` check matched this primary
+   step 5. Behind the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock),
+   re-run the `claim-lock` check form on the primary worktree
+   immediately before acting — not step 1's earlier read or this
+   step's own opening re-check above, both now stale against a
+   concurrent session that could have acquired or replaced this
+   shared admin directory's lock in between (PR `#3354` review,
+   Copilot). If that fresh check still matches this primary
    worktree's lock to the claim-id being recovered, remove that one
    file now that the checkout released the branch (`rm
    "$(git -C <path> rev-parse --absolute-git-dir)/idd-claim.lock"`) —
    the same deletion `git worktree remove` performs for a linked
    worktree, done by hand here since removal itself isn't possible.
-   Leave the generated-tokens record: it is keyed per claim-id, not
-   per branch, and `claim-lock.mts` already documents it as never
-   expected to be cleaned up.
+   Otherwise stop; a different or now-absent holder means the
+   situation changed again. Leave the generated-tokens record: it is
+   keyed per claim-id, not per branch, and `claim-lock.mts` already
+   documents it as never expected to be cleaned up.
 
    Otherwise, behind the
    [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock)
