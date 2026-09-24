@@ -1947,10 +1947,10 @@ close.
 - Command:
   `node scripts/provider-outage-park.mjs [--park --pr <n> --issue <n>
   --service <name> --blockers <name1,name2> --claim-id <id> --agent-id
-  <id>] [--apply]`
+  <id>] [--parked-issues] [--apply]`
 - Published bin: `idd-provider-outage-park`
 - Stable contract (the posted `idd-provider-outage-park` marker payload,
-  not the list-mode stdout shape below):
+  not the list-mode/`--parked-issues` stdout shapes below):
   [`provider-outage-park.schema.json`][provider-outage-park-schema]
 - Purpose (#2321): every current route for an unavailable external
   service ends in a hold, which keeps the claim live until
@@ -1959,9 +1959,26 @@ close.
   requests stuck the same way. Parking releases the claim immediately
   instead, at no cost to any quality gate: it never resolves a thread,
   satisfies a gate, or merges.
+- **Live-marker rule (`#3277`).** Nothing retires a park marker on its
+  own: a marker counts as **live** only when both hold: its embedded
+  `head:` still equals the pull request's current head SHA (the pull
+  request has not moved since it was parked), and no trusted
+  `claimed-by` on the originating issue (`issue:`) has a GitHub
+  `created_at` later than the park **comment's own** `created_at`
+  (never the embedded `parked:` field, which is the parking agent's
+  local clock) -- a fresh claim and a heartbeat share the same wire
+  format, so either one means a session has touched the issue since
+  parking. A marker whose `service:` is not one of
+  `advisory-review`/`ci-actions` is retired the same way. A retired
+  marker is excluded from `entries`/`count`/`boundReached` and counted
+  in `retiredCount` instead. A failed read of the originating issue's
+  own comments keeps a marker live (fail-open); a failed read of the
+  pull request's own comments (the read that finds the marker) instead
+  marks the report `parkedIssuesComplete: false`, alongside a truncated
+  open-pull-request sample.
 - Modes:
   - default (list, read-only): lists every open pull request carrying a
-    trusted `idd-provider-outage-park` marker, each with its parked
+    LIVE trusted `idd-provider-outage-park` marker, each with its parked
     service's current `provider-health` verdict and `resumable` (true
     only once that verdict is `healthy`). Sorted by `parkedAt` then pull
     request number for deterministic re-entry order. Reports `count` and
@@ -1970,7 +1987,18 @@ close.
     pull request read is bounded (default 50, most-recently-updated
     first); `sampleTruncated` is `true` when more open pull requests may
     exist beyond that sample, and `boundReached` fails closed to `true`
-    in that case regardless of the sampled `count`.
+    in that case regardless of the sampled `count`. Also reports
+    `retiredCount` (markers found but not live), `parkedIssues` (the
+    sorted, de-duplicated issue numbers of live, non-resumable entries),
+    and `parkedIssuesComplete` (see the live-marker rule above).
+  - `--parked-issues`: the cheap mode Discover's own parked-issue skip
+    runs on every pass. Prints only `{ parkedIssues, parkedIssuesComplete
+    }`. Reads the live `provider-health` report first; when EVERY
+    service is `healthy`, `parkedIssues` is empty by construction (a
+    live marker's `resumable` is `true` only once its own service is
+    healthy) and complete, so this returns without any open-pull-request
+    or per-pull-request comment read. Otherwise falls through to the
+    full list-mode collection. Mutually exclusive with `--park`.
   - `--park`: fetches the pull request's live head SHA, re-checks the
     named service's live `provider-health` verdict is `unavailable`, and
     requires every entry in `--blockers` (the caller's own fresh
@@ -1986,9 +2014,9 @@ close.
 - Same claim-gating contract as `post-idd-marker.mjs`: this command
   performs no claim/state gating itself -- the calling phase runs its
   own claim-revalidation gate before `--apply`.
-- Read-only by construction in list mode: exposes no field named or
-  shaped as a merge-readiness or CI-gate result, mirroring the
-  provider-health helper above.
+- Read-only by construction in list mode and `--parked-issues`: exposes
+  no field named or shaped as a merge-readiness or CI-gate result,
+  mirroring the provider-health helper above.
 
 ### Local validation evidence helper
 
