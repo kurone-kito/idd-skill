@@ -231,13 +231,12 @@ Apply one outcome:
   reason in the evidence summary (for example `#1234 (not_planned)`)
   instead of folding it into an undifferentiated "closed or otherwise
   complete" count. In recursive hierarchies, this outcome applies only
-  when the selected
-  roadmap is the deepest remaining open roadmap on its path whose
-  descendants are all closed. After closing a nested roadmap,
-  release that roadmap-audit claim, re-fetch the ancestor graph, and
-  return to `idd-discover.instructions.md` (A1) so the parent roadmap
-  can be re-evaluated from fresh state. No child task issue is
-  claimed.
+  when the selected roadmap is the deepest remaining open roadmap on
+  its path whose descendants are all closed. After closing a nested
+  roadmap, release that roadmap-audit claim, re-fetch the ancestor
+  graph, and return to `idd-discover.instructions.md` (A1) so the
+  parent roadmap can be re-evaluated from fresh state. No child task
+  issue is claimed.
 - **Autonomous gaps found**: create or link follow-up issues using the
   repository's issue-authoring rules, then continue to A2 so the new
   work can be discovered. Before creating a new issue, run the narrow
