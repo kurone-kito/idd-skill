@@ -271,7 +271,7 @@ six days after. Search closed issues using the proposal's core nouns
 rather than its new framing, plus at least one alternative phrasing:
 
 ```sh
-gh issue list --repo <owner>/<repo> --state closed \
+gh issue list --repo <owner>/<repo> --state closed --limit 100 \
   --search 'reason:"not planned" <core-nouns>'
 ```
 
