@@ -167,22 +167,22 @@ this table is the instructions-only fallback.
 If that scan fails, is malformed, or is unreadable, treat it as unknown and
 stop before re-claim or takeover; never treat failure as no match.
 
-| Claim state                                                                                     | Route                                                                                                                         |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Issue closed or PR merged                                                                       | Clean up local worktree and branch; STOP                                                                                      |
-| Active claim = this session's verified `{claim-id}` + branch field starts with `roadmap-audit/` | Re-run A1.5; skip worktree creation; STOP after roadmap-side effects. Coordination-only: does not lock child-issue execution. |
-| Active claim = this session's verified `{claim-id}`                                             | Continue with same `{claim-id}`; ignore stale FH evidence citing a different displaced `{claim-id}`; → Step 2                 |
-| FH evidence names this session's already-verified `{claim-id}`                                  | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge                               |
-| Forced-handoff recovery confirmed (§FH)                                                         | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2                           |
-| No active claim after release + matching local worktree is occupied or unreadable               | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                                  |
-| No new-format claims + legacy `claimed-by` + later trusted `unclaimed-by` (same agent)          | Treat as unclaimed → fresh A5 claim → Step 2                                                                                  |
-| No new-format claims + legacy `claimed-by`, age < 24 h                                          | STOP — not inheritable even if agent-id matches                                                                               |
-| No new-format claims + legacy `claimed-by`, age ≥ 24 h                                          | Migrate via A5 with `supersedes: none`; → Step 2                                                                              |
-| No active claim                                                                                 | Re-claim via A5; → Step 2                                                                                                     |
-| Active non-stale claim (< 24 h, other session)                                                  | STOP — not inheritable even if agent-id matches                                                                               |
-| Active stale claim (≥ 24 h, other session) + matching local worktree is occupied or unreadable  | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                                  |
-| Active stale claim (≥ 24 h, other session) + branch field starts with `roadmap-audit/`          | Takeover via A5 with `supersedes: <prior-id>`; then re-run A1.5; STOP after roadmap-side effects                              |
-| Active stale claim (≥ 24 h, other session)                                                      | Takeover via A5 with `supersedes: <prior-id>`; → Step 2                                                                       |
+| Claim state                                                                                    | Route                                                                                                         |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Issue closed or PR merged                                                                      | Clean up local worktree and branch; STOP                                                                      |
+| This session's claim; branch starts with `roadmap-audit/`                                      | Re-run A1.5; skip worktree creation; STOP (roadmap coordination only)                                         |
+| Active claim = this session's verified `{claim-id}`                                            | Continue with same `{claim-id}`; ignore stale FH evidence citing a different displaced `{claim-id}`; → Step 2 |
+| FH evidence names this session's already-verified `{claim-id}`                                 | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge               |
+| Forced-handoff recovery confirmed (§FH)                                                        | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2           |
+| No active claim after release + matching local worktree is occupied or unreadable              | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                  |
+| No new-format claims + legacy `claimed-by` + later trusted `unclaimed-by` (same agent)         | Treat as unclaimed → fresh A5 claim → Step 2                                                                  |
+| No new-format claims + legacy `claimed-by`, age < 24 h                                         | STOP — not inheritable even if agent-id matches                                                               |
+| No new-format claims + legacy `claimed-by`, age ≥ 24 h                                         | Migrate via A5 with `supersedes: none`; → Step 2                                                              |
+| No active claim                                                                                | Re-claim via A5; → Step 2                                                                                     |
+| Active non-stale claim (< 24 h, other session)                                                 | STOP — not inheritable even if agent-id matches                                                               |
+| Active stale claim (≥ 24 h, other session) + matching local worktree is occupied or unreadable | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                  |
+| Stale claim (other session); branch starts with `roadmap-audit/`                               | Takeover via A5 (`supersedes: <prior-id>`); re-run A1.5; STOP (roadmap-side only)                             |
+| Active stale claim (≥ 24 h, other session)                                                     | Takeover via A5 with `supersedes: <prior-id>`; → Step 2                                                       |
 
 All re-claims, migrations, and takeovers must use A5 race-safe verification
 from `idd-claim.instructions.md`. Forced-handoff recovery never waives the
