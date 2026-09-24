@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildCiWaitStateSummary,
+  isProtectionReadUnreadable,
   parseArgs,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
@@ -961,3 +962,137 @@ test('workflowName is trimmed so whitespace-only differences do not produce spur
 // removed. ci-wait-policy.test.mts (a fellow builder+CLI single-file
 // helper whose test file statically imports its builder functions too)
 // follows the same precedent and omits this test for the same reason.
+
+// --- #3300: unreadable protection/ruleset reads -----------------------
+
+test('isProtectionReadUnreadable: an ok outcome is always readable, regardless of the opt-in', () => {
+  assert.equal(
+    isProtectionReadUnreadable({ outcome: 'ok', value: [] }, false),
+    false,
+  );
+  assert.equal(
+    isProtectionReadUnreadable({ outcome: 'ok', value: [] }, true),
+    false,
+  );
+});
+
+test('isProtectionReadUnreadable: a not-found outcome is unreadable unless the opt-in is set', () => {
+  assert.equal(
+    isProtectionReadUnreadable({ outcome: 'not-found' }, false),
+    true,
+  );
+  assert.equal(
+    isProtectionReadUnreadable({ outcome: 'not-found' }, true),
+    false,
+  );
+});
+
+test('required-checks rollup: an unreadable protection/ruleset read reports status unreadable even when every named required check passes', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'], protectionReadsUnreadable: true },
+  );
+
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, true);
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+});
+
+test('required-checks rollup: protectionReadsUnreadable false (the trustEmptyProtectionReads opt-in case) yields the pre-#3300 status unchanged', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'], protectionReadsUnreadable: false },
+  );
+
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, false);
+  assert.equal(summary.requiredChecks.status, 'success');
+  assert.equal(summary.requiredChecks.allRequiredPassing, true);
+});
+
+test('required-checks rollup: protectionReadsUnreadable defaults to false when omitted, matching every pre-#3300 caller', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build' })],
+    },
+    { requiredCheckNames: [] },
+  );
+
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, false);
+  assert.equal(summary.requiredChecks.status, 'no-required-checks');
+});
+
+test('required-checks rollup: unreadable takes precedence over the empty-names no-required-checks status', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: [], protectionReadsUnreadable: true },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+});
+
+test('required-checks rollup: unreadable takes precedence over the empty-names source-pinned status', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build', conclusion: 'SUCCESS' })],
+    },
+    {
+      requiredCheckNames: [],
+      requiredCheckSourcePinned: true,
+      protectionReadsUnreadable: true,
+    },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.equal(summary.requiredChecks.requiredCheckSourcePinned, true);
+});
+
+test('required-checks rollup: unreadable takes precedence over a failing required check', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'FAILURE' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'], protectionReadsUnreadable: true },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.equal(summary.requiredChecks.anyRequiredFailing, true);
+});
+
+test('required-checks rollup: unreadable takes precedence over a not-yet-generated (missing) required check', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    {
+      requiredCheckNames: ['lint', 'test'],
+      protectionReadsUnreadable: true,
+    },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.deepEqual(summary.requiredChecks.missingNames, ['test']);
+  assert.equal(summary.requiredChecks.allRequiredPresent, false);
+});
