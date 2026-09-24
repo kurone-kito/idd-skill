@@ -1423,6 +1423,27 @@ test('maskMarkdownForScan does not mask an indented continuation of an open list
   assert.equal(maskMarkdownForScan(body), body);
 });
 
+test('maskMarkdownForScan keeps a nested list item real after an inner list closes via a lazy paragraph dedent (kurone-kito/idd-skill#3283)', () => {
+  // A prior bug: `findIndentedCodeRanges` closed the *outer* list's
+  // content-indent tracking on the "text after inner" line below,
+  // because that line is a CommonMark *lazy continuation* of the
+  // "inner" list item's own paragraph (no blank line precedes it), not
+  // a genuine dedent that should end the outer list. Losing the outer
+  // list's content indent made the later, blank-separated, still-nested
+  // list item at absolute indent 4 fall back to the top-level 4-column
+  // threshold and get mis-masked as an indented code block, hiding its
+  // real link.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  text after inner',
+    '',
+    '    - [workshop #1](https://example.com/workshop)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);

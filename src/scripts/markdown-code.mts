@@ -1893,7 +1893,20 @@ export function findIndentedCodeRanges(
       !isBlank &&
       listItem === null &&
       activeListContentIndent !== null &&
-      indentationColumns(parsed.content) < activeListContentIndent
+      indentationColumns(parsed.content) < activeListContentIndent &&
+      // CommonMark laziness: an under-indented, non-blank, non-list-item
+      // line right after an ordinary (non-boundary) paragraph line lazily
+      // continues that paragraph and must NOT close the enclosing list's
+      // content zone -- only a line that follows a blank (no open
+      // paragraph to continue) or a block-boundary-shaped line (heading,
+      // fence opener -- not an ongoing paragraph either) is a genuine
+      // dedent. Without this guard, a lazy continuation line at a shallow
+      // indent incorrectly dropped `activeListContentIndent` to null, so a
+      // later, blank-separated, still-nested list item (relative to the
+      // *outer* list, indented enough to satisfy it but not the reset
+      // 4-column top-level default) was misread as a fresh top-level
+      // indented code block (kurone-kito/idd-skill#3283).
+      (previousLineBlank || previousLineBlockBoundary)
     ) {
       activeListContentIndent = null;
       activeListContainerDepth = null;
