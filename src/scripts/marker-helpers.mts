@@ -2336,7 +2336,7 @@ function resolveAuthoringMarkerIdentity(
     return parseAuthoringOwnerComment(body, markerPrefix)?.target ?? null;
   }
   const parsed = parseAuthoringPublicationIntentComment(body, markerPrefix);
-  return parsed ? `${parsed.target} ${parsed.token}` : null;
+  return parsed ? `${parsed.target}\0${parsed.token}` : null;
 }
 
 /**
@@ -2399,7 +2399,7 @@ export function classifyAuthoringMarkerFamily(
       markerPrefix,
       family,
     );
-    const key = identity ?? ` unresolved-${index}`;
+    const key = identity ?? `\0unresolved-${index}`;
     const group = groups.get(key);
     if (group) {
       group.push(index);
