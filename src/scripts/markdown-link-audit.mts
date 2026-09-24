@@ -28,6 +28,16 @@ export interface MarkdownLinkAuditConfig {
   id?: unknown;
   globs?: unknown;
   templateRoot?: unknown;
+  distributedFileSetBlockId?: unknown;
+}
+
+// The subset of a manifest `generatedBlocks[]` entry `resolveDistributedFileSet`
+// needs -- deliberately narrower than audit-docs.mts's own `GeneratedBlock`
+// interface (which this module must not import, to avoid a layering cycle:
+// audit-docs.mts already imports this module).
+export interface GeneratedBlockPathSource {
+  id?: unknown;
+  paths?: unknown;
 }
 
 const DEFAULT_TEMPLATE_ROOT = 'idd-template/';
@@ -260,11 +270,59 @@ function displayPath(path: string): string {
 }
 
 /**
+ * Resolve the distributed core file set named by
+ * `config.distributedFileSetBlockId` against the manifest's
+ * `generatedBlocks[]` entries -- the narrower file set an adopter's
+ * `--import` actually copies (`resolveCoreTemplateFiles` in
+ * `src/scripts/idd-onboard.mts`), not the whole `templateRoot` tree the
+ * escape check alone validates against (#3296). Pure (no I/O): the caller
+ * supplies the already-parsed manifest's `generatedBlocks`.
+ *
+ * Returns `null` when `distributedFileSetBlockId` is absent -- the
+ * stricter distributed-set check is opt-in, so an unconfigured audit
+ * keeps today's escape-only behavior unchanged. Returns `{ error }` when
+ * the key is present but malformed, or names no `generatedBlocks` entry
+ * with a non-empty string-array `paths` -- the caller reports this the
+ * same way the `globs` / `templateRoot` config errors below are reported.
+ * Returns `{ paths }` -- the named block's `paths`, unmodified -- on
+ * success.
+ */
+export function resolveDistributedFileSet(
+  config: MarkdownLinkAuditConfig | null | undefined,
+  generatedBlocks: readonly GeneratedBlockPathSource[],
+): { paths: string[] } | { error: string } | null {
+  if (!config || config.distributedFileSetBlockId === undefined) {
+    return null;
+  }
+  const blockId = config.distributedFileSetBlockId;
+  if (typeof blockId !== 'string' || !blockId) {
+    return { error: 'distributedFileSetBlockId must be a non-empty string' };
+  }
+  const block = generatedBlocks.find((candidate) => candidate.id === blockId);
+  const rawPaths = block?.paths;
+  const paths = Array.isArray(rawPaths) ? rawPaths : [];
+  if (
+    !block ||
+    paths.length === 0 ||
+    !paths.every((path): path is string => typeof path === 'string')
+  ) {
+    return {
+      error:
+        `distributedFileSetBlockId "${blockId}" does not name a ` +
+        'generatedBlocks entry with a non-empty paths list',
+    };
+  }
+  return { paths: [...paths] };
+}
+
+/**
  * Collect intra-repo markdown link/anchor violations across every file
  * `listFiles`'s configured globs match. Pure (no direct I/O); the audit
  * pipeline supplies `repoFiles` (the full flat file list, for existence and
  * directory-prefix checks), `listFiles` (glob matching bound to
- * `repoFiles`), and `readFile`.
+ * `repoFiles`), `readFile`, and, optionally, `distributedFiles` --
+ * `resolveDistributedFileSet`'s already-resolved `paths` (or `null`/
+ * `undefined` when the distributed-set check is not configured).
  *
  * `readFile` is only ever called for paths already confirmed present in
  * `repoFiles` -- a missing target is reported from the `repoFiles` Set
@@ -277,6 +335,7 @@ export function collectMarkdownLinkAuditViolations(
   repoFiles: readonly string[],
   listFiles: (pattern: string) => string[],
   readFile: (path: string) => string,
+  distributedFiles?: readonly string[] | null,
 ): string[] {
   if (!config) {
     return [];
@@ -303,6 +362,7 @@ export function collectMarkdownLinkAuditViolations(
     return [`${id}: templateRoot must be a string ending with "/"`];
   }
 
+  const distributedSet = distributedFiles ? new Set(distributedFiles) : null;
   const repoFileSet = new Set(repoFiles);
   const scopeFiles = [
     ...new Set(globs.flatMap((glob) => listFiles(glob))),
@@ -341,6 +401,14 @@ export function collectMarkdownLinkAuditViolations(
         continue;
       }
 
+      // Non-null only when the *source* file is itself part of the
+      // distributed set -- gates the new check below without repeating the
+      // `distributedSet !== null && distributedSet.has(file)` pair at every
+      // call site.
+      const distributedFromHere = distributedSet?.has(file)
+        ? distributedSet
+        : null;
+
       if (resolved.isDirectory) {
         const hasDirectory = repoFiles.some((candidate) =>
           candidate.startsWith(resolved.path),
@@ -349,6 +417,15 @@ export function collectMarkdownLinkAuditViolations(
           violations.push(
             `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" -> missing directory ${resolved.path}`,
           );
+        } else if (
+          distributedFromHere &&
+          ![...distributedFromHere].some((path) =>
+            path.startsWith(resolved.path),
+          )
+        ) {
+          violations.push(
+            `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" -> ${displayPath(resolved.path)} exists under ${templateRoot} but is not in the distributed core file set`,
+          );
         }
         continue;
       }
@@ -356,6 +433,13 @@ export function collectMarkdownLinkAuditViolations(
       if (!repoFileSet.has(resolved.path)) {
         violations.push(
           `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" -> missing file ${resolved.path}`,
+        );
+        continue;
+      }
+
+      if (distributedFromHere && !distributedFromHere.has(resolved.path)) {
+        violations.push(
+          `${id}: ${file}:${occurrence.line}: link "${occurrence.target}" -> ${displayPath(resolved.path)} exists under ${templateRoot} but is not in the distributed core file set`,
         );
         continue;
       }

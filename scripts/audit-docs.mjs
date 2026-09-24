@@ -38,7 +38,10 @@ import {
   collectHelperFlagDriftViolations,
 } from './helper-flag-drift.mjs';
 import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mjs';
-import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
+import {
+  collectMarkdownLinkAuditViolations,
+  resolveDistributedFileSet,
+} from './markdown-link-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -176,7 +179,10 @@ function main() {
   checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
   checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
   checkOkfBundles(manifest.okfBundles ?? null);
-  checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
+  checkMarkdownLinkAudit(
+    manifest.markdownLinkAudit ?? null,
+    manifest.generatedBlocks ?? [],
+  );
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
@@ -672,13 +678,23 @@ function checkOkfBundles(bundles) {
 // isolated from that file's other concurrent edits) so it can be
 // unit-tested without I/O; the audit pipeline supplies the live glob and
 // reader.
-function checkMarkdownLinkAudit(config) {
+function checkMarkdownLinkAudit(config, generatedBlocks) {
+  const distributedFileSet = resolveDistributedFileSet(config, generatedBlocks);
+  if (distributedFileSet && 'error' in distributedFileSet) {
+    const id =
+      config && typeof config.id === 'string' && config.id
+        ? config.id
+        : 'markdown-link-audit';
+    errors.push(`${id}: ${distributedFileSet.error}`);
+    return;
+  }
   errors.push(
     ...collectMarkdownLinkAuditViolations(
       config,
       repoFiles,
       (pattern) => globFiles(pattern, repoFiles),
       readText,
+      distributedFileSet ? distributedFileSet.paths : null,
     ),
   );
 }
