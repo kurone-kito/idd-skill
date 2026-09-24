@@ -1303,6 +1303,26 @@ export interface ProviderPort {
     number: number,
   ): ProviderReviewsWithHeadCommitDate;
 
+  /**
+   * reviews-and-threads. kurone-kito/idd-skill#3253: the earliest GitHub-
+   * recorded check-suite `createdAt` for the PR's current HEAD commit -- a
+   * GitHub-observed anchor, unlike
+   * {@link getChangeRequestReviewsWithHeadCommitDate}'s `headCommittedAt`,
+   * which is committer-supplied metadata GitHub does not verify and that
+   * can lag the actual push. A sibling method, not an extension of
+   * {@link getChangeRequestReviewsWithHeadCommitDate}: the two are fetched
+   * and consumed independently.
+   *
+   * Returns an empty string -- never throws -- when the queried commit's
+   * own `oid` no longer matches the PR's live `headRefOid` (the HEAD moved
+   * between reads), the commit has no check suite, the check-suite page
+   * walk does not complete within a bounded page count, or the underlying
+   * call fails for any reason. Every consumer already has a defined
+   * fail-closed fallback for an unavailable anchor, so this degrades
+   * instead of crashing its caller.
+   */
+  getChangeRequestHeadObservedAt(number: number): string;
+
   /** merge, write. `pr merge --merge --match-head-commit {headSha}` on the
    * port's own ambient repo. */
   mergeChangeRequest(number: number, headSha: string): string;

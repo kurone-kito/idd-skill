@@ -1523,11 +1523,12 @@
     },
     "advisoryConvergenceWaiverPrecondition": {
       "type": "object",
-      "description": "#2021: deadline/terminal precondition gating whether a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver -- mirrors advisory-convergence.mts's own deadline clock (a 24h deadline anchored on the current HEAD commit's own committedDate) and its terminal Copilot-unavailability escape hatch, so this evidence collector never reports a check as covered before that gate itself would call the waiver waived.",
+      "description": "#2021: deadline/terminal precondition gating whether a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver -- mirrors advisory-convergence.mts's own deadline clock (a 24h deadline anchored on the earliest GitHub-recorded check suite for the current HEAD commit, kurone-kito/idd-skill#3253) and its terminal Copilot-unavailability escape hatch, so this evidence collector never reports a check as covered before that gate itself would call the waiver waived.",
       "required": [
         "checkSelector",
         "deadlineMinutes",
         "headCommittedAt",
+        "headObservedAt",
         "elapsedMinutes",
         "deadlinePassed",
         "terminalUnavailable",
@@ -1546,11 +1547,15 @@
         },
         "headCommittedAt": {
           "type": "string",
-          "description": "ISO timestamp of the current HEAD commit itself, or the literal 'none' when unavailable."
+          "description": "ISO timestamp of the current HEAD commit itself, or the literal 'none' when unavailable -- informational only, the committer-supplied timestamp that is never the clock (kurone-kito/idd-skill#3253)."
+        },
+        "headObservedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit, or the literal 'none' when unavailable -- the actual clock elapsedMinutes is measured from (kurone-kito/idd-skill#3253)."
         },
         "elapsedMinutes": {
           "type": ["integer", "null"],
-          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+          "description": "Whole minutes elapsed from headObservedAt to now, or null when headObservedAt is invalid or absent."
         },
         "deadlinePassed": {
           "type": "boolean",

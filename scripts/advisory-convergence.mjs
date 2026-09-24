@@ -156,6 +156,7 @@ import {
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
 import {
+  fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   isVerifiedCopilotAuthor,
   resolveLatestCopilotReviewClause,
@@ -1465,20 +1466,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       !sameHeadRerollExhausted &&
       !sameHeadRerollInFlight,
   };
-  // --- Deadline clock, anchored on the current HEAD commit's own --------
-  // --- timestamp (not an IDD marker -- see module header for why) -------
+  // --- Deadline clock, anchored on the current HEAD commit's earliest ---
+  // --- GitHub-recorded check suite (kurone-kito/idd-skill#3253) ---------
   const deadlineMinutes = Number.isFinite(options.deadlineMinutes)
     ? Number(options.deadlineMinutes)
     : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const headCommittedAt = String(options.headCommittedAt ?? '');
-  const elapsedMinutes = isValidIsoTimestamp(headCommittedAt)
-    ? minutesBetween(headCommittedAt, now)
+  const headObservedAt = String(options.headObservedAt ?? '');
+  const elapsedMinutes = isValidIsoTimestamp(headObservedAt)
+    ? minutesBetween(headObservedAt, now)
     : null;
   const deadlinePassed =
     elapsedMinutes !== null && elapsedMinutes >= deadlineMinutes;
   const deadline = {
     minutes: deadlineMinutes,
     headCommittedAt,
+    headObservedAt,
     elapsedMinutes,
     passed: deadlinePassed,
   };
@@ -2505,6 +2508,17 @@ export function collectFromGitHub(
     Number(args.prNumber),
     port,
   );
+  // kurone-kito/idd-skill#3253: a sibling fetch, not an extension of the
+  // one above -- fail-closed to `''` on any failure, never throws (see
+  // `fetchHeadObservedAt`'s own doc comment), so no try/catch is needed
+  // here even though the sibling `headCommittedAt` fetch stays deliberately
+  // uncaught.
+  const headObservedAt = fetchHeadObservedAt(
+    owner,
+    repo,
+    Number(args.prNumber),
+    port,
+  );
   const threads = fetchReviewThreads(port, Number(args.prNumber));
   // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
   // BEFORE computing `trustedMarkerLogins`, so collaborator-marker trust
@@ -3047,6 +3061,7 @@ export function collectFromGitHub(
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,
+      headObservedAt,
       deadlineMinutes,
       waiverMode: String(
         policy?.ciGate?.externalCheckWaivers?.mode ?? 'disabled',

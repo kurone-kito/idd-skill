@@ -28,6 +28,7 @@
   "deadline": {
     "minutes": 1440,
     "headCommittedAt": "",
+    "headObservedAt": "",
     "elapsedMinutes": null,
     "passed": false
   },

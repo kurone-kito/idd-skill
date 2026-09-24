@@ -178,6 +178,7 @@ import type {
   ReviewPayload,
 } from './review-clause.mts';
 import {
+  fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   isVerifiedCopilotAuthor,
   resolveLatestCopilotReviewClause,
@@ -691,7 +692,15 @@ export interface AdvisoryConvergenceThreadClause {
 /** Deadline-clock evidence. */
 export interface AdvisoryConvergenceDeadline {
   minutes: number;
+  /** kurone-kito/idd-skill#3253: the committer-supplied HEAD commit
+   * timestamp -- informational only. See `headObservedAt` for the actual
+   * clock `elapsedMinutes`/`passed` are measured from. */
   headCommittedAt: string;
+  /** kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+   * `createdAt` for the current HEAD commit -- the actual deadline clock,
+   * unlike the committer-supplied `headCommittedAt` above, which GitHub
+   * never verifies and which can lag the actual push. */
+  headObservedAt: string;
   elapsedMinutes: number | null;
   passed: boolean;
 }
@@ -1092,9 +1101,15 @@ export interface AdvisoryConvergenceOptions {
   /** The PR author's login, excluded from "external feedback" the same way
    * `summarizeDispositionEvidenceForGate` excludes it elsewhere. */
   prAuthorLogin?: string | null;
-  /** ISO-8601 timestamp for the current HEAD commit; anchors the deadline
-   * clock independent of any IDD-specific marker (see module header). */
+  /** ISO-8601 timestamp for the current HEAD commit; informational only
+   * (kurone-kito/idd-skill#3253) -- see `headObservedAt` for the deadline
+   * clock (see module header). */
   headCommittedAt?: string | null;
+  /** kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+   * `createdAt` for the current HEAD commit; anchors the deadline clock
+   * independent of any IDD-specific marker (see module header), replacing
+   * `headCommittedAt` above as the actual clock. */
+  headObservedAt?: string | null;
   deadlineMinutes?: number;
   waiverMode?: string;
   waiverMaxValidity?: string;
@@ -2146,20 +2161,22 @@ export function computeAdvisoryConvergenceVerdict(
       !sameHeadRerollInFlight,
   };
 
-  // --- Deadline clock, anchored on the current HEAD commit's own --------
-  // --- timestamp (not an IDD marker -- see module header for why) -------
+  // --- Deadline clock, anchored on the current HEAD commit's earliest ---
+  // --- GitHub-recorded check suite (kurone-kito/idd-skill#3253) ---------
   const deadlineMinutes = Number.isFinite(options.deadlineMinutes)
     ? Number(options.deadlineMinutes)
     : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const headCommittedAt = String(options.headCommittedAt ?? '');
-  const elapsedMinutes = isValidIsoTimestamp(headCommittedAt)
-    ? minutesBetween(headCommittedAt, now)
+  const headObservedAt = String(options.headObservedAt ?? '');
+  const elapsedMinutes = isValidIsoTimestamp(headObservedAt)
+    ? minutesBetween(headObservedAt, now)
     : null;
   const deadlinePassed =
     elapsedMinutes !== null && elapsedMinutes >= deadlineMinutes;
   const deadline: AdvisoryConvergenceDeadline = {
     minutes: deadlineMinutes,
     headCommittedAt,
+    headObservedAt,
     elapsedMinutes,
     passed: deadlinePassed,
   };
@@ -3307,6 +3324,17 @@ export function collectFromGitHub(
     Number(args.prNumber),
     port,
   );
+  // kurone-kito/idd-skill#3253: a sibling fetch, not an extension of the
+  // one above -- fail-closed to `''` on any failure, never throws (see
+  // `fetchHeadObservedAt`'s own doc comment), so no try/catch is needed
+  // here even though the sibling `headCommittedAt` fetch stays deliberately
+  // uncaught.
+  const headObservedAt = fetchHeadObservedAt(
+    owner,
+    repo,
+    Number(args.prNumber),
+    port,
+  );
   const threads = fetchReviewThreads(port, Number(args.prNumber));
 
   // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
@@ -3893,6 +3921,7 @@ export function collectFromGitHub(
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,
+      headObservedAt,
       deadlineMinutes,
       waiverMode: String(
         policy?.ciGate?.externalCheckWaivers?.mode ?? 'disabled',

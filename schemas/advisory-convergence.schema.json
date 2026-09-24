@@ -167,8 +167,8 @@
     },
     "deadline": {
       "type": "object",
-      "description": "Deadline-clock evidence anchored on the current HEAD commit's own commit timestamp, gating when the waiver escape hatch opens.",
-      "required": ["minutes", "headCommittedAt", "elapsedMinutes", "passed"],
+      "description": "Deadline-clock evidence anchored on the earliest GitHub-recorded check suite for the current HEAD commit, gating when the waiver escape hatch opens.",
+      "required": ["minutes", "headCommittedAt", "headObservedAt", "elapsedMinutes", "passed"],
       "additionalProperties": false,
       "properties": {
         "minutes": {
@@ -178,11 +178,15 @@
         },
         "headCommittedAt": {
           "type": "string",
-          "description": "ISO timestamp of the current HEAD commit itself."
+          "description": "ISO timestamp of the current HEAD commit itself -- informational only, the committer-supplied timestamp that is never the clock (kurone-kito/idd-skill#3253)."
+        },
+        "headObservedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit -- the actual clock elapsedMinutes is measured from; empty (never the literal 'none') when unavailable, matching headCommittedAt's own raw-empty convention on this object -- unlike the 'none' sentinel this same field uses in pre-merge-readiness.schema.json's advisoryConvergenceWaiverPrecondition, which mirrors ITS sibling headCommittedAt's own convention there instead (kurone-kito/idd-skill#3253)."
         },
         "elapsedMinutes": {
           "type": ["number", "null"],
-          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+          "description": "Whole minutes elapsed from headObservedAt to now, or null when headObservedAt is invalid or absent."
         },
         "passed": {
           "type": "boolean",

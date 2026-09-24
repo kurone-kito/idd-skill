@@ -7976,6 +7976,7 @@ test('#2021: idd-advisory-convergence waiver posted but precondition window not 
       // so terminal unavailability is not proven either -- neither
       // precondition is open.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-11T23:00:00Z',
     },
   );
 
@@ -8061,6 +8062,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) is also withheld from coveredBy
       externalCheckWaiverMaxValidity: 'PT24H',
       // Precondition closed: deadline not passed, terminal not proven.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-11T23:00:00Z',
     },
   );
 
@@ -8128,6 +8130,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) still does not cover coveredByW
       externalCheckWaiverMaxValidity: 'PT24H',
       // Precondition OPEN this time: deadline has passed.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -8236,6 +8239,7 @@ test('#2021: withholding coverage from idd-advisory-convergence does not remove 
       // uncovered, but idd-security must still be covered by the same
       // glob waiver entry.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-11T23:00:00Z',
     },
   );
 
@@ -8291,6 +8295,7 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
       // HEAD committed 25h before `now`: 1500 elapsed minutes >= the
       // 1440-minute default deadline -- the deadline HAS passed.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -8355,6 +8360,7 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
       // The deadline has NOT passed (same 1h-before-now HEAD as the
       // still-blocked case above) -- only the terminal precondition is met.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-11T23:00:00Z',
       copilotUnavailable: true,
     },
   );
@@ -8620,6 +8626,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed but
       // passed, so the precondition is open -- isolating that mode
       // gating, not the precondition, is what withholds coverage here.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -8685,6 +8692,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed and
       externalCheckWaiverMaxValidity: 'PT24H',
       externalCheckWaiverMode: 'maintainer-authorized',
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -8748,6 +8756,7 @@ test('#2034: idd-advisory-convergence waiver posted, precondition open, but the 
       // the check's own live run last completed before both that moment
       // AND the waiver's own createdAt (2026-05-12T00:00:00Z).
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -8827,6 +8836,7 @@ test('#2034: the same idd-advisory-convergence waiver is covered once the check 
       externalCheckWaiverMaxValidity: 'PT24H',
       externalCheckWaiverMode: 'maintainer-authorized',
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
     },
   );
 
@@ -9980,6 +9990,7 @@ test('#3186: two secondary logins with neither having posted yet keeps the full 
     secondaryQuietWindowMinutes: 10,
     secondaryBotLogins: TWO_SECONDARY_LOGINS,
     advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
   });
   const status = secondaryQuietWindowOf(summary);
   // Same anchor/elapsed/remaining as the single-login pending test above
@@ -10009,6 +10020,7 @@ test('#3186: one login declined and the other still pending keeps the full windo
       secondaryQuietWindowMinutes: 10,
       secondaryBotLogins: TWO_SECONDARY_LOGINS,
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const status = secondaryQuietWindowOf(summary);
@@ -10037,6 +10049,7 @@ test('#3186: every configured login declining completes the wait immediately', (
       secondaryQuietWindowMinutes: 60,
       secondaryBotLogins: TWO_SECONDARY_LOGINS,
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const status = secondaryQuietWindowOf(summary);
@@ -10072,6 +10085,7 @@ test('#3186: one settled login and one declined login anchors on the settled log
       secondaryQuietWindowMinutes: 60,
       secondaryBotLogins: TWO_SECONDARY_LOGINS,
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const status = secondaryQuietWindowOf(summary);
@@ -10105,6 +10119,7 @@ test('#3186: both logins settled anchors on the LATEST genuine review timestamp'
       secondaryQuietWindowMinutes: 60,
       secondaryBotLogins: TWO_SECONDARY_LOGINS,
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const status = secondaryQuietWindowOf(summary);
@@ -10113,6 +10128,39 @@ test('#3186: both logins settled anchors on the LATEST genuine review timestamp'
   assert.equal(status.elapsedMinutes, 1);
   assert.equal(status.elapsed, false);
   assert.equal(status.remainingMinutes, 4);
+  assert.equal(status.declined, false);
+});
+
+test('a secondary-bot comment posted after committedDate but before headObservedAt does not settle the quiet window (kurone-kito/idd-skill#3253)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        // Posted after the committer-supplied committedDate, but BEFORE
+        // GitHub's own observed anchor -- must not count as covering the
+        // current HEAD under the new anchor.
+        genuineReviewComment('coderabbitai[bot]', '2026-05-11T23:51:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 10,
+      secondaryBotLogins: ['coderabbitai[bot]'],
+      advisoryConvergenceHeadCommittedAt: '2026-05-11T23:50:00Z',
+      advisoryConvergenceHeadObservedAt: '2026-05-11T23:55:00Z',
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  // Still pending: the comment lands before headObservedAt, so it does not
+  // settle -- the full window applies, anchored on the fixture's own
+  // effective activity ceiling, not the (too-early) comment.
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 6);
+  assert.equal(status.elapsed, false);
   assert.equal(status.declined, false);
 });
 
@@ -10138,6 +10186,7 @@ test('#3196: buildPreMergeReadinessSummary still accepts the legacy singular sec
       secondaryQuietWindowMinutes: 60,
       secondaryBotLogin: 'coderabbitai[bot]',
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const pluralOption = buildPreMergeReadinessSummary(
@@ -10154,6 +10203,7 @@ test('#3196: buildPreMergeReadinessSummary still accepts the legacy singular sec
       secondaryQuietWindowMinutes: 60,
       secondaryBotLogins: ['coderabbitai[bot]'],
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   // Both forms fold the same single login's settlement identically -- the
@@ -10190,6 +10240,7 @@ test('#3196: the plural secondaryBotLogins option wins over the legacy singular 
       secondaryBotLogin: 'my-custom-bot[bot]',
       secondaryBotLogins: ['chatgpt-codex-connector[bot]'],
       advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
     },
   );
   const status = secondaryQuietWindowOf(summary);

@@ -495,8 +495,9 @@ reviewed the current PR HEAD, `--assert` exits non-zero and the check
 **shows as failing** (GitHub Actions has no separate non-failing
 "pending" check state) — by design, since the check must stay red
 until Copilot reviews the current HEAD; once
-`advisoryWait.convergenceDeadline` (default 24h) elapses from the HEAD
-commit's own timestamp, the only way to turn it green without a fresh
+`advisoryWait.convergenceDeadline` (default 24h) elapses from when
+GitHub first recorded the HEAD (its earliest check suite), the only
+way to turn it green without a fresh
 review is a valid maintainer external-check waiver for that HEAD under
 the selector `idd-advisory-convergence`. That waiver path only exists
 once `ciGate.externalCheckWaivers.mode` is `maintainer-authorized`

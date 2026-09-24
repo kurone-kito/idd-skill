@@ -554,6 +554,9 @@ export function createFakeProviderAdapter(fixture) {
       }
       return value;
     },
+    getChangeRequestHeadObservedAt(number) {
+      return fixture.headObservedAtByChangeRequest?.[number] ?? '';
+    },
     resolveChangeRequestReviewThread(threadId) {
       if (fixture.unresolvableReviewThreadIds?.has(threadId)) {
         throw new Error(

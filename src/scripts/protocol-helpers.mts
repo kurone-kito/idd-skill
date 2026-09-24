@@ -3867,6 +3867,15 @@ export function dispositionNamesAdvisoryBot(
 // ever passes REST-raw comments straight through, without the CLI layer's
 // own `normalizeComment` pass, must not silently fail-closed here just
 // because it used the other field-name form.
+//
+// kurone-kito/idd-skill#3253: the `headCommittedAt` parameter here names a
+// ROLE (the cutoff timestamp this function compares comments against), not
+// a SOURCE -- this pure function is anchor-agnostic and never itself reads
+// or knows about committedDate vs. an observed check-suite time, so it is
+// not renamed. Every LIVE caller now passes the GitHub-observed anchor
+// (`headObservedAt`: the earliest check-suite `createdAt` for the current
+// HEAD) here, not the committer-supplied `committedDate` -- see
+// `buildPreMergeReadinessSummary`'s own call site below.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments: CommentLike[],
   {
@@ -3937,6 +3946,10 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // An empty `secondaryBotLogins` list reports the pre-existing unconfigured
 // shape (`{ settledAt: null, declined: false }`), matching
 // `computeSecondaryAdvisoryReviewSettlement`'s own unconfigured default.
+//
+// kurone-kito/idd-skill#3253: same parameter-name-kept-value-changed note as
+// `computeSecondaryAdvisoryReviewSettlement` above -- `headCommittedAt` here
+// is fed the GitHub-observed anchor by every live caller.
 export function foldSecondaryAdvisoryReviewSettlements(
   comments: CommentLike[],
   {
@@ -9302,15 +9315,24 @@ export function buildPreMergeReadinessSummary(
     // doesn't pass it).
     advisoryConvergenceOutageRelievedSince?: string;
     // #2021: the current HEAD commit's own `committedDate` (GraphQL),
-    // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own
-    // gate uses before treating a posted `idd-advisory-convergence` waiver as
-    // active. Sourced by the CALLER (`pre-merge-readiness.mts`, via the
+    // informational only (kurone-kito/idd-skill#3253) -- see
+    // `advisoryConvergenceHeadObservedAt` below for the actual deadline
+    // clock. Sourced by the CALLER (`pre-merge-readiness.mts`, via the
     // identical GraphQL field `review-clause.mts`'s `fetchReviewsAndHeadCommit`
     // reads), mirroring how `copilotUnavailable` above is caller-precomputed.
+    advisoryConvergenceHeadCommittedAt?: string | null;
+    // kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+    // `createdAt` for the current HEAD commit (`review-clause.mts`'s
+    // `fetchHeadObservedAt`) -- the GitHub-observed anchor for the SAME 24h
+    // deadline clock `advisory-convergence.mts`'s own gate uses before
+    // treating a posted `idd-advisory-convergence` waiver as active, and for
+    // the secondary-bot settlement cutoff below. Unlike
+    // `advisoryConvergenceHeadCommittedAt` above (committer-supplied, never
+    // verified by GitHub), this is what GitHub itself first observed.
     // Omitted/invalid (the default) resolves `elapsedMinutes` to `null` and
     // `deadlinePassed` to `false` -- the safer default, never falsely
     // treating a still-open deadline as passed.
-    advisoryConvergenceHeadCommittedAt?: string | null;
+    advisoryConvergenceHeadObservedAt?: string | null;
     // Configured `advisoryWait.convergenceDeadline` in minutes (#2021),
     // resolved by the caller, mirroring `externalCheckWaiverMaxValidity`
     // below's "policy value resolved by the CLI layer" pattern. Omitted by
@@ -9410,7 +9432,7 @@ export function buildPreMergeReadinessSummary(
     secondaryQuietWindowMinutes?: number;
     // #2544: the configured `advisoryWait.secondaryBotLogin`(s), resolved by
     // the caller (mirroring `secondaryQuietWindowMinutes` above). Consulted
-    // together with `advisoryConvergenceHeadCommittedAt` below to detect
+    // together with `advisoryConvergenceHeadObservedAt` above to detect
     // whether each configured secondary bot has already posted a genuine
     // review for the current HEAD, so the quiet window can shorten to a
     // settled buffer instead of always requiring the full configured
@@ -9492,10 +9514,14 @@ export function buildPreMergeReadinessSummary(
   );
   // #2544/#3186: whether the configured secondary bot(s) have already
   // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
-  // `options.advisoryConvergenceHeadCommittedAt` (the HEAD commit's own
-  // `committedDate`, already resolved by the caller for the unrelated
-  // advisory-convergence-deadline precondition below) rather than a second
-  // fetch, since it is exactly "when did this HEAD land" either way.
+  // `options.advisoryConvergenceHeadObservedAt` (the earliest GitHub-recorded
+  // check-suite `createdAt` for the current HEAD, already resolved by the
+  // caller for the unrelated advisory-convergence-deadline precondition
+  // below) rather than a second fetch (kurone-kito/idd-skill#3253: this used
+  // to reuse `advisoryConvergenceHeadCommittedAt`, since it was "exactly
+  // 'when did this HEAD land' either way" -- the committer-supplied
+  // `committedDate` can lag the actual push, so both readers now share the
+  // GitHub-observed anchor instead).
   // `foldSecondaryAdvisoryReviewSettlements` combines every configured
   // login's own independent classification into the single shape
   // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
@@ -9510,7 +9536,7 @@ export function buildPreMergeReadinessSummary(
     comments,
     {
       secondaryBotLogins,
-      headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headCommittedAt: options.advisoryConvergenceHeadObservedAt,
     },
   );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
@@ -9716,18 +9742,21 @@ export function buildPreMergeReadinessSummary(
 
   // #2021: `advisory-convergence.mts`'s own gate never treats a posted
   // `idd-advisory-convergence` waiver as active until ONE of two independent
-  // preconditions is ALSO true -- a 24h deadline anchored on the current HEAD
-  // commit's own `committedDate`, or proven terminal Copilot unavailability
-  // (`copilotUnavailable` above). Reported truthfully in `waiverEvidence`
-  // itself either way (the marker is real and otherwise valid), but a check
-  // only becomes `coveredByWaiver` here once this SAME precondition has
-  // opened -- otherwise this helper reports `coveredByWaiver: true` before
+  // preconditions is ALSO true -- a 24h deadline anchored on the earliest
+  // GitHub-recorded check-suite for the current HEAD commit
+  // (kurone-kito/idd-skill#3253; `headCommittedAt` stays informational
+  // only), or proven terminal Copilot unavailability (`copilotUnavailable`
+  // above). Reported truthfully in `waiverEvidence` itself either way (the
+  // marker is real and otherwise valid), but a check only becomes
+  // `coveredByWaiver` here once this SAME precondition has opened --
+  // otherwise this helper reports `coveredByWaiver: true` before
   // `advisory-convergence.mts` itself would ever call the waiver `waived`,
   // sending an otherwise-correct session into a `gh pr merge` GitHub rejects
   // outright (root cause: kurone-kito/idd-skill#2021).
   const advisoryConvergencePreconditionResult =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headObservedAt: options.advisoryConvergenceHeadObservedAt,
       deadlineMinutes: options.advisoryConvergenceDeadlineMinutes,
       terminalUnavailable: copilotUnavailable,
       now,

@@ -776,6 +776,7 @@ const advisoryConvergenceFixture = {
   deadline: {
     minutes: 1440,
     headCommittedAt: '2026-07-11T09:00:00Z',
+    headObservedAt: '2026-07-11T09:00:00Z',
     elapsedMinutes: 180,
     passed: false,
   },
@@ -1448,6 +1449,7 @@ const preMergeReadinessFixture = {
     checkSelector: 'idd-advisory-convergence',
     deadlineMinutes: 1440,
     headCommittedAt: 'none',
+    headObservedAt: 'none',
     elapsedMinutes: null,
     deadlinePassed: false,
     terminalUnavailable: false,

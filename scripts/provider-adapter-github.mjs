@@ -462,6 +462,126 @@ function fetchCheckRunWorkflowPaths(
     `listCheckRunWorkflowPaths: exceeded ${CHECK_RUN_WORKFLOW_PATH_MAX_PAGES} check-suite pages`,
   );
 }
+const HEAD_OBSERVED_AT_MAX_PAGES = 20;
+/** One page of {@link ProviderPort.getChangeRequestHeadObservedAt}'s
+ * underlying GraphQL connection -- same split-into-a-page-function shape as
+ * {@link fetchCheckRunWorkflowPathsPage}. Re-selects `headRefOid` and the
+ * queried commit's own `oid` on every page (not only the first) so the
+ * caller can detect a HEAD move mid-walk at any point, not only at the
+ * start. */
+function fetchChangeRequestHeadObservedAtPage(
+  deps,
+  owner,
+  repo,
+  number,
+  after,
+) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      headRefOid
+      commits(last:1){
+        nodes{
+          commit{
+            oid
+            checkSuites(first:100, after:$after){
+              nodes{ createdAt }
+              pageInfo{ hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${number}`,
+  ];
+  if (after) {
+    apiArgs.push('-f', `after=${after}`);
+  }
+  const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+  assertNoGraphqlErrors(raw, 'getChangeRequestHeadObservedAt');
+  const parsed = raw;
+  const pullRequest = parsed.data?.repository?.pullRequest;
+  const commit = pullRequest?.commits?.nodes?.[0]?.commit;
+  const checkSuites = commit?.checkSuites;
+  return {
+    headRefOid: String(pullRequest?.headRefOid ?? ''),
+    commitOid: String(commit?.oid ?? ''),
+    createdAts: (checkSuites?.nodes ?? [])
+      .map((node) => String(node?.createdAt ?? ''))
+      .filter((value) => value !== ''),
+    hasNextPage: checkSuites?.pageInfo?.hasNextPage ?? false,
+    endCursor: checkSuites?.pageInfo?.endCursor ?? null,
+  };
+}
+/**
+ * Full-walk pagination for {@link ProviderPort.getChangeRequestHeadObservedAt}
+ * (kurone-kito/idd-skill#3253). Mirrors {@link fetchCheckRunWorkflowPaths}'s
+ * bounded-loop shape, but deliberately fails closed to `''` instead of
+ * throwing -- see that port method's own doc comment for why. A HEAD move
+ * detected on ANY page (not only the first) aborts the whole walk with `''`,
+ * since a page fetched before the move could otherwise contribute stale
+ * check-suite timestamps to the result.
+ */
+function fetchChangeRequestHeadObservedAt(deps, owner, repo, number) {
+  try {
+    let earliest = '';
+    let after = null;
+    // kurone-kito/idd-skill#3253 (Copilot review, PR #3404): a per-page
+    // headRefOid === commitOid check alone cannot detect a HEAD move
+    // between pages when both values advance together -- page 1 can
+    // report sha1/sha1 (internally consistent), then a push lands, and
+    // page 2 reports sha2/sha2 (also internally consistent, since each
+    // fetch re-reads the PR's now-current headRefOid). Pin the FIRST
+    // page's headRefOid and reject any later page whose headRefOid
+    // differs from it, in addition to each page's own internal check.
+    let firstHeadRefOid = null;
+    for (let page = 0; page < HEAD_OBSERVED_AT_MAX_PAGES; page += 1) {
+      const result = fetchChangeRequestHeadObservedAtPage(
+        deps,
+        owner,
+        repo,
+        number,
+        after,
+      );
+      if (!result.headRefOid || result.commitOid !== result.headRefOid) {
+        return '';
+      }
+      if (firstHeadRefOid === null) {
+        firstHeadRefOid = result.headRefOid;
+      } else if (result.headRefOid !== firstHeadRefOid) {
+        return '';
+      }
+      for (const createdAt of result.createdAts) {
+        if (!earliest || createdAt < earliest) {
+          earliest = createdAt;
+        }
+      }
+      if (!result.hasNextPage) {
+        return earliest;
+      }
+      if (!result.endCursor) {
+        return '';
+      }
+      after = result.endCursor;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
 function fetchWorkItemUserContentEditsPage(deps, owner, repo, number, before) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$before:String){
   repository(owner:$owner,name:$repo){
@@ -2694,6 +2814,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         })),
         headCommittedAt,
       };
+    },
+    getChangeRequestHeadObservedAt(number) {
+      return fetchChangeRequestHeadObservedAt(deps, owner, repo, number);
     },
     mergeChangeRequest(number, headSha) {
       return deps.ghText([

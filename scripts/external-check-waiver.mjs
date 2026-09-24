@@ -35,6 +35,7 @@ import {
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
+import { fetchHeadObservedAt } from './review-clause.mjs';
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -396,6 +397,7 @@ export function planExternalCheckWaiver(input, options = {}) {
     ? (() => {
         const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
           headCommittedAt: input?.headCommittedAt,
+          headObservedAt: input?.headObservedAt,
           deadlineMinutes: input?.advisoryConvergenceDeadlineMinutes,
           now: now.toISOString(),
         });
@@ -419,7 +421,7 @@ export function planExternalCheckWaiver(input, options = {}) {
     blockingReasons.push(
       `${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR} waiver deadline has not passed ` +
         `(${elapsed === null ? 'elapsed unknown' : `${elapsed} of ${advisoryConvergenceWaiverPrecondition.deadlineMinutes} minutes`}` +
-        `, anchored on HEAD commit ${advisoryConvergenceWaiverPrecondition.headCommittedAt}); ` +
+        `, anchored on the HEAD's earliest recorded check suite ${advisoryConvergenceWaiverPrecondition.headObservedAt}); ` +
         'terminal Copilot unavailability was not evaluated here, so pass ' +
         '--allow-closed-precondition if that opener already applies',
     );
@@ -614,6 +616,29 @@ export async function runExternalCheckWaiver(options = {}) {
       repo: name,
       headRefOid: String(pr.headRefOid ?? '').trim(),
     });
+  // kurone-kito/idd-skill#3253: the port-backed anchor for the deadline
+  // precondition check below -- a sibling read, not a replacement of
+  // `resolvedHeadCommittedAt` above, which stays wired only into the
+  // `--auto-bootstrap` expiry immediately below (explicitly unchanged by
+  // the issue: an earlier anchor there only shortens that waiver's
+  // validity window, the safe direction). Fails closed to `''` on any
+  // failure and never throws, so no try/catch is needed here.
+  //
+  // kurone-kito/idd-skill#3253 (Copilot review, PR #3404): only fetch for
+  // the exact `idd-advisory-convergence` selector this precondition
+  // actually gates (mirroring `planExternalCheckWaiver`'s own
+  // `preconditionGatedSelector` test) -- every other selector never reads
+  // `advisoryConvergenceWaiverPrecondition`, so paying for a GraphQL
+  // check-suite read (and its Checks API rate-limit budget) on every
+  // invocation regardless of selector was wasted for them. The injected
+  // test override (`options.headObservedAt`) is still honored regardless
+  // of selector, so a test can supply it without also setting
+  // `--check-selector`.
+  const resolvedHeadObservedAt =
+    options.headObservedAt ??
+    (args.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? fetchHeadObservedAt(owner, name, args.prNumber)
+      : '');
   // kurone-kito/idd-skill#2657: the fixed, bounded validity window
   // computed from the PR's own HEAD commit timestamp -- independent of
   // `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
@@ -726,6 +751,7 @@ export async function runExternalCheckWaiver(options = {}) {
       repoOwner: owner,
       claimless: args.claimless,
       headCommittedAt: resolvedHeadCommittedAt,
+      headObservedAt: resolvedHeadObservedAt,
       allowClosedPrecondition: args.allowClosedPrecondition,
       autoBootstrap: args.autoBootstrap,
       runId: args.runId,

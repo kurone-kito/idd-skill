@@ -368,6 +368,7 @@
       "checkSelector": "idd-advisory-convergence",
       "deadlineMinutes": 1440,
       "headCommittedAt": "none",
+      "headObservedAt": "none",
       "elapsedMinutes": null,
       "deadlinePassed": false,
       "terminalUnavailable": false,
