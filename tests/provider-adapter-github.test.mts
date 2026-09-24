@@ -3115,7 +3115,9 @@ test('postWorkItemComment retries once after a transient failure and returns the
       ghText: () => {
         ghTextCalls += 1;
         if (ghTextCalls === 1) {
-          throw new Error('transient: HTTP 401');
+          // A retryable 5xx -- HTTP 401 is now classified non-retryable
+          // (#3275) and covered by its own dedicated test below.
+          throw new Error('transient: (HTTP 502)');
         }
         return JSON.stringify({ id: 42, html_url: 'https://example/42' });
       },
@@ -3128,6 +3130,57 @@ test('postWorkItemComment retries once after a transient failure and returns the
   const result = port.postWorkItemComment(9, 'marker body');
   assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
   assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment retries and succeeds on a no-derivable-status failure after a successful no-match duplicate check (Copilot review, #3275)', () => {
+  // Distinct from the (HTTP 502) case above (a derivable status) and from
+  // the "duplicate-check itself fails" case elsewhere: here the POST
+  // failure carries no derivable HTTP status at all (e.g. a transport
+  // timeout), and the duplicate-body re-read completes successfully with
+  // no match, so the retry must proceed and the second POST must succeed
+  // -- proving null status is treated as retryable, not fail-fast.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('ETIMEDOUT');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment parses the id/html_url from a real `gh api --include` HTTP-header envelope, not just a bare JSON body (Copilot review, #3275)', () => {
+  // Every other success-path test mocks `ghText` returning a bare JSON
+  // body, which only exercises `extractIncludedResponseBody`'s tolerant
+  // fallback. This is the one test that mocks the actual `--include`
+  // envelope shape `gh` produces (status line + header block + blank
+  // line + JSON body), proving the header-stripping branch itself works.
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        [
+          'HTTP/2.0 201 Created',
+          'content-type: application/json; charset=utf-8',
+          'x-ratelimit-remaining: 4999',
+          '',
+          JSON.stringify({ id: 42, html_url: 'https://example/42' }),
+        ].join('\r\n'),
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
 });
 
 test('postWorkItemComment returns the existing comment instead of double-posting when a retry finds an exact-body match', () => {
@@ -3165,7 +3218,9 @@ test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never 
       ghText: () => {
         ghTextCalls += 1;
         if (ghTextCalls === 1) {
-          throw new Error('transient: HTTP 401');
+          // A retryable 5xx -- HTTP 401 is now classified non-retryable
+          // (#3275).
+          throw new Error('transient: (HTTP 502)');
         }
         return JSON.stringify({ id: 42, html_url: 'https://example/42' });
       },
@@ -3178,6 +3233,155 @@ test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never 
   const result = port.postWorkItemComment(9, 'marker body');
   assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
   assert.equal(ghTextCalls, 2);
+});
+
+// --- postWorkItemComment failure classification / Retry-After (#3275) ------
+
+for (const status of [401, 404, 422]) {
+  test(`postWorkItemComment fails immediately with no retry on a non-retryable HTTP ${status}`, () => {
+    let ghTextCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => {
+          ghTextCalls += 1;
+          throw new Error(`gh: HTTP ${status}`);
+        },
+        // The duplicate-check dependency is deliberately left without a
+        // stub -- a non-retryable status must never reach it.
+      }),
+    );
+    assert.throws(
+      () => port.postWorkItemComment(9, 'marker body'),
+      new RegExp(`HTTP ${status}`),
+    );
+    assert.equal(ghTextCalls, 1);
+  });
+}
+
+test('postWorkItemComment throws "not verified" instead of retrying when a possibly-landed failure\'s duplicate-check re-read itself fails', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error('read ECONNRESET');
+      },
+      // ghApiJson intentionally left without a stub -- fakeDeps' default
+      // throws, simulating a failed duplicate-body re-read after the
+      // ambiguous POST failure above.
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghTextCalls, 1);
+});
+
+test('postWorkItemComment honors a Retry-After header before retrying', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          const error = new Error('gh: HTTP 403') as Error & {
+            stderr?: string;
+          };
+          error.stderr = 'gh: HTTP 403\nretry-after: 2';
+          throw error;
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+  assert.equal(sleepDelays.length, 1);
+  assert.ok(
+    sleepDelays[0] >= 2000,
+    `expected sleepSync to wait at least 2000ms, got ${sleepDelays[0]}`,
+  );
+});
+
+test('postWorkItemComment fails closed instead of sleeping past the Retry-After cap', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        const error = new Error('gh: HTTP 403') as Error & {
+          stderr?: string;
+        };
+        error.stderr = 'gh: HTTP 403\nretry-after: 30';
+        throw error;
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified|exceeding the.*cap/i,
+  );
+  assert.equal(ghTextCalls, 1);
+  assert.equal(sleepDelays.length, 0);
+});
+
+test('postWorkItemComment derives a rate-limit-reset wait from x-ratelimit-reset when x-ratelimit-remaining is 0', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const nowMs = 1_000_000_000_000;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          const error = new Error('gh: HTTP 403') as Error & {
+            stderr?: string;
+          };
+          error.stderr = [
+            'gh: HTTP 403',
+            'x-ratelimit-remaining: 0',
+            `x-ratelimit-reset: ${Math.floor(nowMs / 1000) + 3}`,
+          ].join('\n');
+          throw error;
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+      now: () => nowMs,
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(sleepDelays.length, 1);
+  assert.ok(
+    sleepDelays[0] >= 2900 && sleepDelays[0] <= 3000,
+    `expected sleepSync to wait ~3000ms, got ${sleepDelays[0]}`,
+  );
 });
 
 test('postWorkItemComment throws on a malformed successful response instead of returning a bad result', () => {
@@ -3232,6 +3436,85 @@ test('postWorkItemComment throws the last error once retries are exhausted with 
     () => port.postWorkItemComment(9, 'marker body'),
     /persistent: HTTP 500/,
   );
+});
+
+test('postWorkItemComment returns the comment instead of throwing when the FINAL exhausted attempt actually landed (code review, #3275)', () => {
+  // Every attempt fails ambiguously (a 5xx), but the duplicate-body
+  // re-read only ever finds a match starting on the third (final)
+  // check -- simulating the last POST attempt's write having landed
+  // server-side despite the client seeing a failure. Without a
+  // post-exhaustion duplicate check, this would incorrectly throw
+  // "all attempts failed" instead of returning the comment that was
+  // actually posted.
+  let ghApiJsonCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('persistent: HTTP 500');
+      },
+      ghApiJson: () => {
+        ghApiJsonCalls += 1;
+        if (ghApiJsonCalls < 3) {
+          return [];
+        }
+        return [{ id: 9, body: 'marker body', html_url: 'https://example/9' }];
+      },
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 9, htmlUrl: 'https://example/9' });
+  assert.equal(ghApiJsonCalls, 3);
+});
+
+test('postWorkItemComment throws "not verified" when the FINAL exhausted attempt\'s own duplicate re-read fails (code review, #3275)', () => {
+  let ghApiJsonCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('persistent: HTTP 500');
+      },
+      ghApiJson: () => {
+        ghApiJsonCalls += 1;
+        if (ghApiJsonCalls < 3) {
+          return [];
+        }
+        throw new Error('read failed on the final check');
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghApiJsonCalls, 3);
+});
+
+test('postWorkItemComment: a non-iterable duplicate-check result (e.g. a malformed API response) is classified check-failed, not thrown uncaught (code review, #3275)', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error('ambiguous: ETIMEDOUT');
+      },
+      // A non-array, non-iterable value from ghApiJson (e.g. a malformed
+      // GraphQL-shaped object) must not escape as an uncaught TypeError
+      // from the `for...of` loop -- it should be classified the same as
+      // any other duplicate-check failure.
+      ghApiJson: () => ({ unexpected: 'shape' }) as unknown as never[],
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghTextCalls, 1);
 });
 
 test('postWorkItemComment always throws a real Error, even when the underlying failure is a non-Error value (Copilot review, #2504)', () => {
