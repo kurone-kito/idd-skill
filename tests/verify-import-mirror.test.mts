@@ -578,6 +578,52 @@ test('normalizeProseWhitespace tolerates a list item merely reflowed at a differ
   );
 });
 
+test('normalizeProseWhitespace tolerates a non-"1" ordered marker reflowed across a line-wrap mid-paragraph (CommonMark: only a bullet or "1." can interrupt an open paragraph)', () => {
+  // Regression: an earlier version treated ANY parseListItemMatch hit as a
+  // genuine list-item boundary regardless of context, so "5. That is fine"
+  // appearing as ordinary paragraph continuation text (no blank line
+  // before it) was misread as a fresh list item -- even though CommonMark
+  // only lets a bullet or an ordered marker numbered exactly 1 interrupt
+  // an already-open paragraph; "5." here is plain text, and moving it
+  // across a line-wrap is mere reflow, not a structural change.
+  const wrapped = 'costs about\n5. That is fine\n';
+  const rewrapped = 'costs about 5.\nThat is fine\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace still tolerates an ordered list item ("1.") merely reflowed at a different wrap width', () => {
+  const wrapped = '1. this is a long\n   line that wraps\n';
+  const rewrapped = '1. this is a\n   long line that wraps\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace does NOT tolerate a flattened ordered-list nesting change', () => {
+  const nested = '1. parent\n   1. child\n';
+  const flattened = '1. parent 1. child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test('rule 3 pass (issue #3233): a non-"1" ordered marker reflowed mid-paragraph is still tolerated, not a false content-mismatch', () => {
+  const upstream = Buffer.from('costs about\n5. That is fine\n');
+  const target = Buffer.from('costs about 5.\nThat is fine\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'prose-reflow-match');
+});
+
 test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
   // "- child" indented under "- parent" (a genuine nested item) versus
   // "- child" at column 0 (a sibling of "- parent", not nested under it)

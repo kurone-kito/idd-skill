@@ -473,9 +473,16 @@ function isWithinOpenHtmlBlock(
  * `+`, `*`, `1.`, `1)`) -- unlike {@link parseListItemContainer}, which
  * accepts any ordered-list digit. CommonMark allows a non-"1" ordered
  * marker (e.g. `2.`) to appear mid-paragraph without interrupting it, so
- * such a marker must never anchor list-content-indent tracking.
+ * such a marker must never anchor list-content-indent tracking. Exported
+ * for `verify-import-mirror.mts`'s rule 3 (issue #3233): a
+ * {@link parseListItemMatch} hit on a line that continues an
+ * already-open PLAIN PARAGRAPH (not already inside a list item) is only a
+ * genuine block boundary when the marker actually satisfies this same
+ * CommonMark restriction -- otherwise a non-"1" ordered marker like `5.`
+ * appearing mid-paragraph would be misread as a fresh list item instead
+ * of ordinary continuation text.
  */
-function isInterruptingListMarker(marker) {
+export function isInterruptingListMarker(marker) {
   return (
     marker === '-' ||
     marker === '+' ||

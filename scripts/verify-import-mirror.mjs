@@ -185,6 +185,7 @@ import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   findMarkdownCodeRanges,
+  isInterruptingListMarker,
   parseListItemMatch,
 } from './markdown-code.mjs';
 
@@ -443,17 +444,40 @@ function normalizeProseSegment(content) {
  *
  * Reuses `markdown-code.mts`'s own already-reviewed per-line list-item
  * detector ({@link parseListItemMatch}) rather than hand-rolling a
- * second, narrower block parser here -- each line is tested independently
- * and, when it opens a list item, starts a fresh chunk carrying that
- * item's raw `markerIndent` + `marker` verbatim (nesting depth and marker
- * type are exactly what encode block structure, so they must match
- * byte-for-byte); the marker's own trailing separating whitespace is
- * canonicalized to a single space, consistent with how every other
- * incidental whitespace amount in this rule is already tolerated. A line
- * that does not open a list item instead extends the CURRENT chunk (list
- * item or plain paragraph text alike), so ordinary reflow -- rewrapping a
- * list item's own continuation lines, or plain prose with no list items
- * at all -- still collapses exactly as before.
+ * second, narrower block parser here. A line matching it only counts as a
+ * genuine boundary when either nothing is currently open (the start of
+ * this paragraph) or the current chunk is ALREADY a list item -- in both
+ * cases any marker (any ordered number, any bullet char) genuinely opens
+ * or continues a list; when the current chunk is instead still plain
+ * paragraph text, only a {@link isInterruptingListMarker} hit counts,
+ * exactly mirroring CommonMark's own paragraph-interruption rule (only a
+ * bullet, or an ordered marker numbered exactly `1`, can interrupt an
+ * open paragraph -- `2.`/`5)`/etc. mid-paragraph is ordinary continuation
+ * text, not a new list item). Without this gate, a line like `5. more
+ * text` appearing after ordinary prose with no blank line before it would
+ * be misread as a list-item boundary even though CommonMark reads it as
+ * plain paragraph continuation, turning a legitimate reflow (moving `5.`
+ * across a line-wrap) into a false `content-mismatch`.
+ *
+ * A boundary line starts a fresh chunk carrying that item's raw
+ * `markerIndent` + `marker` verbatim; the marker's own trailing
+ * separating whitespace is canonicalized to a single space, consistent
+ * with how every other incidental whitespace amount in this rule is
+ * already tolerated. A line that is not a boundary instead extends the
+ * CURRENT chunk (list item or plain paragraph text alike), so ordinary
+ * reflow -- rewrapping a list item's own continuation lines, or plain
+ * prose with no list items at all -- still collapses exactly as before.
+ *
+ * `markerIndent` is compared verbatim (raw column count), not
+ * canonicalized to a CommonMark nesting LEVEL: a 2-space- and a
+ * 3-space-indented child under the same `- ` parent both render as the
+ * same single nesting level, but this rule deliberately still treats
+ * their differing raw indent as a genuine difference rather than folding
+ * them together. That is a conservative choice, not a logical necessity
+ * of correctness -- consistent with rule 3's existing default of failing
+ * toward `content-mismatch` (a false rejection, the safe direction for a
+ * fidelity check like this one) whenever tolerance is not clearly
+ * warranted, rather than risking a false pass.
  *
  * Deliberately narrower than full CommonMark list-content-zone tracking
  * (`markdown-code.mts`'s own `findEnclosingListContentZone`, built for a
@@ -487,7 +511,13 @@ function normalizeParagraphPreservingListStructure(paragraph) {
   };
   for (const line of lines) {
     const listItem = parseListItemMatch(line);
-    if (listItem !== null) {
+    const isCurrentChunkAList = hasCurrentChunk && currentPrefix !== '';
+    const isGenuineListBoundary =
+      listItem !== null &&
+      (!hasCurrentChunk ||
+        isCurrentChunkAList ||
+        isInterruptingListMarker(listItem.marker));
+    if (isGenuineListBoundary && listItem !== null) {
       flushCurrentChunk();
       currentPrefix = `${listItem.markerIndent}${listItem.marker} `;
       currentContentLines = [listItem.content];
