@@ -287,8 +287,8 @@ the would-be successor's `newClaimId`) may read a `--claim-id` check as an
 ordinary claim-state outcome — both route to an explicit `stop` with a
 dedicated `forced-handoff-linked-pr-lookup-failed` reason, for as long as
 the rejected marker's `oldClaimId` still names the current active claim
-(re-derived live on every `--claim-id` check, not a one-time flag —
-`evaluateResumeClaimRouting`, `src/scripts/resume-claim-routing.mts:459-466`).
+(re-derived live on every `--claim-id` check, not a one-time flag — the
+`linkedPrLookupFailureMatch` override inside `evaluateResumeClaimRouting`).
 A later, unrelated claim transition makes that historical marker no longer
 a live match, so it stops applying; a genuine takeover still reaches
 `already-claimed` → `stale-reclaimable` via `--fresh-claim-gate` and a

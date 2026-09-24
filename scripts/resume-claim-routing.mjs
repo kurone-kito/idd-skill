@@ -654,9 +654,33 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       // when forced-handoff mode is enabled -- so its presence here
       // unambiguously means the latter, never the former, for an
       // issue-only marker.
+      //
+      // #3276 (CodeRabbit review, PR #3386): applyClaimEvent checks
+      // isForcedHandoffEnabled BEFORE the author/forcedBy match and
+      // authorization checks (the 'author-forced-by-mismatch' /
+      // 'forced-by-unauthorized' branches below), so a forged or
+      // unauthorized issue-only marker would otherwise reach here too --
+      // recorded as though it were a genuinely valid handoff blocked only
+      // by the lookup failure, even though it would be rejected as forged/
+      // unauthorized regardless of the lookup outcome. Only record (and
+      // warn about) a lookup-failure rejection for a marker that is
+      // otherwise genuinely valid, by independently re-deriving the same
+      // two checks `resolveClaimState` always applies for this file
+      // (`requireAuthorMatchesForcedBy: true` below) before deciding.
+      const authorMatchesForcedBy =
+        String(event.author?.login ?? '')
+          .trim()
+          .toLowerCase() ===
+        String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+      const otherwiseValidHandoff =
+        authorMatchesForcedBy &&
+        isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event);
       if (
         linkedPrLookupFailed &&
-        forcedHandoff.contextScope !== 'issue-plus-pr'
+        forcedHandoff.contextScope !== 'issue-plus-pr' &&
+        otherwiseValidHandoff
       ) {
         linkedPrLookupFailureRejections.push(forcedHandoff);
         warnings.push(
@@ -1143,6 +1167,14 @@ export function fetchOpenLinkedPrReferences(port, issueNumber) {
   const states = new Map();
   try {
     let after = null;
+    // #3276 (CodeRabbit review, PR #3386): the adapter returns whatever
+    // cursor the GraphQL response carries with no progress guarantee of its
+    // own -- a repeated non-empty cursor (immediate or a multi-cursor
+    // cycle) would otherwise make this loop request the same page
+    // indefinitely. Track every cursor seen and throw on a repeat rather
+    // than imposing an arbitrary page cap, which could wrongly reject a
+    // genuinely long timeline.
+    const seenCursors = new Set();
     for (;;) {
       // Number.isInteger(issueNumber) above already excludes null; TS can't
       // narrow a plain boolean-returning call the way a type predicate would.
@@ -1153,8 +1185,8 @@ export function fetchOpenLinkedPrReferences(port, issueNumber) {
       if (!page.hasNextPage) {
         break;
       }
-      after = page.endCursor ?? null;
-      if (!after) {
+      const nextCursor = page.endCursor ?? null;
+      if (!nextCursor) {
         // hasNextPage with no endCursor: reconciling a truncated timeline
         // could miss a later CONNECTED/DISCONNECTED event and silently read
         // as a smaller, wrong PR set -- exactly the ambiguity this issue
@@ -1164,6 +1196,13 @@ export function fetchOpenLinkedPrReferences(port, issueNumber) {
           'incomplete connected-PR pagination: hasNextPage with no endCursor',
         );
       }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(
+          'non-progressing connected-PR pagination: repeated endCursor',
+        );
+      }
+      seenCursors.add(nextCursor);
+      after = nextCursor;
     }
   } catch {
     return { references: new Set(), lookupFailed: true };

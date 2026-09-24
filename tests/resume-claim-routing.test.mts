@@ -1542,6 +1542,82 @@ test('#3276: the would-be successor (newClaimId) also stops with the lookup-fail
   );
 });
 
+// #3276 (CodeRabbit review, PR #3386): applyClaimEvent checks
+// isForcedHandoffEnabled BEFORE the author/forcedBy match and authorization
+// checks, so a forged or unauthorized issue-only marker must not be swept
+// into linkedPrLookupFailureRejections (and thus the --claim-id override)
+// under a failed lookup -- it would be rejected as forged/unauthorized
+// regardless of the lookup outcome, and the override must not misfire for
+// its oldClaimId/newClaimId.
+function routeWithLinkedPrLookupFailureAndOptions(
+  claimId: string,
+  events: ReturnType<typeof forcedHandoffEvents>,
+  isAuthorizedForcedHandoff: (forcedBy: string) => boolean,
+) {
+  return evaluateResumeClaimRouting(
+    { claimId, now: '2026-05-12T11:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+        forcedHandoffEnabled: true,
+        expectedLinkedPrReferences: new Set(),
+        linkedPrLookupFailed: true,
+      }),
+      isAuthorizedForcedHandoff,
+      linkedPrLookupFailed: true,
+    },
+  );
+}
+
+test('#3276: a forged issue-only marker (author does not match forcedBy) under a failed lookup does not trigger the override', () => {
+  // forcedHandoffEvents() posts the marker as author 'maintainer' with
+  // forcedBy 'maintainer' by default (a match); override forcedBy to a
+  // different name so the author no longer matches it.
+  const events = [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+    },
+    {
+      createdAt: '2026-05-12T10:01:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"copilot","oldClaimId":"claim-old","newAgentId":"copilot","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"someone-else","reason":"forged","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+  ];
+  const oldResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-old',
+    events,
+    () => true,
+  );
+  assert.equal(oldResult.state, 'already_owned');
+  assert.notEqual(oldResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+
+  const newResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-new',
+    events,
+    () => true,
+  );
+  assert.notEqual(newResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+});
+
+test('#3276: an unauthorized issue-only marker under a failed lookup does not trigger the override', () => {
+  const oldResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-old',
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    () => false,
+  );
+  assert.equal(oldResult.state, 'already_owned');
+  assert.notEqual(oldResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+
+  const newResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-new',
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    () => false,
+  );
+  assert.notEqual(newResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+});
+
 test('#3276: a failed linked-PR lookup with no forced-handoff marker present routes identically to a successful empty lookup', () => {
   const events = [
     {
@@ -1633,6 +1709,39 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on an incomplete pa
   const port = createFakeProviderAdapter({
     connectedPrEventPages: {
       11: [{ events: [], hasNextPage: true, endCursor: null }],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
+});
+
+// #3276 round 4 (CodeRabbit review, PR #3386): a repeated non-progressing
+// cursor must not spin the pagination loop forever. `connectedPrEventPages`
+// already lets a test hand back the identical `endCursor` across
+// successive pages, so no new fixture field is needed to simulate this.
+test('fetchOpenLinkedPrReferences reports lookupFailed: true on an immediate repeated cursor (non-progressing pagination)', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        { events: [], hasNextPage: true, endCursor: 'cursor-1' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-1' },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
+});
+
+test('fetchOpenLinkedPrReferences reports lookupFailed: true on a multi-cursor cycle (A -> B -> A)', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        { events: [], hasNextPage: true, endCursor: 'cursor-a' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-b' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-a' },
+      ],
     },
   });
   const result = fetchOpenLinkedPrReferences(port, 11);
