@@ -193,11 +193,12 @@ record each item's source URL:
   `CHANGES_REQUESTED` — exclude any already replied-to and
   re-review-requested in a prior E13/E14 pass.
 - **Regular comments** where the last speaker isn't an IDD agent and
-  you haven't replied since — exclude periodic notification bots
-  (Renovate, etc.). Keep Copilot/CI advisory bot comments; they route
-  through PATH B in E4-E7 (non-review notices — rate-limit / quota /
-  queued / bare acknowledgement / error — dispositioned under the E6
-  non-review-notice rule, not here).
+  you haven't replied since, or whose latest IDD-agent reply starts
+  with `**Awaiting maintainer decision**` — exclude periodic
+  notification bots (Renovate, etc.). Keep Copilot/CI advisory bot
+  comments; they route through PATH B in E4-E7 (non-review notices —
+  rate-limit / quota / queued / bare acknowledgement / error —
+  dispositioned under the E6 non-review-notice rule, not here).
 
 Also carry, from the same Step 1 thread set, a light
 **resolved-thread index** (`isResolved=true`): each entry's file/area,
