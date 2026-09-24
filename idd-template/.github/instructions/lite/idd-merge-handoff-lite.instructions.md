@@ -29,8 +29,11 @@ churn on that issue until someone merges it. If the repository is
 ## Pre-mutation guard
 
 Before posting the handoff comment, confirm all of the following (F2.5
-step 3 repeats checks 1-3 immediately before posting, and step 4
-repeats checks 1-3 again immediately before releasing):
+step 3 repeats checks 1-4 immediately before posting, and step 4
+repeats checks 1-4 again immediately before releasing) — this mirrors
+the canonical claim-revalidation gate's cwd-vs-claim check
+(`idd-overview-core.instructions.md`), which gates a comment mutation
+the same as a commit or push:
 
 1. The active claim still uses this session's `{claim-id}`. If it is
    missing, released, or held by a different `{claim-id}` (even under
@@ -39,7 +42,14 @@ repeats checks 1-3 again immediately before releasing):
 2. If this session posted an activation nonce for the current claim,
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
-3. Acquire the worktree-local claim lock with the profile-selected
+3. Confirm this session is running from the implementation worktree
+   named in the active claim's `branch:` field: `git rev-parse
+   --show-toplevel` must resolve to the sibling worktree path the B1
+   naming convention expects (`../<repo-name>.<normalized-branch>`,
+   `/` → `-`), and `git branch --show-current` must equal the active
+   claim's `branch:` value. If either check fails, stop and report —
+   do not auto-relocate or mutate from the wrong worktree or branch.
+4. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
    the package-manager-profile `idd:claim-lock` command with the same
@@ -50,7 +60,7 @@ repeats checks 1-3 again immediately before releasing):
    and require `present: true` with no `malformed`; otherwise recover
    per `docs/idd-helper-scripts.md` (gated: each step succeeds,
    `reacquired: true` both ends), else stop.
-4. If any check fails, stop.
+5. If any check fails, stop.
 
 ## F2.5 — Draft and post the handoff comment
 
@@ -98,10 +108,11 @@ repeats checks 1-3 again immediately before releasing):
      (using the recorded `prHeadSha` value from F2, not a locally
      re-derived SHA).
 3. Immediately before posting, repeat the pre-mutation guard in full
-   (checks 1-3) — step 1's fetch and read may have taken time since
+   (checks 1-4) — step 1's fetch and read may have taken time since
    the initial guard, during which another session could have
-   released or replaced the claim. If any check fails, stop per the
-   condition above without posting. Otherwise, post the comment.
+   released or replaced the claim, or the worktree could have moved.
+   If any check fails, stop per the condition above without posting.
+   Otherwise, post the comment.
 4. Decide whether to release the worker claim, gated on both the
    `mergePolicy` resolved in step 1 and the recorded F2 verdict:
    - `ready: false`: keep the claim under every `mergePolicy` value —
@@ -112,13 +123,15 @@ repeats checks 1-3 again immediately before releasing):
      `ready`.
    - `mergePolicy` is `separate_merge_agent` **and** `ready: true` —
      the only case that releases:
-     1. Repeat the pre-mutation guard in full (checks 1-3: the active
+     1. Repeat the pre-mutation guard in full (checks 1-4: the active
         claim still uses this session's `{claim-id}`; the activation
-        nonce, if posted, still wins; and reacquire the worktree-local
-        `claim-lock` plus `--read-tokens`) immediately before this
-        mutation — the elapsed time since posting the comment means
-        those local invariants cannot be assumed to still hold. If any
-        check fails, post no release.
+        nonce, if posted, still wins; the worktree is still the one
+        named in the claim's `branch:` field, on that branch; and
+        reacquire the worktree-local `claim-lock` plus
+        `--read-tokens`) immediately before this mutation — the
+        elapsed time since posting the comment means those local
+        invariants cannot be assumed to still hold. If any check
+        fails, post no release.
      2. Otherwise, post `unclaimed-by` for this session's `{agent-id}`
         / `{claim-id}` with the profile-selected `post-idd-marker`
         helper (fields: agent id, claim id, timestamp; resolve the
