@@ -4325,6 +4325,22 @@ More context, unrelated to verification.
   assert.match(result.evidence, /either\/or acceptance-criteria escape hatch/i);
 });
 
+test('#3287: checkVerifiability fails an undocumented escape hatch under the underscore bold pseudo-heading form (Copilot review)', () => {
+  // ACCEPTANCE_CRITERIA_HEADING_FORMS above only exercises "**"; the "__"
+  // alternative (ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN's other branch)
+  // was missing its own test.
+  const issue = {
+    ...BASE_ISSUE,
+    body: `__Acceptance Criteria__
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+  };
+  const result = checkVerifiability({ issue } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /either\/or acceptance-criteria escape hatch/i);
+});
+
 test('#3287: Check 7 passes a well-formed concrete checklist under each accepted heading form', () => {
   for (const { heading } of ACCEPTANCE_CRITERIA_HEADING_FORMS) {
     const issue = {
@@ -5558,6 +5574,28 @@ Candidate files
 ---
 - [ ] ${tick}scripts/real.mjs${tick}
 `,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability bounds the Acceptance Criteria section at a CRLF-terminated Setext-style sibling heading (Copilot review, #3287, gap-2767-13)', () => {
+  // NEXT_HEADING_PATTERN's Setext branch previously required a bare "\n"
+  // after the underline -- a CRLF-terminated underline's own "\r" sat
+  // right before that required "\n"/end-of-string, so the whole
+  // alternative never matched at all in a CRLF body (a total miss, not a
+  // false match). With the boundary never found, the AC section scan
+  // became unbounded and silently absorbed a later, unrelated section's
+  // substantive bullet -- reproduces
+  // tests/fixtures/issue-body-corpus/gap-2767-13.json, whose own
+  // `expected.triage.verifiability` this fix flips from "pass" to "fail".
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        '## Acceptance Criteria\r\n- TBD\r\nUnrelated sibling heading\r\n---\r\n' +
+        `- Real requirement naming ${tick}src/foo.mts${tick}, which must not count as AC content\r\n`,
     },
   } as Context);
   assert.equal(result.pass, false);

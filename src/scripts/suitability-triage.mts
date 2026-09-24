@@ -1017,8 +1017,28 @@ const EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN = /^example\.(?:com|org|net|edu)$/i;
 // immediately following a list-item line is treated as a Setext boundary
 // even where CommonMark itself would keep it inside the list -- full
 // container-aware disambiguation is out of scope for this fix.
+//
+// CRLF-safe (Copilot review, #3287): the content line's char class is
+// `[^\r\n]` (not `[^\n]`) and both the content line's own terminator and
+// the underline's own trailing whitespace/terminator use `\r?\n` (not a
+// bare `\n`), matching `triage-structural-evidence.mts`'s own
+// `NEXT_ATX_HEADING_PATTERN` fix for the identical class of bug. Without
+// this, a CRLF-terminated Setext underline's own `\r` sat right before
+// where the pattern required either `\n` or end-of-string, so the whole
+// alternative never matched at all in a CRLF body -- not a false match,
+// a total miss that left the AC section scan unbounded and able to
+// silently absorb a later, unrelated section's substantive bullet (see
+// `tests/fixtures/issue-body-corpus/gap-2767-13.json`, previously tracked
+// as an accepted gap; this fix closes it and flips that fixture's own
+// `expected.triage.verifiability` from `pass` to `fail`). Pre-existing
+// and already fully reachable via the fixture's own ATX-headed AC
+// section (the bug is in finding the section's END boundary, not in
+// which heading form opened it) -- this PR's own Setext AC heading
+// support just adds a second way to reach the same class of leak, which
+// is why fixing it now, while touching this exact boundary logic, is in
+// scope rather than a purely unrelated drive-by.
 const NEXT_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 // CodeRabbit review (PR #2602): scanning the whole AC section's raw text
 // -- rather than just its list-item lines -- let a placeholder bullet
 // ("- [ ] TODO") followed by unrelated, non-list prose containing a

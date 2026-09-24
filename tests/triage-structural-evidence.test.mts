@@ -797,6 +797,14 @@ test('hasVerificationCommandSignal: false under the bold pseudo-heading form -- 
   assert.equal(hasVerificationCommandSignal(body), false);
 });
 
+test('hasVerificationCommandSignal: false under the underscore bold pseudo-heading form -- deliberately not opted in (Copilot review, #3287)', () => {
+  // ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN accepts both "**" and "__"
+  // (backreferenced via \1, so a mismatched pair like "**...__" never
+  // matches); this test was missing for the "__" alternative specifically.
+  const body = `__Acceptance Criteria__\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
 test('hasVerificationCommandSignal: a Setext-looking heading line preceded by non-blank prose does not count (CodeRabbit review, #3287)', () => {
   // CommonMark only recognizes a Setext heading when its text line begins
   // a fresh paragraph -- "Some intro.\nAcceptance Criteria\n-----"
