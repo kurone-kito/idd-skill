@@ -112,7 +112,16 @@
 //    `findMarkdownCodeRanges` from `markdown-code.mts` -- this
 //    repository's own CommonMark-compliant, container/list-aware code-
 //    region detector, already proven across many review rounds on its
-//    own PR.
+//    own PR. Outside code ranges, a genuine Markdown list-item boundary
+//    (a line matching `markdown-code.mts`'s own `parseListItemMatch`
+//    shape) is ALSO preserved as significant, non-reflowable structure,
+//    rather than collapsed into the surrounding prose the way an
+//    ordinary wrapped line is: a Copilot review on PR #3225 pointed out
+//    that flattening `- parent\n  - child` to `- parent - child` -- a
+//    real structural edit to a vendored file's list nesting, not a mere
+//    line-wrap -- normalized identically under the original whole-
+//    paragraph whitespace collapse and so passed as a tolerated reflow
+//    (issue #3233).
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path`, mode/content/existence
@@ -174,7 +183,10 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
-import { findMarkdownCodeRanges } from './markdown-code.mjs';
+import {
+  findMarkdownCodeRanges,
+  parseListItemMatch,
+} from './markdown-code.mjs';
 
 /** Hardcoded scoping constants (module-level, not CLI flags -- mirrors
  * verify-workshop-integrity.mts's own WORKSHOP_ROOTS/WORKSHOP_ASSET_DIRS
@@ -383,6 +395,10 @@ export function isProseExtension(path) {
  * already proven across many review rounds on its own PR. Only the text
  * OUTSIDE every detected code range gets paragraph/whitespace
  * normalization; every code range's own bytes pass through unchanged.
+ *
+ * Within that non-code text, a genuine Markdown list-item boundary is
+ * ALSO kept significant rather than reflow-collapsed -- see
+ * {@link normalizeParagraphPreservingListStructure} (issue #3233).
  */
 export function normalizeProseWhitespace(content) {
   const unified = content.replace(/\r\n/g, '\n');
@@ -408,9 +424,84 @@ function normalizeProseSegment(content) {
     .join('\n');
   const paragraphs = unified
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .map(normalizeParagraphPreservingListStructure)
     .filter((paragraph) => paragraph.length > 0);
   return paragraphs.join('\n\n');
+}
+/**
+ * Normalizes one blank-line-delimited paragraph block (no internal blank
+ * lines -- {@link normalizeProseSegment} already split on those) the same
+ * way rule 3 always has -- collapsing internal whitespace, including an
+ * ordinary line-wrap newline, to a single space -- EXCEPT across a
+ * genuine Markdown list-item boundary, which stays a hard, non-collapsible
+ * line break with its own leading indent and marker preserved verbatim.
+ * Without this, `- parent\n  - child` and its flattened
+ * `- parent - child` both normalize to the exact same string under a
+ * single whole-paragraph whitespace collapse -- silently tolerating a
+ * real structural edit to a vendored file's list nesting as a mere reflow
+ * (Copilot review, PR #3225; issue #3233).
+ *
+ * Reuses `markdown-code.mts`'s own already-reviewed per-line list-item
+ * detector ({@link parseListItemMatch}) rather than hand-rolling a
+ * second, narrower block parser here -- each line is tested independently
+ * and, when it opens a list item, starts a fresh chunk carrying that
+ * item's raw `markerIndent` + `marker` verbatim (nesting depth and marker
+ * type are exactly what encode block structure, so they must match
+ * byte-for-byte); the marker's own trailing separating whitespace is
+ * canonicalized to a single space, consistent with how every other
+ * incidental whitespace amount in this rule is already tolerated. A line
+ * that does not open a list item instead extends the CURRENT chunk (list
+ * item or plain paragraph text alike), so ordinary reflow -- rewrapping a
+ * list item's own continuation lines, or plain prose with no list items
+ * at all -- still collapses exactly as before.
+ *
+ * Deliberately narrower than full CommonMark list-content-zone tracking
+ * (`markdown-code.mts`'s own `findEnclosingListContentZone`, built for a
+ * different question): {@link parseListItemMatch} only recognizes a
+ * marker at 0-3 RAW leading columns, so a marker nested 4+ columns deep
+ * (a third list level, or a wide marker's own nested child) is not
+ * distinguished from ordinary wrapped prose and still gets reflow-
+ * collapsed into its enclosing chunk -- no worse than before this change,
+ * just not yet covered by it. This bounded fix targets the concrete,
+ * acceptance-criteria case (a single level of ordinary list nesting);
+ * extending to fully general nested-zone tracking is left as a follow-up
+ * rather than folded into this change's scope.
+ */
+function normalizeParagraphPreservingListStructure(paragraph) {
+  const lines = paragraph.split('\n');
+  const chunks = [];
+  let currentPrefix = '';
+  let currentContentLines = [];
+  let hasCurrentChunk = false;
+  const flushCurrentChunk = () => {
+    if (!hasCurrentChunk) {
+      return;
+    }
+    const collapsedContent = currentContentLines
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    chunks.push(currentPrefix + collapsedContent);
+    currentContentLines = [];
+    hasCurrentChunk = false;
+  };
+  for (const line of lines) {
+    const listItem = parseListItemMatch(line);
+    if (listItem !== null) {
+      flushCurrentChunk();
+      currentPrefix = `${listItem.markerIndent}${listItem.marker} `;
+      currentContentLines = [listItem.content];
+      hasCurrentChunk = true;
+    } else if (hasCurrentChunk) {
+      currentContentLines.push(line);
+    } else {
+      currentPrefix = '';
+      currentContentLines = [line];
+      hasCurrentChunk = true;
+    }
+  }
+  flushCurrentChunk();
+  return chunks.join('\n');
 }
 /** Content-only classification (rules 1-3), ignoring mode entirely. */
 export function classifyFileContent(params) {

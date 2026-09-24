@@ -551,6 +551,72 @@ test('rule 3 fail (Copilot review, PR #3225): code hidden after a false 4-space-
 });
 
 // ---------------------------------------------------------------------------
+// Rule 3 -- Markdown list-item/list-nesting structure preservation
+// (Copilot review, PR #3225; issue #3233)
+// ---------------------------------------------------------------------------
+
+test('normalizeProseWhitespace does NOT tolerate a flattened list-item nesting change (issue #3233 worked example)', () => {
+  // Regression: an earlier version collapsed ALL whitespace within a
+  // blank-line-delimited paragraph -- including the newline separating a
+  // nested list item from its parent -- so these two normalized
+  // identically despite the second being a real structural edit (the
+  // nested "- child" item is flattened into the parent's own text).
+  const nested = '- parent\n  - child\n';
+  const flattened = '- parent - child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test('normalizeProseWhitespace tolerates a list item merely reflowed at a different wrap width', () => {
+  const wrapped = '- this is a long\n  line that wraps\n';
+  const rewrapped = '- this is a\n  long line that wraps\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
+  // "- child" indented under "- parent" (a genuine nested item) versus
+  // "- child" at column 0 (a sibling of "- parent", not nested under it)
+  // is a real structural difference -- the indent is what encodes which
+  // parent (if any) a list item nests under -- not incidental whitespace
+  // rule 3's reflow tolerance may collapse away.
+  const nested = '- parent\n  - child\n';
+  const sibling = '- parent\n- child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(sibling),
+  );
+});
+
+test('rule 3 fail (issue #3233): flattening nested list-item structure into one line is a genuine mismatch, not a tolerated reflow', () => {
+  const upstream = Buffer.from('- parent\n  - child\n');
+  const target = Buffer.from('- parent - child\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('rule 3 pass (issue #3233): a list item merely reflowed at a different wrap width is still tolerated', () => {
+  const upstream = Buffer.from('- this is a long\n  line that wraps\n');
+  const target = Buffer.from('- this is a\n  long line that wraps\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'prose-reflow-match');
+});
+
+// ---------------------------------------------------------------------------
 // Rule 4 -- git file mode comparison
 // ---------------------------------------------------------------------------
 

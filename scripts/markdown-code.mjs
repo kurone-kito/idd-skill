@@ -892,7 +892,26 @@ function indentationColumns(text, initialColumns = 0) {
   }
   return columns;
 }
-function parseListItemMatch(content) {
+/**
+ * `true` iff `line` opens a genuine, CommonMark paragraph-interrupting
+ * list-item marker (`-`, `+`, `*`, or an ordered `N.`/`N)` marker) at 0-3
+ * leading columns, followed by required separating whitespace and item
+ * content -- the same shape this module's own container/list-depth
+ * tracking already relies on internally. Exported for
+ * `verify-import-mirror.mts`'s rule 3 (issue #3233): a list-item boundary
+ * is significant Markdown block structure, not the kind of incidental
+ * whitespace rule 3's prose-reflow tolerance already collapses -- reusing
+ * this already-reviewed per-line detector avoids hand-rolling a second,
+ * narrower block parser there. Deliberately does not resolve a NESTED
+ * item's own list-content zone the way {@link findEnclosingListContentZone}
+ * does (that scan answers a different question -- whether a LATER line
+ * still continues an EARLIER opener -- not "what does this line's own raw
+ * indentation look like"): a marker nested 4+ raw columns deep (a third
+ * list level, or a wide marker's own continuation) is not distinguished
+ * from ordinary wrapped prose by this shallow, per-line check alone. See
+ * the caller's own doc comment for how it discloses that limitation.
+ */
+export function parseListItemMatch(content) {
   const match = content.match(LIST_ITEM_PATTERN);
   if (!match || indentationColumns(match[1]) >= 4) {
     return null;

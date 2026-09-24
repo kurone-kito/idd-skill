@@ -1009,7 +1009,14 @@ type ContainerLine = {
   listContentIndent: number | null;
 };
 
-type ListItemMatch = {
+/** One line's genuine, paragraph-interrupting list-item marker shape (see
+ * {@link parseListItemMatch}): the raw leading indent, the marker token
+ * itself, the required separating whitespace after it, and the item's own
+ * first-line content. Exported for `verify-import-mirror.mts`'s rule 3
+ * (issue #3233), which reuses `markerIndent`/`marker` to keep a list
+ * item's own boundary and nesting indent significant -- never
+ * reflow-collapsed the way ordinary wrapped prose is. */
+export type ListItemMatch = {
   marker: string;
   markerIndent: string;
   spacing: string;
@@ -1032,7 +1039,26 @@ function indentationColumns(text: string, initialColumns = 0): number {
   return columns;
 }
 
-function parseListItemMatch(content: string): ListItemMatch | null {
+/**
+ * `true` iff `line` opens a genuine, CommonMark paragraph-interrupting
+ * list-item marker (`-`, `+`, `*`, or an ordered `N.`/`N)` marker) at 0-3
+ * leading columns, followed by required separating whitespace and item
+ * content -- the same shape this module's own container/list-depth
+ * tracking already relies on internally. Exported for
+ * `verify-import-mirror.mts`'s rule 3 (issue #3233): a list-item boundary
+ * is significant Markdown block structure, not the kind of incidental
+ * whitespace rule 3's prose-reflow tolerance already collapses -- reusing
+ * this already-reviewed per-line detector avoids hand-rolling a second,
+ * narrower block parser there. Deliberately does not resolve a NESTED
+ * item's own list-content zone the way {@link findEnclosingListContentZone}
+ * does (that scan answers a different question -- whether a LATER line
+ * still continues an EARLIER opener -- not "what does this line's own raw
+ * indentation look like"): a marker nested 4+ raw columns deep (a third
+ * list level, or a wide marker's own continuation) is not distinguished
+ * from ordinary wrapped prose by this shallow, per-line check alone. See
+ * the caller's own doc comment for how it discloses that limitation.
+ */
+export function parseListItemMatch(content: string): ListItemMatch | null {
   const match = content.match(LIST_ITEM_PATTERN);
   if (!match || indentationColumns(match[1]) >= 4) {
     return null;
