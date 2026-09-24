@@ -1128,10 +1128,13 @@ has been posted and its own POST and re-fetch/verify above have both
 succeeded -- never before, and never interleaved with posting -- scan that
 same target's prior comments (the target issue for `authoring-owner`; the
 journal issue named in the record's own `journal` field for
-`authoring-publication-intent`, which naturally also hides other authoring
-sets' already superseded journal records on that shared journal --
-intentional, since the journal read path is the same paginated scan and is
-unaffected either way) and minimize (classifier `OUTDATED`) every prior
+`authoring-publication-intent`, which naturally also fetches other
+authoring sets' records on that shared journal -- intentional, since the
+journal read path is the same paginated scan either way, but the
+continuity-chain-identity restriction below means only the just-posted
+record's own target (and, for `authoring-publication-intent`, its own
+token too) is ever eligible for minimization, never a different set's)
+and minimize (classifier `OUTDATED`) every prior
 comment from a trusted marker actor whose body is a byte-exact match of the
 canonical rendered template for the same marker family AND shares the
 just-posted record's own continuity-chain identity (`target=` alone for
