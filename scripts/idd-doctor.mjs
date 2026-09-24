@@ -19,6 +19,7 @@ import {
   parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
@@ -104,9 +105,15 @@ export function runDoctor({
   );
   checkWorkshopExampleRepoBackLink(root, { requireGithub }, report);
   checkGithubReadiness(root, requireGithub, strict, report);
-  checkAutopilotSuitabilityConsistency(
+  const openIssuesForConsistencyChecks = checkAutopilotSuitabilityConsistency(
     root,
     { requireGithub, markerPrefix },
+    report,
+  );
+  checkRoadmapIdentityConsistency(
+    root,
+    openIssuesForConsistencyChecks,
+    { markerPrefix },
     report,
   );
   return report;
@@ -164,11 +171,20 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
   }
   return { warnings };
 }
-function checkAutopilotSuitabilityConsistency(root, options, report) {
+/**
+ * Fetch every open issue's `number,labels,body` once via `gh issue list`,
+ * shared by the autopilot-suitability and roadmap-identity consistency
+ * checks below (#3286) so a single `gh` call feeds both instead of each
+ * issuing its own. Returns `null` on any `gh`/parse failure or an empty
+ * result; a `checkName`-prefixed error is recorded on `report` only when
+ * `requireGithub` is set, matching each check's prior standalone
+ * behavior.
+ */
+function fetchOpenIssuesForConsistencyChecks(root, options, report) {
   const requireGithub = options.requireGithub === true;
   const recordGhFailure = (message) => {
     if (requireGithub) {
-      report.errors.push(`autopilot-suitability consistency check: ${message}`);
+      report.errors.push(`${options.checkName}: ${message}`);
     }
   };
   const list = runCommand(
@@ -187,17 +203,28 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
   );
   if (!list.ok) {
     recordGhFailure('gh issue list unavailable');
-    return;
+    return null;
   }
   let issues;
   try {
     issues = JSON.parse(list.stdout);
   } catch {
     recordGhFailure('gh issue list returned invalid JSON');
-    return;
+    return null;
   }
-  if (!Array.isArray(issues) || issues.length === 0) {
-    return;
+  return Array.isArray(issues) && issues.length > 0 ? issues : null;
+}
+function checkAutopilotSuitabilityConsistency(root, options, report) {
+  const issues = fetchOpenIssuesForConsistencyChecks(
+    root,
+    {
+      requireGithub: options.requireGithub,
+      checkName: 'autopilot-suitability consistency check',
+    },
+    report,
+  );
+  if (!issues) {
+    return null;
   }
   const { floor, blockedByHumanLabelName } =
     resolveAutopilotSuitabilityPolicy(root);
@@ -205,6 +232,80 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
     floor,
     markerPrefix: options.markerPrefix,
     blockedByHumanLabelName,
+  });
+  for (const warning of warnings) {
+    report.warnings.push(warning);
+  }
+  return issues;
+}
+/**
+ * Warn about an open issue that carries the configured roadmap label but
+ * no `roadmap-id` marker in its body -- Discover's `classifyIssue`
+ * (`discover-roadmap-graph.mts`, #3286) treats such an issue as an
+ * ordinary execution leaf, never as a roadmap, so a stray label (commonly
+ * applied by a semantic auto-labeler after publication) silently has no
+ * discovery effect. Pure (no I/O) so it can be unit-tested directly;
+ * issues are `{ number, body, labels }` where labels are strings or
+ * `{ name }` objects, matching `evaluateAutopilotSuitabilityConsistency`'s
+ * input shape (reuses the same `SuitabilityIssueInput` type). Marker
+ * detection reuses `extractRoadmapMarkerId` (from
+ * `discover-roadmap-graph.mts`), which already strips fenced/inline code
+ * regions before matching, so a marker quoted only in code correctly
+ * counts as absent.
+ */
+export function evaluateRoadmapIdentityConsistency(issues, options = {}) {
+  const prefix =
+    typeof options.markerPrefix === 'string' && options.markerPrefix.length > 0
+      ? options.markerPrefix
+      : 'idd-skill';
+  const roadmapLabelName =
+    typeof options.roadmapLabelName === 'string' &&
+    options.roadmapLabelName.length > 0
+      ? options.roadmapLabelName
+      : POLICY_DEFAULTS.labels.roadmapLabelName;
+  const warnings = [];
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const labelNames = new Set(
+      (issue?.labels ?? []).map((label) =>
+        typeof label === 'string' ? label : (label?.name ?? ''),
+      ),
+    );
+    if (!labelNames.has(roadmapLabelName)) {
+      continue;
+    }
+    if (extractRoadmapMarkerId(issue?.body, prefix)) {
+      continue;
+    }
+    const number = issue?.number;
+    warnings.push(
+      `roadmap-identity: issue #${number} carries the ${roadmapLabelName} label but no ${prefix}-roadmap-id marker; Discover treats it as an ordinary issue`,
+    );
+  }
+  return { warnings };
+}
+/**
+ * Resolve the configured `labels.roadmapLabelName` from the live IDD
+ * config (canonical-first, legacy-`idd-policy.json` fallback), mirroring
+ * `resolveAutopilotSuitabilityPolicy`'s read pattern. Kept as its own
+ * small resolver rather than folded into that function so its existing
+ * `{floor, blockedByHumanLabelName}` return shape (pinned by several
+ * `deepEqual` tests) stays unchanged.
+ */
+function resolveRoadmapIdentityPolicy(root) {
+  const { config } = resolveLiveConfigDocument(root);
+  const typedConfig = config;
+  return {
+    roadmapLabelName: typedConfig?.labels?.roadmapLabelName,
+  };
+}
+function checkRoadmapIdentityConsistency(root, issues, options, report) {
+  if (!issues) {
+    return;
+  }
+  const { roadmapLabelName } = resolveRoadmapIdentityPolicy(root);
+  const { warnings } = evaluateRoadmapIdentityConsistency(issues, {
+    markerPrefix: options.markerPrefix,
+    roadmapLabelName,
   });
   for (const warning of warnings) {
     report.warnings.push(warning);
