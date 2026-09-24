@@ -106,7 +106,7 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 
 1. Post claim (fresh `{claim-id}`, `supersedes: <prior-claim-id>`) via
    `post-idd-marker --type claim ... --apply`, then an
-   activation-nonce (`idd-claim-lite.instructions.md` step 5).
+   activation-nonce (`idd-claim-lite.instructions.md` step 4).
 2. Wait settle delay; re-parse; confirm claim and nonce winner are
    yours.
 3. Lost → STOP. Verified → record nonce; return to

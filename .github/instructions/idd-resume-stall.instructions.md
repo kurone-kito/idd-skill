@@ -210,9 +210,8 @@ Immediately before posting takeover:
    verify sequence: wait for the configured settle delay from
    `.github/idd/config.json` `claim.verifySettleDelay`
    (distributed default: `PT5S`) after posting, re-parse
-   chronologically, apply same-second lexicographic `{claim-id}`
-   tie-break, and reject later trusted competing `claimed-by` markers
-   with different `{claim-id}` values.
+   chronologically, and apply the same-second lexicographic `{claim-id}`
+   tie-break.
 
 If any check fails, stop and restart from Resume discovery/routing.
 Do not post takeover with stale evidence.
