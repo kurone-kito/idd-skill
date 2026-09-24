@@ -19,6 +19,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  buildCommandCatalog,
   collectVendoredFiles,
   PROFILE_NAMES,
 } from '../src/scripts/helper-runtime-manifest.mts';
@@ -34,6 +35,7 @@ import {
   buildSubstitutionPlan,
   buildUntrustedLabelerGuardWorkflowContent,
   checkGitRemoteBranchExists,
+  checkHelperLoad,
   checkManifestCompleteness,
   checkPackagePinWarning,
   checkPlaceholderResidue,
@@ -3426,6 +3428,182 @@ test('bin/idd-onboard.mjs --verify --profile vendored-node passes for a target i
   ]);
   assert.equal(status, 0);
   assert.equal(verdict.blocking, false);
+  // #3238 regression: this fixture has no package.json (makeFixtureDir is a
+  // bare mkdtemp), matching the reported bug's precondition exactly -- every
+  // cataloged helper must still load and print --help via the shared
+  // resolveBundleRoot marker-first fix.
+  const helperLoad = verdict.helperLoad as {
+    applicable: boolean;
+    probed: string[];
+    failed: unknown[];
+  };
+  assert.equal(helperLoad.applicable, true);
+  assert.deepEqual(helperLoad.failed, []);
+  assert.ok(helperLoad.probed.length > 0);
+});
+
+test('checkHelperLoad reports not applicable and spawns nothing for a non-vendored-node profile', () => {
+  // Import the vendored-node bundle itself, so every cataloged helper file
+  // genuinely exists under targetRoot -- proving the assertions below hold
+  // because of the profile check, not merely because there is nothing to
+  // probe.
+  const targetRoot = makeFixtureDir();
+  const importPlan = buildImportPlan(REPO_ROOT, targetRoot, {
+    profile: 'vendored-node',
+  });
+  applyImportPlan(REPO_ROOT, targetRoot, importPlan);
+
+  for (const profile of [
+    undefined,
+    'package-manager',
+    'ephemeral-npx',
+    'instructions-only',
+  ]) {
+    const result = checkHelperLoad(targetRoot, profile);
+    assert.equal(result.applicable, false);
+    assert.deepEqual(result.probed, []);
+    assert.deepEqual(result.failed, []);
+  }
+});
+
+test('checkHelperLoad refuses to spawn an entryPath reached only through a symlinked ancestor directory (PR #3303 Copilot review)', () => {
+  // fileExists()'s lstatSync only protects the leaf path component -- a
+  // symlinked ancestor directory (here, targetRoot/scripts itself) is
+  // still followed during ordinary path resolution, so a real file
+  // reached only through it must never be spawned as though it were a
+  // normal file under --target.
+  const targetRoot = makeFixtureDir();
+  const outsideDir = makeFixtureDir();
+  const catalog = buildCommandCatalog();
+  const command = catalog.find((c) => c.id === 'select-desynced-index');
+  assert.ok(command, 'expected select-desynced-index in the catalog');
+  const leafName = command.entryPath.split('/').pop();
+  assert.ok(leafName, 'expected a non-empty leaf filename');
+  writeFileSync(
+    join(outsideDir, leafName),
+    "console.log('should never run');\n",
+  );
+  symlinkSync(outsideDir, join(targetRoot, 'scripts'));
+
+  const result = checkHelperLoad(targetRoot, 'vendored-node');
+  assert.equal(result.applicable, true);
+  assert.deepEqual(result.probed, []);
+  const failure = result.failed.find(
+    (entry) => entry.entryPath === command.entryPath,
+  );
+  assert.ok(
+    failure,
+    `expected ${command.entryPath} in helperLoad.failed (symlinked ancestor)`,
+  );
+  assert.match(failure.reason, /symlinked ancestor/);
+});
+
+test('bin/idd-onboard.mjs --verify reports a broken vendored helper in helperLoad without flagging manifestCompleteness (#3238)', () => {
+  const targetRoot = makeFixtureDir();
+  const { status: importStatus } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(importStatus, 0);
+  runCliBin(['--substitute', '--target', targetRoot, ...CLI_OVERRIDE_FLAGS]);
+
+  // select-desynced-index is a standalone cataloged helper: no other
+  // cataloged entryPath imports it (verified by grep before picking it), so
+  // corrupting it in isolation produces exactly one helperLoad failure
+  // rather than a cascade through a shared dependency.
+  const catalog = buildCommandCatalog();
+  const brokenCommand = catalog.find(
+    (command) => command.id === 'select-desynced-index',
+  );
+  assert.ok(brokenCommand, 'expected select-desynced-index in the catalog');
+  const brokenPath = join(targetRoot, brokenCommand.entryPath);
+  assert.ok(
+    existsSync(brokenPath),
+    `${brokenCommand.entryPath} must exist in the imported target`,
+  );
+  writeFileSync(
+    brokenPath,
+    "throw new Error('#3238 test fixture: load-time failure');\n",
+  );
+
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.blocking, true);
+  const helperLoad = verdict.helperLoad as {
+    failed: { id: string; entryPath: string; reason: string }[];
+  };
+  // select-desynced-index has no other cataloged importer (verified above),
+  // so corrupting it in isolation must produce exactly one failure, not a
+  // cascade through a shared dependency.
+  assert.equal(helperLoad.failed.length, 1);
+  assert.equal(helperLoad.failed[0]?.entryPath, brokenCommand.entryPath);
+  const manifestCompleteness = verdict.manifestCompleteness as {
+    missingTarget: string[];
+  };
+  assert.deepEqual(manifestCompleteness.missingTarget, []);
+});
+
+test('a --profile vendored-node import can run its own vendored helpers with --help in a repo with no package.json (#3238 reproduction)', (t) => {
+  const targetRoot = makeFixtureDir();
+  // The reported bug's precondition: no ancestor of targetRoot (up to the
+  // filesystem root) already carries a package.json that would mask the
+  // fa49fb6c-era failure this test guards against.
+  let ancestor = targetRoot;
+  for (;;) {
+    if (existsSync(join(ancestor, 'package.json'))) {
+      t.skip(
+        `an ancestor of the fixture tree (${ancestor}) already has a package.json`,
+      );
+      return;
+    }
+    const parent = dirname(ancestor);
+    if (parent === ancestor) {
+      break;
+    }
+    ancestor = parent;
+  }
+
+  const { status: importStatus } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(importStatus, 0);
+  runCliBin(['--substitute', '--target', targetRoot, ...CLI_OVERRIDE_FLAGS]);
+  assert.equal(existsSync(join(targetRoot, 'package.json')), false);
+
+  for (const args of [
+    ['scripts/advisory-wait-state.mjs', '--help'],
+    ['scripts/pre-merge-readiness.mjs', '--help'],
+    ['scripts/helper-runtime-manifest.mjs', '--profile', 'vendored-node'],
+  ]) {
+    const [entryPath, ...rest] = args;
+    const result = execFileSync(process.execPath, [entryPath, ...rest], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    });
+    assert.ok(
+      result.trim() !== '',
+      `expected non-empty stdout from ${entryPath}`,
+    );
+  }
 });
 
 test('bin/idd-onboard.mjs --verify exits 2 on an unknown --profile value', () => {

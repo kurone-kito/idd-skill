@@ -929,6 +929,18 @@ Reusable inputs:
 | `lint-command`     | `pnpm run lint:minimum`                           | Project lint/test command                                |
 | `boundary-command` | `node scripts/check-pnpm-boundary.mjs`            | Check that distributable command rows do not leak `pnpm` |
 
+The `lint-command` and `boundary-command` defaults above are this
+repository's own commands and are source-repository-only:
+`check-pnpm-boundary.mjs` ships in no core file set or helper runtime
+profile, and reads a path relative to `idd-template/` that exists only
+in this source repository; `lint:minimum` is this repository's own
+`package.json` script. A reusable workflow's steps run against the
+caller's checkout, so neither default can run there unmodified —
+running both commands in a scratch imported tree confirms this: the
+boundary command fails with `MODULE_NOT_FOUND`, and even copied in by
+hand, with `ENOENT` (issue #3293). Every downstream caller, Node.js or
+not, must pass its own `lint-command` and `boundary-command`.
+
 Example downstream usage:
 
 ```yaml
@@ -937,7 +949,8 @@ jobs:
     uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@main
     with:
       node-version: "24.x"
-      boundary-command: node scripts/check-pnpm-boundary.mjs
+      lint-command: npm run lint # replace with your own lint/test command
+      boundary-command: "true" # replace with your own boundary check, if any
 ```
 
 If a downstream repository is non-Node.js, either skip this workflow or

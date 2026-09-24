@@ -63,31 +63,11 @@ see them (preventive; no observed incident yet).
 ### Shared IDD workflow stub
 
 All three root entry files should point agents to the same workflow
-entry path:
-
-```markdown
-## IDD Workflow
-
-This project uses Issue-Driven Development (IDD) with parallel AI
-agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
-cross-agent entry path and phase routing.
-
-Before starting IDD work, open
-`.github/instructions/idd-overview-core.instructions.md`. Open the routed
-phase file manually when the current step changes.
-```
-
-### CLAUDE.md
-
-If `CLAUDE.md` already exists, add the shared IDD workflow section
-above and adapt the surrounding wording to the existing document style.
-
-If `CLAUDE.md` does not exist, create a minimal file such as below.
-When `AGENTS.md`, `GEMINI.md`, or an existing
-`.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top per owning file, pointing to it
-— for example, `See AGENTS.md for repository-specific rules.` —
-instead of copying that guidance here:
+entry path. When a file does not exist yet, create it from this
+minimal stub, adding one pointer line near the top per sibling file
+that already carries repository-specific guidance — for example,
+`See AGENTS.md for repository-specific rules.` — instead of copying
+that guidance here:
 
 ```markdown
 # Guidelines for AI Agents
@@ -110,6 +90,21 @@ Before starting IDD work, open
 `.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
+
+When the file already exists, add just the `## IDD Workflow` section
+above, adapted to the existing document's style, rather than the whole
+stub.
+
+### CLAUDE.md
+
+If `CLAUDE.md` already exists, add the shared IDD workflow section
+above and adapt the surrounding wording to the existing document style.
+
+If `CLAUDE.md` does not exist, create it from the
+[shared stub above](#shared-idd-workflow-stub), pointing to
+`AGENTS.md`, `GEMINI.md`, or an existing
+`.github/copilot-instructions.md` when one of them already carries
+repository-specific guidance.
 
 ### AGENTS.md (for Codex CLI, OpenCode, Grok Build, and Cursor CLI)
 
@@ -127,34 +122,11 @@ Cursor CLI agents should manually open
 `.github/instructions/idd-overview-core.instructions.md`
 and the routed phase file before starting IDD work.
 
-If `AGENTS.md` does not exist, create a minimal file such as below.
-When `CLAUDE.md`, `GEMINI.md`, or an existing
-`.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top per owning file, pointing to it
-— for example, `See CLAUDE.md for repository-specific rules.` —
-instead of copying that guidance here:
-
-```markdown
-# Guidelines for AI Agents
-
-## Immediate rules
-
-- Match the conversational language to the user's language.
-- Write comments and documentation in English unless there is a clear
-  project-specific reason otherwise.
-- If uncertainty, hidden risk, or missing context blocks a safe change,
-  stop and ask a concise question before proceeding.
-
-## IDD Workflow
-
-This project uses Issue-Driven Development (IDD) with parallel AI
-agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
-cross-agent entry path and phase routing.
-
-Before starting IDD work, open
-`.github/instructions/idd-overview-core.instructions.md`. Open the routed
-phase file manually when the current step changes.
-```
+If `AGENTS.md` does not exist, create it from the
+[shared stub above](#shared-idd-workflow-stub), pointing to
+`CLAUDE.md`, `GEMINI.md`, or an existing
+`.github/copilot-instructions.md` when one of them already carries
+repository-specific guidance.
 
 #### OpenCode: optional `opencode.json` recipe
 
@@ -258,34 +230,11 @@ If `GEMINI.md` already exists, apply the same IDD workflow section as
 `AGENTS.md`, adapted to the Antigravity CLI (formerly Gemini CLI)
 wording and still pointing to `docs/idd-workflow.md`.
 
-If `GEMINI.md` does not exist, create a minimal file such as below.
-When `CLAUDE.md`, `AGENTS.md`, or an existing
-`.github/copilot-instructions.md` already carries repository-specific
-guidance, add one line near the top per owning file, pointing to it
-— for example, `See AGENTS.md for repository-specific rules.` —
-instead of copying that guidance here:
-
-```markdown
-# Guidelines for AI Agents
-
-## Immediate rules
-
-- Match the conversational language to the user's language.
-- Write comments and documentation in English unless there is a clear
-  project-specific reason otherwise.
-- If uncertainty, hidden risk, or missing context blocks a safe change,
-  stop and ask a concise question before proceeding.
-
-## IDD Workflow
-
-This project uses Issue-Driven Development (IDD) with parallel AI
-agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
-cross-agent entry path and phase routing.
-
-Before starting IDD work, open
-`.github/instructions/idd-overview-core.instructions.md`. Open the routed
-phase file manually when the current step changes.
-```
+If `GEMINI.md` does not exist, create it from the
+[shared stub above](#shared-idd-workflow-stub), pointing to
+`CLAUDE.md`, `AGENTS.md`, or an existing
+`.github/copilot-instructions.md` when one of them already carries
+repository-specific guidance.
 
 ### .github/copilot-instructions.md (if present)
 

@@ -33,18 +33,21 @@
 //
 // --verify: mechanical pass/fail for a target tree after --import and
 // --substitute have run, replacing a manual walkthrough of
-// `idd-template/ONBOARDING.md` Step 6 with four check groups: manifest
+// `idd-template/ONBOARDING.md` Step 6 with five check groups: manifest
 // completeness (reuses --import's own manifest resolution — no second file
 // list), placeholder residue (reuses --substitute's scanner — no second
-// scan), a stale-import signal (re-runs idd-doctor's content-based
-// drift detector against the target's imported files instead of forking its
-// logic, the #1208 shared-module convention `check-pnpm-boundary.mts`
-// already uses), and a package-pin advisory (#2987: warns, but never
-// blocks, when the target's effective `helperRuntime.profile` is
-// `ephemeral-npx`/`package-manager` with no `helperRuntime.packageSpec`
-// configured, so helper commands silently resolve against the mutable
-// default archive URL instead of an audited pin).
-import { execFileSync } from 'node:child_process';
+// scan), a helper-load check (#3238: for --profile vendored-node only,
+// spawns every cataloged helper under --target with --help and reports
+// any that fail to load), a stale-import signal (re-runs idd-doctor's
+// content-based drift detector against the target's imported files
+// instead of forking its logic, the #1208 shared-module convention
+// `check-pnpm-boundary.mts` already uses), and a package-pin advisory
+// (#2987: warns, but never blocks, when the target's effective
+// `helperRuntime.profile` is `ephemeral-npx`/`package-manager` with no
+// `helperRuntime.packageSpec` configured, so helper commands silently
+// resolve against the mutable default archive URL instead of an audited
+// pin).
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
@@ -59,8 +62,10 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { NON_TTY_ERROR } from './force-handoff.mjs';
 import { safeGhText } from './gh-exec.mjs';
 import {
+  buildCommandCatalog,
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
   PROFILE_NAMES,
@@ -1580,6 +1585,141 @@ export function checkPlaceholderResidue(targetRoot) {
   });
   return { residue: plan.residue, unknownTokens: plan.unknownTokens };
 }
+/** Per-helper `--help` timeout: generous relative to the ~60ms/helper the
+ * full 50-helper sweep took in the issue's own reproduction, so only a
+ * genuine hang trips it, not ordinary process-startup variance. */
+const HELPER_LOAD_TIMEOUT_MS = 15_000;
+/** `HELPER_COMMANDS` id of the one cataloged helper that is an
+ * interactive-only wizard: it rejects non-TTY stdin with its exported
+ * `NON_TTY_ERROR` before parsing any argument (including `--help`), in the
+ * source repository too, so its expected "loaded successfully" outcome is
+ * exit 1 with that message on stderr, never exit 0 with stdout. */
+const FORCE_HANDOFF_HELPER_ID = 'force-handoff';
+/**
+ * Whether `targetRoot`/`entryPath`'s REALPATH (symlinks resolved) still
+ * resolves inside `targetRoot`'s own realpath. `fileExists`'s `lstatSync`
+ * only protects the leaf path component -- a symlinked ANCESTOR directory
+ * (for example `targetRoot/scripts` itself) is still followed during
+ * ordinary path resolution, so a real file reached only through such a
+ * symlink would otherwise be spawned from outside the confined `--target`
+ * root (Copilot review, PR #3303). Mirrors `resolveConfinedDirectory`'s
+ * own realpath-boundary check (`isWithinBoundary`), reused here for one
+ * helper entry instead of the whole `--target` root. Fails closed
+ * (`false`) on any `realpathSync` error, e.g. a dangling symlink.
+ */
+function isHelperEntryConfined(targetRoot, entryPath) {
+  try {
+    const realTarget = realpathSync(targetRoot);
+    const realEntry = realpathSync(resolve(targetRoot, entryPath));
+    return isWithinBoundary(realEntry, realTarget);
+  } catch {
+    return false;
+  }
+}
+/** Spawn one cataloged helper's `entryPath` under `targetRoot` with
+ * `--help`, working directory `targetRoot`, stdin ignored (so a
+ * TTY-sensitive helper like `force-handoff` observes a non-TTY stdin the
+ * same way a real onboarding session's non-interactive shell would). */
+function spawnHelperHelp(targetRoot, entryPath) {
+  const result = spawnSync(
+    process.execPath,
+    [resolve(targetRoot, entryPath), '--help'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      timeout: HELPER_LOAD_TIMEOUT_MS,
+      // node:child_process's `timeout` option only *sends* `killSignal`
+      // once the deadline elapses -- it is not itself a hard deadline.
+      // The default killSignal is SIGTERM, which a cataloged helper (or
+      // one of its imports) can install its own handler for and ignore,
+      // leaving this synchronous call blocked indefinitely despite the
+      // configured timeout (Copilot review, PR #3303). --verify executes
+      // target-owned code, so this check cannot assume every helper
+      // cooperates with SIGTERM the way this repository's own helpers do
+      // -- force termination instead.
+      killSignal: 'SIGKILL',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return {
+    status: result.status,
+    signal: result.signal,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    timedOut: result.error?.code === 'ETIMEDOUT',
+  };
+}
+/** Describe why one probe did not match its expected outcome, for
+ * `HelperLoadFailure.reason`. */
+function describeHelperLoadFailure(probe) {
+  if (probe.timedOut) {
+    return `timed out after ${HELPER_LOAD_TIMEOUT_MS}ms (signal ${String(probe.signal)})`;
+  }
+  if (probe.signal !== null) {
+    return `killed by signal ${probe.signal}`;
+  }
+  const stderrSnippet = probe.stderr.trim().split('\n')[0] ?? '';
+  return `exited ${String(probe.status)}${stderrSnippet ? `: ${stderrSnippet}` : ' with no stderr'}`;
+}
+/**
+ * For `--profile vendored-node`, spawn every cataloged helper's
+ * `entryPath` under `targetRoot` with `--help` and report any that fail
+ * to load (#3238: many vendored helpers cannot even print `--help` in a
+ * target with no `package.json` before the `bundle-root.mts` fix this
+ * issue also lands). `--verify` reports a clean `manifestCompleteness`
+ * while the helpers cannot start is the exact gap this check exists to
+ * close.
+ *
+ * Reads the catalog from `helper-runtime-manifest.mts`'s
+ * `buildCommandCatalog` (a pure map over the static `HELPER_COMMANDS`
+ * table, not a filesystem walk) rather than `collectVendoredFiles`, since
+ * only the cataloged top-level entry points are spawned here, not every
+ * file their import graphs transitively touch.
+ *
+ * Skips (never probes, never fails) an entryPath absent under
+ * `targetRoot` — that is `checkManifestCompleteness`'s own
+ * `missingTarget` finding; probing a file that does not exist would only
+ * duplicate it under a different name. An entryPath present under
+ * `targetRoot` only through a symlinked ancestor directory is a blocking
+ * failure instead (`isHelperEntryConfined`), never spawned: `fileExists`'s
+ * leaf-only `lstatSync` cannot by itself prove the resolved path stays
+ * inside `--target`.
+ */
+export function checkHelperLoad(targetRoot, profile) {
+  if (profile !== 'vendored-node') {
+    return { applicable: false, probed: [], failed: [] };
+  }
+  const probed = [];
+  const failed = [];
+  for (const command of buildCommandCatalog()) {
+    if (!fileExists(targetRoot, command.entryPath)) {
+      continue;
+    }
+    if (!isHelperEntryConfined(targetRoot, command.entryPath)) {
+      failed.push({
+        id: command.id,
+        entryPath: command.entryPath,
+        reason:
+          'resolves outside --target through a symlinked ancestor directory; refusing to spawn it',
+      });
+      continue;
+    }
+    probed.push(command.entryPath);
+    const probe = spawnHelperHelp(targetRoot, command.entryPath);
+    const loaded =
+      command.id === FORCE_HANDOFF_HELPER_ID
+        ? probe.status === 1 && probe.stderr.includes(NON_TTY_ERROR)
+        : probe.status === 0 && probe.stdout.trim() !== '';
+    if (!loaded) {
+      failed.push({
+        id: command.id,
+        entryPath: command.entryPath,
+        reason: describeHelperLoadFailure(probe),
+      });
+    }
+  }
+  return { applicable: true, probed, failed };
+}
 /**
  * Re-run idd-doctor's content-based stale-import detector
  * (`findMissingWorktreeHardening`) against the target tree's imported
@@ -1696,12 +1836,12 @@ export function checkPackagePinWarning(targetRoot) {
   return { profile, applicable, packageSpecConfigured, warning };
 }
 /**
- * Run all four wave-3 check groups against one target tree. Neither the
+ * Run all five wave-3 check groups against one target tree. Neither the
  * stale-import signal nor the package-pin advisory ever contributes to
  * `blocking` (see `checkStaleImportSignal`'s and
- * `checkPackagePinWarning`'s doc comments); only a manifest gap or
- * placeholder residue can fail verify, matching the exit contract in
- * `runVerifyCli`.
+ * `checkPackagePinWarning`'s doc comments); a manifest gap, placeholder
+ * residue, or a helper-load failure can fail verify, matching the exit
+ * contract in `runVerifyCli`.
  */
 export function runVerify(sourceRoot, targetRoot, profile) {
   const manifestCompleteness = checkManifestCompleteness(
@@ -1710,15 +1850,18 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     profile,
   );
   const placeholderResidue = checkPlaceholderResidue(targetRoot);
+  const helperLoad = checkHelperLoad(targetRoot, profile);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
   const packagePinWarning = checkPackagePinWarning(targetRoot);
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
     manifestCompleteness.missingTarget.length > 0 ||
-    placeholderResidue.residue.length > 0;
+    placeholderResidue.residue.length > 0 ||
+    helperLoad.failed.length > 0;
   return {
     manifestCompleteness,
     placeholderResidue,
+    helperLoad,
     staleImportSignal,
     packagePinWarning,
     blocking,
@@ -3149,16 +3292,17 @@ function runVerifyCli(args) {
     profile: args.profile ?? null,
     manifestCompleteness: result.manifestCompleteness,
     placeholderResidue: result.placeholderResidue,
+    helperLoad: result.helperLoad,
     staleImportSignal: result.staleImportSignal,
     packagePinWarning: result.packagePinWarning,
     blocking: result.blocking,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  // Blocking findings (manifest gap or placeholder residue) signal via exit
-  // 1, matching --substitute / --import's contract; the stale-import signal
-  // and the package-pin advisory are both informational only and never
-  // flip this exit code (see checkStaleImportSignal / checkPackagePinWarning
-  // / runVerify).
+  // Blocking findings (manifest gap, placeholder residue, or a helper-load
+  // failure) signal via exit 1, matching --substitute / --import's
+  // contract; the stale-import signal and the package-pin advisory are
+  // both informational only and never flip this exit code (see
+  // checkStaleImportSignal / checkPackagePinWarning / runVerify).
   process.exit(result.blocking ? 1 : 0);
 }
 function printHelp() {
@@ -3260,21 +3404,25 @@ nothing in that case); 2 usage or configuration error.
 
 --verify (wave 3): mechanical pass/fail for a target tree after --import and
 --substitute have run, in place of a manual walkthrough of
-idd-template/ONBOARDING.md Step 6. Reports four check groups:
+idd-template/ONBOARDING.md Step 6. Reports five check groups:
 manifestCompleteness (every file --import would copy for --source /
 --profile exists under --target, reusing that same manifest resolution —
 missing files are blocking), placeholderResidue (leftover {{...}} tokens via
 --substitute's own scanner — a remaining onboarding placeholder is blocking
-residue, any other {{...}}-shaped token stays informational),
-staleImportSignal (idd-doctor's content-based stale-import detector re-run
-against the target's imported files — informational only, never blocking),
-and packagePinWarning (advisory only, never blocking: flags an
-ephemeral-npx/package-manager helperRuntime.profile with no configured
-helperRuntime.packageSpec, so helper commands silently resolve against the
-mutable default archive URL instead of an audited pin).
+residue, any other {{...}}-shaped token stays informational), helperLoad
+(--profile vendored-node only: spawns every cataloged helper under
+--target's own tree with --help and reports any that fail to load — a
+failure is blocking; not applicable, and spawns nothing, for any other
+profile), staleImportSignal (idd-doctor's content-based stale-import
+detector re-run against the target's imported files — informational only,
+never blocking), and packagePinWarning (advisory only, never blocking:
+flags an ephemeral-npx/package-manager helperRuntime.profile with no
+configured helperRuntime.packageSpec, so helper commands silently resolve
+against the mutable default archive URL instead of an audited pin).
 
-Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest gap
-or placeholder residue); 2 usage or configuration error.
+Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest
+gap, placeholder residue, or a helper-load failure); 2 usage or
+configuration error.
 
   --verify                           run the verify stage
   --source <dir>                     local idd-skill source tree the target was imported from
