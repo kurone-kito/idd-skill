@@ -5,6 +5,7 @@ import {
   buildMergedPrFeedbackSweep,
   type MergedPrInput,
   parseArgs,
+  type SweepReviewInput,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
 import { buildCommentThread } from './test-utils.mts';
@@ -602,10 +603,14 @@ test('a COMMENTED (non-CHANGES_REQUESTED) review body is not feedback', () => {
       number: 10,
       reviews: [
         {
+          // #3259: a non-primary-bot author, so this stays a test of the
+          // state gate alone -- a COMMENTED review from the CONFIGURED
+          // primary bot is covered separately below (its thread-less-body
+          // classification is a distinct, now-tested surfacing path).
           body: 'overview',
           state: 'COMMENTED',
           submittedAt: '2026-06-09T00:00:00Z',
-          author: { login: 'copilot-pull-request-reviewer' },
+          author: { login: 'a-human' },
         },
       ],
     },
@@ -696,6 +701,245 @@ test('a COMMENTED review with an outside-diff-range count of 0 is not feedback',
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+// --- kurone-kito/idd-skill#3259: thread-less Copilot review-body findings --
+//
+// Fixture trimmed (badge-image `<picture>` markup stripped, structural text
+// kept) from the real PR #3196 review `5288008196` body, fetched live via
+// `gh api repos/kurone-kito/idd-skill/pulls/3196/reviews` -- the same
+// real-world fixture `tests/advisory-convergence.test.mts`'s own
+// `V2_PREVIOUSLY_MISSED_1_BODY` uses.
+const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+const COPILOT_REVIEW_COMMIT = 'a5a56e57267540dc046659c600bcb7c62bdc3949';
+const COPILOT_REVIEW_SUBMITTED_AT = '2026-09-23T07:21:02Z';
+const V2_PREVIOUSLY_MISSED_1_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '### Needs a closer look',
+  '',
+  'Address the documented instruction ambiguities and add the missing',
+  'policy-schema coverage.',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary>Add schema tests for valid and malformed union values</summary>',
+  '',
+  '`schemas/policy.schema.json:353`',
+  '',
+  'The new union constraints are not exercised through the policy schema.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+function copilotReviewInput(
+  overrides: Partial<SweepReviewInput> = {},
+): SweepReviewInput {
+  return {
+    body: V2_PREVIOUSLY_MISSED_1_BODY,
+    state: 'COMMENTED',
+    submittedAt: COPILOT_REVIEW_SUBMITTED_AT,
+    commitOid: COPILOT_REVIEW_COMMIT,
+    author: { login: COPILOT_LOGIN },
+    url: 'https://example/pr3196review',
+    ...overrides,
+  };
+}
+
+test('#3259: a thread-less Copilot "Previously missed" finding is surfaced with no review-ack', () => {
+  const prs: MergedPrInput[] = [
+    { number: 30, reviews: [copilotReviewInput()] },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].kind, 'review');
+  assert.equal(result.prs[0].unaddressedComments[0].author, COPILOT_LOGIN);
+  assert.equal(result.prs[0].unaddressedComments[0].advisoryBot, true);
+});
+
+test("#3259: a trusted review-ack naming the review's own commit, posted after it, clears the finding", () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 31,
+      reviews: [copilotReviewInput()],
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3259: a review-ack naming a different commit does not clear the finding', () => {
+  const differentCommit = '05a56e57267540dc046659c600bcb7c62bdc3949';
+  const prs: MergedPrInput[] = [
+    {
+      number: 32,
+      reviews: [copilotReviewInput()],
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: some-agent ${differentCommit} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3259: a review-ack from an untrusted author does not clear the finding', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 33,
+      reviews: [copilotReviewInput()],
+      comments: [
+        {
+          author: { login: 'random-user' },
+          body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+});
+
+test('#3259: a missing commitOid fails closed toward reporting, even with an otherwise-matching review-ack', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 34,
+      reviews: [copilotReviewInput({ commitOid: null })],
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+});
+
+test('#3259: a healthy Copilot review with no thread-less findings is not surfaced', () => {
+  const healthyBody = [
+    '<!-- ccr-overview-v2 -->',
+    '',
+    '## Copilot review overview',
+    '',
+    '**Review effort:** Lite',
+    '**Findings:** None',
+  ].join('\n');
+  const prs: MergedPrInput[] = [
+    { number: 35, reviews: [copilotReviewInput({ body: healthyBody })] },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3259: an unrecognized-shape Copilot review is reported under the Copilot default', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 36,
+      reviews: [
+        copilotReviewInput({
+          body: 'Reviewed the changes, no actionable comments posted.',
+        }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].kind, 'review');
+});
+
+test('#3259: an unrecognized-shape review is not reported when primaryBotLogin names a non-Copilot bot (author mismatch)', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 37,
+      reviews: [
+        copilotReviewInput({
+          body: 'Reviewed the changes, no actionable comments posted.',
+        }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, {
+    ...OPTIONS,
+    primaryBotLogin: 'a-different-bot[bot]',
+  });
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3259: an unrecognized-shape review from the CONFIGURED non-Copilot primary bot is still not reported (unrecognized-shape scoping is Copilot-default-only)', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 38,
+      reviews: [
+        {
+          body: 'Reviewed the changes, no actionable comments posted.',
+          state: 'COMMENTED',
+          submittedAt: COPILOT_REVIEW_SUBMITTED_AT,
+          commitOid: COPILOT_REVIEW_COMMIT,
+          author: { login: 'a-different-bot[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, {
+    ...OPTIONS,
+    primaryBotLogin: 'a-different-bot[bot]',
+  });
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3259: a suppressedCount>0 legacy-shape review from a configured non-Copilot primary bot is still reported', () => {
+  const legacyBody = [
+    '<details><summary>Suppressed comments (1)</summary>',
+    '',
+    'some finding',
+    '',
+    '</details>',
+  ].join('\n');
+  const prs: MergedPrInput[] = [
+    {
+      number: 39,
+      reviews: [
+        {
+          body: legacyBody,
+          state: 'COMMENTED',
+          submittedAt: COPILOT_REVIEW_SUBMITTED_AT,
+          commitOid: COPILOT_REVIEW_COMMIT,
+          author: { login: 'a-different-bot[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, {
+    ...OPTIONS,
+    primaryBotLogin: 'a-different-bot[bot]',
+  });
+  assert.equal(result.prs.length, 1);
 });
 
 test('summary aggregates across PRs and skips clean PRs', () => {
