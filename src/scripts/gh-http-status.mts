@@ -45,17 +45,28 @@ export function deriveGhHttpStatus(error: unknown): number | null {
   if (jsonMatch) {
     return Number.parseInt(jsonMatch[1], 10);
   }
-  // Fallback: gh's other HTTP-status shapes -- a bare `gh: HTTP NNN` line,
-  // or `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)`. Anchored to the
-  // *start* of a line (Copilot review, #3335: a bare `\b` word boundary
-  // alone still lets prose text like "retry HTTP 404: please try again"
-  // match, since a `:` or ` (` can follow the number anywhere, not only in
-  // gh's own output) with an optional `gh: ` prefix, and on what follows
-  // the digits (a colon, an open paren, or end of line) so an unrelated
-  // number in prose text cannot match.
-  const bareMatch = text.match(/^(?:gh: )?HTTP (\d{3})(?=:| \(|\s*$)/m);
-  if (bareMatch) {
-    return Number.parseInt(bareMatch[1], 10);
+  // Fallback: gh's bare `gh: HTTP NNN` line -- always alone on its own
+  // line with nothing else (`gh: %s` wrapping a bare `HTTP %d`, printed
+  // only for a non-JSON error body). Requires the `gh: ` prefix and end
+  // of line so a line-leading "HTTP NNN: ..."/"HTTP NNN (...)" (the
+  // *different* shape handled below) cannot also match here.
+  const bareGhMatch = text.match(/^gh: HTTP (\d{3})\s*$/m);
+  if (bareGhMatch) {
+    return Number.parseInt(bareGhMatch[1], 10);
+  }
+  // Fallback: `HTTP NNN: <message> (<url>)` / `HTTP NNN (<url>)` from
+  // non-`api` subcommands. Anchored to the *start* of a line (Copilot
+  // review, #3335: a bare `\b` word boundary alone still let prose text
+  // like "retry HTTP 404: please try again" match) and requires the
+  // parenthesized `http(s)://` URL these two forms always carry --
+  // without that requirement, line-leading prose that merely starts with
+  // "HTTP NNN:" or "HTTP NNN (" (e.g. "HTTP 404: please try again" or
+  // "HTTP 404 (ok)") would still match (Copilot review round 2, #3335).
+  const urlSuffixedMatch = text.match(
+    /^HTTP (\d{3})(?::.*)? \(https?:\/\/\S+\)\s*$/m,
+  );
+  if (urlSuffixedMatch) {
+    return Number.parseInt(urlSuffixedMatch[1], 10);
   }
   return null;
 }

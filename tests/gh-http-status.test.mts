@@ -199,6 +199,35 @@ test('deriveGhHttpStatus requires the bare/URL-suffixed forms to start a line, n
   );
 });
 
+// Copilot review round 2, #3335: the line-start anchor alone still let a
+// *line-leading* prose line like "HTTP 404: please try again" or
+// "HTTP 404 (ok)" match, since neither the real `HTTP NNN: <message>
+// (<url>)` nor `HTTP NNN (<url>)` shape was distinguished from arbitrary
+// text by content -- only the real gh 2.101.0 forms always carry a
+// parenthesized `http(s)://` URL, which the fixed regex now requires.
+test('deriveGhHttpStatus requires the URL-suffixed forms to carry a real http(s) URL in parens', () => {
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), {
+        stderr: 'HTTP 404: please try again',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    deriveGhHttpStatus(
+      Object.assign(new Error('x'), { stderr: 'HTTP 200 (ok)' }),
+    ),
+    null,
+  );
+  // The bare end-of-line form is unaffected -- it never carries a URL at
+  // all, and still requires the `gh: ` prefix.
+  assert.equal(
+    deriveGhHttpStatus(Object.assign(new Error('x'), { stderr: 'HTTP 502' })),
+    null,
+  );
+});
+
 test('classifyInaccessibleIssueLookup: 404 fixtures -> not-found', () => {
   assert.equal(
     classifyInaccessibleIssueLookup(fixtureError('bare404')),
