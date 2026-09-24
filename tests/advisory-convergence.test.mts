@@ -103,6 +103,7 @@ function baseOptions(
     advisoryBotLogins: [],
     prAuthorLogin: '',
     headCommittedAt: RECENT,
+    headObservedAt: RECENT,
     deadlineMinutes: 1440,
     waiverMode: 'disabled',
     waiverMaxValidity: 'PT24H',
@@ -323,6 +324,7 @@ test('idd-claimed scope: an indeterminate branch mismatch still falls through th
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-different',
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -965,6 +967,7 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1003,6 +1006,7 @@ test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unle
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // not registered
     }),
@@ -1045,6 +1049,7 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: repoPolicy.ciGate.externalCheckWaivers.mode,
       waivableSelectors: repoPolicy.ciGate.externalChecks.waivable,
       waiverMaxValidity: repoPolicy.ciGate.externalCheckWaivers.maxValidity,
@@ -1083,6 +1088,7 @@ test('claimless waiver: a maintainer-posted none-claim-id waiver flips a stale-p
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1117,6 +1123,7 @@ test('claimless waiver: a non-none claim id posted on a claimless PR does not wa
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1131,7 +1138,11 @@ test('claimless waiver: a non-none claim id posted on a claimless PR does not wa
 test('deadline-passed-no-waiver: no waiver comment leaves a stale-pending PR blocked', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+    }),
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.deadline.passed, true);
@@ -1159,7 +1170,11 @@ test('deadline-passed-no-waiver: waiver mode disabled never waives, even with an
         { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
       ],
     }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.waiver.validCount, 0);
   assert.equal(verdict.waived, false);
@@ -1171,6 +1186,7 @@ test('deadline not yet passed: no waiver path is consulted even in maintainer-au
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
     }),
   );
@@ -1182,7 +1198,11 @@ test('deadline not yet passed: no waiver path is consulted even in maintainer-au
 test('regression: the deadline-passed reason names the waiver mode instead of implying a waiver would work when waivers are disabled', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.ready, false);
   assert.match(verdict.reasons.join('\n'), /no waiver is available/);
@@ -1201,22 +1221,43 @@ test('regression: the default deadline minutes come from the shared advisory-wai
 });
 
 test('regression: elapsedMinutes is floored to a non-negative whole number', () => {
-  // headCommittedAt 90 seconds before `now` -- a fractional 1.5 minutes
+  // headObservedAt 90 seconds before `now` -- a fractional 1.5 minutes
   // must floor to 1, not report a fractional value.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [copilotReview()] }),
-    baseOptions({ headCommittedAt: '2026-07-11T11:58:30Z' }),
+    baseOptions({ headObservedAt: '2026-07-11T11:58:30Z' }),
   );
   assert.equal(verdict.deadline.elapsedMinutes, 1);
   assert.equal(Number.isInteger(verdict.deadline.elapsedMinutes), true);
 });
 
-test('regression: elapsedMinutes clamps to 0 instead of going negative when headCommittedAt is after now', () => {
+test('regression: elapsedMinutes clamps to 0 instead of going negative when headObservedAt is after now', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [copilotReview()] }),
-    baseOptions({ headCommittedAt: '2026-07-11T13:00:00Z' }), // after NOW
+    baseOptions({ headObservedAt: '2026-07-11T13:00:00Z' }), // after NOW
   );
   assert.equal(verdict.deadline.elapsedMinutes, 0);
+});
+
+test('deadline clock follows headObservedAt, not the informational headCommittedAt (kurone-kito/idd-skill#3253)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: OLD, headObservedAt: RECENT }),
+  );
+  assert.equal(verdict.deadline.headCommittedAt, OLD);
+  assert.equal(verdict.deadline.headObservedAt, RECENT);
+  assert.equal(verdict.deadline.passed, false);
+});
+
+test('deadline clock never falls back to headCommittedAt when headObservedAt is empty (kurone-kito/idd-skill#3253)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: OLD, headObservedAt: '' }),
+  );
+  assert.equal(verdict.deadline.headCommittedAt, OLD);
+  assert.equal(verdict.deadline.headObservedAt, '');
+  assert.equal(verdict.deadline.elapsedMinutes, null);
+  assert.equal(verdict.deadline.passed, false);
 });
 
 // --- 8. forced-handoff / collaborator-marker-trust claim-resolution parity
@@ -1306,6 +1347,7 @@ test('forced-handoff takeover (issue-plus-pr): a waiver bound to the successor c
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1337,6 +1379,7 @@ test('forced-handoff takeover (issue-only, predates the PR): honored via prFirst
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1371,6 +1414,7 @@ test('forced-handoff (issue-only) is rejected once it no longer predates the PR 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1403,6 +1447,7 @@ test('regression: forced-handoff options default OFF -- the marker is inert and 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1442,6 +1487,7 @@ test('collaborator-marker trust (PR side): a waiver from a login outside trusted
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       trustedMarkerLogins: [TRUSTED, COLLABORATOR],
@@ -1481,6 +1527,7 @@ test('collaborator-marker trust (claim-issue side): a forced-handoff marker AUTH
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1515,6 +1562,7 @@ test('regression: collaborator-marker trust defaults OFF -- an untrusted marker 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1550,6 +1598,7 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
     baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       // staleAgeMs omitted -- hardcoded 24h default; the 2h gap is not stale.
@@ -1562,6 +1611,7 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
     baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000, // 1h -- the 2h gap now counts as stale.
@@ -1587,6 +1637,7 @@ test('waiver: a marker bound to the superseded claim still waives after an in-po
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000,
@@ -1615,6 +1666,7 @@ test('waiver: a two-hop-old claim id does not waive after takeover (#2080)', () 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000,
@@ -3500,7 +3552,8 @@ test('terminal-unavailable-no-waiver: COPILOT_UNAVAILABLE alone never flips read
       comments: terminalRecoveryComments(),
     }),
     baseOptions({
-      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // the ordinary 24h deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3527,7 +3580,8 @@ test('terminal-unavailable-with-waiver: a valid maintainer waiver flips ready vi
       comments: [...terminalRecoveryComments(), terminalWaiverComment()],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // still NOT past the ordinary deadline
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // still NOT past the ordinary deadline
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3553,6 +3607,7 @@ test('terminal-unavailable: a waiver bound to a different HEAD does not satisfy 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3575,6 +3630,7 @@ test('terminal-unavailable: a waiver bound to a different claim-id does not sati
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3596,6 +3652,7 @@ test('terminal-unavailable: a waiver posted by an untrusted actor does not satis
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3617,6 +3674,7 @@ test('terminal-unavailable: an expired waiver does not satisfy the terminal path
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3635,6 +3693,7 @@ test('terminal-unavailable: an otherwise-valid waiver does not satisfy the termi
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // idd-advisory-convergence never registered
     }),
@@ -3654,7 +3713,8 @@ test('outage-relief: an active provider-outage declaration satisfies the termina
       comments: terminalRecoveryComments(), // proves terminalUnavailable, no waiver comment
     }),
     baseOptions({
-      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // the ordinary 24h deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3676,7 +3736,8 @@ test('outage-relief: an active declaration does NOT relieve the deadline-only pa
       comments: [], // no recovery markers at all -- terminal stays NOT_TERMINAL
     }),
     baseOptions({
-      headCommittedAt: OLD, // the ordinary 24h deadline HAS passed
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // the ordinary 24h deadline HAS passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3699,6 +3760,7 @@ test('outage-relief: an active declaration does not relieve a selector outside t
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // idd-advisory-convergence never registered
       outageDeclarationActive: true,
@@ -3718,6 +3780,7 @@ test('outage-relief: waiverMode not maintainer-authorized never relieves via a d
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'disabled',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3752,6 +3815,7 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3870,7 +3934,8 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3913,6 +3978,7 @@ test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-test',
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3969,6 +4035,7 @@ test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates 
     baseOptions({
       // Deliberately NOT 'idd-claimed' -- defaults to 'all-prs'.
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4002,6 +4069,7 @@ test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4030,6 +4098,7 @@ test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4060,6 +4129,7 @@ test('self-referential-bootstrap-auto: a run whose own workflow path does not ma
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4087,6 +4157,7 @@ test('self-referential-bootstrap-auto: a run bound to a different head SHA is re
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4117,6 +4188,7 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4154,6 +4226,7 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4190,6 +4263,7 @@ test('self-referential-bootstrap-auto: an unresolved repositoryFullName never tr
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: '',
@@ -4216,6 +4290,7 @@ test('self-referential-bootstrap-auto: a marker missing run-id: never resolves t
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4241,6 +4316,7 @@ test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4266,6 +4342,7 @@ test('self-referential-bootstrap-auto: a different reason token never counts as 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4291,6 +4368,7 @@ test('self-referential-bootstrap-auto: a human-authored marker with the same rea
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4316,6 +4394,7 @@ test('self-referential-bootstrap-auto: waiverMode disabled means no automated wa
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'disabled',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4343,7 +4422,8 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       ],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -4363,7 +4443,8 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       ],
     }),
     baseOptions({
-      headCommittedAt: OLD, // deadline has passed
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // deadline has passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -4392,7 +4473,8 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
     baseOptions({
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-different', // branch mismatch -> indeterminate
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4422,6 +4504,7 @@ test('self-referential-bootstrap-auto: an indeterminate PR with no bindable clai
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-test',
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4460,7 +4543,8 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
-      headCommittedAt: OLD, // deadline HAS passed -- would otherwise push a reason
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // deadline HAS passed -- would otherwise push a reason
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4651,6 +4735,7 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4686,6 +4771,7 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4723,6 +4809,7 @@ test("self-referential-bootstrap-auto: a non-origin repository touching this sou
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4754,6 +4841,7 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4819,6 +4907,7 @@ test('self-referential-bootstrap-auto: a genuine marker deleted after posting le
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4881,6 +4970,7 @@ test('self-referential-bootstrap-auto: a genuine comment EDITED in place after p
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4929,6 +5019,7 @@ test('self-referential-bootstrap-auto: two distinct candidates sharing the same 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4996,6 +5087,7 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -5033,6 +5125,7 @@ test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver p
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -5075,6 +5168,7 @@ test("self-referential-bootstrap-auto: a marker created outside the cited run's 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -5104,6 +5198,7 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -5138,6 +5233,7 @@ test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set f
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -5903,7 +5999,11 @@ test('isSoleCopilotNotReviewedYetReason: false when an unrelated blocking reason
   // alongside the pending one -- reasons.length > 1, so this must not poll.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.pending, true);
   assert.equal(verdict.review.found, false);
@@ -6457,7 +6557,11 @@ test('formatAssertNextActions covers posted items, threads, and suppressed (#214
 test('formatAssertNextActions covers deadline, terminal, and reroll (#2142)', () => {
   const deadline = computeAdvisoryConvergenceVerdict(
     baseInputs(),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+    }),
   );
   assert.equal(deadline.deadline.passed, true);
   assert.match(formatAssertNextActions(deadline), /deadline/);

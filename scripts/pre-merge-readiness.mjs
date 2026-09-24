@@ -69,6 +69,7 @@ import {
 // `listCheckRunWorkflowPaths`'s own doc comment in provider-port.mts).
 import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
+  fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
@@ -770,6 +771,17 @@ export function collectPreMergeReadiness(
     reviews: advisoryConvergenceReviews,
     headCommittedAt: advisoryConvergenceHeadCommittedAt,
   } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber, port);
+  // kurone-kito/idd-skill#3253: a sibling fetch, not an extension of the one
+  // above -- fail-closed to `''` on any failure, never throws (see
+  // `fetchHeadObservedAt`'s own doc comment), so unlike the sibling fetch
+  // above this one is safe to leave uncaught without masking a fetch
+  // failure as an empty anchor.
+  const advisoryConvergenceHeadObservedAt = fetchHeadObservedAt(
+    owner,
+    repo,
+    args.prNumber,
+    port,
+  );
   const advisoryConvergenceDeadlineMinutes =
     resolveAdvisoryConvergenceDeadlineMinutes(advisoryWaitConfig);
   const secondaryQuietWindowMinutes =
@@ -1142,6 +1154,7 @@ export function collectPreMergeReadiness(
       advisoryConvergenceOutageRelievedSince:
         advisoryConvergenceOutageRelief.since,
       advisoryConvergenceHeadCommittedAt,
+      advisoryConvergenceHeadObservedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
       secondaryBotLogins,

@@ -683,6 +683,7 @@ function buildAdvisoryConvergenceInput(): BaseInput {
   ];
   input.requestedSelector = 'idd-advisory-convergence';
   input.headCommittedAt = '2026-08-30T18:13:24Z';
+  input.headObservedAt = '2026-08-30T18:13:24Z';
   // Supplied by the caller from the RAW config, as pre-merge-readiness
   // receives it: normalizePolicyConfig drops `convergenceDeadline`, so
   // reading it off the normalized policy would silently use the 24h default
@@ -706,6 +707,7 @@ test('planExternalCheckWaiver blocks an advisory-convergence waiver before its d
     checkSelector: 'idd-advisory-convergence',
     deadlineMinutes: 540,
     headCommittedAt: '2026-08-30T18:13:24Z',
+    headObservedAt: '2026-08-30T18:13:24Z',
     elapsedMinutes: 229,
     deadlinePassed: false,
     terminalUnavailable: false,
@@ -736,6 +738,38 @@ test('planExternalCheckWaiver allows an advisory-convergence waiver once the dea
   );
 });
 
+test('planExternalCheckWaiver follows the injected headObservedAt, not headCommittedAt, for the deadline precondition (kurone-kito/idd-skill#3253)', () => {
+  const input = buildAdvisoryConvergenceInput();
+  // headCommittedAt (informational) is old enough to have opened the
+  // pre-#3253 hatch; headObservedAt (the actual clock) is recent, so the
+  // hatch must stay shut.
+  input.headCommittedAt = '2026-08-01T00:00:00Z';
+  input.headObservedAt = '2026-08-30T21:33:24Z';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-30T22:02:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.headCommittedAt,
+    '2026-08-01T00:00:00Z',
+  );
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.headObservedAt,
+    '2026-08-30T21:33:24Z',
+  );
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.elapsedMinutes,
+    29,
+  );
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /anchored on the HEAD's earliest recorded check suite 2026-08-30T21:33:24Z/,
+  );
+});
+
 test('planExternalCheckWaiver honors the closed-precondition opt-in (#2328)', () => {
   const input = buildAdvisoryConvergenceInput();
   input.allowClosedPrecondition = true;
@@ -754,6 +788,7 @@ test('planExternalCheckWaiver honors the closed-precondition opt-in (#2328)', ()
 test('planExternalCheckWaiver keeps the hatch shut without a HEAD commit anchor (#2328)', () => {
   const input = buildAdvisoryConvergenceInput();
   input.headCommittedAt = '';
+  input.headObservedAt = '';
 
   const report = planExternalCheckWaiver(input, {
     now: new Date('2026-08-31T03:13:24Z'),

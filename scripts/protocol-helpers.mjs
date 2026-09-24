@@ -2842,6 +2842,15 @@ export function dispositionNamesAdvisoryBot(
 // ever passes REST-raw comments straight through, without the CLI layer's
 // own `normalizeComment` pass, must not silently fail-closed here just
 // because it used the other field-name form.
+//
+// kurone-kito/idd-skill#3253: the `headCommittedAt` parameter name is kept
+// unchanged for compatibility with this function's own direct unit tests
+// (which exercise the cutoff-comparison logic in isolation, independent of
+// which upstream timestamp source feeds it), but every LIVE caller now
+// passes the GitHub-observed anchor (`headObservedAt`: the earliest
+// check-suite `createdAt` for the current HEAD) here, not the
+// committer-supplied `committedDate` -- see
+// `buildPreMergeReadinessSummary`'s own call site below.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments,
   { secondaryBotLogin, headCommittedAt },
@@ -2906,6 +2915,10 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // An empty `secondaryBotLogins` list reports the pre-existing unconfigured
 // shape (`{ settledAt: null, declined: false }`), matching
 // `computeSecondaryAdvisoryReviewSettlement`'s own unconfigured default.
+//
+// kurone-kito/idd-skill#3253: same parameter-name-kept-value-changed note as
+// `computeSecondaryAdvisoryReviewSettlement` above -- `headCommittedAt` here
+// is fed the GitHub-observed anchor by every live caller.
 export function foldSecondaryAdvisoryReviewSettlements(
   comments,
   { secondaryBotLogins, headCommittedAt },
@@ -7508,10 +7521,14 @@ export function buildPreMergeReadinessSummary(
   );
   // #2544/#3186: whether the configured secondary bot(s) have already
   // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
-  // `options.advisoryConvergenceHeadCommittedAt` (the HEAD commit's own
-  // `committedDate`, already resolved by the caller for the unrelated
-  // advisory-convergence-deadline precondition below) rather than a second
-  // fetch, since it is exactly "when did this HEAD land" either way.
+  // `options.advisoryConvergenceHeadObservedAt` (the earliest GitHub-recorded
+  // check-suite `createdAt` for the current HEAD, already resolved by the
+  // caller for the unrelated advisory-convergence-deadline precondition
+  // below) rather than a second fetch (kurone-kito/idd-skill#3253: this used
+  // to reuse `advisoryConvergenceHeadCommittedAt`, since it was "exactly
+  // 'when did this HEAD land' either way" -- the committer-supplied
+  // `committedDate` can lag the actual push, so both readers now share the
+  // GitHub-observed anchor instead).
   // `foldSecondaryAdvisoryReviewSettlements` combines every configured
   // login's own independent classification into the single shape
   // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
@@ -7526,7 +7543,7 @@ export function buildPreMergeReadinessSummary(
     comments,
     {
       secondaryBotLogins,
-      headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headCommittedAt: options.advisoryConvergenceHeadObservedAt,
     },
   );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
@@ -7730,18 +7747,21 @@ export function buildPreMergeReadinessSummary(
   const copilotUnavailable = options.copilotUnavailable === true;
   // #2021: `advisory-convergence.mts`'s own gate never treats a posted
   // `idd-advisory-convergence` waiver as active until ONE of two independent
-  // preconditions is ALSO true -- a 24h deadline anchored on the current HEAD
-  // commit's own `committedDate`, or proven terminal Copilot unavailability
-  // (`copilotUnavailable` above). Reported truthfully in `waiverEvidence`
-  // itself either way (the marker is real and otherwise valid), but a check
-  // only becomes `coveredByWaiver` here once this SAME precondition has
-  // opened -- otherwise this helper reports `coveredByWaiver: true` before
+  // preconditions is ALSO true -- a 24h deadline anchored on the earliest
+  // GitHub-recorded check-suite for the current HEAD commit
+  // (kurone-kito/idd-skill#3253; `headCommittedAt` stays informational
+  // only), or proven terminal Copilot unavailability (`copilotUnavailable`
+  // above). Reported truthfully in `waiverEvidence` itself either way (the
+  // marker is real and otherwise valid), but a check only becomes
+  // `coveredByWaiver` here once this SAME precondition has opened --
+  // otherwise this helper reports `coveredByWaiver: true` before
   // `advisory-convergence.mts` itself would ever call the waiver `waived`,
   // sending an otherwise-correct session into a `gh pr merge` GitHub rejects
   // outright (root cause: kurone-kito/idd-skill#2021).
   const advisoryConvergencePreconditionResult =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headObservedAt: options.advisoryConvergenceHeadObservedAt,
       deadlineMinutes: options.advisoryConvergenceDeadlineMinutes,
       terminalUnavailable: copilotUnavailable,
       now,

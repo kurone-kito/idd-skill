@@ -41,6 +41,7 @@ import {
 } from './protocol-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
+import { fetchHeadObservedAt } from './review-clause.mts';
 
 /** Normalized policy object returned by {@link normalizePolicyConfig}. */
 type NormalizedPolicy = ReturnType<typeof normalizePolicyConfig>;
@@ -185,11 +186,19 @@ interface ExternalCheckWaiverPlanInput {
   expiresAt?: string;
   repoOwner?: string;
   /**
-   * #2328: the current HEAD commit's own timestamp, the anchor the
-   * `idd-advisory-convergence` waiver deadline is measured from. Absent or
-   * unparseable keeps the hatch shut, which is the safe direction.
+   * #2328: the current HEAD commit's own committer-supplied timestamp,
+   * informational only (kurone-kito/idd-skill#3253) -- see `headObservedAt`
+   * below for the waiver deadline's actual anchor.
    */
   headCommittedAt?: string;
+  /**
+   * kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+   * `createdAt` for the current HEAD commit, the anchor the
+   * `idd-advisory-convergence` waiver deadline is actually measured from.
+   * Absent or unparseable keeps the hatch shut, which is the safe
+   * direction.
+   */
+  headObservedAt?: string;
   /**
    * #2328: the configured `advisoryWait.convergenceDeadline` in minutes.
    * Supplied by the caller from the RAW policy document, exactly as
@@ -441,6 +450,9 @@ interface RunExternalCheckWaiverOptions {
   prComments?: WaiverCommentPayload[] | (() => WaiverCommentPayload[]);
   /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
   headCommittedAt?: string;
+  /** kurone-kito/idd-skill#3253: injected HEAD-observed anchor, so tests
+   * skip the check-suite read. */
+  headObservedAt?: string;
   /**
    * #2328 (review): injected linked-issue resolver, called once before the
    * post and once for the reconcile, so a test can model a takeover landing
@@ -829,6 +841,7 @@ export function planExternalCheckWaiver(
     ? (() => {
         const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
           headCommittedAt: input?.headCommittedAt,
+          headObservedAt: input?.headObservedAt,
           deadlineMinutes: input?.advisoryConvergenceDeadlineMinutes,
           now: now.toISOString(),
         });
@@ -852,7 +865,7 @@ export function planExternalCheckWaiver(
     blockingReasons.push(
       `${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR} waiver deadline has not passed ` +
         `(${elapsed === null ? 'elapsed unknown' : `${elapsed} of ${advisoryConvergenceWaiverPrecondition.deadlineMinutes} minutes`}` +
-        `, anchored on HEAD commit ${advisoryConvergenceWaiverPrecondition.headCommittedAt}); ` +
+        `, anchored on the HEAD's earliest recorded check suite ${advisoryConvergenceWaiverPrecondition.headObservedAt}); ` +
         'terminal Copilot unavailability was not evaluated here, so pass ' +
         '--allow-closed-precondition if that opener already applies',
     );
@@ -1061,6 +1074,16 @@ export async function runExternalCheckWaiver(
       headRefOid: String(pr.headRefOid ?? '').trim(),
     });
 
+  // kurone-kito/idd-skill#3253: the port-backed anchor for the deadline
+  // precondition check below -- a sibling read, not a replacement of
+  // `resolvedHeadCommittedAt` above, which stays wired only into the
+  // `--auto-bootstrap` expiry immediately below (explicitly unchanged by
+  // the issue: an earlier anchor there only shortens that waiver's
+  // validity window, the safe direction). Fails closed to `''` on any
+  // failure and never throws, so no try/catch is needed here.
+  const resolvedHeadObservedAt =
+    options.headObservedAt ?? fetchHeadObservedAt(owner, name, args.prNumber);
+
   // kurone-kito/idd-skill#2657: the fixed, bounded validity window
   // computed from the PR's own HEAD commit timestamp -- independent of
   // `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
@@ -1174,6 +1197,7 @@ export async function runExternalCheckWaiver(
       repoOwner: owner,
       claimless: args.claimless,
       headCommittedAt: resolvedHeadCommittedAt,
+      headObservedAt: resolvedHeadObservedAt,
       allowClosedPrecondition: args.allowClosedPrecondition,
       autoBootstrap: args.autoBootstrap,
       runId: args.runId,

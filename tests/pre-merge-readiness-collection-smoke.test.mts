@@ -1251,6 +1251,12 @@ function runSecondaryQuietWindowFixture(
       reviewsWithHeadCommitDate: {
         42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
       },
+      // kurone-kito/idd-skill#3253: the GitHub-observed anchor, mirroring
+      // headCommittedAt above -- absent, this defaults to `''` and the
+      // secondary-bot settlement cutoff has no valid anchor to compare
+      // against, so a genuine review can never settle the quiet window
+      // regardless of its timestamp.
+      headObservedAtByChangeRequest: { 42: '2026-07-31T23:00:00Z' },
       changedFiles: { 42: [] },
       comments: {
         42: comments.map((entry, index) => ({
