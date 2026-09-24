@@ -1370,7 +1370,12 @@ maintainer approval actor before unattended work can start. Recommended
 signals are:
 
 - the configured ready label from `approvalSignals.readyLabelName`
-  (default: `idd:ready`), restricted to maintainer approval actors
+  (default: `idd:ready`): the claim-approval-gate helper verifies the
+  actor of the label's latest `labeled` timeline event against
+  `maintainerApprovalActorPolicy` (in both `labelFreshnessMode` values
+  below), and fails closed when that actor's permission cannot be
+  read, so an advisory bot or non-collaborator applying the label
+  alone does not approve the issue
 - a standalone `IDD ready` comment from a maintainer approval actor
 
 Treat standalone `IDD ready` comments as fresh only when they are newer
@@ -1378,11 +1383,14 @@ than the latest substantive issue title/body edit and any generated-plan
 update. Label freshness is configured separately through
 `approvalSignals.labelFreshnessMode`:
 
-- `presence-only` (default): label presence is sufficient after the
-  label name matches `approvalSignals.readyLabelName`
+- `presence-only` (default): skips the freshness comparison, but the
+  actor of the label's latest `labeled` timeline event must still
+  satisfy `maintainerApprovalActorPolicy` -- label presence from an
+  untrusted labeler is never sufficient on its own
 - `event-freshness`: the latest matching `labeled` timeline event for
-  the configured ready label must be newer than the latest substantive
-  issue title/body edit and any generated-plan update
+  the configured ready label must also be newer than the latest
+  substantive issue title/body edit and any generated-plan update,
+  on top of the same actor check
 
 When `.github/idd/config.json` is present, repositories can record the
 approval-signal and issue-authoring knobs directly:

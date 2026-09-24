@@ -38,6 +38,16 @@ const CLAIM_APPROVAL_GATE_FLAG_SPEC = {
   '--verbose': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
+/** #3254: fields shared by every `resolveReadyLabelApproval` return
+ * branch that doesn't otherwise set them, so each branch only needs to
+ * spell out what makes it distinct. Declared here, above the
+ * `import.meta.main` trigger, for the same TDZ reason as
+ * `CLAIM_APPROVAL_GATE_FLAG_SPEC` above -- `runCli()` reaches
+ * `resolveReadyLabelApproval` synchronously at module-evaluation time. */
+const READY_LABEL_STATE_DEFAULTS = {
+  actorUnverified: false,
+  actorPermissionUnavailable: false,
+};
 if (import.meta.main) {
   runCli();
 }
@@ -133,9 +143,17 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     policy: policyState,
     freshnessAnchor,
     freshnessDeterminable,
+    resolvePermission,
   });
   if (readyLabelState.freshnessUnknown) {
     ambiguity.push('ready-label-freshness-unavailable');
+  }
+  if (readyLabelState.actorUnverified) {
+    ambiguity.push('ready-label-actor-unverified');
+  }
+  if (readyLabelState.actorPermissionUnavailable) {
+    ambiguity.push('ready-label-actor-permission-unavailable');
+    permissionAmbiguity = true;
   }
   checks.push({
     id: 'ready_label_present',
@@ -223,6 +241,56 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     checks,
   };
 }
+/**
+ * #3254: extracted from `runCli` so a test can supply a fake
+ * `ProviderPort` (e.g. one whose `getWorkItemTimeline` throws) without
+ * spawning a real `gh` process, exercising the same input-collection path
+ * `runCli` uses in production.
+ */
+export function collectClaimApprovalGateInputs(port, issueNumber) {
+  const rawIssue = port.getWorkItem(issueNumber);
+  if (!rawIssue) {
+    throw new Error(`issue #${issueNumber} not found`);
+  }
+  // Remapped back to the raw REST (snake_case) shape normalizeIssue() and
+  // the output block below both already expect -- ProviderWorkItem's
+  // camelCase fields (and getWorkItem's uppercased state) are a port-level
+  // convention, not this file's pre-migration contract.
+  const issue = {
+    number: rawIssue.number,
+    title: rawIssue.title,
+    state: rawIssue.state.toLowerCase(),
+    html_url: rawIssue.htmlUrl,
+    url: rawIssue.url,
+    user: rawIssue.user,
+    author_association: rawIssue.authorAssociation,
+    labels: rawIssue.labels,
+    created_at: rawIssue.createdAt,
+    updated_at: rawIssue.updatedAt,
+  };
+  const comments = port.listWorkItemComments(issueNumber).map((c) => ({
+    user: { login: c.authorLogin },
+    body: c.body,
+    created_at: c.createdAt,
+  }));
+  const timelineState = fetchIssueTimeline(port, issueNumber);
+  // #2762/#3254: the raw fetch result (string[]/events[] on success, or
+  // the `null` failure sentinel) is passed straight through -- never
+  // flattened to a bare array, which would silently collapse a failed
+  // read back to "known-empty" and reintroduce the bug #3254 fixes.
+  const userContentEditsState = fetchIssueUserContentEdits(port, issueNumber);
+  return {
+    issue,
+    comments,
+    timeline: timelineState.known ? timelineState.events : null,
+    timelineAvailable: timelineState.known,
+    timelineParseError: timelineState.parseError,
+    userContentEdits: userContentEditsState.known
+      ? userContentEditsState.timestamps
+      : null,
+    userContentEditsAvailable: userContentEditsState.known,
+  };
+}
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -241,42 +309,7 @@ function runCli() {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
-  const rawIssue = port.getWorkItem(args.issue ?? 0);
-  if (!rawIssue) {
-    throw new Error(`issue #${args.issue} not found`);
-  }
-  // Remapped back to the raw REST (snake_case) shape normalizeIssue() and
-  // the output block below both already expect -- ProviderWorkItem's
-  // camelCase fields (and getWorkItem's uppercased state) are a port-level
-  // convention, not this file's pre-migration contract.
-  const issue = {
-    number: rawIssue.number,
-    title: rawIssue.title,
-    state: rawIssue.state.toLowerCase(),
-    html_url: rawIssue.htmlUrl,
-    url: rawIssue.url,
-    user: rawIssue.user,
-    author_association: rawIssue.authorAssociation,
-    labels: rawIssue.labels,
-    created_at: rawIssue.createdAt,
-    updated_at: rawIssue.updatedAt,
-  };
-  const comments = port.listWorkItemComments(args.issue ?? 0).map((c) => ({
-    user: { login: c.authorLogin },
-    body: c.body,
-    created_at: c.createdAt,
-  }));
-  const timelineState = fetchIssueTimeline(port, args.issue ?? 0);
-  // #2762: the raw fetch result (string[] on success, or the `null`
-  // failure sentinel) is passed straight through as `userContentEdits`
-  // below -- never flattened to a bare array the way `timeline:
-  // timelineState.events` above discards its own `known` flag. Flattening
-  // this one the same way would silently collapse a failed GraphQL read
-  // back to "known-empty" and reintroduce the bug this issue fixes.
-  const userContentEditsState = fetchIssueUserContentEdits(
-    port,
-    args.issue ?? 0,
-  );
+  const inputs = collectClaimApprovalGateInputs(port, args.issue ?? 0);
   const policy = loadPolicy(args.policy);
   const permissionCache = new Map();
   const resolvePermission = (login) =>
@@ -288,12 +321,10 @@ function runCli() {
     });
   const result = evaluateClaimApprovalGate(
     {
-      issue,
-      comments,
-      timeline: timelineState.events,
-      userContentEdits: userContentEditsState.known
-        ? userContentEditsState.timestamps
-        : null,
+      issue: inputs.issue,
+      comments: inputs.comments,
+      timeline: inputs.timeline,
+      userContentEdits: inputs.userContentEdits,
       policy: policy.config,
       generatedPlanUpdatedAt: args.generatedPlanUpdatedAt,
     },
@@ -302,11 +333,11 @@ function runCli() {
   const output = {
     repository: { owner, repo },
     issue: {
-      number: Number.parseInt(String(issue.number), 10),
-      title: String(issue.title ?? ''),
-      state: String(issue.state ?? ''),
-      url: String(issue.html_url ?? issue.url ?? ''),
-      author: String(issue.user?.login ?? ''),
+      number: Number.parseInt(String(inputs.issue.number), 10),
+      title: String(inputs.issue.title ?? ''),
+      state: String(inputs.issue.state ?? ''),
+      url: String(inputs.issue.html_url ?? inputs.issue.url ?? ''),
+      author: String(inputs.issue.user?.login ?? ''),
     },
     approved: result.approved,
     reason: result.reason,
@@ -319,9 +350,9 @@ function runCli() {
           name: check.name,
           result: check.result,
         })),
-    timelineAvailable: timelineState.known,
-    timelineParseError: timelineState.parseError,
-    userContentEditsAvailable: userContentEditsState.known,
+    timelineAvailable: inputs.timelineAvailable,
+    timelineParseError: inputs.timelineParseError,
+    userContentEditsAvailable: inputs.userContentEditsAvailable,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
@@ -492,36 +523,38 @@ function resolveReadyLabelApproval({
   policy,
   freshnessAnchor,
   freshnessDeterminable,
+  resolvePermission,
 }) {
   const readyLabelName = policy.approvalSignals.readyLabelName;
   const labelDisplayName = readyLabelName || 'idd:ready';
   const hasReadyLabel = issue.labels.includes(readyLabelName);
+  const eventFreshnessMode =
+    policy.approvalSignals.labelFreshnessMode === 'event-freshness';
   if (!hasReadyLabel) {
     return {
+      ...READY_LABEL_STATE_DEFAULTS,
       approved: false,
       present: false,
       freshnessUnknown: false,
       evidence: `Configured ready label ${labelDisplayName} is absent.`,
     };
   }
-  if (policy.approvalSignals.labelFreshnessMode !== 'event-freshness') {
-    return {
-      approved: true,
-      present: true,
-      freshnessUnknown: false,
-      evidence: `Configured ready label ${labelDisplayName} is present; labelFreshnessMode=presence-only.`,
-    };
-  }
+  // #3254: both labelFreshnessMode values now need the issue timeline to
+  // identify who applied the label -- presence-only no longer shortcuts
+  // past this the way it used to before the actor check existed.
   if (!timelineState.known) {
     return {
+      ...READY_LABEL_STATE_DEFAULTS,
       approved: false,
       present: true,
-      freshnessUnknown: true,
-      evidence: `Configured ready label ${labelDisplayName} is present, but the issue timeline is unavailable for label freshness checks.`,
+      freshnessUnknown: eventFreshnessMode,
+      actorUnverified: true,
+      evidence: `Configured ready label ${labelDisplayName} is present, but the issue timeline is unavailable to verify who applied it.`,
     };
   }
-  if (!freshnessDeterminable || !freshnessAnchor) {
+  if (eventFreshnessMode && (!freshnessDeterminable || !freshnessAnchor)) {
     return {
+      ...READY_LABEL_STATE_DEFAULTS,
       approved: false,
       present: true,
       freshnessUnknown: true,
@@ -534,18 +567,83 @@ function resolveReadyLabelApproval({
   );
   if (latestLabelEvent?.event !== 'labeled') {
     return {
+      ...READY_LABEL_STATE_DEFAULTS,
       approved: false,
       present: true,
-      freshnessUnknown: true,
+      freshnessUnknown: eventFreshnessMode,
+      actorUnverified: true,
       evidence: `Configured ready label ${labelDisplayName} is present, but no matching label application event was found in the issue timeline.`,
     };
   }
-  const fresh = compareIso(latestLabelEvent.createdAt, freshnessAnchor) > 0;
+  if (eventFreshnessMode) {
+    const fresh = compareIso(latestLabelEvent.createdAt, freshnessAnchor) > 0;
+    if (!fresh) {
+      // Stale on freshness grounds alone -- never reaches the actor check,
+      // so this evidence string (and every currently-passing staleness
+      // test asserting it) stays byte-for-byte unchanged by #3254.
+      return {
+        ...READY_LABEL_STATE_DEFAULTS,
+        approved: false,
+        present: true,
+        freshnessUnknown: false,
+        evidence: `Configured ready label ${labelDisplayName} was last applied at ${latestLabelEvent.createdAt}; freshness anchor is ${freshnessAnchor}.`,
+      };
+    }
+  }
+  return evaluateReadyLabelActor({
+    labelDisplayName,
+    policy,
+    latestLabelEvent,
+    resolvePermission,
+  });
+}
+/** #3254: shared by both `labelFreshnessMode` values once a matching
+ * `labeled` event is confirmed (immediately for presence-only; only
+ * after the event is confirmed fresh for event-freshness) -- decides
+ * approval from the actor of that event, not from label presence alone. */
+function evaluateReadyLabelActor({
+  labelDisplayName,
+  policy,
+  latestLabelEvent,
+  resolvePermission,
+}) {
+  const actorLogin = latestLabelEvent.actorLogin;
+  if (!actorLogin) {
+    return {
+      ...READY_LABEL_STATE_DEFAULTS,
+      approved: false,
+      present: true,
+      freshnessUnknown: false,
+      actorUnverified: true,
+      evidence: `Configured ready label ${labelDisplayName} was applied at ${latestLabelEvent.createdAt}, but the timeline event has no recorded actor.`,
+    };
+  }
+  const permission = normalizePermissionResult(resolvePermission(actorLogin));
+  if (!permission.known) {
+    return {
+      ...READY_LABEL_STATE_DEFAULTS,
+      approved: false,
+      present: true,
+      freshnessUnknown: false,
+      actorPermissionUnavailable: true,
+      evidence: `Configured ready label ${labelDisplayName} was applied by ${actorLogin}, but their permission could not be resolved.`,
+    };
+  }
+  // A bot or non-collaborator actor normalizes to known: true,
+  // permission: 'none' (resolveCollaboratorPermission's not-collaborator
+  // outcome) -- a known, unauthorized result, never an ambiguity.
+  const authorized = isAuthorizedByPolicy(
+    permission.permission,
+    policy.maintainerApprovalActorPolicy,
+  );
   return {
-    approved: fresh,
+    ...READY_LABEL_STATE_DEFAULTS,
+    approved: authorized,
     present: true,
     freshnessUnknown: false,
-    evidence: `Configured ready label ${labelDisplayName} was last applied at ${latestLabelEvent.createdAt}; freshness anchor is ${freshnessAnchor}.`,
+    evidence: authorized
+      ? `Configured ready label ${labelDisplayName} was applied by ${actorLogin} (permission ${permission.permission}), satisfying policy ${policy.maintainerApprovalActorPolicy}.`
+      : `Configured ready label ${labelDisplayName} was applied by ${actorLogin} (permission ${permission.permission}), which does not satisfy policy ${policy.maintainerApprovalActorPolicy}.`,
   };
 }
 function detectGeneratedPlanUpdateAt({ comments, override }) {
@@ -627,6 +725,9 @@ function findLatestReadyLabelEvent(events, readyLabelName) {
         .toLowerCase(),
       labelName: normalizeLabelName(event?.label),
       createdAt: normalizeIso(event?.created_at),
+      actorLogin: String(event?.actor?.login ?? '')
+        .trim()
+        .toLowerCase(),
     }))
     .filter((event) => event.createdAt !== null)
     .filter((event) => event.event === 'labeled' || event.event === 'unlabeled')
