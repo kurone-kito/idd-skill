@@ -390,10 +390,16 @@ could ever observe it as 'alive'".
 2. **Rule out a live session.** Outside the helpers, independently
    confirm no session is still working in the worktree — the helpers
    never check process liveness (see the citation above).
-3. **Preserve.** Run this step and step 4 from the **surviving primary
-   worktree**, never from `<path>` itself — the same cwd rule F4 uses
-   for its own removal (`idd-merge.instructions.md`), since a shell
-   inside `<path>` becomes invalid the moment it's removed. Check for
+3. **Preserve.** When `<path>` is a linked worktree, run this step and
+   step 4 from the **surviving primary worktree**, never from `<path>`
+   itself — the same cwd rule F4 uses for its own removal
+   (`idd-merge.instructions.md`), since a shell inside `<path>`
+   becomes invalid the moment it's removed. When `<path>` is itself
+   the primary worktree (step 4's own primary-worktree branch below),
+   there is no other primary worktree to run from — run both steps'
+   commands from `<path>` instead; neither step removes the primary
+   worktree itself, only checks out a different branch there, so the
+   shell stays valid throughout. Check for
    an in-progress rebase, merge,
    cherry-pick, or bisect using git state, not a literal `.git/...`
    path — `.git` at a linked worktree's root is a file, not a
@@ -474,9 +480,11 @@ could ever observe it as 'alive'".
    to save and creates no new entry, so step 4 skips the stash check
    for it.
 4. **Remove.** Immediately before removing anything — not step 1's
-   earlier read — re-run its confirm-the-block check
-   (`resume-claim-routing.mjs --issue <n>` and the `claim-lock` check
-   form). Stop if the result no longer matches: a live session
+   earlier read — re-run its confirm-the-block check, using the same
+   profile-selected `resume-claim-routing` and `claim-lock` helper
+   forms step 1 above resolves (a bare `resume-claim-routing.mjs`
+   invocation is not portable outside the source-repo/vendored-node
+   profile). Stop if the result no longer matches: a live session
    resumed the claim, a different claim-id now holds the lock, or the
    branch no longer reports `local_worktree_occupied` — the situation
    changed since step 1, and `idd-merge.instructions.md`'s own F4
@@ -514,8 +522,9 @@ could ever observe it as 'alive'".
    scope), which step 3's stash/update-ref/copy operations never touch, so
    nothing before the checkout needs it. A concurrent session can use
    the shared primary clone's topology at any point between the
-   checkout and the deletion otherwise. Re-run the
-   `claim-lock` check form on the primary worktree now, immediately
+   checkout and the deletion otherwise. Re-run step 1's
+   profile-selected `claim-lock` check form on the primary worktree
+   now, immediately
    before acting — not step 1's earlier read or this step's own
    opening re-check above, both stale by the time a concurrent session
    could have acquired or replaced this shared admin directory's lock.
