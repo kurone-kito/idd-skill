@@ -1822,6 +1822,107 @@ export function classifyAuthoringMarkerFamily(
     untrustedIndexes,
   };
 }
+// --- Shared markerPrefix / marker-occurrence helpers, and the
+// authoring-bucket marker (moved from audit-authored-issue.mts, #3289)
+// ---
+//
+// suitability-triage.mts already needed normalizeMarkerPrefix and
+// parseAuthoringBucketMarker (both originally defined in
+// audit-authored-issue.mts) to run its own local evaluators
+// (evaluateSuitabilityLocal). Once audit-authored-issue.mts started
+// running suitability-triage.mts's evaluateSuitabilityLocal /
+// evaluateA4Viability at authoring time (#3289) to catch an A4/A4.5
+// triage failure before publish instead of only at Discover time, an
+// import straight back from audit-authored-issue.mts to
+// suitability-triage.mts would have closed an import cycle between the
+// two modules. Moving the shared pieces to this leaf module (imports
+// only marker-regex.mts and node:crypto -- see the module header above)
+// breaks the cycle: both audit-authored-issue.mts and
+// suitability-triage.mts import from here instead of from each other.
+// audit-authored-issue.mts re-exports the two functions (and the two
+// types below) to keep its own pre-#3289 public surface unchanged for
+// any other caller.
+/** Distributed default `markerPrefix` when config is absent. */
+export const DEFAULT_MARKER_PREFIX = 'idd-skill';
+/**
+ * Normalize an arbitrary config/CLI `markerPrefix` value: trim, and fall
+ * back to {@link DEFAULT_MARKER_PREFIX} for an empty or non-string value --
+ * a value with accidental leading/trailing whitespace (e.g. "idd-skill ")
+ * would otherwise become a distinct prefix that never matches any real
+ * marker, producing confusing false failures across every marker check.
+ */
+export function normalizeMarkerPrefix(prefix) {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 ? trimmed : DEFAULT_MARKER_PREFIX;
+}
+/**
+ * Count every occurrence of the `<!-- {markerPrefix}-{suffix} ... -->`
+ * marker in `text`. `text` should already be code-fence/inline-span-masked
+ * by the caller (e.g. `stripMarkdownCodeRegions` in
+ * audit-authored-issue.mts), so a marker merely quoted in a pasted
+ * template/example snippet does not count as a real occurrence.
+ */
+export function countMarkerOccurrences(text, markerPrefix, suffix) {
+  const base = createMarkerRegex(markerPrefix, suffix);
+  const global = new RegExp(base.source, `${base.flags}g`);
+  return [...text.matchAll(global)].length;
+}
+export function isAuthoringBucketValue(value) {
+  return value === 'needs-decision' || value === 'blocked-by-human';
+}
+/**
+ * Canonical parser for the authored
+ * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
+ * marker. `text` must already be `stripMarkdownCodeRegions`-masked (every
+ * caller in audit-authored-issue.mts passes the shared masked text, not
+ * the raw body), so a marker merely quoted in prose cannot be mistaken
+ * for a real one.
+ *
+ * Uses the same rawCount-vs-coherent-count gap the effort-marker check in
+ * audit-authored-issue.mts closes for the `effort` marker: the
+ * value-capturing regex below requires a non-empty token (`[^\s>]+`), so a
+ * value-less marker like `<!-- {prefix}-authoring-bucket: -->` would
+ * otherwise never match it at all and read as `present: false` --
+ * indistinguishable from no marker (#2648 review, Copilot).
+ * `countMarkerOccurrences`'s detection-only regex matches regardless of
+ * value, so comparing the two counts recovers the distinction.
+ */
+export function parseAuthoringBucketMarker(text, markerPrefix) {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'authoring-bucket',
+  );
+  if (rawCount === 0) {
+    return { present: false, value: null, malformed: false };
+  }
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
+    'gi',
+  );
+  let coherentCount = 0;
+  let value = null;
+  let match = regex.exec(text);
+  while (match) {
+    coherentCount += 1;
+    const raw = match[1];
+    const parsed = isAuthoringBucketValue(raw) ? raw : null;
+    // Fail-safe: any invalid token, or a value disagreeing with an
+    // earlier coherent one, yields no bucket.
+    if (parsed === null || (value !== null && parsed !== value)) {
+      return { present: true, value: null, malformed: true };
+    }
+    value = parsed;
+    match = regex.exec(text);
+  }
+  if (coherentCount !== rawCount) {
+    // At least one occurrence matched the raw (any-value) scan but not
+    // the value-capturing one -- a value-less or otherwise malformed-shape
+    // marker.
+    return { present: true, value: null, malformed: true };
+  }
+  return { present: true, value, malformed: false };
+}
 // --- Per-cycle marker body renderers (#900) ---
 //
 // Pure, network-free renderers for the three operational markers an agent

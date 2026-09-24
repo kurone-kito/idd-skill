@@ -106,11 +106,16 @@ is available. It mechanically catches shape and marker mistakes — a
 missing or duplicated autopilot-suitability footer, a wrong
 markerPrefix, a missing required heading for the declared shape, a
 malformed dependency marker — that a confident narrative can otherwise
-mask:
+mask. For the `orphan` and `child` shapes, it also runs the same A4/A4.5
+triage evaluators Discover runs later, so most viability/suitability
+failures surface here instead of only at claim time -- pass `--title`
+(or lead the draft with a `# <title>` line) so those checks can
+evaluate:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --body-file draft.md
+  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
+  --body-file draft.md
 ```
 
 Before newly publishing a body into the `needs-decision` or
@@ -121,11 +126,13 @@ matching value) — without it, the marker/label checks that key off
 never run through this gate at all. Passing `--expect-bucket` also
 skips the ready-shape-only checks (the suitability footer and required
 headings) that a bucket body like `#431` below is never expected to
-carry:
+carry, and downgrades a failing A4/A4.5 triage finding to a warning
+instead of a failure, since such a body is meant to be non-ready:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --body-file draft.md \
+  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
+  --body-file draft.md \
   --expect-bucket needs-decision \
   --label status:needs-decision
 ```

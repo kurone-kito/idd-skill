@@ -866,7 +866,11 @@ Pre-publish validation checklist:
    human handoffs
 5. **Mechanical audit**: the drafted body passes the
    `audit-authored-issue` linter for its declared shape (see
-   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+   [Mechanical pre-publish gate](#mechanical-pre-publish-gate)) — for the
+   `orphan` and `child` shapes, this now also runs the same A4 criteria
+   and the six offline-evaluable A4.5 checks this table lists, catching
+   most of a would-be A4/A4.5 failure here instead of only at Discover
+   time
 
 If any check is uncertain, route the issue to `needs-decision` or
 `blocked-by-human` during drafting instead of publishing a
@@ -904,6 +908,27 @@ authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
+
+For the `orphan` and `child` shapes, the linter also runs the same A4
+viability and A4.5 suitability evaluators the IDD discover phase runs
+later, at claim time (`triage-title-missing`, one
+`triage-a4-<criterion id>` finding per A4 criterion, and one
+`triage-a45-<check id>` finding per A4.5 check) — so a body that would
+fail A4 or A4.5 at claim time is caught here, before it is ever
+published, instead of only after. `triage-a45-duplicate_or_superseded`
+(Check 4) always reports "not applicable" (it needs a live repository,
+which this offline linter never has); the `roadmap` shape reports every
+one of these findings as not applicable, since Discover never routes a
+roadmap node through A4 or A4.5 in the first place. A title is required
+for these checks to actually evaluate: pass `--title`, or lead the
+drafted body with a `# <title>` line (see the command example below);
+without either, `triage-title-missing` fails and every `triage-a45-*` finding
+reports "not evaluated" instead of a noisy Check 2/Coherence cascade
+(the three `triage-a4-*` findings still evaluate normally, since A4's
+criteria are title-independent). With `--expect-bucket`, a failing
+triage finding is downgraded to a warning instead of failing the
+report, mirroring how this linter already treats a bucket body as
+deliberately non-ready everywhere else.
 
 The linter also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
@@ -991,14 +1016,19 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
-  --marker-prefix <resolved-target-prefix> \
+  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]
 ```
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
-`--body-file` when the drafted body is not yet written to disk.
+`--body-file` when the drafted body is not yet written to disk. Omit
+`--title` when the drafted body already leads with a `# <title>` line
+(the local convention `evaluateSuitabilityLocal`'s own dry-run mode
+uses); for the `orphan` and `child` shapes, at least one of the two is
+required for the `triage-a45-*` findings to actually evaluate (see
+[Mechanical pre-publish gate](#mechanical-pre-publish-gate) above).
 **Always pass `--marker-prefix`** with the prefix resolved under
 [Target marker prefix](#target-marker-prefix): without it, the linter
 falls back to reading `.github/idd/config.json` from the current
