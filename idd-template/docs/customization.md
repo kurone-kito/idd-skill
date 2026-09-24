@@ -1370,7 +1370,12 @@ maintainer approval actor before unattended work can start. Recommended
 signals are:
 
 - the configured ready label from `approvalSignals.readyLabelName`
-  (default: `idd:ready`), restricted to maintainer approval actors
+  (default: `idd:ready`): the claim-approval-gate helper verifies the
+  actor of the label's latest `labeled` timeline event against
+  `maintainerApprovalActorPolicy` (in both `labelFreshnessMode` values
+  below), and fails closed when that actor's permission cannot be
+  read, so an advisory bot or non-collaborator applying the label
+  alone does not approve the issue
 - a standalone `IDD ready` comment from a maintainer approval actor
 
 Treat standalone `IDD ready` comments as fresh only when they are newer

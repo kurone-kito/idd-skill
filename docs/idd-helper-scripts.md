@@ -2144,6 +2144,17 @@ close.
 - `checks` remain stable by `id`: `gate_enabled`,
   `author_self_authorized`, `ready_label_present`,
   `ready_comment_fresh`, and `ambiguity_guard`
+- `ready_label_present` verifies the **actor** of the configured ready
+  label's latest `labeled` timeline event against
+  `maintainerApprovalActorPolicy` -- in both `presence-only` and
+  `event-freshness` `labelFreshnessMode` -- not label presence alone. A
+  bot or non-collaborator actor (a known, unauthorized permission read,
+  e.g. a `404`) fails the check with no ambiguity; a missing matching
+  `labeled` event, an unavailable issue timeline, or an actor with no
+  recorded login fails closed with a `ready-label-actor-unverified`
+  ambiguity entry, and an unresolvable actor permission read fails
+  closed with a `ready-label-actor-permission-unavailable` ambiguity
+  entry
 - the helper is intentionally scoped to A5(a); A5(d) open-PR conflict
   checks stay on the written live GitHub path because inheritable-branch
   and linked-issue exceptions do not yet have a supported helper
