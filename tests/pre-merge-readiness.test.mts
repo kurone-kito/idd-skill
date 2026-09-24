@@ -8435,6 +8435,84 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
   assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
 });
 
+// kurone-kito/idd-skill#3246 (E2 critique, C1 round 2): every other
+// `edited`-bucket test in this file exercises `summarizeExternalCheckWaivers`
+// directly (unit level) -- none asserted `coveredByWaiver` through the full
+// `buildPreMergeReadinessSummary` pipeline the F2/F3 CI gate actually reads,
+// unlike the sibling `advisory-convergence.mts` collector, which got exactly
+// this negative-control end-to-end test
+// (`tests/advisory-convergence-fake-provider.test.mts`, "C1 round 2"). Reuses
+// the immediately preceding test's otherwise-open precondition (deadline
+// passed) so this proves the edit-state check alone withholds coverage, not
+// merely a closed precondition doing so incidentally.
+test('#3246: a body-edited idd-advisory-convergence waiver never sets coveredByWaiver, even once the deadline has passed', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const waived = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'edited-deadline-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+          // GitHub reports this waiver's body was edited after posting --
+          // never trust evidence, regardless of how favorable every other
+          // classification would otherwise be.
+          lastEditedAt: '2026-05-12T00:05:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      // Same deadline-passed precondition as the preceding test, where an
+      // unedited waiver DOES reach `coveredByWaiver: true`.
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const waiverEvidence = waived.waiverEvidence as {
+    valid: unknown[];
+    edited: { authorLogin: string; editState: string }[];
+  };
+  assert.equal(waiverEvidence.valid.length, 0);
+  assert.equal(waiverEvidence.edited.length, 1);
+  assert.equal(waiverEvidence.edited[0].authorLogin, 'kurone-kito');
+  assert.equal(waiverEvidence.edited[0].editState, 'edited');
+
+  const check = ciCheckByName(waived, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  // #3246 (E10 critique): pin the exact failed state, matching the
+  // sibling tests this one mirrors, rather than the weaker `!== 'success'`
+  // -- `withAdvisoryConvergenceRequiredCheck`'s COMPLETED/FAILURE check
+  // makes `classifyCiChecks` deterministically report `failed`.
+  assert.equal((waived.ci as Record<string, unknown>).status, 'failed');
+  assert.equal(
+    (waived.ci as Record<string, unknown>).requiredChecksPassing,
+    false,
+  );
+  assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
+});
+
 test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavailability is proven is covered even before the deadline passes', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const input = withAdvisoryConvergenceRequiredCheck(fixture);
