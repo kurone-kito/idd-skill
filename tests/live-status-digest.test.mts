@@ -130,6 +130,129 @@ test('refuses duplicate current digests and reports repair context', () => {
   assert.match(plan.repairPath, /Do not delete or minimize/);
 });
 
+// --- #3337: ignore digest comments from untrusted authors -----------------
+
+test('findLiveStatusDigestComments filters to trusted authors only when isTrustedAuthor is provided', () => {
+  const comments = [
+    {
+      id: 1,
+      author: { login: 'idd-bot' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\ntrusted`,
+    },
+    {
+      id: 2,
+      author: { login: 'not-a-trusted-marker-actor' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\nuntrusted`,
+    },
+  ];
+
+  assert.deepEqual(
+    findLiveStatusDigestComments(comments, {
+      isTrustedAuthor: (login) => login === 'idd-bot',
+    }).map((comment) => comment.id),
+    [1],
+  );
+  // No `isTrustedAuthor` option: every author's digest is still found --
+  // the maintainer repair path's own contract stays author-blind.
+  assert.deepEqual(
+    findLiveStatusDigestComments(comments).map((comment) => comment.id),
+    [1, 2],
+  );
+});
+
+test('plans creation when the only current digest is authored by an untrusted actor', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 301,
+        author: { login: 'not-a-trusted-marker-actor' },
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'create');
+  assert.equal(plan.canApply, true);
+  assert.equal(plan.body, renderLiveStatusDigest(fields));
+});
+
+test('an untrusted digest next to one trusted digest updates the trusted one instead of reporting a duplicate', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 302,
+        author: { login: 'not-a-trusted-marker-actor' },
+        html_url: 'https://github.example/comment/302',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+      {
+        id: 303,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/303',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'update');
+  assert.equal(plan.commentId, 303);
+  assert.equal(plan.url, 'https://github.example/comment/303');
+});
+
+test('two trusted-author current digests still report a duplicate', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 304,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/304',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+      {
+        id: 305,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/305',
+        body: renderLiveStatusDigest({ ...fields, phase: 'B2 planned' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'duplicate');
+  assert.equal(plan.canApply, false);
+  assert.deepEqual(
+    plan.duplicates.map((comment) => comment.id),
+    [304, 305],
+  );
+});
+
+test('duplicate repair retires an untrusted-author current digest while retaining the trusted one (author-blind by design)', () => {
+  const comments = [
+    { ...currentDigestComment(401, 'retained'), author: { login: 'idd-bot' } },
+    {
+      ...currentDigestComment(402, 'retired'),
+      author: { login: 'not-a-trusted-marker-actor' },
+    },
+  ];
+  const plan = planLiveStatusDigestRepair({
+    comments,
+    targetState: 'open',
+    retainedCommentId: '401',
+  });
+
+  assert.equal(plan.action, 'ready');
+  assert.equal(plan.canApply, true);
+  assert.deepEqual(
+    plan.retirements.map((retirement) => retirement.id),
+    ['402'],
+  );
+});
+
 test('duplicate repair rejects zero or one current digest', () => {
   const noDigest = planLiveStatusDigestRepair({
     comments: [],

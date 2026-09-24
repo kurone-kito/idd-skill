@@ -51,7 +51,10 @@ import {
   renderReviewReplyStamp,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
-import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
+import {
+  LIVE_STATUS_DIGEST_MARKER,
+  summarizeClaimValidation,
+} from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
@@ -2166,6 +2169,49 @@ test('ineligibleReasons: missing-regular-comment-disposition fires alone when on
   assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
     SAME_HEAD_REROLL_INELIGIBLE_REASON.MISSING_REGULAR_COMMENT_DISPOSITION,
   ]);
+});
+
+// #3337: `computeAdvisoryConvergenceVerdict` reuses
+// `summarizeDispositionEvidenceForGate` with `iddAgentLogins:
+// trustedMarkerLogins` (both derived from the same configured set here) --
+// so an author outside that set is neither a trusted marker actor nor an
+// IDD agent, and their comment's disposition-evidence treatment must not
+// depend on whether its first line happens to look like the live-status
+// digest marker.
+test('#3337: an untrusted author comment produces the same disposition-evidence result whether or not its first line is the digest marker', () => {
+  const untrustedAuthor = 'not-a-trusted-marker-actor';
+  const buildVerdict = (body: string) =>
+    computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [copilotReview({ itemCount: 2 })],
+        comments: [
+          {
+            id: 1,
+            createdAt: OLD,
+            body,
+            author: { login: untrustedAuthor },
+          },
+        ],
+      }),
+      baseOptions(),
+    );
+
+  const ordinary = buildVerdict('please double check this edge case');
+  const digestShaped = buildVerdict(
+    `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+  );
+
+  assertValidVerdict(ordinary);
+  assertValidVerdict(digestShaped);
+  assert.equal(ordinary.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.equal(
+    digestShaped.dispositionEvidence.missingRegularCommentCount,
+    ordinary.dispositionEvidence.missingRegularCommentCount,
+  );
+  assert.deepEqual(
+    digestShaped.sameHeadReroll.ineligibleReasons,
+    ordinary.sameHeadReroll.ineligibleReasons,
+  );
 });
 
 test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {

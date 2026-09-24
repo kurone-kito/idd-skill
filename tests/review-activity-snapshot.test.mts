@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseArgs } from '../src/scripts/review-activity-snapshot.mts';
+import {
+  parseArgs,
+  resolveActivitySnapshotTrustedMarkerLogins,
+} from '../src/scripts/review-activity-snapshot.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -84,4 +87,38 @@ test('parseArgs: rejects an unknown flag', () => {
 test('parseArgs: --help is recognized without requiring --pr', () => {
   const args = parseArgs(['--help']);
   assert.equal(args.help, true);
+});
+
+// --- #3337: viewer-inclusive trusted-marker-login set for digest exclusion -
+
+test('resolveActivitySnapshotTrustedMarkerLogins includes the viewer login when no trusted marker actors are configured', () => {
+  const result = resolveActivitySnapshotTrustedMarkerLogins([], {
+    viewerLogin: 'idd-bot',
+    viewerLoginUnavailable: false,
+  });
+  assert.deepEqual(result, ['idd-bot']);
+});
+
+test('resolveActivitySnapshotTrustedMarkerLogins merges the viewer login with configured trusted actors', () => {
+  const result = resolveActivitySnapshotTrustedMarkerLogins(['a-maintainer'], {
+    viewerLogin: 'idd-bot',
+    viewerLoginUnavailable: false,
+  });
+  assert.deepEqual(result, ['a-maintainer', 'idd-bot']);
+});
+
+test('resolveActivitySnapshotTrustedMarkerLogins excludes the viewer login when it is reported unavailable', () => {
+  const result = resolveActivitySnapshotTrustedMarkerLogins(['a-maintainer'], {
+    viewerLogin: 'idd-bot',
+    viewerLoginUnavailable: true,
+  });
+  assert.deepEqual(result, ['a-maintainer']);
+});
+
+test('resolveActivitySnapshotTrustedMarkerLogins deduplicates a viewer login already in the configured set', () => {
+  const result = resolveActivitySnapshotTrustedMarkerLogins(['idd-bot'], {
+    viewerLogin: 'idd-bot',
+    viewerLoginUnavailable: false,
+  });
+  assert.deepEqual(result, ['idd-bot']);
 });
