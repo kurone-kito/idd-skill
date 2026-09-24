@@ -3132,6 +3132,57 @@ test('postWorkItemComment retries once after a transient failure and returns the
   assert.equal(ghTextCalls, 2);
 });
 
+test('postWorkItemComment retries and succeeds on a no-derivable-status failure after a successful no-match duplicate check (Copilot review, #3275)', () => {
+  // Distinct from the (HTTP 502) case above (a derivable status) and from
+  // the "duplicate-check itself fails" case elsewhere: here the POST
+  // failure carries no derivable HTTP status at all (e.g. a transport
+  // timeout), and the duplicate-body re-read completes successfully with
+  // no match, so the retry must proceed and the second POST must succeed
+  // -- proving null status is treated as retryable, not fail-fast.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('ETIMEDOUT');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment parses the id/html_url from a real `gh api --include` HTTP-header envelope, not just a bare JSON body (Copilot review, #3275)', () => {
+  // Every other success-path test mocks `ghText` returning a bare JSON
+  // body, which only exercises `extractIncludedResponseBody`'s tolerant
+  // fallback. This is the one test that mocks the actual `--include`
+  // envelope shape `gh` produces (status line + header block + blank
+  // line + JSON body), proving the header-stripping branch itself works.
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        [
+          'HTTP/2.0 201 Created',
+          'content-type: application/json; charset=utf-8',
+          'x-ratelimit-remaining: 4999',
+          '',
+          JSON.stringify({ id: 42, html_url: 'https://example/42' }),
+        ].join('\r\n'),
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+});
+
 test('postWorkItemComment returns the existing comment instead of double-posting when a retry finds an exact-body match', () => {
   let ghTextCalls = 0;
   const port = createGithubProviderAdapter(
