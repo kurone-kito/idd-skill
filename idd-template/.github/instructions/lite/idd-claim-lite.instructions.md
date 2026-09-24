@@ -136,7 +136,7 @@ the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 Heartbeat). If it was omitted (first-time forced-handoff entry, not
 yet activated by you), go to Claim execution step 5 (post your own
 activation-nonce for `newClaimId`) first, then Claim verification's
-**Forced-handoff adopt-verbatim** case (step 5's settle-delay + nonce
+**Forced-handoff adopt-verbatim** case (step 4's settle-delay + nonce
 recompute only).
 
 **Otherwise** (no recorded `{claim-id}`, no forced-handoff evidence, or

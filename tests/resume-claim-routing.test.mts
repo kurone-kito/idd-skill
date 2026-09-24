@@ -1644,10 +1644,10 @@ test('a released competing claim no longer produces disputed', () => {
 
 test('evaluateFreshClaimGate: released competing claim is claimable, not already-claimed', () => {
   // Mirrors the fresh-claim-gate scenario from the livelock report: the
-  // active claim itself has also been released (the owner's own courteous
-  // walk-away), so the
-  // issue should read as plainly unclaimed once the raced competitor's
-  // release is reconciled too -- proving `findLaterCompetingClaim`'s
+  // active claim itself has also been released (the owner's own
+  // courteous walk-away), so the issue should read as plainly unclaimed
+  // once the raced competitor's release is reconciled too -- proving
+  // `findLaterCompetingClaim`'s
   // reconciliation never masks the ordinary release path (once
   // `state.activeClaim` clears, the competing-claim scan is never even
   // invoked; see `!state.activeClaim` in `evaluateResumeClaimRouting`).
