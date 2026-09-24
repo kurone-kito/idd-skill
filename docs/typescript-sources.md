@@ -128,8 +128,11 @@ would let an untracked emitted artifact pass unnoticed.
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
 bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
-whose pairing guard fails when a source is missing its generated artifact
-or a banner-marked artifact is missing its source. `node --test
+whose pairing guard fails when a source is missing its generated artifact,
+a banner-marked artifact is missing its source, or a source's provenance
+banner is missing or malformed in either file — the guard requires the
+banner on every `src/scripts/**/*.mts` / `src/bin/**/*.mts` source, not
+only on an artifact that already happens to carry one. `node --test
 tests/inventory-ordering.test.mts` (part of `lint:minimum`'s test run)
 closes the remaining gap: it fails when a `scripts/*.mjs` or `bin/*.mjs`
 on disk has no matching `.mts` source at all, regardless of whether it

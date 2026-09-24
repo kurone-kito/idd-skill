@@ -115,15 +115,24 @@ function scriptAttributeLine(name: string): string {
  * ascending string-sorted. Deriving it the same way — rather than from
  * `tsc --listEmittedFiles` — is what keeps a fresh build's .gitattributes green
  * under that test's completeness check even if a stale generated .mjs lingers.
+ *
+ * The window is measured in UTF-8 bytes, not JS string length (UTF-16 code
+ * units) -- a naive `.slice(0, GENERATED_MARKER_SCAN_BYTES)` would let a
+ * multibyte prefix push the banner past the true byte boundary while still
+ * matching, same class of gap as `audit-docs.mts`'s
+ * `collectGeneratedSourceBannerViolations` fixed for the same reason
+ * (review finding on kurone-kito/idd-skill#3294's own PR #3333).
  */
 function generatedScriptNames(scriptsDir: string): string[] {
   return readdirSync(scriptsDir)
     .filter((name) => name.endsWith('.mjs'))
-    .filter((name) =>
-      readFileSync(`${scriptsDir}/${name}`, 'utf8')
-        .slice(0, GENERATED_MARKER_SCAN_BYTES)
-        .includes(GENERATED_MARKER),
-    )
+    .filter((name) => {
+      const text = readFileSync(`${scriptsDir}/${name}`, 'utf8');
+      const scanned = Buffer.from(text, 'utf8')
+        .subarray(0, GENERATED_MARKER_SCAN_BYTES)
+        .toString('utf8');
+      return scanned.includes(GENERATED_MARKER);
+    })
     .sort();
 }
 

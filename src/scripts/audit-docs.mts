@@ -29,6 +29,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
+  collectGeneratedSourceBannerViolations,
   collectInstructionSizeBudgetRatchetViolations,
   collectInstructionSizeBudgetViolations,
   collectNearCeilingRatchetViolations,
@@ -36,6 +37,7 @@ import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
+  GENERATED_SOURCE_BANNER_PATTERN,
   globFiles,
   isBannerScopedInstructionTarget,
   normalizeNonNegativeNumber,
@@ -167,6 +169,13 @@ let changedFiles: Set<string> | null = null;
 // temporal dead zone when the trigger fires (see ci-wait-state.mts's
 // identical note).
 const readTextAtRefCache = new Map<string, string | null>();
+
+// Kept identical to the `idd-generated-from` scan in build-ts.mts and
+// tests/inventory-ordering.test.mts so the audit, the build, and that test
+// all agree on one generated set. Declared here, above the
+// `import.meta.main` trigger below, for the same TDZ reason as
+// `readTextAtRefCache` immediately above.
+const GENERATED_MARKER_SCAN_BYTES = 200;
 
 // The fixed, known mirror set for this repository's engines.node range
 // (#1706) -- not manifest-configurable, since these are this repository's
@@ -319,10 +328,13 @@ function main(): void {
 // pure-`node:` existence check (no TypeScript dependency) so it runs in the
 // install-free bare-node CI lane alongside the rest of the audit.
 function checkGeneratedSourcePairs() {
-  const bannerPattern = /^\/\/ idd-generated-from:\s*(\S+)/m;
   const repoFileSet = new Set(repoFiles);
 
-  // Forward direction: each source has its generated counterpart.
+  // Forward direction: each source has its generated counterpart, and both
+  // the source and its emitted artifact carry a well-formed generated-from
+  // banner within the first GENERATED_MARKER_SCAN_BYTES bytes -- otherwise
+  // a source with no banner at all (#3294) silently escapes both this
+  // guard and the banner-derived .gitattributes/inventory checks below.
   for (const source of globFiles('src/**/*.mts', repoFiles)) {
     const emitted = emittedPathForSource(source);
     if (!emitted) {
@@ -335,7 +347,17 @@ function checkGeneratedSourcePairs() {
       errors.push(
         `${source}: missing generated artifact ${emitted}; run \`pnpm run build\` and commit the result`,
       );
+      continue;
     }
+    errors.push(
+      ...collectGeneratedSourceBannerViolations(
+        source,
+        readText(source),
+        emitted,
+        readText(emitted),
+        GENERATED_MARKER_SCAN_BYTES,
+      ),
+    );
   }
 
   // Reverse direction: each banner-marked artifact has its source, and the
@@ -344,7 +366,7 @@ function checkGeneratedSourcePairs() {
     ...globFiles('scripts/**/*.mjs', repoFiles),
     ...globFiles('bin/**/*.mjs', repoFiles),
   ]) {
-    const match = bannerPattern.exec(readText(emitted));
+    const match = GENERATED_SOURCE_BANNER_PATTERN.exec(readText(emitted));
     if (!match) {
       continue;
     }

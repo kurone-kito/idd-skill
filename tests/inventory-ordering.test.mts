@@ -56,13 +56,18 @@ test('.gitattributes lists exactly the generated scripts/*.mjs (no missing or st
   // stats / diff-collapsing would silently skip it) and a removed script never
   // leaves a dangling entry — completeness, alongside the order guard above.
   const scriptsDir = new URL('scripts/', new URL('../', import.meta.url));
+  // The window is UTF-8 bytes, not JS string length (UTF-16 code units) --
+  // see build-ts.mts's generatedScriptNames for why (kurone-kito/idd-skill#3294
+  // review finding on PR #3333).
   const generated = readdirSync(scriptsDir)
     .filter((name) => name.endsWith('.mjs'))
-    .filter((name) =>
-      /idd-generated-from/.test(
-        readFileSync(new URL(name, scriptsDir), 'utf8').slice(0, 200),
-      ),
-    )
+    .filter((name) => {
+      const text = readFileSync(new URL(name, scriptsDir), 'utf8');
+      const scanned = Buffer.from(text, 'utf8')
+        .subarray(0, 200)
+        .toString('utf8');
+      return /idd-generated-from/.test(scanned);
+    })
     .sort();
   const listed = [
     ...read('.gitattributes').matchAll(
