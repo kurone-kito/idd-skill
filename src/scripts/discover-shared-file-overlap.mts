@@ -22,6 +22,7 @@ import { loadPolicyConfig } from './idd-config.mts';
 import { findMarkdownCodeRanges } from './markdown-code.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
+  DEFAULT_STALE_AGE_MS,
   resolveActiveClaim,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
@@ -59,7 +60,6 @@ export const DEFAULT_BUNDLE_IDS = [
 /** Append-mostly shared surfaces that are not bundle members. */
 export const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
 const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
-const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
 /** A Setext-style sibling heading's own underline: a lone run of `=` or `-`
@@ -1043,8 +1043,7 @@ function loadPolicy(policyPath: string): {
   const autopilotSuitabilityEnabled =
     config?.autopilotSuitability?.enabled !== false;
   const claimStaleAgeMs =
-    parseIsoDurationToMs(config?.claimTiming?.staleAge) ??
-    DEFAULT_CLAIM_STALE_AGE_MS;
+    parseIsoDurationToMs(config?.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS;
   return {
     markerPrefix,
     trustedMarkerActors: trusted.actors,

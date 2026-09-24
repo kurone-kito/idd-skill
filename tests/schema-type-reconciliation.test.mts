@@ -614,6 +614,7 @@ export const preMergeReadinessKeys = [
   'trustedMarkerActorsSource',
   'localValidationEvidence',
   'developmentBranchTarget',
+  'closingSet',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
@@ -1464,6 +1465,14 @@ const preMergeReadinessFixture = {
     mergeable: 'MERGEABLE',
     requiresUpToDateHead: false,
     requiresUpToDateHeadSource: 'none',
+  },
+  closingSet: {
+    status: 'match',
+    expected: [309],
+    actual: [309],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
   },
   trustedMarkerActors: ['copilot-cli'],
   trustedMarkerActorsSource: 'config',

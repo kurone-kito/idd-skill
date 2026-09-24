@@ -1,0 +1,28 @@
+{
+  "id": "1553",
+  "category": "merged",
+  "note": "",
+  "title": "Add model-selection and prompting field notes for the weak tier",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "\n## Background\n\nParent roadmap: #1540 (weak-local-field-notes-r2).\n\nAn independent field PoC found three predictable model-selection and prompting mistakes an adopter is likely to make at the weak-local tier, none of which the current capability-tier documentation warns against: <https://gist.github.com/kurone-kito/8f45ee1ec0c07e8a7fdc8c1f04e83654>.\n\nEvidence: (a) a model that passed a 5/5 single-shot coding battery then spiraled in a multi-turn agentic loop — the single-shot-coding capability knee and the agentic-loop-stability knee were different model sizes entirely, so single-shot benchmarking does not predict loop stability. (b) A verbose reasoning model spec-drifted on literal, fully-specified instructions (returning a generator instead of a list; renaming the target function, causing a `NameError`) while burning roughly 7x the tokens and 2x the wall-time of a leaner, non-reasoning model that followed the spec literally — the reasoning model \"improved\" on the request instead of obeying it. (c) Routing a weak model through a full agent session (system-prompt injection, on the order of 9K tokens per turn) made it 5-8x slower and lower quality than a direct, minimal-prompt path — the same model that passed a spec directly failed 6/6 through the full agent wrapper, because the extra context pushed it past its reliable zone.\n\n## Proposed change\n\nAdd a short model-selection-and-prompting subsection near [Model capability expectations](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-workflow.md#model-capability-expectations) or \"Weak-model guardrails\" covering three notes:\n\n1. Select on agentic loop stability, not single-shot pass rate — a model's single-shot coding score does not predict whether it can hold a multi-turn loop without spiraling. Suggest a minimal smoke test (can the model run N turns on a simple task without spiraling) as a cheap gate before committing to a model for loop execution.\n2. For mechanical, fully-specified, single-clause steps, prefer a literal, low-reasoning model over a verbose reasoning model — select for obedience, not cleverness, at this tier. Note explicitly that a reasoning model can reduce adherence and inflate cost on this kind of step, so \"more reasoning\" is not automatically a safer default.\n3. At the weak tier, prefer a direct, minimal-prompt generation path (feeding only the atomic task and its acceptance context) over routing the same request through a full agent session with its system prompt and instruction stack — the added context can push a small model past its reliable zone.\n\n## Acceptance criteria\n\n- [ ] The new subsection states all three notes, each with its concrete failure mode named (loop-stability-versus-single-shot mismatch, reasoning-model spec-drift, full-agent-wrapper degradation).\n- [ ] The notes are stated as adopter-facing guidance, not as a new requirement on this repository's own instructions or tooling.\n- [ ] `node scripts/audit-docs.mjs --check` passes.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->",
+  "bodySha256": "848c989bdb93780beb61a196a7f6944e29987d0ee13e172d451c1333130227d1",
+  "fetchedAt": "2026-09-24T04:43:40.706Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

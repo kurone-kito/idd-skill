@@ -86,6 +86,95 @@ in §CSA before those commits are pushed or bundled into a PR. The
 displaced session is by definition unreachable, so its own planning
 comment can never substitute for this independent check.
 
+## §MC — F4 Cleanup Routing for a Merged or Closed Issue
+
+Applies to Step 1's merged-PR and closed-issue rows in
+`idd-resume.instructions.md` (kurone-kito/idd-skill#3319; preventive, no
+observed incident yet — a resuming session finding the PR merged while the
+prior worker was still running F4 could otherwise remove that worker's
+live worktree).
+
+**Displaced-session safety.** The owned row's "claim = this session's
+verified `{claim-id}`" condition means a **freshly re-parsed** active
+claim per the shared claim-state rules
+(`idd-claim.instructions.md`), including rule 7's forced-handoff
+transfer: once a valid forced-handoff marker names this session's claim
+displaced, the active claim becomes the successor's pair, so the owned
+row no longer matches for this session at all — this is the same
+"verified" every other claim-matching row in Step 1 already relies on,
+not a new exposure. The "FH evidence names this session's
+already-verified `{claim-id}`" row — positioned right after the owned and
+unowned rows, before the catch-all row — is the explicit backstop against
+a stale evaluation, since it checks this session's own recorded
+`{claim-id}` against FH evidence directly rather than against whatever
+the active claim currently is; it must run before the catch-all so a
+displaced session stops silently per §FH's no-mutation rule instead of
+reaching the catch-all's hold comment.
+
+**Development-branch resolution.** Both rows resolve `{development-branch}`
+the same way B1's Worktree creation Step 2 does — re-resolve it here if
+entered directly (for example, on resume) without a fresh B1 pass, the same
+caveat this document's §CSA section and `idd-pr-submit.instructions.md`'s
+D1 use for the same variable.
+
+**Sanctioned direct F4 entry.** `idd-merge.instructions.md`'s own opening
+line ("Read only after `idd-merge-handoff.instructions.md` routes the
+current claim to the autonomous merge path") describes the common F3-first
+path, where merge-handoff's job is deciding whether _this_ session may
+execute the merge under the repository's recorded policy
+(`fully_autonomous_merge` / `human_merge` / `separate_merge_agent`). Both
+rows here enter F4 directly, never F3, and only once the PR is already
+merged — the decision merge-handoff exists to make is already resolved by
+then, so there is nothing left for it to route. This is the sanctioned
+exception these two rows establish, not a bypass of a still-open decision.
+
+**Ownership condition.** The owned row (active claim = this session's
+verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
+contract (steps 4-7, plus step 1 when `{development-branch}` is not the
+default branch and a closing-set issue is still open) because this session
+can satisfy F4's own claim-revalidation gate at each mutation. On this row,
+`{branch}` is the active claim's own `branch:` field — the same binding
+Step 2 uses, available here without waiting for Step 2 because the claim
+is already verified. This is also
+what makes F4's own `primary-worktree-dirty` hold's "resume: ... then
+re-run from this step through step 7" instruction reachable from Resume for
+the first time — previously nothing routed a resuming session back into F4
+at all. The unowned row applies only when **no claim is currently active**
+and the issue's most recent claim was released (never a claim that was
+never made — see below); a live competing claim (even mid-F4 itself) still
+falls to the catch-all row, not this one. It binds `{branch}` to that
+released claim's own branch, since Step 2's usual binding rule (`{branch}`
+= the verified _active_ claim's branch) has nothing to bind to on this
+row. It runs
+local-only steps: F4 step 4 (fast-forward `{development-branch}`) and step
+5's `git branch -d` bullet. It skips step 5's `git worktree remove`
+(nothing local to remove — see the worktree condition below), step 6
+(remote branch deletion needs the same authority as a held claim), and step
+7 (its revalidation gate stops on any claim that is not this session's,
+including none). On this row, step 4's own `primary-worktree-dirty` guard
+still applies, but degrades to a plain hold comment rather than F4's usual
+Hold / suspend: there is no held claim on this row to suspend. A merged PR
+whose issue was **never claimed at all** has no released-claim branch to
+bind and nothing local to clean up — it falls to the catch-all row below,
+not this one.
+
+**Worktree condition.** "No local worktree matches `{branch}`" means
+`git worktree list` reports no entry for that branch at all — a plain
+absence check, not the A5(e) collision scan's occupied/unreadable/absent
+classification. A worktree that does exist for `{branch}` while the claim
+is released falls to the catch-all row instead: without a held claim to
+revalidate against, this session cannot tell whether that worktree is
+safely idle or another session's live workspace, so it holds rather than
+guesses.
+
+**Closed-with-no-PR and catch-all rows.** Closing an issue without a
+merging PR leaves nothing for F4 to reconcile, so this row holds instead.
+The catch-all row covers every other closed/merged combination (a live
+competing claim, an unverified worktree state, forced-handoff evidence
+naming this session as displaced, or a merged PR whose issue was never
+claimed at all) the same way: each needs a human or a future resume pass
+with better evidence, never a mechanical removal.
+
 ## §W1 — PR exists (1 match), no worktree
 
 Run `git fetch origin` from the primary worktree (this is a

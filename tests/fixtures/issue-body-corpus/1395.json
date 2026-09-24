@@ -1,0 +1,28 @@
+{
+  "id": "1395",
+  "category": "merged",
+  "note": "",
+  "title": "Add --with-claim-state parity to the orphan-discovery helper",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nPart of the field-report batch-6 roadmap (#1386). Field evidence: the roadmap-first and orphan-fallback discovery helpers are documented as interchangeable siblings within the same phase, but only the roadmap helper can fold live claim state into its output; a caller trusting the orphan helper's output at face value can select and attempt to claim a candidate a live session claimed moments earlier, discovering the conflict only at the claim pre-check — precisely the race the roadmap helper's claim-state flag exists to prevent. The asymmetry is easy to miss because the two helpers otherwise look and behave so similarly.\n\nVerified against current `main`:\n\n- `src/scripts/discover-roadmap-graph.mts` has `--with-claim-state` (parsed line 2030; wiring 565-567; annotations 764-777 and 1271-1277; `LeafActiveClaim {present, stale, claimId, agentId, ownedByCurrentSession?}` lines 160-166) plus `--current-claim-id` (line 2052).\n- `src/scripts/discover-orphan-filter.mts` (781 lines) has zero matches for /claim/i; its output is `OrphanCandidate {number, title, state, reason, url, autopilotSuitability}` (lines 106-112).\n- The claim logic is mostly already exported from the graph helper: `annotateLeafClaimState` (1533-1589), `isClaimStaleByAge` (1623-1637), `buildTrustedAuthorPredicate` (1709-1722); only `buildCommentLoader` (~23 lines) and `buildClaimStateResolution` (~20 lines) are module-private.\n\n## Proposed change\n\nAdd opt-in `--with-claim-state` (and `--current-claim-id`) to `discover-orphan-filter`, reusing the exported functions; either export the two module-private builders from the graph helper or lift the ~45 lines of loader wiring. Annotate each candidate with the same claim shape the roadmap helper emits (`present`, `stale`, `claimId`, `agentId`, `ownedByCurrentSession`). Update the orphan-fallback description in `idd-discover.instructions.md` to mention the flag with wording parallel to the roadmap path. Default output (flag absent) stays byte-identical to today.\n\n## Acceptance criteria\n\n- [ ] Flag present; annotated output shape matches the roadmap helper's claim shape.\n- [ ] Default (no-flag) output unchanged (existing tests/fixtures pass).\n- [ ] Tests cover active-claim, stale-claim, and unclaimed candidates.\n- [ ] `idd-discover.instructions.md` mentions the flag; `pnpm run build` output committed.\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: M -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "afac75a9af1b00ac0584de71d51d78cebe690f25e6ec9198dbd8c72c98542bdf",
+  "fetchedAt": "2026-09-24T04:43:52.986Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

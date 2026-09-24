@@ -30,6 +30,7 @@ import {
   digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
@@ -1454,6 +1455,10 @@ function resolveLinkedIssueCandidates({
     return !issueNumber || Number(issue.number) === issueNumber;
   });
   const results = [];
+  // #3270 (Copilot review, PR #3370): resolveHelperActiveClaim's staleAgeMs
+  // is now required -- this write-gate caller previously omitted it and
+  // silently used the hardcoded 24h default.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   for (const issue of issueRefs) {
     const comments = ghJson(
       [
@@ -1493,6 +1498,7 @@ function resolveLinkedIssueCandidates({
           }
           return auth.permission === 'admin' || auth.permission === 'maintain';
         },
+        staleAgeMs,
       },
     );
     if (!activeClaim) {

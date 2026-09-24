@@ -19,7 +19,11 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mts';
-import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+import { loadIddConfig } from './idd-config.mts';
+import {
+  parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
+} from './protocol-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 
@@ -177,11 +181,17 @@ export async function runHandoff(
         permissionCache,
       ));
 
+  // #3270 (Copilot review, PR #3370): planHandoff's staleAgeMs is now
+  // required -- this interactive facade previously omitted it and silently
+  // used the hardcoded 24h default.
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
+
   const resolveOpts = {
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
     forcedBy,
     reason,
+    staleAgeMs,
   };
 
   const firstPass = planHandoff(issueComments, [], resolveOpts);

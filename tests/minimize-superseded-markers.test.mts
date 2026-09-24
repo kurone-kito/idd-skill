@@ -292,6 +292,102 @@ test('an explicit empty --trusted-marker-logins value is accepted, unlike --subj
   }
 });
 
+// #3316: a pnpm-forwarded leading `--` (e.g. `pnpm run idd:minimize-
+// superseded-markers -- --help`) used to crash with `error: Unexpected
+// argument '--help'. This command does not take positional arguments` --
+// node:util's parseArgs (strict: true, allowPositionals defaulted false)
+// treated the leading `--` as its own end-of-options terminator and then
+// rejected everything after it as a stray positional. parseMinimizeArgs()
+// runs fully -- including the internal parseArgs() call where the crash
+// happened -- before the `args.help` check, so `--help` genuinely
+// exercises the fix rather than bypassing it via an early return. Assert
+// concrete expected values, not just parity between the two invocations,
+// so a future regression that broke both forms identically would still
+// be caught.
+test('a leading -- (pnpm-forwarded) before --help no longer crashes, matching the no-separator form exactly (#3316)', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const withSeparator = spawnSync(process.execPath, [script, '--', '--help'], {
+    encoding: 'utf8',
+  });
+  const withoutSeparator = spawnSync(process.execPath, [script, '--help'], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(withSeparator.status, 0);
+  assert.equal(withSeparator.stderr, '');
+  assert.match(withSeparator.stdout, /^Usage: minimize-superseded-markers/);
+
+  assert.equal(withSeparator.status, withoutSeparator.status);
+  assert.equal(withSeparator.stdout, withoutSeparator.stdout);
+  assert.equal(withSeparator.stderr, withoutSeparator.stderr);
+});
+
+// #3316: a leading `--` ahead of value-taking string flags and a boolean
+// flag together, carried all the way through to the gh-backed business
+// logic (probeSubject()'s `gh api graphql` call, stubbed here to fail
+// deterministically and offline) -- not just an early parse-time
+// validation error. This proves parseArgs() actually consumed
+// `--subject-ids`'s value and `--trusted-marker-logins`'s empty value and
+// `--allow-untrusted`'s boolean after the guard strips the leading `--`,
+// the same way `an explicit empty --trusted-marker-logins value is
+// accepted` above proves it for the no-separator form.
+test('a leading -- ahead of multiple flags reaches the same gh-backed business logic as the no-separator form (#3316)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    const restore = stubExecutable('gh', 'process.exit(1);\n');
+    try {
+      const script = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'scripts',
+        'minimize-superseded-markers.mjs',
+      );
+      const flagArgs = [
+        '--subject-ids',
+        'IC_test',
+        '--trusted-marker-logins',
+        '',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ];
+      const spawnOpts = {
+        cwd: sandbox,
+        env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+        encoding: 'utf8' as const,
+      };
+      const withSeparator = spawnSync(
+        process.execPath,
+        [script, '--', ...flagArgs],
+        spawnOpts,
+      );
+      const withoutSeparator = spawnSync(
+        process.execPath,
+        [script, ...flagArgs],
+        spawnOpts,
+      );
+
+      assert.equal(withSeparator.status, 1, withSeparator.stderr);
+      const report = JSON.parse(withSeparator.stdout);
+      assert.equal(report.trustedMarkerActorsSource, 'none');
+      assert.deepEqual(report.trustedMarkerActors, []);
+
+      assert.equal(withSeparator.status, withoutSeparator.status);
+      assert.equal(withSeparator.stdout, withoutSeparator.stdout);
+      assert.equal(withSeparator.stderr, withoutSeparator.stderr);
+    } finally {
+      restore();
+    }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 // cspell:ignore Wpaqs
 // Shared by the three "unresolvable node id" tests below, so each test only
 // supplies its --subject-ids value and assertions instead of repeating the

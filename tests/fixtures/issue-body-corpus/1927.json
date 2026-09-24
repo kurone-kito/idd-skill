@@ -1,0 +1,30 @@
+{
+  "id": "1927",
+  "category": "merged",
+  "note": "Merged/ready real issue documenting hook-manager coexistence; today's A4 limited_scope criterion false-positives on its own \"coexistence\"/config-surface prose (known lexical-gate boundary gap).",
+  "title": "docs(customization): cover hook-manager coexistence when the worktree guard claims core.hooksPath",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nParent roadmap: #1937\n\nThe B1 worktree guard is activated by claiming `core.hooksPath` for\n`.githooks`, per the guidance roadmap #1156 shipped through #1158.\n`core.hooksPath` is shared, non-worktree-scoped repository config.\n\nHusky v9 ships `\"prepare\": \"husky\"` in `package.json`, which every\n`pnpm install` triggers, and it resets `core.hooksPath` to `.husky/_`\nunconditionally. So in a repository that already uses Husky,\nthe guard is correctly wired, then silently un-wired by the next\ndependency install in any worktree — and `idd-doctor`'s #1157\nenabled-but-inert warning correctly reappears each time, moments after\nthe operator re-wired it.\n\nField-reported from `kurone-kito/web-toybox` and independently from\n`kurone-kito/builder-config`. This is not the \"never wired\" case\n#1157/#1158 address; it is \"wired, then reset by unrelated tooling\",\nwhich their guidance does not cover. The combination is not exotic for\nthe profile it affects: `docs/onboarding/policy-decisions.md`\nauto-proposes `package-manager` for any repository with a supported\nlockfile, and a hook manager is common in exactly those repositories.\n\nRoadmap #1156 recorded, as an explicit non-goal, that it would not ship\nan auto-wiring install/prepare hook, \"left out unless a maintainer\nrequests it\". **This issue does not build that mechanism and does not\nreopen that non-goal.** It adds the coexistence guidance that was never\npart of it — which is why the \"never wired\" documentation shipped while\nthis failure mode stayed undocumented.\n\n## Proposed change\n\nExtend the worktree-guard activation guidance with a hook-manager\ncoexistence section covering the case where `core.hooksPath` is already\nowned by another tool:\n\n- State that `core.hooksPath` is repository-wide, not worktree-scoped,\n  so one install in any worktree changes it for all of them.\n- State that a hook manager whose own install step sets `core.hooksPath`\n  will reclaim it on every dependency install, and that the recurring\n  `idd-doctor` enabled-but-inert warning is the expected symptom rather\n  than a detection defect.\n- Give the chaining recipe as the recommended resolution: keep the\n  existing manager's hook path and have each of its hooks `exec` the\n  corresponding `.githooks/*` script, so neither tool has to win\n  ownership of `core.hooksPath`.\n- Note the fully-replace alternative in one sentence, without\n  prescribing it, since it removes the other tool from the repository.\n- Add a portability caveat for the chaining recipe: a lifecycle script\n  run through pnpm's `shellEmulator` supports simple chaining\n  (`&&`, `||`, `;`, `exit`) but not POSIX control-flow keywords, so a\n  fail-closed guard written as `if ... then ... fi` fails with\n  `command not found: if`. Show the emulator-safe form instead.\n\n## Acceptance criteria\n\n- The worktree-guard activation guidance carries a hook-manager\n  coexistence section with all five points above.\n- The chaining recipe is shown as a concrete snippet, not prose alone.\n- The `shellEmulator` caveat shows an emulator-safe fail-closed form\n  that still lets a genuine failure propagate.\n- The section states explicitly that no automatic wiring mechanism is\n  provided, and that manual activation stays the contract.\n- The `docs/customization.md` worktree-guard row links the new section.\n- `docs/customization.md` syncs in `exact` mode from\n  `idd-template/docs/customization.md`, so the template source is\n  edited and `node scripts/sync-docs.mjs --apply` regenerates the\n  repository copy; `node scripts/audit-docs.mjs --check` reports no\n  drift.\n- `node scripts/audit-code-span-wrap.mjs` passes.\n- `pnpm run lint:minimum` passes.\n\n## Candidate files\n\n- `idd-template/docs/customization.md`\n- `docs/customization.md`\n- `idd-template/docs/onboarding/policy-decisions.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n\n",
+  "bodySha256": "4db1915ca5fe7fc97e1898dd979deb22621976933b4f5022d00c4b3ed35f5280",
+  "fetchedAt": "2026-09-24T04:43:17.301Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "limited_scope"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "2957",
+  "category": "merged",
+  "note": "Merged/ready real issue fixing an error-handler message-loss bug in minimize-superseded-markers.mjs; today's A4 clear_verification criterion false-positives on its own error-handling description (known lexical-gate boundary gap).",
+  "title": "fix(scripts): minimize-superseded-markers.mjs's runGh error handler loses e.message on empty stderr",
+  "labels": [
+    "bug"
+  ],
+  "body": "**Origin**: flagged by an adopter (`kurone-kito/dotfiles`) at `v0.6.0` (dotfiles#233), carried forward unfixed through `v0.7.0`/`v0.9.0`, reconfirmed still present verbatim at `v0.11.0` (`1f90787ebf4021673ce6e5eb69741df331fd2037`) by dotfiles#425's final-verification sweep.\n\n**File**: `idd-template/scripts/minimize-superseded-markers.mjs`, `runGh`'s error handler.\n\n**Problem**: The stderr fallback expression is:\n\n```js\nstderr: String(e.stderr?.toString?.() ?? e.message ?? 'unknown error'),\n```\n\n`??` only falls through on `null`/`undefined`. When `gh` exits with a defined-but-empty `stderr` string (e.g. on a bare timeout with no captured output), `e.stderr?.toString?.()` evaluates to `''` (empty string, not nullish), so the `??` chain short-circuits there and never reaches `e.message` -- discarding the actually-useful timeout/error text and reporting an empty string instead.\n\n**Suggested fix**: Treat an empty string the same as nullish for this fallback, e.g.:\n\n```js\nstderr: (e.stderr?.toString?.() || e.message || 'unknown error'),\n```\n\nor an explicit empty-string check before falling through to `e.message`.\n\n**Confirmed present** at `v0.11.0` verbatim (`idd-template/scripts/minimize-superseded-markers.mjs`, the `runGh` function).\n",
+  "bodySha256": "2baf2944236dfd66a9c93130bd328e0a893af3ac397f266bb629f703d2ecebb9",
+  "fetchedAt": "2026-09-24T04:42:39.467Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

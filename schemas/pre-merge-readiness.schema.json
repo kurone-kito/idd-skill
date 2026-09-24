@@ -22,6 +22,7 @@
     "claimIdentityInstalledAt",
     "staleSelfWaiver",
     "branchCurrency",
+    "closingSet",
     "ready",
     "blockers"
   ],
@@ -1738,6 +1739,58 @@
         "baseRefName": {
           "type": "string",
           "description": "The PR's live base branch, read alongside the same headRefOid/baseRefName pr view fetch this report already performs."
+        }
+      }
+    },
+    "closingSet": {
+      "type": "object",
+      "description": "#3298: the closing-set / stray-commit-close merge-gate evidence, mirroring idd-pr-submit.instructions.md's D3.5 steps 6-7 so both the lite and standard profiles get this safety check from the helper verdict itself. Unlike developmentBranchTarget above, this is deliberately REQUIRED (a real collectPreMergeReadiness run always emits it) so an older report missing this field is caught by the lite 'missing required field -> stop' rule. A status other than 'match' or 'skipped-non-default-branch' adds a closing-set blocker.",
+      "required": ["status", "expected", "actual", "extra", "missing", "strayCommitCloses"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap) always block.",
+          "enum": ["match", "mismatch", "skipped-non-default-branch", "unavailable"]
+        },
+        "expected": {
+          "type": "array",
+          "description": "The deliberate closing set: --closing-issues when given (must include the claimed issue), else the single claimed issue number, else empty under --claimless.",
+          "items": { "type": "integer" }
+        },
+        "actual": {
+          "type": "array",
+          "description": "Every issue number from the PR's live closingIssuesReferences (GitHub's own merge-time closing-keyword resolution), including a cross-repository entry's bare number.",
+          "items": { "type": "integer" }
+        },
+        "extra": {
+          "type": "array",
+          "description": "actual entries outside the deliberate closing set, including any cross-repository entry regardless of whether its bare number coincides with an expected number.",
+          "items": { "type": "integer" }
+        },
+        "missing": {
+          "type": "array",
+          "description": "Deliberate closing-set entries with no matching same-repository closingIssuesReferences entry.",
+          "items": { "type": "integer" }
+        },
+        "strayCommitCloses": {
+          "type": "array",
+          "description": "Branch commits whose full message carries a closing keyword for an issue number outside expected -- a stray commit-message close that would auto-close an unintended issue on merge.",
+          "items": {
+            "type": "object",
+            "required": ["sha", "issue"],
+            "additionalProperties": false,
+            "properties": {
+              "sha": {
+                "type": "string",
+                "description": "Commit SHA carrying the stray closing keyword."
+              },
+              "issue": {
+                "type": "integer",
+                "description": "The stray closing keyword's captured issue number."
+              }
+            }
+          }
         }
       }
     },

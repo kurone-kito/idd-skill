@@ -1,0 +1,27 @@
+{
+  "id": "2321",
+  "category": "merged",
+  "note": "",
+  "title": "feat(outage-park): park and reroute work blocked only by an unavailable service",
+  "labels": [
+    "enhancement"
+  ],
+  "body": "## Background\n\nEvery current route for an unavailable external service ends the same\nway: post a hold comment and stop. That leaves the claim live until\n`claimTiming.staleAge` elapses, so the session can neither continue nor\npick up different work, and the issue does not advertise why it is\nstuck. Meanwhile the outage keeps producing more pull requests in the\nsame state, and each one adds branch-sync churn and a review backlog\nthat all lands at once on recovery.\n\nParking is the only relief route that costs no assurance at all: the\nquality gates are untouched, and only scheduling changes. That makes it\nthe right default layer, and the only one available at all when both\nservices are degraded at once.\n\nBlocked by #2319\n\n## Proposed change\n\nAdd an explicit park-and-reroute route for work whose sole blocker is\nan unavailable service, expressed in the existing hold/suspend\nvocabulary rather than as a new lifecycle state.\n\n- Enter the route only when the service verdict is `unavailable` and\n  the pull request's blocker set contains nothing but that service.\n  Any other blocker keeps today's behavior.\n- On entry, post a park notice naming the service and the blocking\n  evidence, then release the claim explicitly instead of waiting out\n  the stale-age window, so the issue becomes reclaimable immediately\n  and the session is free to route elsewhere.\n- Bound the parked backlog with `providerOutage.maxParkedChanges`\n  (documented small default). Once the bound is reached, the session\n  stops claiming new issues rather than manufacturing more unmergeable\n  pull requests.\n- Add a read-only helper that lists parked pull requests and, for each,\n  whether its blocking service has returned to `healthy`, in a\n  deterministic order a later session can re-enter from.\n- Change nothing about review, merge, or thread state: parking never\n  resolves a thread, never marks a gate satisfied, and never merges.\n\n## Acceptance criteria\n\n- [ ] The park route is documented in the phase instructions with its\n      exact precondition (verdict `unavailable`, and no blocker other\n      than that service) and its explicit claim release.\n- [ ] A JSON Schema and read-only helper list parked and resumable\n      pull requests from markers, with the contract registered in\n      `docs/idd-helper-scripts.md`.\n- [ ] Unit tests from offline fixtures assert no park happens on a\n      `healthy`, `degraded`, or `unknown` verdict, and none happens\n      when any additional blocker is present.\n- [ ] Unit tests assert the parked-change bound is enforced at and just\n      above the limit, and that reaching it stops new claims.\n- [ ] A test asserts the park path performs no thread resolution, no\n      gate satisfaction, and no merge, and that merge-readiness output\n      for a parked pull request still reports its blockers.\n- [ ] Resume ordering is deterministic for a fixed fixture set and is\n      asserted by a test.\n- [ ] `providerOutage.maxParkedChanges` validates against the schema,\n      absence resolves to the documented default, and an invalid value\n      is rejected deterministically.\n- [ ] Behavior detail lands in `docs/`, the phase-instruction delta\n      stays minimal, and `node scripts/audit-docs.mjs --check` passes\n      the documentation byte budget.\n- [ ] `pnpm run build` regenerates committed helper output, and\n      `node scripts/validate-schemas.mjs` plus the repository's\n      `pre-push-validate` command pass.\n\n## Candidate files\n\n- `src/scripts/provider-outage-park.mts`\n- `schemas/provider-outage-park.schema.json`\n- `src/scripts/policy-helpers.mts`\n- `schemas/policy.schema.json`\n- `.github/instructions/idd-overview-appendix.instructions.md`\n- `idd-template/.github/instructions/idd-overview-appendix.instructions.md`\n- `.github/instructions/idd-ci.instructions.md`\n- `idd-template/.github/instructions/idd-ci.instructions.md`\n- `docs/idd-helper-scripts.md`\n- `docs/policy-constants.md`\n- `scripts/provider-outage-park.mjs`\n- `tests/`\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "dbbfbb8883f83886121479b66a8222117df68b3880b7068a6334875e9d0cfbcb",
+  "fetchedAt": "2026-09-24T04:42:59.004Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

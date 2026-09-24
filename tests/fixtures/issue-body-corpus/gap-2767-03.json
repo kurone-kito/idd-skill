@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-03",
+  "category": "synthetic",
+  "note": "#2767 item 3 (terminal-punctuation short-circuit only treats a period as a self-containment signal): `findClosingQuoteIndex` never existed under that name in this repo's history. Today's SENTENCE_TERMINATOR_PATTERN treats \".\", \"!\", and \"?\" identically in both the backward and forward framing-verb scans (verified with matched .-/!-/?-terminated triples in both directions giving identical results). The specific period-only asymmetry the comment describes does not exist in today's code (MISMATCH).",
+  "title": "Adopt option A after review",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nWhat does the tracker say? Maintainer decision (#100, 2026-09-01): adopt option A.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "74b5beb71ab65c86c261e15d638caa1c31523f887d84764dd4fbf941201f326b",
+  "fetchedAt": "2026-09-24T07:22:41.381Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

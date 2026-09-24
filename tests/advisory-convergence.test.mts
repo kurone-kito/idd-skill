@@ -48,9 +48,13 @@ import {
   digestExternalCheckWaiverMarkerBody,
   renderAdvisoryWaitRecoveryMarker,
   renderExternalCheckWaiverComment,
+  renderReviewReplyStamp,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
-import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
+import {
+  LIVE_STATUS_DIGEST_MARKER,
+  summarizeClaimValidation,
+} from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
@@ -840,6 +844,86 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.threads.blockingCount, 0);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+// #3244: `summarizeDispositionEvidenceForGate` (reused unfiltered for
+// Clause 2) no longer honors the #2135 review-reply stamp regardless of
+// author -- an untrusted account's stamped `**Accepted**` must not clear
+// a Copilot-authored thread.
+test('untrusted stamped Accepted: a stamped Accepted reply from an untrusted account does not satisfy the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_untrusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: 'someone-else' },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 1);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRT_untrusted_stamp']);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted marker actor satisfies the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_trusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 0);
+  assert.ok(!verdict.threads.blockingIds.includes('PRT_trusted_stamp'));
   assert.equal(verdict.threads.satisfied, true);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
@@ -2085,6 +2169,49 @@ test('ineligibleReasons: missing-regular-comment-disposition fires alone when on
   assert.deepEqual(verdict.sameHeadReroll.ineligibleReasons, [
     SAME_HEAD_REROLL_INELIGIBLE_REASON.MISSING_REGULAR_COMMENT_DISPOSITION,
   ]);
+});
+
+// #3337: `computeAdvisoryConvergenceVerdict` reuses
+// `summarizeDispositionEvidenceForGate` with `iddAgentLogins:
+// trustedMarkerLogins` (both derived from the same configured set here) --
+// so an author outside that set is neither a trusted marker actor nor an
+// IDD agent, and their comment's disposition-evidence treatment must not
+// depend on whether its first line happens to look like the live-status
+// digest marker.
+test('#3337: an untrusted author comment produces the same disposition-evidence result whether or not its first line is the digest marker', () => {
+  const untrustedAuthor = 'not-a-trusted-marker-actor';
+  const buildVerdict = (body: string) =>
+    computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [copilotReview({ itemCount: 2 })],
+        comments: [
+          {
+            id: 1,
+            createdAt: OLD,
+            body,
+            author: { login: untrustedAuthor },
+          },
+        ],
+      }),
+      baseOptions(),
+    );
+
+  const ordinary = buildVerdict('please double check this edge case');
+  const digestShaped = buildVerdict(
+    `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+  );
+
+  assertValidVerdict(ordinary);
+  assertValidVerdict(digestShaped);
+  assert.equal(ordinary.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.equal(
+    digestShaped.dispositionEvidence.missingRegularCommentCount,
+    ordinary.dispositionEvidence.missingRegularCommentCount,
+  );
+  assert.deepEqual(
+    digestShaped.sameHeadReroll.ineligibleReasons,
+    ordinary.sameHeadReroll.ineligibleReasons,
+  );
 });
 
 test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {
@@ -4808,6 +4935,59 @@ test('pickResolvingClaimEvents: zero or multiple resolving candidates still fail
   assert.deepEqual(
     pickResolvingClaimEvents([noClaim, claimA], [TRUSTED], false),
     claimA,
+  );
+});
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// lands 19h later (2026-05-13T04:00:00Z) -- inside an 18h configured
+// staleAge, not stale under the old hardcoded 24h. The candidate's own
+// `unclaimed-by` (for the TAKEOVER claim-id) immediately follows. Whether
+// that release actually clears `activeClaimPresent` depends on the takeover
+// having activated first (idd-claim's unclaimed-by rule 5: it releases only
+// the CURRENT active claim's exact agent-id/claim-id) -- so this is the
+// #1310-window regression for `filterResolvingClaimCandidates` (exercised
+// here via the exported `pickResolvingClaimEvents`, which delegates to it):
+// with the fix (an 18h `staleAgeMs`), the takeover activates, its own
+// unclaimed-by then correctly releases it, and NO candidate resolves.
+// Without the fix (staleAgeMs omitted, the old hardcoded 24h default), the
+// takeover never activates, the stale old claim stays "active" instead, and
+// its unmatched `unclaimed-by` is ignored -- so the (wrong) old claim still
+// resolves as present.
+test('pickResolvingClaimEvents (#3270): a takeover inside a configured 18h staleAge, followed by its own unclaimed-by, yields no resolving candidate', () => {
+  const takeoverClaimId = 'claim-20260513T040000Z-337-new';
+  const candidate = [
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-12T09:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} ${takeoverClaimId} supersedes: claim-20260512T090000Z-337-old 2026-05-13T04:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-13T04:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${AGENT_ID} ${takeoverClaimId} 2026-05-13T04:05:00Z -->\n\n_${AGENT_ID}: issue claim released — IDD automation marker._`,
+      createdAt: '2026-05-13T04:05:00Z',
+    },
+  ];
+
+  assert.deepEqual(
+    pickResolvingClaimEvents(
+      [candidate],
+      [TRUSTED],
+      false,
+      18 * 60 * 60 * 1000,
+    ),
+    [],
+  );
+  // Without the fix (staleAgeMs omitted -> the primitive's own hardcoded
+  // 24h default), the takeover never activates, so the stale old claim
+  // stays wrongly "active" and the whole candidate still resolves.
+  assert.deepEqual(
+    pickResolvingClaimEvents([candidate], [TRUSTED], false),
+    candidate,
   );
 });
 

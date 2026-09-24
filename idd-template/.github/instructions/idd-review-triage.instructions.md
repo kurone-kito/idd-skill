@@ -497,10 +497,8 @@ After the review loop confirms no PATH A items remain (from E3 or E8),
 check the current branch state before routing to F-phase. This gate uses
 merge-from-`{development-branch}` (never rebase) when synchronization is
 required, preserving review history on the already-published PR branch.
-`{development-branch}` is the value resolved in
-`idd-work.instructions.md`'s B1
-[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-step.
+`{development-branch}` is the value resolved by
+[B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch).
 
 When helper runtime is enabled, call:
 `idd-branch-conflict-state --pr {pr-number}`
@@ -540,9 +538,10 @@ Route based on `branchState` from the helper (or `mergeable` /
   few seconds apart), then route by the first settled result. Only a
   state that is **still** `computing` / `unknown` after the budget falls
   through to the hold below.
-- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
-  a PR comment documenting the state and stop. Do not proceed to F-phase
-  without confirmed branch-state evidence.
+- **`dirty`**, **`unknown`**, or an unlisted state (e.g.
+  `force-push-exception`): hold; post a PR comment documenting the
+  state and stop. Do not proceed to F-phase without confirmed
+  branch-state evidence.
 
 **Sync path** (merge-from-`{development-branch}`):
 

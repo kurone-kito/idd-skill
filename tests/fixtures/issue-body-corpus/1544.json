@@ -1,0 +1,28 @@
+{
+  "id": "1544",
+  "category": "merged",
+  "note": "",
+  "title": "Author the lite instruction set for the PR-submit phase (D1-D4)",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "\n## Background\n\nParent roadmap: #1539 (lite-execution-profile). Blocked by #1541 (sync-manifest drift control must exist before this content lands).\n\n`docs/weak-model-lite-profile-design.md` scopes `idd-pr-submit.instructions.md` (D1-D4: rebase, validate, push, open PR, wait for CI) as in-scope: \"Mechanical rebase/validate/push/open-PR continuation of the same single issue.\"\n\n## Proposed change\n\nAuthor `idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md`, condensing `idd-pr-submit.instructions.md` under this roadmap's five content principles (self-contained checklists, imperative single-clause steps, no deep cross-references, mechanical helper gates as the fail-closed default with an explicit `instructions-only` fallback statement, explicit stop-and-ask conditions). Wire it into `audit/sync-manifest.json`'s `syncPairs` and generate the `.github/instructions/lite/` copy.\n\n**Non-goal**: no semantic changes to the standard profile.\n\n## Acceptance criteria\n\n- [ ] `idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md` exists, covering D1-D4, self-contained per principle 1.\n- [ ] The generated `.github/instructions/lite/idd-pr-submit-lite.instructions.md` copy exists and matches its `syncPairs` entry.\n- [ ] The lite file fits within its assigned `bundleBudgets` byte ceiling.\n- [ ] `node scripts/audit-docs.mjs --check` passes.\n- [ ] A reviewer confirms no semantic disagreement with `idd-pr-submit.instructions.md` (recorded in the PR description).\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->",
+  "bodySha256": "581a67b39229dc40cd004828f58142578edc83e130050142e9a118b3fb49cb55",
+  "fetchedAt": "2026-09-24T04:43:42.223Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

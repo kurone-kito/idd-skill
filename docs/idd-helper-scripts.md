@@ -1150,6 +1150,14 @@ The adopted helper boundaries are intentionally narrow:
 - it creates or updates only the single current digest comment and
   refuses duplicate marked digests with repair URLs instead of choosing
   one, deleting, or minimizing audit history
+- the ordinary create/update/duplicate-detection path considers only
+  current-digest comments authored by a trusted marker actor
+  (`isTrustedMarkerAuthor`, kurone-kito/idd-skill#3337): an untrusted
+  actor's digest-marker comment is neither updated nor counted toward
+  the duplicate check, so the helper creates or updates its own digest
+  alongside it instead of rewriting a stranger's comment; the
+  maintainer repair mode below still sees every author's current-digest
+  comment, so a maintainer can still retire a stranger's marker there
 - `--repair-duplicate --retain-comment-id <id>` is a separate maintainer
   repair mode for an already-duplicate current-digest set; it requires an
   authenticated owner/maintainer permission check and, in apply mode, all
@@ -1939,10 +1947,10 @@ close.
 - Command:
   `node scripts/provider-outage-park.mjs [--park --pr <n> --issue <n>
   --service <name> --blockers <name1,name2> --claim-id <id> --agent-id
-  <id>] [--apply]`
+  <id>] [--parked-issues] [--apply]`
 - Published bin: `idd-provider-outage-park`
 - Stable contract (the posted `idd-provider-outage-park` marker payload,
-  not the list-mode stdout shape below):
+  not the list-mode/`--parked-issues` stdout shapes below):
   [`provider-outage-park.schema.json`][provider-outage-park-schema]
 - Purpose (#2321): every current route for an unavailable external
   service ends in a hold, which keeps the claim live until
@@ -1951,9 +1959,26 @@ close.
   requests stuck the same way. Parking releases the claim immediately
   instead, at no cost to any quality gate: it never resolves a thread,
   satisfies a gate, or merges.
+- **Live-marker rule (`#3277`).** Nothing retires a park marker on its
+  own: a marker counts as **live** only when both hold: its embedded
+  `head:` still equals the pull request's current head SHA (the pull
+  request has not moved since it was parked), and no trusted
+  `claimed-by` on the originating issue (`issue:`) has a GitHub
+  `created_at` later than the park **comment's own** `created_at`
+  (never the embedded `parked:` field, which is the parking agent's
+  local clock) -- a fresh claim and a heartbeat share the same wire
+  format, so either one means a session has touched the issue since
+  parking. A marker whose `service:` is not one of
+  `advisory-review`/`ci-actions` is retired the same way. A retired
+  marker is excluded from `entries`/`count`/`boundReached` and counted
+  in `retiredCount` instead. A failed read of the originating issue's
+  own comments keeps a marker live (fail-open); a failed read of the
+  pull request's own comments (the read that finds the marker) instead
+  marks the report `parkedIssuesComplete: false`, alongside a truncated
+  open-pull-request sample.
 - Modes:
   - default (list, read-only): lists every open pull request carrying a
-    trusted `idd-provider-outage-park` marker, each with its parked
+    LIVE trusted `idd-provider-outage-park` marker, each with its parked
     service's current `provider-health` verdict and `resumable` (true
     only once that verdict is `healthy`). Sorted by `parkedAt` then pull
     request number for deterministic re-entry order. Reports `count` and
@@ -1962,7 +1987,18 @@ close.
     pull request read is bounded (default 50, most-recently-updated
     first); `sampleTruncated` is `true` when more open pull requests may
     exist beyond that sample, and `boundReached` fails closed to `true`
-    in that case regardless of the sampled `count`.
+    in that case regardless of the sampled `count`. Also reports
+    `retiredCount` (markers found but not live), `parkedIssues` (the
+    sorted, de-duplicated issue numbers of live, non-resumable entries),
+    and `parkedIssuesComplete` (see the live-marker rule above).
+  - `--parked-issues`: the cheap mode Discover's own parked-issue skip
+    runs on every pass. Prints only `{ parkedIssues, parkedIssuesComplete
+    }`. Reads the live `provider-health` report first; when EVERY
+    service is `healthy`, `parkedIssues` is empty by construction (a
+    live marker's `resumable` is `true` only once its own service is
+    healthy) and complete, so this returns without any open-pull-request
+    or per-pull-request comment read. Otherwise falls through to the
+    full list-mode collection. Mutually exclusive with `--park`.
   - `--park`: fetches the pull request's live head SHA, re-checks the
     named service's live `provider-health` verdict is `unavailable`, and
     requires every entry in `--blockers` (the caller's own fresh
@@ -1978,9 +2014,9 @@ close.
 - Same claim-gating contract as `post-idd-marker.mjs`: this command
   performs no claim/state gating itself -- the calling phase runs its
   own claim-revalidation gate before `--apply`.
-- Read-only by construction in list mode: exposes no field named or
-  shaped as a merge-readiness or CI-gate result, mirroring the
-  provider-health helper above.
+- Read-only by construction in list mode and `--parked-issues`: exposes
+  no field named or shaped as a merge-readiness or CI-gate result,
+  mirroring the provider-health helper above.
 
 ### Local validation evidence helper
 
@@ -2144,6 +2180,17 @@ close.
 - `checks` remain stable by `id`: `gate_enabled`,
   `author_self_authorized`, `ready_label_present`,
   `ready_comment_fresh`, and `ambiguity_guard`
+- `ready_label_present` verifies the **actor** of the configured ready
+  label's latest `labeled` timeline event against
+  `maintainerApprovalActorPolicy` -- in both `presence-only` and
+  `event-freshness` `labelFreshnessMode` -- not label presence alone. A
+  bot or non-collaborator actor (a known, unauthorized permission read,
+  e.g. a `404`) fails the check with no ambiguity; a missing matching
+  `labeled` event, an unavailable issue timeline, or an actor with no
+  recorded login fails closed with a `ready-label-actor-unverified`
+  ambiguity entry, and an unresolvable actor permission read fails
+  closed with a `ready-label-actor-permission-unavailable` ambiguity
+  entry
 - the helper is intentionally scoped to A5(a); A5(d) open-PR conflict
   checks stay on the written live GitHub path because inheritable-branch
   and linked-issue exceptions do not yet have a supported helper
@@ -3275,7 +3322,13 @@ reflexively as any other CLI option.
   pass `--claim-issue`). It skips claim fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
-  `idd-merge-execute` still requires `--claim-issue`.
+  `idd-merge-execute` also requires `--claim-id` (or the deprecated
+  `--expected-claim-id` alias) unless `--claimless` is passed
+  (`#3252`). Optional `--closing-issues <n>[,<n>...]` (#3298) declares
+  the deliberate multi-issue closing set for the `closingSet` gate
+  below; it must include `--claim-issue`'s own number and cannot
+  combine with `--claimless`. Omit it for the ordinary single-issue
+  case, where the claimed issue alone is the deliberate set.
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
@@ -3294,6 +3347,28 @@ reflexively as any other CLI option.
   is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
   async-still-computing state F1 and the E-phase branch-sync check
   already re-poll, not a blocker here.
+- `closingSet` (#3298) is the closing-set / stray-commit-close merge-gate
+  evidence, mirroring `idd-pr-submit.instructions.md`'s D3.5 steps 6-7 so
+  both the lite and standard profiles get this safety check from the
+  helper verdict itself instead of only from prose steps a standard
+  profile session must remember to run. Unlike every other optional
+  evidence section above, `closingSet` is always emitted by a real
+  `collectPreMergeReadiness` run and the schema lists it as `required` --
+  an older report missing it is caught by the lite "missing required
+  field -> stop" rule. `status` is `"match"` (live
+  `closingIssuesReferences` equals the deliberate set from `--claim-issue`
+  or `--closing-issues`, and no branch commit message carries a closing
+  keyword for an issue number outside that set) or
+  `"skipped-non-default-branch"` (the PR base branch is not the live
+  repository default branch -- `closingIssuesReferences` never populates
+  there, the same exemption D3.5 itself applies) -- neither blocks.
+  `"mismatch"` (an extra or missing closing reference, or a stray
+  commit-message close) or `"unavailable"` (the live default branch or
+  the PR's own commit list could not be read, or the commit list hit the
+  REST API's 250-commit pagination cap) is a `closing-set` merge-gate
+  blocker, whose detail names the extra/missing issue numbers (an extra
+  number's detail names `--closing-issues` as the remedy for a genuine
+  multi-issue close) and each stray commit's `sha` + issue number.
 - `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-producer
   (name/type/workflowName/workflowPath -- kurone-kito/idd-skill#2919 widened
   this from the original name/type/workflowName 3-tuple) required-check
@@ -3431,6 +3506,23 @@ reflexively as any other CLI option.
   optional flags as `pre-merge-readiness` (`--agent-id`, `--owner`,
   `--repo`, `--trusted-marker-logins`, `--advisory-bot-logins`); add
   `--apply` to merge.
+- **Required claim binding (`#3252`).** `--claim-id` (or the deprecated
+  `--expected-claim-id` alias) is required unless `--claimless` is also
+  given — the same "no-issue PR" exemption `pre-merge-readiness` itself
+  honors — checked before this helper ever collects readiness evidence
+  or merges: the collector's own claim gate only checks whether a
+  _supplied_ claim-id matches the active claim, never whether one was
+  supplied at all, so an `--apply` run with neither flag would merge
+  under whichever claim happened to be active rather than the caller's
+  own.
+- **`--now` is dry-run only (`#3252`).** Passing `--now` together with
+  `--apply` is rejected before any collection or merge call: `--now`
+  overrides every merge-gate clock (claim staleness, waiver expiry,
+  advisory-convergence deadline, terminal-unavailability window,
+  secondary-bot quiet window), which is safe for read-only dry-run
+  evaluation but would otherwise let the caller pick the clock an
+  `--apply` merge is actually gated on. `--now` stays fully supported
+  without `--apply`.
 - Stable contract:
   [`idd-merge-execute.schema.json`][idd-merge-execute-schema]
 - It WRAPS the read-only `pre-merge-readiness` collector and adds no new
@@ -3465,7 +3557,12 @@ reflexively as any other CLI option.
   command fails with GitHub's "base branch policy prohibits the merge"
   error, the helper checks `mergeGate.soloCodeownerAdminFallback` in
   `.github/idd/config.json` (distributed default `auto-admin-retry`;
-  absent behaves the same). Unless the repository has set it to
+  absent behaves the same), read from the PR's **base ref** — falling
+  back to the repository's live default branch when a base ref cannot
+  be determined — never the PR's head SHA and never a local worktree
+  read (`#3252`): either would let the PR under merge steer whether its
+  own plain-merge failure gets retried with `--admin`. Unless the
+  repository has set it to
   `hold-and-report`, it retries exactly once with `--admin`, bound to
   the same validated head, but ONLY when the freshly re-validated
   report's `reviewerStates.codeownerSelfApproval` has `status: "clear"`

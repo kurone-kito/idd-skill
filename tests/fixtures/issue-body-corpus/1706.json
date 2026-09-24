@@ -1,0 +1,28 @@
+{
+  "id": "1706",
+  "category": "merged",
+  "note": "",
+  "title": "chore(ci): exercise the Node 22 engines floor in CI and mechanically guard the hand-mirrored engines range",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nThe engines claim `\"node\": \"^22.22.2 || >=24.2.0\"` is advertised,\nlocally pinned, and never tested:\n\n- `.nvmrc`, `.node-version`, and `.tool-versions` all pin\n  `22.22.2` — the developer/adopter recommendation.\n- Every workflow that pins Node pins `24.x`\n  (`pnpm-boundary.yml`, `scheduled-typecheck.yml`,\n  `post-merge-cleanup.yml`); the unpinned lanes run the runner\n  default and only assert the floor.\n- `@types/node` is `26.1.0`, so typecheck validates against Node 26\n  APIs.\n\nA helper that adopts an API present in types-26 but absent/broken on\nNode 22.22.x passes typecheck (types are 26), passes CI (runs 24+),\nand then crashes for every developer and adopter on the repo's own\nrecommended pin. This bug class already bit once (#1447:\n`import.meta.main` silently falsy on 24.0/24.1), and\n`verify-workshop-integrity.mts` already uses still-maturing\n`fs.globSync` options. The 22.x half of the engines claim is\nenforced nowhere mechanically.\n\nSeparately, the engines range is hand-mirrored in ~8 places with no\nguard — including two copy-pasted inline semver checkers in\n`lint.yml` and `idd-advisory-convergence.yml` whose comments boast\n\"Exact match to package.json's engines.node\", plus prose mirrors in\nCONTRIBUTING (3 languages), `docs/typescript-sources.md`,\n`docs/workshop/README.md`, and `docs/stalled-session-quiet-check.md`.\nThe next engines bump that misses one inlined check either keeps\nadmitting a dropped Node line or hard-fails newly-supported ones.\nMechanical guards for mirrored surfaces are this repository's own\nconvention; this surface is the unguarded outlier.\n\n## Proposed change\n\n1. Add one CI execution on `node-version: 22.22.2` —\n   `pnpm-boundary.yml` already accepts `node-version` as a\n   `workflow_call` input, so a tiny matrix or a second invocation\n   suffices. Run at least the test suite there.\n2. Make the two workflow floor-assert steps read\n   `package.json`'s `engines.node` and evaluate it (both lanes run\n   after checkout), or add a consistency test asserting the workflow\n   snippets and doc mentions contain the current engines string.\n3. Decide within the PR whether to align `@types/node` with the\n   lowest supported line (or document why types-26 is acceptable\n   with the 22-lane as the runtime backstop).\n\n## Acceptance criteria\n\n- [ ] CI runs the test suite on Node 22.22.x on every PR (or a\n      documented equivalent cadence with rationale).\n- [ ] A deliberate local mismatch between `engines.node` and a\n      workflow checker/doc mention fails a test or the workflow\n      itself (demonstrated in the PR).\n- [ ] The `@types/node`-vs-engines tension is resolved or explicitly\n      documented.\n- [ ] `pnpm test` passes on both lanes.\n\nRefs: 2026-07-28 fresh-model audit (build agent); #1447 (the prior\nversion-skew incident this guards against).\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "fd919445e3fbe5a5a830513b0c740864847366f7a5a34fbbc04aa71b59c2c638",
+  "fetchedAt": "2026-09-24T04:43:29.474Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

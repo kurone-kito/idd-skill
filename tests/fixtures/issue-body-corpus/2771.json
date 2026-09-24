@@ -1,0 +1,28 @@
+{
+  "id": "2771",
+  "category": "merged",
+  "note": "",
+  "title": "docs(lite): fix idd-review-snapshot-lite's inverted F3 digest carve-out",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-0f0c65aa4c356a86; anchor=kurone-kito/idd-skill#2770; set=set-449631721ec618b2; session=claude-fable-4e5f865d; token=pub-62fd32065f021dff -->\n\n## Background\n\nPart of the `spec-audit-2026-09-09` roadmap (R2, phase-digest rules;\nraised by 2 of 3 audit passes).\n\n`.github/instructions/lite/idd-review-snapshot-lite.instructions.md`\nStep 2 (\"Record the watermark\", around lines 174-178) says:\n\n> Do not create or edit the PR live status digest after posting this\n> watermark unless the next route is back to E1, an F3 blocked reroute\n> that **returns to** F2's restart path, a hold/stop, or post-merge\n> cleanup\n\nThe standard file it condenses,\n`.github/instructions/idd-review-snapshot.instructions.md` (around\nlines 192-196; the `idd-template/` source sits five lines earlier, before\nthe generated-from banner), carves out the opposite branch:\n\n> unless the next route is E1, an F3 blocked reroute that **leaves** the\n> F2 restart path (F1/D4), a hold/stop, or post-merge cleanup\n\n`idd-merge.instructions.md` F3 and `idd-overview-appendix.instructions.md`\nboth side with the standard file: a blocked reroute that goes back to\nF2's restart path must not touch the digest, because a digest edit is\nPR activity and would invalidate the review currency the restarted F2\npass is about to check. A lite-profile session following its own file\nedits the digest on exactly the path where that edit self-invalidates\nthe next gate.\n\n## Proposed change\n\n- In the canonical\n  `idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md`,\n  replace \"an F3 blocked reroute that returns to F2's restart path\" with\n  the standard file's \"an F3 blocked reroute that leaves the F2 restart\n  path (F1/D4)\", keeping the rest of the sentence unchanged.\n- Run `node scripts/sync-docs.mjs --apply` so the generated\n  `.github/instructions/lite/` copy matches.\n\n## Acceptance criteria\n\n- `grep -n \"returns to F2\" .github/instructions/lite/idd-review-snapshot-lite.instructions.md`\n  prints nothing, and the lite Step 2 sentence contains \"leaves the F2\n  restart path (F1/D4)\".\n- `node scripts/audit-docs.mjs --check` and\n  `npx markdownlint-cli2 \"**/*.md\"` pass.\n\n## Candidate files\n\n- `idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md`\n- `.github/instructions/lite/idd-review-snapshot-lite.instructions.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. A one-clause replacement\nwith the target wording quoted from the canonical file._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "ad5b1a6499cde3e520accf4d1115b21dc3479d7baf5f131c73c17bacce051e76",
+  "fetchedAt": "2026-09-24T04:42:44.594Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

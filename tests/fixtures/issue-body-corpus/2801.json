@@ -1,0 +1,28 @@
+{
+  "id": "2801",
+  "category": "merged",
+  "note": "",
+  "title": "feat(worktree-guard): add an opt-in base-branch refusal mode",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-912dc6402a2a0a4a; anchor=kurone-kito/idd-skill#2795; set=set-01ab237a36117ba2; session=claude-sonnet5-15b9d1f4; token=pub-49428997b293f039 -->\n\n## Background\n\nThe shipped `worktreeGuard` hook (`.githooks/_idd-worktree-guard.sh`,\n`idd-skill#2233`'s own fix) refuses a commit/push made from the primary\nworktree only when `HEAD` matches a configured `branchPatterns` glob\n(default `issue/* roadmap-audit/*`). Confirmed by reading the script\ndirectly: its `case \"$branch\" in $pattern)` loop has no special case for\nthe configured default/base branch itself, so a delegated worker that\nskips B1 entirely and commits directly on the base branch (e.g. `main`)\nin the primary worktree is never refused -- `branch` evaluates to the\nliteral base-branch name, which matches neither default pattern.\n\nThe B1 self-check (`idd-skill#2233`'s other shipped mitigation) is blind\nhere from a different angle: it is a checkpoint written *inside* the B1\nphase's own instructions, so it only helps an agent that actually reaches\nand reads that phase file. An agent that skips straight from reading the\nissue to writing implementation code never reads B1 at all in that\nfailure mode.\n\nField evidence: a delegated worker skipped both the claim step and the\nentire B1 worktree-creation step, editing implementation source files\ndirectly in the primary worktree while `HEAD` stayed on the base branch\nthe whole time. Caught via an unexpectedly non-empty `git status` before\nany commit was attempted -- not a reproduced hook bypass on a real commit\n-- but by direct inspection of the guard's own branch-matching logic, a\ncommit attempted from that exact state would not have been refused.\n\n## Proposed change\n\nAdd an **opt-in**, off-by-default stricter mode to the guard: when enabled\nvia a new `worktreeGuard` config key (e.g. `refuseBaseBranchCommits:\ntrue`, defaulting to `false` so existing adopters' behavior is unchanged),\nalso refuse a commit/push made from the primary worktree while `HEAD` is\non the repository's configured default branch. Keep this strictly opt-in\nsince a direct base-branch commit from the primary worktree is also a\nlegitimate, routine action for a human maintainer working outside an IDD\nsession -- the new key lets an adopter that wants the stricter guarantee\nchoose it explicitly, without changing the shipped default for anyone\nelse. Alongside the code change, document the hook's actual scope next to\nits existing description (both in the hook's own header comment and in\n`idd-work.instructions.md`'s B1), so the base-branch gap is a known,\ndocumented limitation of the default mode rather than an implicit blind\nspot.\n\n## Acceptance criteria\n\n- A new `worktreeGuard.refuseBaseBranchCommits` config key (or equivalent\n  name) exists, defaulting to `false`/absent.\n- When set to `true`, the hook refuses a commit/push from the primary\n  worktree while `HEAD` is on the repository's configured default branch,\n  with the same refusal message shape the existing pattern-match refusal\n  uses.\n- When unset or `false`, existing behavior is unchanged -- a base-branch\n  commit from the primary worktree is still allowed by default.\n- `tests/worktree-guard-hook.test.mts` covers both the new opt-in refusal\n  case and the unchanged default-off case.\n- The hook's own header comment and `idd-work.instructions.md`'s B1 state\n  the guard's actual default scope (implementation-branch patterns only,\n  not the base branch, unless the new opt-in is set).\n- `node --experimental-strip-types --test tests/worktree-guard-hook.test.mts`\n  passes.\n\n## Candidate files\n\n- `.githooks/_idd-worktree-guard.sh`\n- `idd-template/.githooks/_idd-worktree-guard.sh`\n- `tests/worktree-guard-hook.test.mts`\n- `.github/instructions/idd-work.instructions.md`\n- `idd-template/.github/instructions/idd-work.instructions.md`\n- `schemas/policy.schema.json`\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: M -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "0056856bd31f0bd3a800b95d4c011a869a9c0aaa2342b55128a0ce84771d46ea",
+  "fetchedAt": "2026-09-24T04:42:43.368Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

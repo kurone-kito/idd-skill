@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-06",
+  "category": "synthetic",
+  "note": "#2767 item 6 (inline emphasis between the opening quote and the marker defeats the inverted-attribution check): isFollowedByFramingVerb still checks exactly one preceding character, not a scan through intervening Markdown emphasis. With \"*Maintainer decision...\" the character immediately before \"Maintainer\" is \"*\", which fails the quote-char check outright, so the real quote+attribution (\"reports the tracking issue\") is never checked. The gap is present today, verbatim as described (MATCH).",
+  "title": "Choose option A for style",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\n\"*Maintainer decision (#100, 2026-09-01): choose option A,*\" reports the tracking issue.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "6a27335401b45e865c4308370dc51008f911968e83c0425eb7c76097c04bb997",
+  "fetchedAt": "2026-09-24T07:22:41.388Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

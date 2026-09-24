@@ -1,0 +1,30 @@
+{
+  "id": "1675",
+  "category": "merged",
+  "note": "Merged/ready real issue about routing every gh subprocess call through a shared helper; today's A4 autonomous_completion criterion false-positives on its own cross-cutting-sounding \"every call\" prose (known lexical-gate boundary gap).",
+  "title": "fix(helpers): apply a default gh subprocess timeout and route every call through gh-exec",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`src/scripts/gh-exec.mts` is the shared `gh` execution layer, but it\ndoes not apply a timeout by default and a large share of helpers do\nnot go through it at all. A stalled or credential-prompting `gh`\ninvocation therefore hangs the calling helper indefinitely, which in\nan autonomous IDD session means a phase that never returns rather\nthan a phase that fails and routes to recovery.\n\nCurrent state in `src/scripts/`:\n\n- `ghApiJson()` calls `execFileSync('gh', args, { encoding: 'utf8' })`\n  with no timeout and no option for a caller to supply one, even\n  though it is the shared JSON entry point.\n- `ghText()` applies a timeout only when the caller passes one; the\n  default is no timeout.\n- `GH_TEXT_LOOP_TIMEOUT_OPTIONS` (30s) already exists and is used at\n  54 call sites, so a 30s bound is the established convention here —\n  the gap is that it is opt-in.\n- 30 call sites across 22 helper files still call\n  `execFileSync('gh', ...)` directly, bypassing `gh-exec.mts`\n  entirely; none of them pass a timeout.\n\nAdvisory review has flagged this shape repeatedly (for example, that\na per-run lookup loop calling `ghApiJson()` can hang the helper\nbecause `gh-exec` sets no timeout), but each fix has been local to\nthe helper under review, so the underlying default has never changed.\n\n## Proposed change\n\n1. Give `gh-exec.mts` a default timeout. Apply a module-level default\n   (the existing 30s convention) inside `ghText()` and `ghApiJson()`\n   so a caller that passes nothing still gets a bounded invocation,\n   and keep the explicit-option path as an override.\n2. Let `ghApiJson()` accept a timeout override through its options\n   object, so a caller that legitimately needs longer can ask for it.\n3. Decide and record the paginated-call bound. `ghApiJson({ paginate:\n   true })` can legitimately run longer than a single request, so\n   either give the paginated path a larger default or document why the\n   single-request bound is still correct. Record the choice in the\n   module's doc comment so a later reader does not re-litigate it.\n4. Migrate the 30 direct `execFileSync('gh', ...)` call sites in\n   `src/scripts/**/*.mts` onto `ghText` / `safeGhText` / `ghApiJson`.\n   Where a call site needs behavior `gh-exec` does not yet offer,\n   extend `gh-exec` rather than keeping the direct spawn.\n5. Add a guard test asserting that `gh-exec.mts` is the only module\n   under `src/scripts/` that spawns `gh` directly, so the pattern\n   cannot silently return.\n6. Run `pnpm run build` so the generated `scripts/*.mjs` copies match\n   their `.mts` sources.\n\n## Acceptance criteria\n\n- [ ] `ghText()` and `ghApiJson()` apply a bounded default timeout\n      when the caller supplies none, and an explicit caller-supplied\n      timeout still wins.\n- [ ] `ghApiJson()` exposes a timeout override in its options type.\n- [ ] The paginated-call timeout decision is implemented and recorded\n      in `gh-exec.mts`'s doc comments.\n- [ ] No module under `src/scripts/` other than `gh-exec.mts` calls\n      `execFileSync`, `execFile`, or `spawnSync` with `'gh'` as the\n      command.\n- [ ] A guard test enforces the previous criterion and fails when a\n      direct `gh` spawn is reintroduced into another module.\n- [ ] Existing unit tests still pass, and helpers that previously\n      passed `GH_TEXT_LOOP_TIMEOUT_OPTIONS` keep their 30s behavior.\n- [ ] The generated `scripts/*.mjs` files are rebuilt and committed,\n      and `node scripts/audit-docs.mjs --check` reports no drift.\n- [ ] The repository's `pre-push-validate` command passes.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "ec0437a7e4c4a998120726fb84db6ff9f157c58dceac102b97bc6d9258f222d9",
+  "fetchedAt": "2026-09-24T04:43:32.403Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

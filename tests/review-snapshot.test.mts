@@ -7,6 +7,7 @@ import {
   classifyRegularBotComment,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
+  LIVE_STATUS_DIGEST_MARKER,
 } from '../src/scripts/protocol-helpers.mts';
 import { readJson } from './test-utils.mts';
 
@@ -504,6 +505,42 @@ test('malformed forced-handoff comments remain visible activity', () => {
   assert.equal(summary.counts.comments, 1);
   assert.equal(summary.totalItemCount, 1);
   assert.equal(summary.maxActivityUpdatedAt, '2026-05-10T10:40:00Z');
+});
+
+// #3337: a live-status digest is only ever the posting agent's own
+// activity, so `buildActivitySnapshotSummary` excludes a digest-marker
+// comment only when its author is a trusted marker actor; an untrusted
+// actor's digest-marker-shaped comment counts as ordinary activity
+// requiring disposition, exactly like any other stranger's comment.
+test('excludes a trusted author digest but counts an untrusted author digest as activity', () => {
+  const trustedDigest = {
+    id: 'DIGEST-TRUSTED',
+    author: { login: 'idd-bot' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    createdAt: '2026-05-10T12:00:00Z',
+    updatedAt: '2026-05-10T12:00:00Z',
+  };
+  const untrustedDigest = {
+    id: 'DIGEST-UNTRUSTED',
+    author: { login: 'not-a-trusted-marker-actor' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    createdAt: '2026-05-10T13:00:00Z',
+    updatedAt: '2026-05-10T13:00:00Z',
+  };
+
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [trustedDigest, untrustedDigest],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    { trustedMarkerLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.totalItemCount, 1);
+  assert.equal(summary.counts.comments, 1);
+  assert.equal(summary.maxActivityUpdatedAt, '2026-05-10T13:00:00Z');
 });
 
 test('classifies post-disposition advisory-bot comments as ack-only', () => {

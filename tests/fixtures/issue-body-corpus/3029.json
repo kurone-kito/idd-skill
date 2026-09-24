@@ -1,0 +1,28 @@
+{
+  "id": "3029",
+  "category": "merged",
+  "note": "",
+  "title": "fix(schemas): canonicalize phase-graph node IDs and guard them",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-f1c954422d68a288; anchor=kurone-kito/idd-skill#3026; set=set-d9ac57f123437ad6; session=claude-idd-authoring-3405aa6f371d; token=pub-b56c9a50b39e2cfc -->\n\n## Background\n\nParent roadmap: #3026\n\n`src/scripts/phase-id-resolver.mts` declares the canonical machine-facing\nphase IDs (`DEFAULT_CANONICAL_PHASE_IDS`, 47 entries) and a legacy-alias\nmap that normalizes older spellings onto them — `F2_5` accepts `F2.5`,\n`F2-5`, and `F25`; `A4_5` accepts `A4.5`, `A4-5`, and `A45`.\n\n`schemas/phase-graph.json` is the machine-readable routing graph, validated\nfor referential integrity by `src/scripts/validate-schemas.mts`. Comparing\nits node IDs against the resolver's canonical list:\n\n- the graph declares a node `F2.5`, which is a **legacy alias**, not the\n  canonical `F2_5`. The same string also appears inside `F2`'s `next`\n  array.\n- the graph has 38 nodes against 47 canonical IDs. Eleven canonical IDs are\n  absent: `A0`, `A0_O`, `A0_T`, `A1`, `A1_5`, `A2`, `A3`, `A3_5`, `A4`,\n  `A4_5`, and `F2_5`.\n- the graph declares a bare `A` node that is not a canonical phase ID.\n\nThe bare `A` node is deliberate and documented: the resolver's own header\ncomment states it is \"the collapsed routing-graph-only node in\n`schemas/phase-graph.json`\", `resume-route-selection` never emits it, and\n`tests/phase-id-resolver.test.mts` asserts `A` resolves to\n`unknown_phase_id`. Whether to expand it into the concrete discovery\nsub-phases is a routing-model decision, not a naming defect, and it is out\nof scope here.\n\nThe `F2.5` node is a different matter. It is a naming inconsistency between\ntwo files that are supposed to share one vocabulary, and nothing today\nprevents it or the next one: no check asserts that a graph node ID is a\ncanonical phase ID. Today the inconsistency is latent rather than live —\ngrepping `src/` and `tests/` finds no consumer that looks a resolver-\nproduced canonical ID up in the graph — but it means the graph cannot be\ntrusted as the substrate for any phase re-ordering work until both the\nspelling and the guard exist. This is preventive; no incident is attributed\nto it.\n\n## Proposed change\n\n- Rename the `schemas/phase-graph.json` node `F2.5` to the canonical\n  `F2_5`, including the occurrence inside `F2`'s `next` array. Do not\n  change any edge, and do not add or remove any node.\n- Add a test asserting that every `schemas/phase-graph.json` node ID is\n  either a canonical phase ID per `phase-id-resolver` or the documented\n  collapsed `A` node, and that no node ID is a legacy alias of a canonical\n  ID. The `A` exemption must be explicit and commented, naming the resolver\n  comment it mirrors, so a future reader can tell a deliberate exemption\n  from an unnoticed gap.\n- Leave `tests/phase-id-resolver.test.mts`'s existing\n  `assertUnknownPhaseId('A')` assertion unchanged; it and the new test\n  encode the same decision from opposite directions.\n\nDo not expand the collapsed `A` node, do not renumber any phase, and do not\ntouch the legacy-alias map. Those belong to the re-order proposal this\ntrack's sibling issue produces.\n\n## Acceptance criteria\n\n- [ ] `schemas/phase-graph.json` contains no node ID and no `next` entry\n      spelled `F2.5`; the node and its inbound edge read `F2_5`.\n- [ ] The graph's node count and edge set are otherwise byte-for-byte\n      unchanged apart from that rename; state this explicitly in the PR\n      body.\n- [ ] A test fails when a node ID is introduced that is neither a canonical\n      phase ID nor the documented `A` node.\n- [ ] That same test fails when a node ID is changed to a legacy alias of a\n      canonical ID, for example reverting `F2_5` to `F2.5`.\n- [ ] The `A` exemption in that test carries a comment naming the\n      `phase-id-resolver` header comment that documents the collapse.\n- [ ] `node --test tests/*.test.mts` passes, including the existing\n      referential-integrity validation of the live graph data file.\n- [ ] The full `pre-push-validate` command from the Project commands table\n      passes.\n\n## Candidate files\n\n- `schemas/phase-graph.json`\n- `tests/phase-id-resolver.test.mts`\n- `tests/schema-validation.test.mts`\n- `src/scripts/phase-id-resolver.mts`\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable; below\nthe configured floor is human-oriented. A one-token rename plus a test,\nwith the one judgment call (whether to expand the collapsed node) removed\nfrom scope and assigned to the sibling issue._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "19b4883d43785b5871a5870cac73dfaa4c8ca227c4e8c7c5cbfc81a9fc4d9aad",
+  "fetchedAt": "2026-09-24T04:42:36.885Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

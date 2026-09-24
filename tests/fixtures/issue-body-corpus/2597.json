@@ -1,0 +1,31 @@
+{
+  "id": "2597",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: audit-pr-cleanup has no ack-only-post-disposition carve-out F2/F3's gate already has",
+  "labels": [
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "# needs-decision: audit-pr-cleanup has no ack-only-post-disposition carve-out F2/F3's gate already has\n\n## Background\n\nRefs #2586. `hasFreshDisposition` (`src/scripts/protocol-helpers.mts`)\ncomputes `latestFeedbackAt` as the max activity timestamp of every\nnon-disposition comment in a thread, then requires the disposition\ncomment's own timestamp to be strictly after that max. In practice, any\nsingle trailing reply that is not itself a recognized `**Accepted**`/\n`**Rejected**` disposition — including a content-free advisory-bot\ncourtesy acknowledgment — invalidates the disposition's freshness.\n\nReproduced mechanically against a real PR review thread (GraphQL\nthread id `PRRT_kwDOCuI_ec6fNMgw`, `isResolved: true`, fetched via `gh\napi graphql`, not only from a session self-report): a bot posted the\noriginal finding; a maintainer replied with a properly stamped\n`**Rejected** — {reason}` disposition; the same bot then replied a\ncontent-free courtesy withdrawal (\"thanks for the clarification ...\nI withdraw this finding\") with a timestamp after the disposition's own.\n`hasFreshDisposition` evaluates `false` for this exact thread.\n\n`audit-pr-cleanup.mts`'s two consumers of this function — the\nper-thread minimizer check in `evaluateReviewComment` (reporting\n`'review thread is missing an IDD accept/reject disposition'`) and the\nper-review-parent aggregate via `indexThreadsByReview`'s\n`missingDisposition` counter — have no carve-out for this pattern; a\nrepository-wide search for `ackOnly`/\n`classifyThreadAckOnlyPostDisposition`/`soleCause` against\n`audit-pr-cleanup.mts` returns zero matches.\n\n`pre-merge-readiness.mts` hits the identical `hasFreshDisposition`\nstaleness first, but when it comes back `false`, additionally runs\n`classifyThreadAckOnlyPostDisposition`, which checks whether every\npost-disposition, post-snapshot-boundary external comment on the\nthread is a pure advisory-bot courtesy acknowledgment. When true,\n`soleCauseAckOnlyPostDisposition` is set, and\n`buildPreMergeReadinessSummary`'s blocker logic — explicitly commented\n`(#2125)` — skips the `disposition-evidence` blocker for exactly this\ncase. This is the mechanism that lets F2/F3 correctly treat the\nexample thread above as dispositioned, while F4's `audit-pr-cleanup`\n(no such override) reports it missing.\n\n`#2125` (closed) fixed the identical symptom shape but was explicitly\nscoped to the F2/F3 merge-execute path — its PR's changed-files list\nnever touched `audit-pr-cleanup.mts`. `#951` (closed) previously\nestablished that `audit-pr-cleanup`'s `hasFreshDisposition` callers are\ndeliberately treated as \"non-gate,\" a distinct category from the F2/F3\ngate's stricter, purpose-built handling — relevant precedent that this\nline has been drawn deliberately before, which is why this is a\nmaintainer decision rather than an assumed oversight. No open or closed\nissue was found covering extending the F2/F3 ack-only carve-out to F4.\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision among the\noptions below, given `#951`'s precedent that F4's stricter treatment\nwas a deliberate prior choice.\n\n### Options for a maintainer to choose among\n\n1. **Extend the carve-out.** Give `audit-pr-cleanup.mts`'s two call\n   sites the same `classifyThreadAckOnlyPostDisposition`-style\n   ack-only check F2/F3 already has, so a resolved thread whose only\n   post-disposition activity is a pure advisory-bot courtesy\n   acknowledgment is still treated as dispositioned (or reported as a\n   separate, distinctly labeled skip reason) for F4 minimization\n   purposes.\n2. **Keep F4 stricter, fix the message.** Leave the current\n   classification behavior unchanged, but stop reporting the\n   `'...is missing an IDD accept/reject disposition'` text when a\n   disposition **was** found but is merely stale — that message is\n   misleading for a human auditing the F4 report, who would reasonably\n   conclude no disposition was ever posted.\n3. **Minimal: enrich the skip reason only.** Without changing pass/fail\n   classification, have the skip carry whether a stale disposition was\n   found and what invalidated its freshness (the trailing comment's\n   author/timestamp), so the false-positive is legible without\n   re-deriving it from GraphQL data by hand.\n4. **Something else the maintainer prefers.**\n\n## Acceptance criteria\n\n- A maintainer states which option above to take (or a different\n  resolution) in a comment on this issue.\n- Close this issue once that decision is recorded. The chosen option\n  becomes a follow-up `ready` issue scoped to the exact\n  `audit-pr-cleanup.mts` change — this issue itself stays\n  decision-only.\n\n## Candidate files\n\n- `src/scripts/audit-pr-cleanup.mts`\n- `src/scripts/protocol-helpers.mts`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. This is a deliberate\ngate-vs-non-gate strictness trade-off with a settled precedent (#951);\nthe field evidence above is already gathered and mechanically verified\nagainst a live thread, and does not need re-deriving._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "f2ef86623cb7f960d4b66f13d6faff88b595a672b4f4640a782cf17137a1664a",
+  "fetchedAt": "2026-09-24T04:46:48.132Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "limited_scope",
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

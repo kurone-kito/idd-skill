@@ -37,6 +37,7 @@ import {
   classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
+  DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
   hasFreshDisposition,
@@ -44,6 +45,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
+  readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
@@ -58,6 +60,12 @@ import {
   summarizeReviewerStates,
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
+import {
+  computeClosingSetEvidence,
+  findStrayCommitCloses,
+} from '../src/scripts/supersession-detection.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { readJson } from './test-utils.mts';
 
@@ -743,6 +751,96 @@ test('buildPreMergeReadinessSummary: a malformed review-watermark comment surfac
   const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
   assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
   assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
+// #3339: a review-watermark-shaped comment whose head SHA is 12 hex
+// characters (not the required 40) is accepted by the loose shape
+// `pattern` but rejected by parseReviewWatermarkComment's stricter field
+// check -- proving the same 'malformed-watermark' (not 'missing-watermark')
+// wiring as the glued-note case above also covers this distinct,
+// field-level defect class end to end.
+test('buildPreMergeReadinessSummary: a review-watermark comment with a too-short head SHA surfaces malformed-watermark', () => {
+  const prHeadSha = '7777777777777777777777777777777777777777';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(
+            12,
+          )} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
+// Same field-level defect class, this time on the `maxActivityUpdatedAt`
+// field: neither a valid ISO-8601 timestamp nor the literal `none`
+// sentinel.
+test('buildPreMergeReadinessSummary: a review-watermark comment with an invalid maxActivityUpdatedAt surfaces malformed-watermark', () => {
+  const prHeadSha = '8888888888888888888888888888888888888888';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} not-a-timestamp 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
+// Control case for the two tests above: with no watermark-shaped comment
+// at all (malformed or otherwise), the generic 'missing-watermark' reason
+// must still apply -- proving the new field-invalid branch does not widen
+// detectMalformedReviewWatermarkComments into flagging ordinary absence.
+test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays missing-watermark', () => {
+  const prHeadSha = '9999999999999999999999999999999999999999';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: 'just an ordinary regular comment, not marker-shaped at all',
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
 });
 
 test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
@@ -2981,14 +3079,97 @@ test('disposition evidence keeps freshness after an IDD reply even if later huma
   );
 });
 
-test('disposition evidence recognizes a stamped Accepted under a custom markerPrefix (#2139)', () => {
+// #3244: `hasFreshDisposition` no longer honors the review-reply stamp
+// regardless of author -- it only ever narrows who counts as an IDD
+// disposition author (#2135's "only makes the gate stricter" design
+// intent), never widens it. `isIddOriginatedThreadReply`'s own
+// presence-only classification (below, still author-blind by design) is
+// untouched, so the custom-`markerPrefix` coverage moves there instead of
+// exercising a now-removed `hasFreshDisposition` option.
+test('disposition evidence keeps a human-authored thread open when a later reply carries only the review-reply stamp under a custom markerPrefix (#3244)', () => {
   const stamp = renderReviewReplyStamp('org-project');
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [],
       threads: [
         {
-          id: 'thread-custom-prefix',
+          id: 'thread-custom-prefix-stamp-only',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                // No `**Accepted**`/`**Rejected**` prefix -- the stamp
+                // alone still makes this reply IDD-originated
+                // (`isIddOriginatedThreadReply`), so it is NOT
+                // presence-only, and the thread still lacks any actual
+                // disposition.
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `just a follow-up note\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence treats the same human-authored reply as presence-only once the stamp is removed (#3244)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-custom-prefix-no-stamp',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: 'just a follow-up note',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence keeps a Copilot thread open when a stamped Accepted reply comes from an untrusted, non-PR-author account (#3244)', () => {
+  const stamp = renderReviewReplyStamp('org-project');
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-untrusted-stamped-accept',
           isResolved: false,
           comments: {
             pageInfo: { hasNextPage: false },
@@ -3011,8 +3192,54 @@ test('disposition evidence recognizes a stamped Accepted under a custom markerPr
     { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
   );
 
-  assert.equal(summary.route, 'proceed');
-  assert.equal(summary.missingThreadCount, 0);
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence keeps a Copilot thread open when the stamped Accepted reply is posted by an untrusted PR author (#3244)', () => {
+  const stamp = renderReviewReplyStamp('org-project');
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-untrusted-pr-author-stamped-accept',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      markerPrefix: 'org-project',
+      prAuthorLogin: 'someone-else',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
 });
 
 test('disposition evidence classifies a trusted maintainer LGTM as a human reply (#2139)', () => {
@@ -6575,6 +6802,7 @@ test('resolveActiveClaimForWriteGate recognizes an authorized issue-only handoff
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6589,6 +6817,7 @@ test('resolveActiveClaimForWriteGate keeps the original on an unauthorized appro
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6605,6 +6834,7 @@ test('resolveActiveClaimForWriteGate keeps the original on a self-signed handoff
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6618,6 +6848,7 @@ test('resolveActiveClaimForWriteGate keeps the original when mode is disabled', 
       forcedHandoffEnabled: false,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6634,6 +6865,7 @@ test('resolveActiveClaimForWriteGate is inert on an old-claim-id mismatch', () =
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6647,6 +6879,7 @@ test('resolveActiveClaimForWriteGate is inert on a branch mismatch', () => {
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6661,6 +6894,7 @@ test('resolveActiveClaimForWriteGate defaults isAuthorizedForcedHandoff to fail 
       isTrustedAuthor: wgTrusted,
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6670,6 +6904,7 @@ test('resolveActiveClaimForWriteGate resolves a plain claim like a bare predicat
   const events = [wgClaimEvent()];
   const writeGate = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor: wgTrusted,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
   // A non-FH repo (no handoff marker) must resolve identically to the bare
   // resolveActiveClaim(events, predicate) path.
@@ -6688,6 +6923,7 @@ test('Part B: PR-backed claim accepts an issue-only handoff that predates the PR
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T12:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6704,6 +6940,7 @@ test('Part B: PR-backed claim rejects an issue-only handoff at/after the PR firs
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T10:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6717,6 +6954,7 @@ test('Part B: PR-backed claim rejects an issue-only handoff with no prFirstCommi
       forcedHandoffEnabled: true,
       expectedLinkedPrs: ['#359'],
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6736,6 +6974,7 @@ test('Part B: PR-backed claim accepts an issue-plus-pr handoff with a matching l
       // by the linked-pr match, not by the predates-PR rule.
       prFirstCommitAt: '2026-05-12T10:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6753,6 +6992,7 @@ test('Part B: PR-backed claim rejects an issue-plus-pr handoff with a mismatchin
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T12:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6821,11 +7061,18 @@ test('resolveActiveClaimForWriteGate recognizes a takeover claim inside a config
   assert.equal(active?.agentId, 'cli-new');
 });
 
-test('resolveActiveClaimForWriteGate keeps the old claim active for the same 20h gap without staleAgeMs (old hardcoded 24h)', () => {
+test('resolveActiveClaimForWriteGate keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default (#3270)', () => {
+  // #3270: `staleAgeMs` is now a REQUIRED option (the type checker catches a
+  // future caller that forgets it), so this can no longer be expressed by
+  // omission the way the pre-#3270 version of this test did. A caller that
+  // deliberately wants the distributed 24h default now passes
+  // DEFAULT_STALE_AGE_MS explicitly -- the 20h-old claim is correctly still
+  // NOT stale under that window, so the takeover does not activate.
   const active = resolveActiveClaimForWriteGate(
     [wgClaimEvent(), wgTakeoverEvent()],
     {
       isTrustedAuthor: wgTrusted,
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6847,12 +7094,15 @@ test('summarizeClaimValidation reports no claimLost for a takeover inside a conf
   assert.equal(summary.activeClaim.claimId, WG_TAKEOVER_CLAIM_ID);
 });
 
-test('summarizeClaimValidation falsely reports claimLost for the same takeover without staleAgeMs (the #1310 bug, pinned)', () => {
-  // Documents the exact production symptom from the issue: the legitimate
-  // successor's session recorded WG_TAKEOVER_CLAIM_ID as its expected claim,
-  // but the write gate — with no staleAgeMs override — still resolves the
-  // hardcoded-stale old claim as active, so a live successor reads as
-  // claimLost. Fixed by passing staleAgeMs from the resolved policy.
+test('summarizeClaimValidation reports claimLost for the same takeover when staleAgeMs is omitted (its own documented 24h default, #3270)', () => {
+  // #3270: `summarizeClaimValidation` itself deliberately keeps `staleAgeMs`
+  // OPTIONAL -- it has non-write-gate callers (status/summary building,
+  // other tests) that must not be forced to thread a window they do not
+  // care about. This is no longer "the #1310 bug" (every WRITE-GATE caller
+  // now goes through `summarizeClaimValidationForWriteGate`, which makes
+  // `staleAgeMs` required and closes the omission class of bug); it is this
+  // primitive's own intended, documented fallback for a caller that
+  // genuinely omits the window.
   const summary = summarizeClaimValidation(
     [wgClaimEvent(), wgTakeoverEvent()],
     {
@@ -6864,6 +7114,31 @@ test('summarizeClaimValidation falsely reports claimLost for the same takeover w
   assert.equal(summary.claimLost, true);
   assert.equal(summary.reason, 'claim-id-mismatch');
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+// #3270: `readClaimStaleAgeMs` is the single shared config-read point
+// `pre-merge-readiness.mts` (`readClaimStaleAgeMs(iddConfig)` at its own
+// F2/F3 claim-gate call site) and `resume-claim-routing.mts`'s `loadPolicy`
+// (`staleAgeMs: readClaimStaleAgeMs(typedConfig)`) both delegate to now --
+// so a schema-invalid value necessarily resolves to the identical
+// milliseconds in both by construction, not by two independently-maintained
+// parsers happening to agree. Before #3270, resume-claim-routing.mts had its
+// own loose, case-insensitive local `parseDurationToMs` that accepted
+// `pt12h` as 12h, while `pre-merge-readiness.mts`'s case-sensitive
+// `normalizePolicyConfig` fell back to the 24h default -- a genuine
+// cross-helper divergence this test pins against regressing.
+test('readClaimStaleAgeMs resolves a schema-invalid claimTiming.staleAge (lowercase "pt12h") to the distributed 24h default', () => {
+  assert.equal(
+    readClaimStaleAgeMs({ claimTiming: { staleAge: 'pt12h' } }),
+    DEFAULT_STALE_AGE_MS,
+  );
+  // A well-formed, case-correct value still parses normally.
+  assert.equal(
+    readClaimStaleAgeMs({ claimTiming: { staleAge: 'PT12H' } }),
+    12 * 60 * 60 * 1000,
+  );
+  // Absent config: same distributed default.
+  assert.equal(readClaimStaleAgeMs(null), DEFAULT_STALE_AGE_MS);
 });
 
 test('buildPreMergeReadinessSummary threads staleAgeMs to the F2/F3 claim gate (#1310)', () => {
@@ -10057,6 +10332,539 @@ test('#2272: an unrecognized developmentBranchTarget.status fails closed even wh
   );
   assert.ok(blocker);
   assert.match(blocker.detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// #3298: closing-set / stray-commit-close merge gate.
+//
+// computeClosingSetEvidence (supersession-detection.mts) is the pure
+// evidence computation collectPreMergeReadiness calls; these tests drive it
+// directly with hand-built inputs, mirroring this file's own
+// developmentBranchTarget tests immediately above. computePreMergeReadinessBlockers
+// then rolls the resulting evidence into a `closing-set` blocker.
+// ---------------------------------------------------------------------------
+
+const CLOSING_SET_OWNER = 'kurone-kito';
+const CLOSING_SET_REPO = 'idd-skill';
+const CLOSING_SET_BASE_REF = 'main';
+
+/** Minimal `computeClosingSetEvidence` options shared by every test below;
+ * each test overrides only the fields its scenario cares about. */
+function baseClosingSetOptions(): Parameters<
+  typeof computeClosingSetEvidence
+>[0] {
+  return {
+    expected: [7],
+    closingIssuesReferences: [{ number: 7 }],
+    owner: CLOSING_SET_OWNER,
+    repo: CLOSING_SET_REPO,
+    baseRefName: CLOSING_SET_BASE_REF,
+    liveDefaultBranch: CLOSING_SET_BASE_REF,
+    commits: [],
+  };
+}
+
+/** A `pulls/{pr}/commits` REST-shaped entry, matching `PrCommitPayload`. */
+function commitPayload(sha: string, message: string) {
+  return { sha, commit: { message } };
+}
+
+/** Build the smallest report shape `computePreMergeReadinessBlockers` needs
+ * to evaluate the `closing-set` gate alone, without every other gate's own
+ * fail-closed defaults also adding unrelated blockers to the returned list
+ * -- callers filter for `gate === 'closing-set'` rather than asserting the
+ * full list. The parameter is intentionally looser than
+ * `ReturnType<typeof computeClosingSetEvidence>` (a plain `status: string`
+ * rather than the real enum) so the "unrecognized status" test below can
+ * pass a value the real evidence function would never produce. */
+function closingSetBlockers(
+  closingSet:
+    | (Omit<ReturnType<typeof computeClosingSetEvidence>, 'status'> & {
+        status: string;
+      })
+    | undefined,
+) {
+  const report: Record<string, unknown> =
+    closingSet === undefined ? {} : { closingSet };
+  return computePreMergeReadinessBlockers(report).filter(
+    (blocker) => blocker.gate === 'closing-set',
+  );
+}
+
+test('closingSet: closingIssuesReferences equal to [claim-issue] and a clean commit message -> match, no blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: [commitPayload('a'.repeat(40), 'Closes #7')],
+  });
+  assert.equal(evidence.status, 'match');
+  assert.deepEqual(evidence.extra, []);
+  assert.deepEqual(evidence.missing, []);
+  assert.deepEqual(evidence.strayCommitCloses, []);
+  assert.deepEqual(closingSetBlockers(evidence), []);
+});
+
+test('closingSet: an extra closingIssuesReferences entry outside the deliberate set -> mismatch, blocker names the number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.extra, [8]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /extra/);
+  assert.match(blockers[0].detail, /\b8\b/);
+  assert.match(blockers[0].detail, /--closing-issues/);
+});
+
+test('closingSet: the claimed issue missing from closingIssuesReferences -> mismatch, blocker names the number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.missing, [7]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /missing/);
+  assert.match(blockers[0].detail, /\b7\b/);
+});
+
+test('closingSet: a stray "Fixes #M" commit message outside the set -> mismatch, blocker names the sha and M; "Closes #N" for the claimed N is not a stray', () => {
+  const strayCommit = commitPayload('deadbeef'.repeat(5), 'Fixes #99');
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: [commitPayload('a'.repeat(40), 'Closes #7'), strayCommit],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.strayCommitCloses, [
+    { sha: strayCommit.sha, issue: 99 },
+  ]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, new RegExp(strayCommit.sha));
+  assert.match(blockers[0].detail, /#99/);
+});
+
+test('closingSet: findStrayCommitCloses ignores a match against the expected set and reports each distinct stray number once per commit', () => {
+  const strays = findStrayCommitCloses(
+    [
+      commitPayload('c1', 'Closes #7, and also fixes #10 and resolves #10'),
+      commitPayload('c2', 'this also fixes #11'),
+    ],
+    [7],
+  );
+  assert.deepEqual(strays, [
+    { sha: 'c1', issue: 10 },
+    { sha: 'c2', issue: 11 },
+  ]);
+});
+
+test('closingSet: --closing-issues N,M with matching references -> match; the same references without the flag -> mismatch naming --closing-issues', () => {
+  const withFlag = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [7, 8],
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(withFlag.status, 'match');
+
+  const withoutFlag = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [7],
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(withoutFlag.status, 'mismatch');
+  const blockers = closingSetBlockers(withoutFlag);
+  assert.match(blockers[0].detail, /--closing-issues/);
+});
+
+test('closingSet: --closing-issues omitting the claimed issue, or combined with --claimless, is a parseArgs usage error', () => {
+  assert.throws(
+    () =>
+      parseArgs(['--pr', '1', '--claim-issue', '7', '--closing-issues', '8,9']),
+    /--closing-issues must include the claimed issue number 7/,
+  );
+  assert.throws(
+    () => parseArgs(['--pr', '1', '--claimless', '--closing-issues', '7']),
+    /--closing-issues cannot be combined with --claimless/,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--closing-issues',
+        '7,abc',
+      ]),
+    /invalid --closing-issues value/,
+  );
+  const parsed = parseArgs([
+    '--pr',
+    '1',
+    '--claim-issue',
+    '7',
+    '--closing-issues',
+    '7,8',
+  ]);
+  assert.deepEqual(parsed.closingIssueNumbers, [7, 8]);
+});
+
+test('closingSet: --claimless with a closing keyword in a commit message -> blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [],
+    closingIssuesReferences: [],
+    commits: [commitPayload('a'.repeat(40), 'Closes #50')],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.strayCommitCloses, [
+    { sha: 'a'.repeat(40), issue: 50 },
+  ]);
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a base branch different from the live default branch -> skipped-non-default-branch, no blocker even with a genuine mismatch present', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    baseRefName: 'feature-branch',
+    liveDefaultBranch: 'main',
+    closingIssuesReferences: [{ number: 999 }],
+    commits: [commitPayload('a'.repeat(40), 'Fixes #999')],
+  });
+  assert.equal(evidence.status, 'skipped-non-default-branch');
+  assert.deepEqual(closingSetBlockers(evidence), []);
+});
+
+test('closingSet: an unreadable live default branch -> unavailable, blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    liveDefaultBranch: null,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+// Copilot review, PR #3353: an empty/missing `baseRefName` previously
+// compared unequal to a non-empty `liveDefaultBranch` and fell through to
+// `"skipped-non-default-branch"` -- reporting a successful exemption for a
+// PR whose real base branch was never actually verified, instead of
+// failing closed. `liveDefaultBranch` is deliberately a real, non-empty
+// value here so the only unknown is `baseRefName` itself.
+test('closingSet: an empty/missing baseRefName fails closed to unavailable, never a false skipped-non-default-branch exemption', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    baseRefName: '',
+    liveDefaultBranch: 'main',
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+// Copilot review, PR #3353: a missing/non-array closingIssuesReferences
+// previously coerced to `[]`, silently treating "not verified" as "verified
+// empty" -- under --claimless (expected: []), that let a genuinely unread
+// closing-reference field report "match" instead of failing closed. Each
+// case below pairs a non-array value with an empty `expected` (the
+// --claimless shape) specifically because that is the one combination a
+// naive `[]` coercion cannot be told apart from real, confirmed evidence.
+for (const malformed of [null, undefined, 'not-an-array', 42, { number: 7 }]) {
+  test(`closingSet: closingIssuesReferences ${JSON.stringify(malformed)} fails closed to unavailable, never a false "match" on unread evidence`, () => {
+    const evidence = computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      expected: [],
+      closingIssuesReferences: malformed,
+    });
+    assert.equal(evidence.status, 'unavailable');
+    const blockers = closingSetBlockers(evidence);
+    assert.equal(blockers.length, 1);
+    assert.match(blockers[0].detail, /unavailable/);
+  });
+}
+
+test('closingSet: a failed commit-list read (null) -> unavailable, blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: null,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a commit list hitting the REST 250-entry pagination cap -> unavailable, blocker', () => {
+  const commits = Array.from({ length: 250 }, (_, index) =>
+    commitPayload(String(index).padStart(40, '0'), 'Closes #7'),
+  );
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a closingIssuesReferences entry for the same number in another repository counts as extra, not a match', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [
+      {
+        number: 7,
+        repository: {
+          name: 'other-repo',
+          owner: { login: 'other-owner' },
+        },
+      },
+    ],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.extra, [7]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /extra/);
+});
+
+test('closingSet: a same-repository entry (repository field present, matching owner/repo) still matches normally', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [
+      {
+        number: 7,
+        repository: {
+          name: CLOSING_SET_REPO,
+          owner: { login: CLOSING_SET_OWNER },
+        },
+      },
+    ],
+  });
+  assert.equal(evidence.status, 'match');
+});
+
+// Copilot review, PR #3353: closingIssuesReferences is an unvalidated
+// provider passthrough, so a malformed entry (no resolvable number, or a
+// non-object repository field) previously fell through a silent `continue`,
+// dropping it from the comparison entirely -- expected [7] plus
+// [{ number: 7 }, {}] reported "match" even though the second entry was
+// never actually verified as "nothing." Both cases now fail the whole
+// result closed instead of silently ignoring the one bad entry.
+test('closingSet: a malformed entry with no resolvable number fails the whole result closed, not just that entry', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7 }, {}],
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('closingSet: a present but non-object repository field fails closed, never silently assumed same-repo', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7, repository: 'not-an-object' }],
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('closingSet: an explicit null repository field is still treated as "no repository info" (same-repo), not malformed', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7, repository: null }],
+  });
+  assert.equal(evidence.status, 'match');
+});
+
+// Copilot review, PR #3353: `Number(true) === 1` -- a raw `{ number: true }`
+// entry previously coerced to issue 1 and could match a real expected
+// number, defeating the malformed-entry fail-closed check immediately
+// above. Only a genuine `number`-typed value is ever accepted now.
+test('closingSet: a boolean number field never coerces to a matching issue number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [1],
+    closingIssuesReferences: [{ number: true }],
+  });
+  assert.equal(evidence.status, 'unavailable');
+});
+
+test('computePreMergeReadinessBlockers: an absent closingSet adds no closing-set blocker (unmigrated caller / unit fixture)', () => {
+  assert.deepEqual(closingSetBlockers(undefined), []);
+});
+
+// Copilot review, PR #3353: a present `closingSet: null` previously read as
+// falsy and skipped the whole gate, same as a genuinely absent key -- since
+// the schema requires this section, only `undefined` (the unmigrated-caller
+// case above) may skip it; `null` must still reach `preMergeAsRecord`'s
+// `{}` fallback and block as `unavailable`.
+test('computePreMergeReadinessBlockers: a present closingSet: null still blocks as unavailable, unlike a genuinely absent key', () => {
+  const blockers = computePreMergeReadinessBlockers({
+    closingSet: null,
+  }).filter((blocker) => blocker.gate === 'closing-set');
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('computePreMergeReadinessBlockers: an unrecognized closingSet.status fails closed with a blocker', () => {
+  const blockers = closingSetBlockers({
+    status: 'bogus',
+    expected: [7],
+    actual: [],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
+  });
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// #3298: collectPreMergeReadiness wiring -- proves the hoisted, unconditional
+// `listChangeRequestCommits` fetch (previously gated behind
+// forcedHandoffEnabled) is actually caught and turned into `closingSet`
+// evidence, not just that the pure evidence function handles a `null` input
+// correctly (already covered directly above).
+// ---------------------------------------------------------------------------
+
+function closingSetSmokeFakePort(
+  overrides: {
+    closingIssuesReferences?: unknown[];
+    throwOnCommits?: boolean;
+    nonArrayCommits?: boolean;
+  } = {},
+): ProviderPort {
+  const port = createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: overrides.closingIssuesReferences ?? [
+          { number: 7 },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  });
+  if (overrides.throwOnCommits) {
+    return {
+      ...port,
+      listChangeRequestCommits() {
+        throw new Error('simulated commits-API failure');
+      },
+    };
+  }
+  if (overrides.nonArrayCommits) {
+    // Copilot review, PR #3353: `listChangeRequestCommits` is declared
+    // `unknown[]` on the port, but nothing enforces that at runtime -- a
+    // non-conforming provider (or a malformed successful `gh` response)
+    // could hand back something else entirely.
+    return {
+      ...port,
+      listChangeRequestCommits() {
+        return { notAnArray: true } as unknown as unknown[];
+      },
+    };
+  }
+  return port;
+}
+
+test('collectPreMergeReadiness: a throwing listChangeRequestCommits read fails closed to closingSet.status "unavailable" (not an uncaught crash)', () => {
+  const port = closingSetSmokeFakePort({ throwOnCommits: true });
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'unavailable');
+  assert.ok(
+    (report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: a non-array listChangeRequestCommits response fails closed to closingSet.status "unavailable" instead of crashing', () => {
+  const port = closingSetSmokeFakePort({ nonArrayCommits: true });
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'unavailable');
+  assert.ok(
+    (report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: a clean commit list and matching closingIssuesReferences collect to closingSet.status "match"', () => {
+  const port = closingSetSmokeFakePort();
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'match');
+  assert.ok(
+    !(report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,28 @@
+{
+  "id": "1834",
+  "category": "merged",
+  "note": "",
+  "title": "docs(advisory-convergence): warn against job `name:` override breaking exact-match rerun",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\nThe rerun helper and the advisory-wait policy both use the literal\ncheck-run context `idd-advisory-convergence`. GitHub derives a\ncheck-run name from a job's `name:` field when one is present; otherwise\nthe job id supplies the context name.\n\nAn adopter can therefore change the check-run context without changing\nthe job id: adding a display-name key to the job makes the actual\ncheck-run name differ from the literal context consumed by the helper\nand the external-check waiver path. The rerun helper then reports no\nmatching instances even when the workflow has run for the current HEAD.\n\nThe source workflow already warns that changing the job id requires\nkeeping the helper selector, policy selector, and required status check\nin sync. It does not warn that adding a display-name key has the same\neffect. The workflow currently has no such key, so this is a preventive\ndocumentation gap.\n\nThe workflow comments themselves are the adopter-facing guidance: the\nsource copy is the dogfooded reference and the template copy is what\nadopters copy. Updating both copies keeps this warning adjacent to the\njob definition and avoids duplicating a warning already covered by\nrecent onboarding documentation work.\n\n## Proposed change\n\nExtend the existing job-context comment in both copies of\n`idd-advisory-convergence.yml`:\n\n1. State that the job id is the exact check-run context consumed by the\n   rerun helper, advisory-wait policy, and external-check waiver\n   configuration.\n2. Warn adopters not to add a `name:` display-name key to this job\n   unless they also update every consumer of the exact context.\n3. Keep the warning next to the existing job-id synchronization note so\n   it remains visible when the workflow is copied or customized.\n4. Run the documentation audit after editing the mirrored files.\n\n## Acceptance criteria\n\n- [ ] The source workflow comment names both job-id changes and adding a\n      `name:` display-name key as changes that can break exact\n      check-run matching.\n- [ ] The `idd-template/` workflow carries the equivalent warning.\n- [ ] Both warnings identify the literal context\n      `idd-advisory-convergence` and the consumers that depend on it.\n- [ ] `node scripts/audit-docs.mjs --check` passes.\n\n## Candidate files\n\n- `.github/workflows/idd-advisory-convergence.yml`\n- `idd-template/.github/workflows/idd-advisory-convergence.yml`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "961b05d4b86e1792a7393b15de606ff53b63a622c983cf3554ae54f53a093cf0",
+  "fetchedAt": "2026-09-24T04:43:21.386Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

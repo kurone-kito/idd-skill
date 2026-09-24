@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
+import type { CollaboratorPermissionCache } from '../src/scripts/collaborator-permission.mts';
+import { resolveTrustedCollaboratorMarkerLogins } from '../src/scripts/collaborator-permission.mts';
 import {
+  buildTrustedMarkerLogins,
   currentIsoTimestamp,
   generateSuccessorIds,
   main,
@@ -15,6 +18,7 @@ import {
 } from '../src/scripts/forced-handoff-marker.mts';
 import {
   applyClaimEvent,
+  DEFAULT_STALE_AGE_MS,
   normalizeForcedHandoffPayload,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
@@ -241,6 +245,7 @@ test('forced handoff helper replays prior handoffs when resolving the active cla
     trustedLogins,
     {
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
 
@@ -251,6 +256,48 @@ test('forced handoff helper replays prior handoffs when resolving the active cla
     branch: 'issue/337-feat-protocol-add-auditable-forced',
     createdAt: '2026-05-12T12:00:05Z',
   });
+});
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the plain
+// (non-forced-handoff) takeover below lands 20h later
+// (2026-05-13T05:00:00Z) -- squarely in the 18-24h gap the issue describes:
+// stale under an 18h configured age, not stale under the old hardcoded 24h
+// `summarizeClaimValidation` silently fell back to when
+// `resolveHelperActiveClaim` omitted `staleAgeMs`.
+test('resolveHelperActiveClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const trustedLogins = ['cli-old', 'cli-new'];
+  const oldClaim = {
+    body: [
+      '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+      '',
+      '_cli-old: issue claim — IDD automation marker._',
+    ].join('\n'),
+    created_at: '2026-05-12T09:00:00Z',
+    user: { login: 'cli-old' },
+  };
+  const takeover = {
+    body: [
+      '<!-- claimed-by: cli-new claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+      '',
+      '_cli-new: issue claim — IDD automation marker._',
+    ].join('\n'),
+    created_at: '2026-05-13T05:00:00Z',
+    user: { login: 'cli-new' },
+  };
+
+  const withConfiguredWindow = resolveHelperActiveClaim(
+    [oldClaim, takeover],
+    trustedLogins,
+    { staleAgeMs: 18 * 60 * 60 * 1000 },
+  );
+  assert.equal(withConfiguredWindow?.claimId, 'claim-20260513T050000Z-337-new');
+
+  const withDefaultWindow = resolveHelperActiveClaim(
+    [oldClaim, takeover],
+    trustedLogins,
+    { staleAgeMs: 24 * 60 * 60 * 1000 },
+  );
+  assert.equal(withDefaultWindow?.claimId, 'claim-20260512T090000Z-337-old');
 });
 
 test('forced handoff helper keeps PR-scoped active claim when issue-only handoff exists', () => {
@@ -297,6 +344,7 @@ test('forced handoff helper keeps PR-scoped active claim when issue-only handoff
         'https://github.com/kurone-kito/idd-skill/pull/359',
       ],
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
 
@@ -701,6 +749,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: authorizeKuroneKito,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(resultIssueOnly.contextScope, 'issue-only');
@@ -731,6 +780,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: authorizeKuroneKito,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(resultWithPr.contextScope, 'issue-plus-pr');
@@ -752,6 +802,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
         forcedBy: 'kurone-kito',
         reason: 'operator-approved-recovery',
         isAuthorizedForcedHandoff: authorizeKuroneKito,
+        staleAgeMs: DEFAULT_STALE_AGE_MS,
       }),
     /PR #999 does not match any open PR on claim branch issue\/496-feat-force-handoff-derive-live-pr/,
   );
@@ -790,6 +841,7 @@ test('planHandoff omits markerBody when forcedBy actor is not authorized', () =>
     forcedBy: 'unauthorized-actor',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(
@@ -823,6 +875,7 @@ test('planHandoff fails closed for the marker preview when no authorizer callbac
     trustedMarkerLogins: ['kurone-kito', 'github-copilot-cli-old'],
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   };
 
   // Missing callback must be treated as unauthorized for the preview,
@@ -885,6 +938,7 @@ test('planHandoff rejects prior issue-only handoff when PR is present (PR-scoped
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(result.contextScope, 'issue-plus-pr');
@@ -925,5 +979,142 @@ test('forcedHandoff.mode defaults to disabled when key is absent', () => {
     );
   } finally {
     process.chdir(originalCwd);
+  }
+});
+
+// --- kurone-kito/idd-skill#3340: buildTrustedMarkerLogins delegates its ----
+// collaborator-widening step to resolveTrustedCollaboratorMarkerLogins ------
+//
+// Mirrors force-handoff.test.mts's own #1693 parity test: previously this
+// file's buildTrustedMarkerLogins permission-checked every unique
+// issue-comment author (once collaborator marker trust is enabled),
+// over-trusting an ordinary write+ collaborator who never posted an
+// operational marker. It now delegates that widening step to
+// resolveTrustedCollaboratorMarkerLogins (collaborator-permission.mts) --
+// the same marker-authors-first filter force-handoff.mts already uses.
+
+const CLAIM_MARKER_BODY = [
+  '<!-- claimed-by: some-agent claim-3340-parity supersedes: none 2026-09-24T00:00:00Z branch: issue/3340-parity -->',
+  '',
+  '_some-agent: issue claim — IDD automation marker. Do not edit._',
+].join('\n');
+
+test('buildTrustedMarkerLogins trusts only operational-marker-shaped comment authors when collaborator marker trust is enabled', () => {
+  const previousEnv = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  process.env.IDD_TRUST_COLLABORATOR_MARKERS = 'true';
+  try {
+    const comments = [
+      {
+        body: CLAIM_MARKER_BODY,
+        created_at: '2026-09-24T00:00:00Z',
+        user: { login: 'marker-author' },
+      },
+      {
+        body: 'just an ordinary comment, no marker here',
+        created_at: '2026-09-24T00:00:01Z',
+        user: { login: 'ordinary-commenter' },
+      },
+    ];
+    const seed: CollaboratorPermissionCache = new Map([
+      ['o/r:marker-author', { permission: 'write', roleName: 'write' }],
+      ['o/r:ordinary-commenter', { permission: 'write', roleName: 'write' }],
+    ]);
+
+    const { logins: trusted, sources } = buildTrustedMarkerLogins(
+      'o',
+      'r',
+      'viewer',
+      '',
+      comments,
+      new Map(seed),
+    );
+    const siblingFilterResult = resolveTrustedCollaboratorMarkerLogins(
+      'o',
+      'r',
+      comments,
+      { cache: new Map(seed) },
+    );
+
+    // Parity, per-login: the same decision resolveTrustedCollaboratorMarkerLogins
+    // makes for each comment author is reflected in buildTrustedMarkerLogins's
+    // own trusted set.
+    for (const login of ['marker-author', 'ordinary-commenter']) {
+      assert.equal(
+        trusted.has(login),
+        siblingFilterResult.includes(login),
+        `parity mismatch for ${login}`,
+      );
+    }
+    assert.ok(trusted.has('marker-author'));
+    assert.ok(!trusted.has('ordinary-commenter'));
+    assert.ok(sources.includes('collaborators'));
+  } finally {
+    if (previousEnv === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousEnv;
+    }
+  }
+});
+
+test('buildTrustedMarkerLogins reports no collaborators source when no collaborator posted a marker', () => {
+  const previousEnv = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  process.env.IDD_TRUST_COLLABORATOR_MARKERS = 'true';
+  try {
+    const comments = [
+      {
+        body: 'just an ordinary comment, no marker here',
+        created_at: '2026-09-24T00:00:01Z',
+        user: { login: 'ordinary-commenter' },
+      },
+    ];
+    const seed: CollaboratorPermissionCache = new Map([
+      ['o/r:ordinary-commenter', { permission: 'write', roleName: 'write' }],
+    ]);
+
+    const { logins: trusted, sources } = buildTrustedMarkerLogins(
+      'o',
+      'r',
+      'viewer',
+      '',
+      comments,
+      new Map(seed),
+    );
+
+    assert.ok(!trusted.has('ordinary-commenter'));
+    assert.ok(!sources.includes('collaborators'));
+  } finally {
+    if (previousEnv === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousEnv;
+    }
+  }
+});
+
+test('buildTrustedMarkerLogins leaves comment authors untouched when collaborator marker trust is disabled', () => {
+  const previousEnv = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  try {
+    const { logins: trusted } = buildTrustedMarkerLogins(
+      'o',
+      'r',
+      'viewer',
+      '',
+      [
+        {
+          body: CLAIM_MARKER_BODY,
+          created_at: '2026-09-24T00:00:00Z',
+          user: { login: 'marker-author' },
+        },
+      ],
+    );
+    assert.ok(!trusted.has('marker-author'));
+  } finally {
+    if (previousEnv === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousEnv;
+    }
   }
 });

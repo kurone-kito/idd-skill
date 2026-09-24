@@ -12,6 +12,10 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
 } from './gh-exec.mjs';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
@@ -283,32 +287,27 @@ function collectActivities({ repository, pr, now, claimCreatedAt }) {
   }
   return activities;
 }
-function resolveWindowFromPolicy(policyPath) {
+export function resolveWindowFromPolicy(policyPath) {
   const source = policyPath
     ? resolve(process.cwd(), policyPath)
     : resolve(process.cwd(), '.github/idd/config.json');
   try {
     const config = JSON.parse(readFileSync(source, 'utf8'));
+    // #3270: was a loose, case-insensitive local `parseDurationToMs` copy
+    // applied to the raw value -- a stray duplicate of the identical bug in
+    // resume-claim-routing.mts's own local copy (different config key,
+    // same shape). Replaced with the shared strict parser applied to the
+    // normalized policy (fail-safe to the documented `PT30M` default), so a
+    // schema-invalid `quietWindow` (e.g. lowercase `pt45m`) now falls back
+    // to the default instead of being silently accepted.
     return (
-      parseDurationToMs(config?.stallRecovery?.quietWindow) ??
-      DEFAULT_QUIET_WINDOW_MS
+      parseIsoDurationToMs(
+        normalizePolicyConfig(config).stallRecovery.quietWindow,
+      ) ?? DEFAULT_QUIET_WINDOW_MS
     );
   } catch {
     return DEFAULT_QUIET_WINDOW_MS;
   }
-}
-function parseDurationToMs(value) {
-  const text = String(value ?? '').trim();
-  if (!text) return null;
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) return null;
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
 function warnDeprecatedFlag(deprecated, canonical) {
   process.stderr.write(

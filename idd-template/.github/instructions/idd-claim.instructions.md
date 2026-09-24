@@ -348,44 +348,24 @@ rules. Apply all race-safe checks below:
    marker plus one competitor) is resolved here rather than slipping past
    as a single-element set.
 3. Verify that the active claim now uses **your** `{claim-id}` after the
-   same-second tie-break is applied.
-4. Verify no trusted competing `claimed-by` with a different
-   `{claim-id}` appears in a strictly later `created_at` second than
-   your claim event.
-5. If you posted an [activation-nonce marker](#activation-nonce-format) for
+   same-second tie-break is applied. A trusted competing `claimed-by` with a
+   different `{claim-id}` in a strictly later `created_at` second never
+   disputes this check (#3268): Claim-state parsing rules 4 and 6 could
+   never have activated it while your claim is already active, so it stays
+   diagnostic only — see [Claim-state parsing](#claim-state-parsing).
+4. If you posted an [activation-nonce marker](#activation-nonce-format) for
    this `{claim-id}`, recompute its winner and verify it equals yours. This
    catches a second session that adopted the identical `{claim-id}` via
-   forced-handoff, where steps 1–4 see nothing to disagree about (both
+   forced-handoff, where steps 1–3 see nothing to disagree about (both
    `{claim-id}`s genuinely match). No marker posted: treat as passed.
 
-6. Re-fetch labels and the paginated owner-marker log. If an authoring
-   hold is active on this issue, it contests this claim: when step 5
+5. Re-fetch labels and the paginated owner-marker log. If an authoring
+   hold is active on this issue, it contests this claim: when step 4
    passed, post and verify `unclaimed-by`, then take the
    already-claimed/Discover fallback (A0-T stops) — never A5(c); when
-   step 5 failed, keep the claim and never release on a nonce mismatch.
+   step 4 failed, keep the claim and never release on a nonce mismatch.
 
 If any check fails, treat the claim as contested.
-
-**Release before walking away when you provably own the active claim
-(step 4 failure only).** When steps 1–3 passed — the active claim
-genuinely uses your `{claim-id}` — and step 4 is the sole failing check
-(a trusted competing `claimed-by` with a different `{claim-id}` landed
-in a strictly later `created_at` second), post `unclaimed-by` for your
-own `{agent-id}` / `{claim-id}` (see
-[Unclaim format](idd-overview-core.instructions.md#unclaim-format))
-before returning to Discover. You provably hold the active claim, so
-releasing it is safe and restores the issue to unclaimed — without this
-release, the issue would stay locked against mechanical reclaim
-(including the 24 h stale-takeover) with no live owner, since the
-losing side of a different-second claim race never activates. Verify
-step 5 independently before releasing — do not infer "step 4 only"
-merely from a helper's single `reason` field, since a combined
-`later-competing-claim-and-activation-nonce-mismatch` verdict means
-step 5 also failed. Do **not** release whenever step 5
-(activation-nonce) fails, alone or together with step 4: a nonce
-mismatch means a second, independent activation shares your exact
-`{agent-id}` / `{claim-id}` pair, and releasing it would also evict
-that other session's legitimate claim.
 
 Return to Discover using the same selection mode that produced this
 target and pick the next eligible issue (orphan-first: continue the
@@ -411,7 +391,7 @@ repeat the label/authoring-state guard above. Post your own
 [activation-nonce marker](#activation-nonce-format) for `new-claim-id`
 too (see the
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred)).
-Verify it the same way step 5 above does: wait `claim.verifySettleDelay`,
+Verify it the same way step 4 above does: wait `claim.verifySettleDelay`,
 recompute the nonce winner for `new-claim-id`, and confirm it is yours —
 the only nonce check here (this path posts no `claimed-by`). After nonce
 verification, repeat that guard. On nonce mismatch or an incomplete or
@@ -474,7 +454,7 @@ post is required for the delegation itself.
 **Carry the nonce, don't mint one — and still revalidate it.** The
 brief must also carry the orchestrator's current activation nonce
 verbatim; minting a new nonce for the same `{claim-id}` creates the
-exact two-nonce collision step 5 above exists to catch, flagging
+exact two-nonce collision step 4 above exists to catch, flagging
 legitimate delegation as a second activation. The worker still
 performs the Claim revalidation gate's nonce check
 (`idd-overview-core.instructions.md`) using the carried value: before

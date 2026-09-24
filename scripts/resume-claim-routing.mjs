@@ -25,6 +25,7 @@ import {
   normalizeLinkedPrReference,
   parseClaimComment,
   parseReleaseComment,
+  readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mjs';
 import {
@@ -149,10 +150,19 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     reason = 'no-active-claim';
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
     // Owner-resume path: the checking session already proved ownership of
-    // the active claim-id. A later competing claim disputes an owner
-    // unconditionally here, regardless of the active claim's own staleness
-    // (#1687 keeps this test-locked semantic byte-identical -- only the
-    // non-owner / fresh-claim-gate path below gains a staleness escape).
+    // the active claim-id. A later trusted `claimed-by` with a different
+    // claim-id never disputes an owner here (#3268): Claim-state parsing
+    // rules 4 and 6 could never have activated it (rule 4 rejects a
+    // `supersedes: none` competitor while a claim is already active; rule 6
+    // ignores a mismatched/already-superseded `supersedes:`), and
+    // `resolveActiveClaim` already proved that by leaving this owner's
+    // claim-id active. Surfacing it as a dispute only ever stopped the real
+    // owner while the loser still failed its own step 3 and returned to
+    // Discover unchanged -- so it is kept as diagnostics
+    // (`evidence.later_competing_claim` plus a warning below), not a route
+    // outcome. Only the non-owner / fresh-claim-gate path below still
+    // disputes on it, since a claim that never activated there has not yet
+    // been proven a loser.
     //
     // The claim-id matches, but claim-id alone cannot distinguish a second,
     // independent activation of the same id (the sticky forced-handoff
@@ -161,27 +171,16 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     // require them to agree too. Either side being absent (no nonce posted
     // yet, or this caller never opted in) skips the comparison and keeps
     // the claim-id-only outcome, matching pre-#1522 behavior exactly.
-    //
-    // Computed unconditionally (not only when laterCompetingClaim is falsy)
-    // so a later-competing-claim dispute can still surface a concurrent
-    // nonce mismatch in `reason` (CodeRabbit, PR #1770) -- a caller that
-    // mechanically releases on "step 4 is the sole failing check" must be
-    // able to tell a step-4-only dispute apart from a dispute where step 5
-    // also fails, since releasing a claim-id/agent-id pair that a second,
-    // legitimate activation shares would evict that other session.
     const nonceMismatch =
       activationNonceWinner !== null &&
       nonceChecked &&
       activationNonceWinner !== nonceChecked;
-    if (laterCompetingClaim && nonceMismatch) {
-      routeState = 'disputed';
-      action = 'stop';
-      reason = 'later-competing-claim-and-activation-nonce-mismatch';
-    } else if (laterCompetingClaim) {
-      routeState = 'disputed';
-      action = 'stop';
-      reason = 'later-competing-claim';
-    } else if (nonceMismatch) {
+    if (laterCompetingClaim) {
+      warnings.push(
+        `later trusted claim ${laterCompetingClaim.claim_id} at ${laterCompetingClaim.created_at} cannot activate under Claim-state parsing rules 4/6 and is ignored on the owner path`,
+      );
+    }
+    if (nonceMismatch) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'activation-nonce-mismatch';
@@ -894,8 +893,8 @@ function printHelp() {
                       --> marker for that claim-id (lexicographically
                       earliest nonce among however many were posted). A
                       mismatch means a second, independent session activated
-                      the identical claim-id -- routes to "disputed" the same
-                      as a later-competing-claim loss. Omit --nonce when
+                      the identical claim-id -- routes to "disputed" with
+                      reason activation-nonce-mismatch. Omit --nonce when
                       the claim-id has 0 or 1 trusted nonce to skip the
                       comparison. Omit --nonce when 2+ trusted nonces exist
                       and this session has no local nonce: route to
@@ -932,15 +931,20 @@ function fetchIssueComments(port, issueNumber) {
 // loadPolicyConfig makes internally -- so the option (and this function's
 // own try/catch around the read) is no longer needed; a load failure now
 // propagates the shared reader's own error.
-function loadPolicy(policyPath) {
+export function loadPolicy(policyPath) {
   const { path: source, config } = loadPolicyConfig(policyPath);
   const typedConfig = config;
   const normalized = normalizePolicyConfig(typedConfig);
   return {
     source,
-    staleAgeMs:
-      parseDurationToMs(typedConfig?.claimTiming?.staleAge) ??
-      DEFAULT_STALE_AGE_MS,
+    // #3270: was a loose, case-insensitive local `parseDurationToMs` copy
+    // applied to the RAW value -- a schema-invalid `pt12h` parsed to 12h
+    // here but fell back to the distributed 24h default in
+    // `pre-merge-readiness.mts` (case-sensitive). Now the same shared,
+    // strict `readClaimStaleAgeMs` every other caller uses, applied to the
+    // already-normalized `claimTiming.staleAge` (fail-safe to `PT24H`), so
+    // a schema-invalid value resolves identically everywhere.
+    staleAgeMs: readClaimStaleAgeMs(typedConfig),
     trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
       ? typedConfig.trustedMarkerActors
           .map((value) => String(value ?? '').trim())
@@ -951,23 +955,6 @@ function loadPolicy(policyPath) {
       authorityPolicy: normalized.forcedHandoff.authorityPolicy,
     },
   };
-}
-function parseDurationToMs(value) {
-  const text = String(value ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) {
-    return null;
-  }
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
 function resolveTrustedLogins({ fromArgs, fromPolicy, currentLogin }) {
   const fromCsv = String(fromArgs ?? '')

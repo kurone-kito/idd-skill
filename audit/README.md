@@ -220,21 +220,49 @@ out of scope — no network I/O.
 
 ### Template context
 
-A link from an `idd-template/**` file is resolved against the shipped
-template tree, not the source repository tree: `templateRoot`
-(default `idd-template/`) is the boundary adopters actually receive
-when they copy that directory into their own repository. A relative
-link whose resolved path falls outside `templateRoot` fails the audit
-even when that exact path happens to exist in the source repository —
-adopters never get the sibling files the source repository ships
-outside `idd-template/`. Observed on
+A link from an `idd-template/**` file is resolved against what
+adopters actually receive, not the source repository tree, in two
+layers.
+
+**Escape check**: `templateRoot` (default `idd-template/`) is the
+outer boundary. A relative link whose resolved path falls outside
+`templateRoot` fails the audit even when that exact path happens to
+exist in the source repository — adopters never get the sibling files
+the source repository ships outside `idd-template/`. Observed on
 [#1696](https://github.com/kurone-kito/idd-skill/issues/1696) (the
 2026-07-28 audit, closed 2026-08-01): a template instruction file's
 relative link to the source repository's own
 `copilot-instructions.md` and to a source-repo-only `schemas/`
-directory both rot silently before this checker existed; retargeting
-such a link to a hosted URL, or to a file that genuinely ships inside
-`idd-template/`, is the fix — not a suppression.
+directory both rot silently before this checker existed.
+
+**Distributed-set check**: adopters do not receive the whole
+`idd-template/` directory either — `--import` copies only the
+`idd-template-core-files` generated block plus one helper-runtime
+profile's files (`resolveCoreTemplateFiles` in
+`src/scripts/idd-onboard.mts`), a set narrower than `templateRoot`.
+`markdownLinkAudit.distributedFileSetBlockId` names the generated
+block defining that set. For a source file covered by the named
+block, a link that stays inside `templateRoot` still fails when its
+resolved target is not itself in the distributed set — for example a
+link to `idd-template/README.md` or `idd-template/ONBOARDING.md`,
+neither of which ships to an adopter clone. `ONBOARDING.md` and
+`README.md` themselves are template files outside the distributed
+set, so a link **from** either one keeps the escape-only rule above
+instead, since both are read in the source repository rather than
+copied out. This class of dead link was fixed one file at a time
+before this stricter check existed:
+[#2062](https://github.com/kurone-kito/idd-skill/issues/2062)
+(PR [#2087](https://github.com/kurone-kito/idd-skill/pull/2087)),
+[#2088](https://github.com/kurone-kito/idd-skill/issues/2088)
+(PR [#2107](https://github.com/kurone-kito/idd-skill/pull/2107)),
+[#2982](https://github.com/kurone-kito/idd-skill/issues/2982)
+(PR [#3047](https://github.com/kurone-kito/idd-skill/pull/3047)), and
+[#3231](https://github.com/kurone-kito/idd-skill/issues/3231)
+(PR [#3232](https://github.com/kurone-kito/idd-skill/pull/3232),
+an inline code span rather than a link, so out of this checker's
+scope). Both checks retarget the same way: a hosted URL, or a file
+that genuinely ships in the distributed set, is the fix — not a
+suppression.
 
 ### Suppressing an intentional exception
 

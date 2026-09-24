@@ -109,8 +109,22 @@ export interface ParsedReleaseMarker {
 /** Parsed claim-id-less marker retained for legacy routing compatibility. */
 export interface ParsedLegacyClaimMarker {
   agentId: string;
+  /**
+   * The comment's GitHub `created_at`, never the embedded timestamp --
+   * `idd-overview-core.instructions.md` ("Thresholds") and
+   * `idd-claim.instructions.md` ("Legacy claim migration") both require
+   * staleness and ordering decisions to ignore the embedded value, since it
+   * is chosen by the posting agent's own (potentially skewed) clock.
+   */
   createdAt: string;
   branch: string;
+  /**
+   * The raw timestamp embedded in the legacy marker body, retained only for
+   * marker-shape diagnostics. Never feed this into a staleness or ordering
+   * decision -- use `createdAt` instead. `null` when the embedded value did
+   * not parse as a valid timestamp.
+   */
+  embeddedTimestamp: string | null;
 }
 
 /** Minimal event shape consumed by the legacy claim-state resolver. */
@@ -941,10 +955,20 @@ export function parseClaimComment(
   if (!match || !isValidIsoTimestamp(match[4])) {
     return null;
   }
+  // #3339: the grammar above is case-insensitive (`/i`), so a trusted,
+  // otherwise well-formed marker hand-composed with `supersedes: None` or
+  // `supersedes: NONE` parses successfully but carries a non-lowercase
+  // token. `applyClaimEvent` activates a fresh claim only when
+  // `claim.supersedes === 'none'` exactly, so leaving it verbatim would
+  // silently drop such a claim instead of activating it. Mirror
+  // `renderClaimedByMarker`'s emit-side normalization here on the parse
+  // side; a real claim ID (never a case-variant of `none`) passes through
+  // unchanged.
+  const supersedes = match[3].toLowerCase() === 'none' ? 'none' : match[3];
   return {
     agentId: match[1],
     claimId: match[2],
-    supersedes: match[3],
+    supersedes,
     branch: match[5],
     createdAt,
   };
@@ -1058,18 +1082,24 @@ export function parseLegacyClaimComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Age this claim by the comment's own GitHub `created_at`, never the
+    // embedded timestamp (see the field doc on `ParsedLegacyClaimMarker`).
+    // Fall back to the raw value only when it fails to normalize, mirroring
+    // the fail-open formatting behavior this replaces.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
     branch: match[3],
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
 export function parseLegacyReleaseComment(
   body: string,
   createdAt: string,
-): { agentId: string; createdAt: string } | null {
+): {
+  agentId: string;
+  createdAt: string;
+  embeddedTimestamp: string | null;
+} | null {
   const match = String(body ?? '')
     .trimEnd()
     .match(LEGACY_RELEASE_PATTERN);
@@ -1078,20 +1108,31 @@ export function parseLegacyReleaseComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Order this release by the comment's own GitHub `created_at`, never
+    // the embedded timestamp -- same rationale as the claim parser above.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
-/** Resolve the latest legacy claim and its matching later release. */
+/**
+ * Resolve the latest legacy claim and its matching later release.
+ *
+ * Both inputs and the "later" comparison below are keyed on each comment's
+ * GitHub `created_at` (via `parseLegacyClaimComment` /
+ * `parseLegacyReleaseComment`), never the embedded timestamp -- a release
+ * is treated as later than its claim only when the release comment's own
+ * `created_at` strictly postdates the claim comment's `created_at`.
+ */
 export function resolveLegacyClaimState(
   events: readonly LegacyClaimEventLike[],
 ): LegacyClaimState {
   let latestClaim: ParsedLegacyClaimMarker | null = null;
-  let latestMatchingRelease: { agentId: string; createdAt: string } | null =
-    null;
+  let latestMatchingRelease: {
+    agentId: string;
+    createdAt: string;
+    embeddedTimestamp: string | null;
+  } | null = null;
   const orderedEvents = events
     .map((event, index) => ({ event, index }))
     .sort((left, right) => {
@@ -2336,7 +2377,7 @@ function resolveAuthoringMarkerIdentity(
     return parseAuthoringOwnerComment(body, markerPrefix)?.target ?? null;
   }
   const parsed = parseAuthoringPublicationIntentComment(body, markerPrefix);
-  return parsed ? `${parsed.target} ${parsed.token}` : null;
+  return parsed ? `${parsed.target}\0${parsed.token}` : null;
 }
 
 /**
@@ -2399,7 +2440,7 @@ export function classifyAuthoringMarkerFamily(
       markerPrefix,
       family,
     );
-    const key = identity ?? ` unresolved-${index}`;
+    const key = identity ?? `\0unresolved-${index}`;
     const group = groups.get(key);
     if (group) {
       group.push(index);
@@ -2535,11 +2576,12 @@ export function renderClaimedByMarker(payload: {
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const supersedesToken = normalizeNonWhitespaceToken(payload?.supersedes);
   // Normalize any case-variant of the sentinel to lowercase `none`. The claim
-  // parser matches case-insensitively, but the claim lifecycle
+  // grammar matches case-insensitively on both the emit side (here) and the
+  // parse side (`parseClaimComment`, #3339), but the claim lifecycle
   // (`applyClaimEvent`) accepts a fresh claim only when `supersedes === 'none'`
-  // exactly, so an emitted `None`/`NONE` would round-trip into a claim that is
-  // silently ignored. Real claim IDs (never a case-variant of `none`) pass
-  // through verbatim.
+  // exactly, so an unnormalized `None`/`NONE` on either side would round-trip
+  // into a claim that is silently ignored. Real claim IDs (never a
+  // case-variant of `none`) pass through verbatim.
   const supersedes =
     supersedesToken === '' || supersedesToken.toLowerCase() === 'none'
       ? 'none'
@@ -3122,6 +3164,174 @@ export function parseCopilotUnavailableComment(
     ...parsed,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
+}
+
+/** The `advisory-wait:` marker family's four recognized shapes (#3338). */
+export type AdvisoryWaitMarkerFamily =
+  | 'advisory-wait'
+  | 'advisory-wait-recovery'
+  | 'advisory-reroll'
+  | 'advisory-wait-html';
+
+/** Result of `parseAdvisoryWaitFamilyMarker`. */
+export interface ParsedAdvisoryWaitFamilyMarker {
+  family: AdvisoryWaitMarkerFamily;
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+}
+
+// Maps each advisory-wait-family member to its OPERATIONAL_MARKERS label
+// (the single source of grammar truth) and a loose field-extraction regex
+// that only ever runs AFTER that entry's own `pattern` has already
+// validated the body -- so the extraction regex only needs to locate the
+// three fields inside an already-known-valid string, not re-validate the
+// grammar itself (#3338: this is what keeps OPERATIONAL_MARKERS the one
+// canonical grammar instead of a duplicated fifth regex).
+const ADVISORY_WAIT_FAMILY_ENTRIES: {
+  family: AdvisoryWaitMarkerFamily;
+  label: string;
+  extract: RegExp;
+}[] = [
+  {
+    family: 'advisory-wait',
+    label: 'advisory-wait:',
+    extract: /^advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+)\s*$/,
+  },
+  {
+    family: 'advisory-wait-recovery',
+    label: 'advisory-wait-recovery:',
+    // The optional ` claim:{id} attempt:{n}` suffix (#1572) is deliberately
+    // not captured here -- this shared parser only ever needs the agent,
+    // SHA, and timestamp fields common to the whole family; the bound
+    // recovery form's own suffix is parsed separately by
+    // `parseAdvisoryRecoveryComment` above. `(\S+)` for the timestamp group
+    // naturally stops at the following whitespace (before `claim:` or end
+    // of string) without needing its own trailing anchor.
+    extract: /^advisory-wait-recovery:\s+(\S+)\s+(\S+)\s+(\S+)/,
+  },
+  {
+    family: 'advisory-reroll',
+    label: 'advisory-reroll:',
+    extract: /^advisory-reroll:\s+(\S+)\s+(\S+)\s+(\S+)\s*$/,
+  },
+  {
+    family: 'advisory-wait-html',
+    label: '<!-- advisory-wait:',
+    // Greedy timestamp capture, `$`-anchored to the true end of the
+    // (already `trimEnd()`'d) body -- mirroring the canonical entry's own
+    // `pattern` (`\S+\s*-->\s*$`) exactly, including its end anchor,
+    // rather than stopping at the first `-->`. The canonical grammar's
+    // last field is an unrestricted `\S+` token, so it can itself contain
+    // the literal sequence `-->` (Copilot review, PR #3380: a body like
+    // `<!-- advisory-wait: agent sha foo-->bar -->` is well-formed with
+    // timestamp `foo-->bar`). A non-`$`-anchored lazy `(\S+?)\s*-->`
+    // previously stopped at the FIRST `-->` instead, truncating that
+    // field to `foo` -- wrong per the parser's own field contract, and a
+    // regression: the pre-shared-grammar provider-health regex required
+    // its captured field to be a complete ISO timestamp immediately
+    // followed by `-->`, so it already rejected this exact adversarial
+    // shape outright (see the regression corpus rows below) rather than
+    // silently truncating it into a spurious ISO match. Since this regex
+    // only ever runs after `marker.pattern.test()` has already validated
+    // the body via that same `$`-anchored canonical pattern, backtracking
+    // here is guaranteed to find a match, and greedy + `$` forces it to
+    // the FINAL `-->` -- the correct field boundary.
+    extract: /^<!--\s*advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+)\s*-->\s*$/,
+  },
+];
+
+/**
+ * Shared parser for the whole `advisory-wait:` marker family --
+ * `advisory-wait:`, `advisory-wait-recovery:` (legacy or bound form),
+ * `advisory-reroll:`, and the `<!-- advisory-wait: ... -->` HTML form
+ * (#3338). Anchors at byte 0 (`trimEnd()` only, never `trimStart()`),
+ * matching the canonical `OPERATIONAL_MARKERS` entries this delegates to
+ * for validation -- a body only reaches field extraction after its
+ * family's own `pattern` already matched it in full, so this function's
+ * notion of "well-formed" is identical to `operationalMarkerPrefix`'s for
+ * these four labels by construction. Returns `null` when no family's
+ * `pattern` matches.
+ */
+export function parseAdvisoryWaitFamilyMarker(
+  body: string,
+): ParsedAdvisoryWaitFamilyMarker | null {
+  const normalized = body.trimEnd();
+  for (const entry of ADVISORY_WAIT_FAMILY_ENTRIES) {
+    const marker = OPERATIONAL_MARKERS.find((m) => m.label === entry.label);
+    if (!marker?.pattern.test(normalized)) {
+      continue;
+    }
+    const match = entry.extract.exec(normalized);
+    if (!match) {
+      // Unreachable given `marker.pattern` already validated the same
+      // shape this loose regex only re-locates fields within; kept as
+      // defense-in-depth against a future divergence between the two.
+      return null;
+    }
+    return {
+      family: entry.family,
+      agentId: match[1],
+      headSha: match[2].toLowerCase(),
+      timestamp: match[3],
+    };
+  }
+  return null;
+}
+
+/**
+ * Byte-0-anchored, prefix-only predicate over the same four
+ * `advisory-wait:` family labels as `parseAdvisoryWaitFamilyMarker`, using
+ * each entry's `startPattern` (not `pattern` -- no field validation, so a
+ * structurally incomplete body such as `advisory-wait: agent-id` alone
+ * still matches, same as `advisoryMarkerComment`'s pre-#3338 `startsWith`
+ * checks). Deliberately does not route through
+ * `operationalMarkerPrefixByStart`, which `trimStart()`s the body first --
+ * that would accept a marker that does not start at byte 0, which is
+ * exactly the drift this issue fixes.
+ */
+export function advisoryWaitFamilyMarkerStart(
+  body: string,
+): AdvisoryWaitMarkerFamily | null {
+  const normalized = String(body ?? '');
+  for (const entry of ADVISORY_WAIT_FAMILY_ENTRIES) {
+    const marker = OPERATIONAL_MARKERS.find((m) => m.label === entry.label);
+    if (marker?.startPattern.test(normalized)) {
+      return entry.family;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse a trusted `advisory-wait:` REQUEST marker's own embedded
+ * `{ISO8601-requested-at}` field -- the plain `advisory-wait:` and HTML
+ * `<!-- advisory-wait: ... -->` forms only, not `advisory-wait-recovery:`
+ * or `advisory-reroll:` (#3338, replacing `provider-health.mts`'s former
+ * private copy of this same grammar). The plain form's timestamp is
+ * already ISO-shaped by construction (`OPERATIONAL_MARKERS` validated it),
+ * but the HTML form's last field accepts any non-whitespace token in the
+ * canonical grammar -- so this layers an explicit ISO check on top for
+ * that form only. Deliberately not `isValidIsoTimestamp`: that helper
+ * round-trips through `Date#toISOString()` and rejects a well-formed but
+ * non-3-digit fractional value (e.g. `...00.1Z`) that the marker family's
+ * own `(?:\.\d+)?Z` grammar accepts, which would wrongly discard a genuine
+ * request marker's timing evidence.
+ */
+export function parseAdvisoryWaitRequestMarker(body: string): string | null {
+  const parsed = parseAdvisoryWaitFamilyMarker(body);
+  if (
+    !parsed ||
+    (parsed.family !== 'advisory-wait' &&
+      parsed.family !== 'advisory-wait-html')
+  ) {
+    return null;
+  }
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
+    parsed.timestamp,
+  )
+    ? parsed.timestamp
+    : null;
 }
 
 export function operationalMarkerPrefix(body: string): string | null {

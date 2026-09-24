@@ -18,6 +18,7 @@ import {
   ghApiJson,
   ghText,
 } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
@@ -31,11 +32,12 @@ import {
   parsePaginatedGhNdjson,
   planLiveStatusDigestRepair,
   planLiveStatusDigestUpsert,
+  readClaimStaleAgeMs,
   renderLiveStatusDigestRepairEvidence,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   retireLiveStatusDigestBody,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -172,10 +174,21 @@ function main() {
     nextAction: args.nextAction,
     authoritativeBy: args.authoritativeBy,
   };
+  // Issue #3337: the ordinary create/update/duplicate-detection path below
+  // only ever considers a current-digest comment authored by a trusted
+  // marker actor -- an untrusted actor's digest-marker comment is neither
+  // rewritten nor treated as a duplicate, so this helper creates or
+  // updates its own digest alongside it instead. The maintainer repair
+  // path (`runDuplicateDigestRepair` above) never uses this filter, so it
+  // keeps seeing every author and can still retire a stranger's marker.
+  const isTrustedDigestAuthor = (login) =>
+    isTrustedMarkerAuthor(owner, repo, login);
   const comments = fetchIssueComments(owner, repo, targetNumber);
   let planned;
   try {
-    planned = planLiveStatusDigestUpsert(comments, fields);
+    planned = planLiveStatusDigestUpsert(comments, fields, {
+      isTrustedAuthor: isTrustedDigestAuthor,
+    });
   } catch (error) {
     fail(error.message);
   }
@@ -212,6 +225,7 @@ function main() {
           planLiveStatusDigestUpsert(
             fetchIssueComments(owner, repo, targetNumber),
             fields,
+            { isTrustedAuthor: isTrustedDigestAuthor },
           ),
         assertClaim: () =>
           assertActiveClaim(
@@ -1265,7 +1279,7 @@ function assertActiveClaim(
     );
   }
 }
-function readActiveClaim(owner, repo, issueNumber, options = {}) {
+export function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map(
     (comment) => {
       return {
@@ -1278,13 +1292,16 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call
-  // would be a needless I/O hot path.
+  // would be a needless I/O hot path. staleAgeMs (#3270) reuses the same
+  // read.
   const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
-  const summary = summarizeClaimValidation(comments, {
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
+  const summary = summarizeClaimValidationForWriteGate(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
     prFirstCommitAt: options.prFirstCommitAt ?? null,
+    staleAgeMs,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,

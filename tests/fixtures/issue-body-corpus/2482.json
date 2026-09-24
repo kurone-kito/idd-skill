@@ -1,0 +1,29 @@
+{
+  "id": "2482",
+  "category": "merged",
+  "note": "Merged/ready real issue documenting an authoring-intent-to-discovery-signal table; today's A4 autonomous_completion criterion false-positives on its own cross-referencing documentation prose (known lexical-gate boundary gap).",
+  "title": "docs(customization): add an authoring-intent-to-discovery-signal table",
+  "labels": [
+    "documentation"
+  ],
+  "body": "# docs(customization): add an authoring-intent-to-discovery-signal table\n\n## Background\n\nAuthors deciding how to mark an issue as not-yet-actionable have no\nsingle compact reference mapping their intent to the discovery-visible\nsignal IDD already honors. `skills/issue-authoring/references/\ndraft-patterns.md` documents two of four cases (undecided ->\n`needs-decision`, waits-on-person/credential -> `blocked-by-human`) in\nprose, but `docs/customization.md` -- the file most adopters read for\npolicy surfaces -- has no such table, and neither location documents\nthat an order-dependency should become `Blocked by #N`, or that\ngenuinely-not-ready work should simply stay unreferenced by any open\nroadmap.\n\n## Proposed change\n\nAdd a compact table to `docs/customization.md` covering all four\nintents (undecided, waits-on-person/credential, order-dependency,\nnot-yet-ready) so authors stop inventing ad hoc \"not ready\" markers\ninstead of reusing primitives Discover already understands.\n\n## Acceptance criteria\n\n- `docs/customization.md` has a compact table mapping all four\n  authoring intents to their discovery-visible signal.\n- The table matches (does not contradict) the existing prose in\n  `draft-patterns.md`.\n- `node scripts/audit-docs.mjs --check` passes.\n\n## Candidate files\n\n- `docs/customization.md`\n- `skills/issue-authoring/references/draft-patterns.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n",
+  "bodySha256": "b71e9d44aa26e049d35b7a6150702507e050b7024592c79944fc9de1eef5b8a3",
+  "fetchedAt": "2026-09-24T04:42:54.690Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

@@ -405,8 +405,11 @@ Keep approval labels and operational marker trust as separate controls:
 
 - The configured ready label from `approvalSignals.readyLabelName`
   (default: `idd:ready`) is the distributed issue-selection approval
-  signal for orphan-first policy and should be restricted to maintainer
-  approval actors.
+  signal for orphan-first policy. GitHub has no per-label permission, so
+  the `claim-approval-gate` helper verifies the actor of the label's
+  latest `labeled` timeline event against `maintainerApprovalActorPolicy`
+  and fails closed when that actor's permission cannot be read, instead
+  of trusting label presence alone.
 - Trusted marker actors govern operational marker authority
   (`claimed-by`, `unclaimed-by`, `review-watermark`,
   `review-baseline`, `advisory-wait`) and may include different actors.

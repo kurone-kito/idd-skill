@@ -31,6 +31,7 @@ export * from './marker-helpers.mjs';
 
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
   findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
@@ -38,6 +39,7 @@ import {
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
+  parseAdvisoryWaitFamilyMarker,
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
@@ -46,6 +48,7 @@ import {
 } from './marker-helpers.mjs';
 import {
   getReviewEscalationChangesRequestedPolicy,
+  normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 export const LIVE_STATUS_DIGEST_MARKER = '<!-- idd-live-status: current -->';
@@ -369,10 +372,26 @@ export function summarizeExternalCheckWaivers(
     modeDisabled,
   };
 }
-export function findLiveStatusDigestComments(comments) {
-  return comments.filter((comment) => {
+export function findLiveStatusDigestComments(comments, options = {}) {
+  const matches = comments.filter((comment) => {
     return firstLine(comment.body ?? '') === LIVE_STATUS_DIGEST_MARKER;
   });
+  // Issue #3337: the ordinary create/update/duplicate-detection callers pass
+  // `isTrustedAuthor` so a digest-marker comment from an untrusted actor is
+  // neither selected for update nor counted toward the duplicate check --
+  // the helper then creates or updates its own digest alongside it instead
+  // of rewriting a stranger's comment. The maintainer repair path
+  // (`planLiveStatusDigestRepair`, `createLiveStatusDigestSnapshot`, and
+  // `runDuplicateDigestRepair`'s own call sites) never passes this option,
+  // so it keeps seeing every author -- a maintainer can still retire a
+  // stranger's current-marker comment.
+  if (!options.isTrustedAuthor) {
+    return matches;
+  }
+  const { isTrustedAuthor } = options;
+  return matches.filter((comment) =>
+    isTrustedAuthor(String(comment.author?.login ?? comment.user?.login ?? '')),
+  );
 }
 function sha256Hex(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -644,8 +663,8 @@ export function renderLiveStatusDigest(fields) {
 | Authoritative by | ${escapeMarkdownTableCell(normalized.authoritativeBy)} |
 `;
 }
-export function planLiveStatusDigestUpsert(comments, fields) {
-  const matches = findLiveStatusDigestComments(comments);
+export function planLiveStatusDigestUpsert(comments, fields, options = {}) {
+  const matches = findLiveStatusDigestComments(comments, options);
   const nextBody = renderLiveStatusDigest(fields);
   if (matches.length > 1) {
     return {
@@ -1478,18 +1497,20 @@ export function hasFreshDisposition(thread, options = {}) {
   // Callers that require IDD-only dispositions (e.g., audit-pr-cleanup) should pass:
   //   { isDispositionAuthor: (login) => iddAgentLogins.has(login) }
   // This design trades stricter default behavior for backward compatibility with utility functions.
-  // `isIddOriginatedBody` (#2139) additionally accepts a stamped disposition
-  // regardless of author login: the #2135 review-reply stamp is utterance
-  // identity, so a stamped `**Accepted**` still clears an advisory thread
-  // even when the same trusted account also posts unmarked human prose.
+  // #2135's own design intent is that a spoofed/copied review-reply stamp
+  // "only makes the gate stricter for that comment" -- the stamp is
+  // utterance identity among already-trusted accounts (#2139), never an
+  // independent trust signal on its own. Honoring it regardless of author
+  // login (as an earlier revision of #2139 did) let an untrusted account's
+  // stamped `**Accepted**`/`**Rejected**` reply satisfy this gate (#3244).
+  // The stamp therefore only ever narrows who counts as an IDD disposition
+  // author -- it can never widen `dispositionAuthorPredicate` -- so honoring
+  // it is folded into that same predicate check below rather than kept as a
+  // separate, author-blind fallback.
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login) => !isKnownReviewBot(login);
-  const originatedBodyPredicate =
-    typeof options.isIddOriginatedBody === 'function'
-      ? options.isIddOriginatedBody
-      : null;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -1506,10 +1527,7 @@ export function hasFreshDisposition(thread, options = {}) {
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (dispositionAuthorPredicate(authorLogin)) {
-      return true;
-    }
-    return Boolean(originatedBodyPredicate?.(String(comment.body ?? '')));
+    return dispositionAuthorPredicate(authorLogin);
   };
   const latestFeedbackAt = maxIsoTimestamp(
     comments
@@ -4048,18 +4066,24 @@ export function buildActivitySnapshotSummary(
   // #3194 (round 36 field feedback): a live-status digest edit must never
   // perturb review-currency (idd-overview-appendix.instructions.md's "Live
   // status digest" section) -- the same fail-closed, first-line-only digest
-  // recognition `isOperationalOrDigestCommentForGate` already uses for
+  // recognition `isOperationalOrDigestCommentForGate` uses for
   // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`.
-  // Checked unconditionally (not gated by `trustedMarkerLogins`, mirroring
-  // that function's own digest branch): a comment merely mentioning the
-  // marker text on a line other than its first still counts as regular
-  // activity below.
+  // Issue #3337: gated by `trustedMarkerLogins` (unlike the pre-#3337
+  // unconditional exclusion this comment used to describe) -- a digest is
+  // only ever the agent's own activity, so only a trusted author's
+  // digest-marker comment is excluded here; an untrusted actor's
+  // digest-marker-shaped comment counts as ordinary activity requiring
+  // disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract"). A
+  // comment merely mentioning the marker text on a line other than its
+  // first still counts as regular activity below, regardless of author.
   const filteredComments = comments.filter((comment) => {
     const body = comment.body ?? '';
+    const authorLogin = (comment.author?.login ?? '').toLowerCase();
     if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
-      return false;
+      return !trustedMarkerLogins.has(authorLogin);
     }
-    if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
+    if (!trustedMarkerLogins.has(authorLogin)) {
       return true;
     }
     return operationalMarkerPrefixByStart(body) === null;
@@ -4317,14 +4341,21 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
 }
 /**
  * Scans the same trusted-author comment stream `resolveLatestReviewWatermark`
- * consumes for a `review-watermark`/`review-baseline`-shaped comment whose
- * body fails the strict canonical `pattern` (e.g. a hand-authored note glued
- * directly to the leading underscore, `_IDD ...` with no space, missing
- * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary). Such a comment
- * already reads as absent to `resolveLatestReviewWatermark` (#2251) -- this
- * gives the F2 caller a way to tell "malformed marker found" apart from
- * "no watermark-shaped comment at all" without changing
- * `resolveLatestReviewWatermark`'s own return shape or selection behavior.
+ * consumes for a `review-watermark`/`review-baseline`-shaped comment that is
+ * malformed in either of two ways: (1) the body fails the strict canonical
+ * `pattern` (e.g. a hand-authored note glued directly to the leading
+ * underscore, `_IDD ...` with no space, missing
+ * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary), or (2) for
+ * `review-watermark` specifically, the loose shape `pattern` accepts the
+ * body (so `operationalMarkerPrefix` recognizes it) but the stricter
+ * field-level `parseReviewWatermarkComment` rejects it -- e.g. a head SHA
+ * shorter than the required 40 hex characters, or a timestamp field that is
+ * neither a valid ISO-8601 string nor the literal `none` sentinel (#3339).
+ * Either way, such a comment already reads as absent to
+ * `resolveLatestReviewWatermark` (#2251) -- this gives the F2 caller a way
+ * to tell "malformed marker found" apart from "no watermark-shaped comment
+ * at all" without changing `resolveLatestReviewWatermark`'s own return
+ * shape or selection behavior.
  *
  * `options.expectedClaimId`, when set, restricts the scan to a malformed
  * comment whose own claim-id token (the second token after the marker
@@ -4349,10 +4380,28 @@ export function detectMalformedReviewWatermarkComments(comments, options = {}) {
     }
     const body = comment.body ?? '';
     const label = detectMalformedOperationalMarker(body);
-    if (
-      label !== '<!-- review-watermark:' &&
-      label !== '<!-- review-baseline:'
-    ) {
+    const isShapeMalformed =
+      label === '<!-- review-watermark:' || label === '<!-- review-baseline:';
+    // #3339: OPERATIONAL_MARKER_ENTRIES' review-watermark shape `pattern`
+    // uses `\S+` for the head-SHA and both timestamp fields, so
+    // `operationalMarkerPrefix` already recognizes a body with e.g. a
+    // 12-hex-char SHA or a non-ISO/non-`none` timestamp as a well-formed
+    // marker -- `detectMalformedOperationalMarker` above then returns
+    // `null` for it (already recognized, so "not malformed" from that
+    // function's own point of view). `parseReviewWatermarkComment` then
+    // separately rejects it (`[0-9a-f]{40}` / `isValidIsoTimestamp`), so
+    // without this second check the comment silently reads as a genuinely
+    // absent watermark instead of a malformed one. Scoped to
+    // `review-watermark` only: no equivalent strict field parser exists
+    // for `review-baseline`.
+    const isFieldInvalidWatermark =
+      !isShapeMalformed &&
+      operationalMarkerPrefix(body) === '<!-- review-watermark:' &&
+      parseReviewWatermarkComment(
+        body,
+        comment.createdAt ?? comment.created_at ?? '',
+      ) === null;
+    if (!isShapeMalformed && !isFieldInvalidWatermark) {
       return false;
     }
     if (!expectedClaimId) {
@@ -4419,6 +4468,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
         comment.body,
         comment.authorLogin,
         trustedMarkerLogins,
+        iddAgentLogins,
       ) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
@@ -4462,6 +4512,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
@@ -4803,6 +4854,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter(
@@ -4971,6 +5023,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .sort((left, right) => {
@@ -5143,8 +5196,6 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
-          isIddOriginatedBody: (body) =>
-            isIddOriginatedReply(body, markerPrefix),
         })
       ) {
         return null;
@@ -6593,11 +6644,15 @@ export function buildForcedHandoffEnableGate(options) {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
- * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
- *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
- *   (non-numeric/non-finite), or non-positive, staleness falls back to the
- *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
- *   pass it keep today's exact behavior. See `isStaleByAge`.
+ * - `staleAgeMs` (#1310) is the config-aware claim-staleness window, in
+ *   milliseconds (a parsed `claimTiming.staleAge`, e.g. via
+ *   {@link readClaimStaleAgeMs}) -- REQUIRED (#3270) so the type checker
+ *   catches a future write-gate caller that forgets it, instead of it
+ *   silently falling back to the hardcoded 24h `isStaleAt` default the way
+ *   every pre-#3270 caller did. A caller that deliberately wants the
+ *   distributed 24h default passes {@link DEFAULT_STALE_AGE_MS} explicitly.
+ *   Invalid (non-numeric/non-finite) or non-positive values still fall back
+ *   to {@link isStaleAt} via `resolveStalePredicate`. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(events, options) {
   const expectedLinkedPrReferences = new Set(
@@ -6758,6 +6813,26 @@ export function summarizeClaimValidation(
     claimLost: reason !== 'match',
     reason,
   };
+}
+/**
+ * Write-gate wrapper around {@link summarizeClaimValidation} with a
+ * REQUIRED `staleAgeMs` (#1310/#3270). `summarizeClaimValidation` itself
+ * keeps `staleAgeMs` optional because it also has non-write-gate callers
+ * (status/summary building such as `buildPreMergeReadinessSummary`, and
+ * tests exercising unrelated forced-handoff/nonce behavior) that must not
+ * be forced to thread a claim-staleness window they do not care about.
+ * Every claim-OWNERSHIP write-gate caller (a helper that decides whether
+ * THIS session may still mutate GitHub state) should call this wrapper
+ * instead, so the type checker catches a future write-gate caller that
+ * forgets to resolve and pass the configured window -- the exact class of
+ * bug #3270 fixes for the eight callers that previously omitted it.
+ */
+export function summarizeClaimValidationForWriteGate(
+  claimEvents = [],
+  options,
+  captureTraceInto,
+) {
+  return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
@@ -7306,6 +7381,70 @@ export function computePreMergeReadinessBlockers(report) {
       blockers.push({
         gate: 'development-branch-target',
         detail: `unrecognized developmentBranchTarget.status "${status}" (expected "configured", "default", "invalid", or "unavailable")`,
+      });
+    }
+  }
+  // #3298: fail-closed closing-set / stray-commit-close invariant, mirroring
+  // #2272's developmentBranchTarget precedent immediately above -- absent
+  // entirely (unmigrated caller / unit fixture) adds no blocker, while
+  // `collectPreMergeReadiness` always emits a `closingSet` section. Whitelist
+  // of recognized non-blocking statuses, not a denylist, matching
+  // developmentBranchTarget's own convention: an unrecognized status must
+  // fail closed rather than silently pass. Tested with `!== undefined`, not
+  // truthiness (Copilot review, PR #3353): since the schema requires this
+  // section, only a genuinely absent key (the unmigrated-caller case above)
+  // skips the gate -- a present `closingSet: null` (or any other falsy,
+  // non-object value) is malformed evidence and must still reach
+  // `preMergeAsRecord`'s own `{}` fallback below, which resolves to
+  // `status: "unavailable"` and blocks, rather than silently passing.
+  if (report.closingSet !== undefined) {
+    const closingSet = preMergeAsRecord(report.closingSet);
+    const status = String(closingSet.status || 'unavailable');
+    if (status === 'skipped-non-default-branch' || status === 'match') {
+      // D3.5's own non-default-branch exemption, or a clean comparison --
+      // neither blocks.
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          'closing-set evidence unavailable: the live default branch or the PR commit list could not be read, or the commit list hit the REST API’s 250-commit pagination cap',
+      });
+    } else if (status === 'mismatch') {
+      const extra = Array.isArray(closingSet.extra) ? closingSet.extra : [];
+      const missing = Array.isArray(closingSet.missing)
+        ? closingSet.missing
+        : [];
+      const strayCommitCloses = Array.isArray(closingSet.strayCommitCloses)
+        ? closingSet.strayCommitCloses
+        : [];
+      const detailParts = [];
+      if (extra.length > 0) {
+        detailParts.push(
+          `extra closing reference(s) ${extra.join(', ')} outside the deliberate closing set (pass --closing-issues to declare a deliberate multi-issue close)`,
+        );
+      }
+      if (missing.length > 0) {
+        detailParts.push(
+          `deliberate closing reference(s) ${missing.join(', ')} missing from closingIssuesReferences`,
+        );
+      }
+      for (const entry of strayCommitCloses) {
+        const strayEntry = preMergeAsRecord(entry);
+        detailParts.push(
+          `commit ${String(strayEntry.sha ?? 'unknown')} carries a stray closing keyword for #${String(strayEntry.issue ?? '?')}`,
+        );
+      }
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          detailParts.length > 0
+            ? detailParts.join('; ')
+            : 'closingSet.status is "mismatch" with no further detail available',
+      });
+    } else {
+      blockers.push({
+        gate: 'closing-set',
+        detail: `unrecognized closingSet.status "${status}" (expected "match", "mismatch", "skipped-non-default-branch", or "unavailable")`,
       });
     }
   }
@@ -8321,6 +8460,15 @@ export function buildPreMergeReadinessSummary(
   if (options.developmentBranchTarget) {
     summary.developmentBranchTarget = options.developmentBranchTarget;
   }
+  // #3298: omitted entirely (not even `null`) when the caller does not pass
+  // it, mirroring developmentBranchTarget's own omission contract
+  // immediately above -- see that option's doc comment for why
+  // `computePreMergeReadinessBlockers` treats an absent section as "no
+  // gate" (unmigrated caller / unit fixture) while the real collector
+  // always emits one.
+  if (options.closingSet) {
+    summary.closingSet = options.closingSet;
+  }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
   // Includes the F2 ack-only overrides (#2125) so a fully-autonomous F3
@@ -8425,6 +8573,41 @@ function resolveStalePredicate(staleAgeMs) {
   }
   return (activeCreatedAt, nextCreatedAt) =>
     isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs);
+}
+/**
+ * Resolve the configured claim-staleness window (`claimTiming.staleAge`,
+ * #1310) in milliseconds from an already-loaded `.github/idd/config.json`
+ * object (or `null`) -- e.g. `loadIddConfig()`'s or `loadTrustedIddConfig()`'s
+ * return value directly, or a raw untyped config object a caller already
+ * parsed itself. The single shared config-read point every write-gate
+ * caller of {@link resolveActiveClaimForWriteGate} /
+ * {@link summarizeClaimValidationForWriteGate} should use, so a caller that
+ * already has its config in hand needs no second local copy of this
+ * parse-with-fallback (#3270 hoists this out of `pre-merge-readiness.mts`,
+ * its sole pre-#3270 home, to a shared façade every caller across the
+ * codebase can import). `normalizePolicyConfig(config).claimTiming.staleAge`
+ * is already fail-safe-normalized (a valid ISO-8601 duration, or the
+ * distributed `PT24H` default when the configured value is missing or
+ * malformed), so `parseIsoDurationToMs` only needs its own `?? fallback` for
+ * belt-and-suspenders defense, not as the primary fallback path.
+ *
+ * Deliberately defined here, not in `policy-helpers.mts` (the issue's own
+ * proposed location): `policy-helpers.mts` -> `protocol-helpers.mts` ->
+ * `idd-config.mts` -> `policy-helpers.mts` would be a real import cycle,
+ * since `idd-config.mts` already imports the critique-loop resolvers from
+ * `policy-helpers.mts` and this file already imports `loadIddConfig` from
+ * `idd-config.mts`. This file already imports `normalizePolicyConfig` /
+ * `parseIsoDurationToMs` FROM `policy-helpers.mts` with no cycle (that file
+ * has no dependency back on this one), so co-locating this reader beside
+ * {@link DEFAULT_STALE_AGE_MS} / {@link isStaleAt} / {@link isStaleByAge} —
+ * the other claim-staleness primitives it composes — avoids the cycle
+ * entirely while keeping every claim-staleness primitive in one module.
+ */
+export function readClaimStaleAgeMs(config) {
+  return (
+    parseIsoDurationToMs(normalizePolicyConfig(config).claimTiming.staleAge) ??
+    DEFAULT_STALE_AGE_MS
+  );
 }
 function compareClaimIds(left, right) {
   if (left === right) {
@@ -9230,6 +9413,19 @@ function isOperationalOrDigestCommentForGate(
   body,
   authorLogin,
   trustedMarkerLogins,
+  // Issue #3337: a digest-marker comment is only ever the target's OWN
+  // agent activity, so it must be excluded here only when its author is
+  // recognized as trusted OR as an IDD agent -- never unconditionally.
+  // Checking `trustedMarkerLogins` alone would fail open: a digest posted
+  // by an `iddAgentLogins` member outside the trusted set would then count
+  // as a genuine IDD reply, wrongly advancing `lastIddReplyAt`
+  // (`summarizeRegularCommentsForGate`) or entering `agentReplyComments`
+  // (`summarizeDispositionEvidenceForGate`), which could mark earlier
+  // feedback as answered. An author in neither set is a genuine stranger,
+  // so their digest-marker-shaped comment now counts as ordinary activity
+  // requiring disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract").
+  iddAgentLogins = new Set(),
 ) {
   const marker = operationalMarkerPrefix(body);
   if (marker === '<!-- forced-handoff:') {
@@ -9239,26 +9435,46 @@ function isOperationalOrDigestCommentForGate(
         .toLowerCase(),
     );
   }
-  return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+  if (marker !== null) {
+    return true;
+  }
+  if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
+    const login = String(authorLogin ?? '')
+      .trim()
+      .toLowerCase();
+    return trustedMarkerLogins.has(login) || iddAgentLogins.has(login);
+  }
+  return false;
 }
 function buildBodyPreview(body) {
   return firstLine(String(body ?? '')).slice(0, 120);
 }
+// #3338: delegates to the shared `parseAdvisoryWaitFamilyMarker` grammar
+// (marker-helpers.mts) instead of a hand-copied `[^ ]`-spaced regex trio,
+// so a canonical-but-differently-spaced marker (double space, tab,
+// trailing whitespace, fractional seconds, `<!--advisory-wait:`) is
+// recognized the same way `OPERATIONAL_MARKERS` recognizes it.
+// `advisory-reroll:` is deliberately excluded from same-HEAD detection --
+// unchanged from this function's pre-#3338 behavior, which never matched
+// that prefix either.
 function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
+  const parsed = parseAdvisoryWaitFamilyMarker(body);
   return (
-    new RegExp(`^advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(
-      body,
-    ) ||
-    new RegExp(
-      `^advisory-wait-recovery: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`,
-    ).test(body) ||
-    new RegExp(
-      `^<!-- advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)} [^ ]+ -->$`,
-    ).test(body)
+    parsed !== null &&
+    parsed.family !== 'advisory-reroll' &&
+    parsed.headSha === String(prHeadSha).trim().toLowerCase()
   );
 }
+// #3338: prefix-only (not full-grammar-valid), matching this function's
+// pre-#3338 behavior -- a field-invalid body (e.g. a `pending` timestamp
+// placeholder) still counts toward `requestMarkerCount`, which bounds the
+// re-request cap regardless of whether the rest of the marker parses.
+// Delegates to the shared `advisoryWaitFamilyMarkerStart` byte-0-anchored
+// predicate (marker-helpers.mts) instead of its own `<!-- advisory-wait:`
+// exact-single-space literal, so the HTML spacing variants count too.
 function advisoryWaitRequestMarker(body) {
-  return /^advisory-wait:/.test(body) || /^<!-- advisory-wait:/.test(body);
+  const family = advisoryWaitFamilyMarkerStart(body);
+  return family === 'advisory-wait' || family === 'advisory-wait-html';
 }
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

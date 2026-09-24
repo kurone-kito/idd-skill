@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-12",
+  "category": "synthetic",
+  "note": "#2767 item 12 (only the first \"## Acceptance Criteria\" heading is ever evaluated): the primary section-scoped ACCEPTANCE_CRITERIA_PATTERN match in checkVerifiability has no global flag, so only the first heading is ever located -- confirmed: a placeholder-only first section followed by a later, substantive second section fails Check 7 (verifiability) when the second section's real bullet is a bare (non-checkbox) list item, as authored here. The primary-scan gap is present today (MATCH); a research variant using this repo's own checkbox+outcome-word convention on the second section's bullet was sometimes rescued by a separate whole-body fallback further down the same function, so whether the final verdict flips depends on downstream bullet formatting -- this entry's own bare-bullet body reliably exercises the failing case. Unrelated to item 12's own claim: checkAutonomy (Check 6) also fails on this body, because its own literal \"- TBD\" placeholder bullet independently matches the UNRESOLVED_CHOICE_SOURCE pattern -- an artifact of the placeholder text choice, not a #2767 gap.",
+  "title": "Adopt src/foo.mts change (second AC heading)",
+  "labels": [],
+  "body": "## Acceptance Criteria\n- TBD\n\n## Notes\n\nSome unrelated background prose about the motivation for this change.\n\n## Acceptance Criteria\n- Names `src/foo.mts` as the concrete artifact for this change\n",
+  "bodySha256": "26ca9c8175bb4dac5f58e6a7eb1db78616afeb54de0f2c62e37f1b6950ae36bc",
+  "fetchedAt": "2026-09-24T07:22:41.393Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}
