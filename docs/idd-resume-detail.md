@@ -319,6 +319,11 @@ could ever observe it as 'alive'".
    Any match means back up the
    pre-operation branch tip before continuing — this recovery
    abandons the interrupted operation itself rather than resuming it.
+   For an in-progress rebase specifically, `HEAD` is the in-progress
+   replay tip, not the pre-operation tip: read the pre-operation tip
+   from `$(git -C <path> rev-parse --git-path rebase-merge)/orig-head`
+   or `rebase-apply/orig-head` (whichever the detection above matched)
+   instead.
 
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
@@ -361,10 +366,17 @@ could ever observe it as 'alive'".
    outside `<path>` — mirroring F4's own "copy other work to a
    different ref or path" rule — rather than treating the branch-tip
    backup alone as sufficient preservation. Preserve unpushed commits
-   — this worktree's own and every submodule's — on a backup ref
-   (`git -C <path> update-ref refs/idd-lwr/<branch> HEAD`, or the
-   same scoped to a submodule's own path) or a bundle, instead of
-   pushing them to the issue branch. `--include-untracked` does not
+   — this worktree's own and every submodule's — on a backup ref:
+   record the intended tip first (`git -C <path> rev-parse HEAD`, or
+   the pre-operation tip captured above for an in-progress rebase),
+   then `git -C <path> update-ref refs/idd-lwr/<branch> <that-sha>`
+   (or the same scoped to a submodule's own path), or a bundle,
+   instead of pushing them to the issue branch. A stale
+   `refs/idd-lwr/<branch>` left by an earlier interrupted attempt at
+   this same recovery can otherwise satisfy step 4's existence check
+   even when this attempt's own `update-ref` never ran — recording
+   and later comparing the OID closes that gap the same way the
+   stash `<tag>` closes it for stash entries. `--include-untracked` does not
    stash ignored files, so
    copy those out separately too: secrets (e.g. `.env`) — never
    commit or push them — and any other non-reproducible ignored data.
@@ -387,8 +399,10 @@ could ever observe it as 'alive'".
    stash, any unmerged-path fallback copy landed outside `<path>`,
    any `-` submodule's copied files landed outside `<path>`,
    `git -C <path> rev-parse --verify refs/idd-lwr/<branch>` resolves
-   (or the submodule-scoped equivalent) only where step 3 found
-   unpushed commits to back up, and any copied-out ignored files
+   **to the recorded tip OID** — not merely that it resolves at all,
+   which a stale ref could also satisfy — (or the submodule-scoped
+   equivalent) only where step 3 found unpushed commits to back up,
+   and any copied-out ignored files
    landed outside the worktree — before removing anything. Stop and do
    not run `git worktree remove`, `--force` included, if any of them
    failed.
@@ -403,25 +417,35 @@ could ever observe it as 'alive'".
    issue branch directly in the primary worktree instead of adding a
    linked one). Acquire the
    [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) before
-   this recovery's first mutation below and hold it through the final
-   lock check and deletion — a concurrent session can use the shared
-   primary clone at any point in between otherwise. Re-run the
+   this branch's first mutation to the shared primary clone's own
+   topology or checked-out branch below — the checkout — and hold it
+   through the final lock check and deletion: the clone-scoped lock
+   serializes `worktree add`/`remove` and `fetch` against exactly that
+   shared topology (`src/scripts/clone-lock.mts`'s own documented
+   scope), which step 3's stash/update-ref/copy operations never touch, so
+   nothing before the checkout needs it. A concurrent session can use
+   the shared primary clone's topology at any point between the
+   checkout and the deletion otherwise. Re-run the
    `claim-lock` check form on the primary worktree now, immediately
    before acting — not step 1's earlier read or this step's own
    opening re-check above, both stale by the time a concurrent session
    could have acquired or replaced this shared admin directory's lock.
    Only if that fresh check still matches this primary worktree's lock
-   to the claim-id being recovered: run `git -C <path> checkout
+   to the claim-id being recovered, or — for a legacy release — still
+   finds no lock at all (matching step 1's own absent-lock finding):
+   run `git -C <path> checkout
    {development-branch}` there to release the branch — re-resolve
    `{development-branch}` per §CSA's note above if this file is
    entered without a fresh B1 pass — confirm `resume-claim-routing.mjs`
    now reports this branch's `evidence.local_worktree.status` as
-   `absent`, then remove that one lock file (`rm "$(git -C <path>
+   `absent`, then, only when that fresh check found a lock, remove
+   that one lock file (`rm "$(git -C <path>
    rev-parse --absolute-git-dir)/idd-claim.lock"`) — the same deletion
    `git worktree remove` performs for a linked worktree, done by hand
    here since removal itself isn't possible — before releasing the
-   lock and continuing to step 5. Otherwise stop; a different or
-   now-absent holder means the situation changed again. Leave the
+   lock and continuing to step 5. Otherwise (a different holder, or a
+   lock that now exists where step 1 found none) stop; the situation
+   changed again. Leave the
    generated-tokens record: it is keyed per claim-id, not per branch,
    and `claim-lock.mts` already documents it as never expected to be
    cleaned up.
