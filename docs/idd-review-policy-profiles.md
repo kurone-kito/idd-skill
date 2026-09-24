@@ -31,8 +31,9 @@ distributed template. It keeps the current behavior:
 
 - E14 can request a Copilot re-review for the current PR head.
 - F2 and F3 can wait or hold based on Copilot advisory state.
-- Copilot and CI advisory comments are handled as PATH B feedback during
-  review triage.
+- Copilot's inline review-thread comments are PATH A; Copilot's other
+  comments and CI advisory comments are handled as PATH B feedback
+  during review triage.
 
 Use this profile when GitHub Copilot pull request review is available
 and the operator accepts it as an advisory signal rather than a required

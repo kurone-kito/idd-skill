@@ -83,11 +83,13 @@ for the exact marker format and collection rules.
 IDD separates review findings into two paths:
 
 - **PATH A** is actionable feedback. Human review comments, requested
-  changes, and critique findings belong here when they may require a
-  code change or maintainer decision.
-- **PATH B** is advisory feedback. Copilot and CI advisory bot comments
-  are tracked for traceability, accepted or rejected during triage, and
-  closed out without entering the review-fix phase.
+  changes, critique findings, and Copilot's inline review-thread
+  comments belong here when they may require a code change or
+  maintainer decision.
+- **PATH B** is advisory feedback. Copilot's and CI advisory bots'
+  review-summary bodies and regular comments are tracked for
+  traceability, accepted or rejected during triage, and closed out
+  without entering the review-fix phase.
 
 This split keeps advisory noise visible without letting it block the
 same way as human requested changes. When a source is ambiguous, IDD

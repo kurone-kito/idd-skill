@@ -33,11 +33,12 @@ edit. A missing, failed, or incomplete pagination fails closed.
 For each item in ReviewItems_snapshot, first classify it:
 
 - **PATH A — actionable feedback**: human reviewer threads and regular
-  comments, `CHANGES_REQUESTED` review bodies, and critique-pass
-  findings that require a code change or maintainer decision.
-- **PATH B — advisory feedback**: Copilot and CI advisory bot comments
-  included by E1 for traceability, even when they do not require a code
-  change.
+  comments, `CHANGES_REQUESTED` review bodies, critique-pass findings
+  that require a code change or maintainer decision, and Copilot
+  inline review-thread comments.
+- **PATH B — advisory feedback**: Copilot's and CI advisory bots'
+  review-summary bodies and regular comments included by E1 for
+  traceability, even when they do not require a code change.
 - If classification is ambiguous, default to PATH A.
 - Record each PATH A actor's permission standing (CODEOWNER, required
   reviewer, Triage/Write/Maintain/Admin, or none) — E5's cap reads it.
@@ -171,11 +172,10 @@ CODEOWNER/required-reviewer item (E6's AMD exception):
   <round>/<threshold>): {reason}`.
 - **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
   unchanged when off; `low`/`low-and-medium` apply from round 1).
-  Scope: PATH A only — a Copilot inline thread asking for a code
-  change falls through to PATH A under E4's ambiguous-default rule.
-  Eligibility severity is the higher of E4's own tier and Copilot's
-  label for that thread — the `alt="<Level> severity"` text next to
-  its `#discussion_r<id>` link in the Open section of any
+  Scope: PATH A only, including Copilot's inline review-thread
+  comments (E4). Eligibility severity is the higher of E4's own tier
+  and Copilot's label for that thread — the `alt="<Level> severity"`
+  text next to its `#discussion_r<id>` link in the Open section of any
   `<!-- ccr-overview-v2 -->` review on the PR; this floor only decides
   eligibility, never E4's own tier or its Accept-forced rule. An item
   is **adopt-now** (never eligible) when any holds: (a) a regression

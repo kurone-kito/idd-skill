@@ -202,9 +202,9 @@ fresh round per arrival, but only when **all** hold:
   advisory bot's login (default Copilot: `copilot` /
   `copilot-pull-request-reviewer*`, matched via `isCopilotReviewerLogin`
   in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
-  **regardless of PATH A/B** (Copilot's inline thread comments fall
-  through to PATH A under E4's ambiguous-default rule; an overlap with
-  any configured `secondaryBotLogin` login still qualifies).
+  **regardless of PATH A/B** (Copilot's inline thread comments are
+  PATH A under E4; an overlap with any configured
+  `secondaryBotLogin` login still qualifies).
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
