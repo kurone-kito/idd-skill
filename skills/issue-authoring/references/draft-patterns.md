@@ -551,7 +551,13 @@ Before publishing an issue, apply a reuse-first decision tree:
 1. Is an existing open issue a better fit? If yes, extend it instead of
    creating a new one. Add a comment linking to the new schema request.
 2. Is the work already complete in a closed issue or merged PR? If yes,
-   create a reference or learning note instead of reopening it.
+   create a reference or learning note instead of reopening it. Was it
+   instead already declined — closed as `not planned`, or rejected in
+   a review thread of the PR that last reshaped the same mechanism
+   (the reuse-first policy's previously declined check)? If yes and
+   nothing is new since that outcome, route to `needs-decision` or
+   drop the proposal instead of publishing it as `ready`; if something
+   is new, cite the declined outcome in the Background and continue.
 3. Is a parent roadmap already managing this work? If yes, add it to the
    task list instead of filing independently.
 4. Does the issue have any of these properties? If yes, escalate to

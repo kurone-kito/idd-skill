@@ -1652,6 +1652,32 @@ after claim — this scan only adds an earlier, pre-publish checkpoint.
 A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
 
+**Previously declined check.** Before treating a proposal as new, the
+skill should check whether it was already declined. Vocabulary alone
+can miss a match: the Groom outcome recorded on issue #2996 on
+2026-09-15 closed it as not-planned, yet issue #3164's own later search
+missed it six days after. The skill should search closed issues using
+the proposal's core nouns rather than its new framing, plus at least
+one alternative phrasing:
+
+```sh
+gh issue list --repo <owner>/<repo> --state closed \
+  --search 'reason:"not planned" <core-nouns>'
+```
+
+When the proposal changes an existing mechanism, the skill should
+identify the PR that introduced or last reshaped it (for example from
+`git log -S` on the mechanism's symbol, followed by its merge
+commit's `Merge pull request #N` subject), then read that PR's review threads for
+a **Rejected** disposition of the same idea — for example, review
+comment `3983246464` on PR #2895 was dispositioned Rejected on
+2026-09-10 as a deliberate trade-off; that rejection is recorded only
+in that review thread. The skill should cite every match found
+by either search in the drafted issue's Background, stating what
+is new since that outcome. When nothing is new, do not publish the
+issue as `ready` — route it to `needs-decision` or drop the proposal
+and record why.
+
 ## Decomposition and roadmap planning rules
 
 The skill should identify atomic execution units first, then decide how
