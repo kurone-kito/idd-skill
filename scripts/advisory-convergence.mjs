@@ -2490,8 +2490,16 @@ export function collectFromGitHub(
   // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
   // marker-shaped PR comment can be detected before that set is used to
   // resolve `claimEvents` -- see `resolveTrustedCollaboratorMarkerLogins`.
+  // #3246: `includeEditState` resolves each comment's GraphQL
+  // `lastEditedAt` -- needed so the waiver evidence built from these PR
+  // comments (below) can reject a body-edited external-check-waiver
+  // marker. `claimCandidates`' own comments (fetched separately below)
+  // deliberately do NOT opt in: the claim-marker family's own edit-state
+  // consumer is a separate, sibling issue.
   const comments = retryTransientGhFailure(() =>
-    port.listWorkItemComments(Number(args.prNumber)),
+    port.listWorkItemComments(Number(args.prNumber), {
+      includeEditState: true,
+    }),
   ).map(toIssueCommentPayload);
   // #1344: collaborator-marker trust, matching `pre-merge-readiness.mts`'s
   // `readCollaboratorTrustEnabled` exactly, except reusing the already-
@@ -3386,6 +3394,9 @@ function toIssueCommentPayload(comment) {
     author: { login: comment.authorLogin },
     createdAt: comment.createdAt,
     updatedAt: comment.updatedAt,
+    // #3246: passthrough only -- `undefined` for every caller that did not
+    // request `includeEditState` from the port.
+    lastEditedAt: comment.lastEditedAt,
   };
 }
 /** #1906: fetch the PR's own author `login`/`__typename` via

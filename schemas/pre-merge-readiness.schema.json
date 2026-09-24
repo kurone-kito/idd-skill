@@ -1253,7 +1253,8 @@
         "unauthorized",
         "malformed",
         "notConfigured",
-        "modeDisabled"
+        "modeDisabled",
+        "edited"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1515,6 +1516,34 @@
               "expiresAt": {
                 "type": "string",
                 "description": "Waiver's recorded expiry timestamp."
+              }
+            }
+          }
+        },
+        "edited": {
+          "type": "array",
+          "description": "#3246: marker-shaped waivers whose comment is body-edited (editState 'edited') or whose edit state could not be resolved (editState 'unknown'); checked right after the #2657 reason-token exclusion and before every other classification, so an edited or edit-state-unresolved marker never reaches valid regardless of author, HEAD, claim, or expiry.",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "editState"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string",
+                "description": "Login of the waiver's author, normalized to lowercase."
+              },
+              "checkSelector": {
+                "type": "string",
+                "description": "Check-name selector the waiver targets."
+              },
+              "editState": {
+                "type": "string",
+                "enum": ["edited", "unknown"],
+                "description": "'edited' when GraphQL lastEditedAt is a parseable timestamp; 'unknown' when it is absent, empty, or unparseable."
               }
             }
           }

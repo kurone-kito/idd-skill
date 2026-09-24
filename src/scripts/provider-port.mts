@@ -83,7 +83,20 @@ export interface ProviderWorkItem {
  * without it keep compiling unchanged. `post-idd-marker.mts`'s
  * hide-at-post-time step is the one consumer that needs it, to pass a
  * candidate comment's GraphQL node id to
- * `minimize-superseded-markers.mts`'s `minimizeComment` mutation. */
+ * `minimize-superseded-markers.mts`'s `minimizeComment` mutation.
+ *
+ * `lastEditedAt` (#3246) is GraphQL `IssueComment.lastEditedAt`, a
+ * genuinely separate signal from `updatedAt`: GitHub's `minimizeComment`
+ * mutation (IDD's own hide-on-supersede sweeps call it) advances
+ * `updatedAt` while leaving `lastEditedAt` `null`, so `updatedAt` can
+ * never substitute for it (kurone-kito/idd-skill#3173). Three-state
+ * contract, matching `authoring-owner-provenance.mts`'s
+ * `inspectLastEditedAt`: an explicit `null` means the comment was never
+ * body-edited, a parseable ISO timestamp means it was, and `undefined`
+ * means the caller never asked {@link ProviderPort.listWorkItemComments}
+ * (or {@link ProviderPort.listWorkItemCommentsWithRetryAsync}) to resolve
+ * it -- REST alone cannot answer this, so it costs an extra GraphQL round
+ * trip callers opt into explicitly rather than pay unconditionally. */
 export interface ProviderComment {
   id: number;
   body: string;
@@ -91,6 +104,7 @@ export interface ProviderComment {
   updatedAt: string;
   authorLogin: string;
   nodeId?: string;
+  lastEditedAt?: string | null;
 }
 
 /** One GraphQL `Issue.userContentEdits` node -- see
@@ -261,6 +275,11 @@ export interface ProviderReviewThreadComment {
   authorLogin: string;
   /** The comment's parent review node id, when the query selects it (disposition-evidence matching). */
   pullRequestReviewId?: string | null;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Unlike `ProviderComment`'s own opt-in, this is
+   * always populated: the review-thread queries are already GraphQL, so
+   * selecting one more field costs nothing extra. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments} --
@@ -304,6 +323,10 @@ export interface ProviderGraphqlComment {
   createdAt: string;
   updatedAt: string;
   authorLogin: string;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Always populated, like
+   * {@link ProviderReviewThreadComment.lastEditedAt}. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
@@ -355,6 +378,10 @@ export interface ProviderReviewThreadCommentWithAuthorType {
   authorLogin: string;
   authorTypename: string | null;
   pullRequestReviewId: string | null;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Always populated, like
+   * {@link ProviderReviewThreadComment.lastEditedAt}. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
@@ -606,10 +633,19 @@ export interface ProviderPort {
    * `gh --paginate` timeout (#2754, chatgpt-codex-connector review on PR
    * #2788) -- same rationale as {@link ProviderPort.getChangeRequestHeadSha}'s
    * own `options.timeoutMs`. Omit it to keep that default unchanged.
+   *
+   * `options.includeEditState` (#3246), when `true`, additionally resolves
+   * each returned comment's {@link ProviderComment.lastEditedAt} via one
+   * follow-up GraphQL batch read -- REST alone has no edit-timestamp
+   * field. A caller that omits it (the default) leaves `lastEditedAt`
+   * `undefined` on every returned comment and pays no extra round trip.
+   * When set and the GraphQL read fails or comes back incomplete for any
+   * comment, this method throws rather than returning a partial or
+   * `null`-defaulted result.
    */
   listWorkItemComments(
     number: number,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; includeEditState?: boolean },
   ): ProviderComment[];
 
   /**
@@ -766,8 +802,19 @@ export interface ProviderPort {
    * {@link listWorkItemComments}: that method's single `--paginate` call
    * retries (if at all) the WHOLE fetch, where this one retries one page
    * at a time -- a real granularity difference, not interchangeable.
+   *
+   * `options.includeEditState` (#3246): same opt-in contract as
+   * {@link ProviderPort.listWorkItemComments}'s own option of the same
+   * name. Since this method's return type is a raw passthrough, not
+   * {@link ProviderComment}, an opted-in edit-state value is merged onto
+   * each row as `last_edited_at` (snake_case, matching every other raw
+   * REST field this method already passes through unchanged) rather than
+   * the port's own camelCase `lastEditedAt`.
    */
-  listWorkItemCommentsWithRetryAsync(number: number): Promise<unknown[]>;
+  listWorkItemCommentsWithRetryAsync(
+    number: number,
+    options?: { includeEditState?: boolean },
+  ): Promise<unknown[]>;
 
   /**
    * work-items. `gh search issues`, the distinct server-side search

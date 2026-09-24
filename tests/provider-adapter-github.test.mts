@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   createGithubProviderAdapter,
+  fetchLastEditedAtByNodeId,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
 
@@ -1386,6 +1387,242 @@ test('listWorkItemCommentsWithRetryAsync retries once past a transient page-fetc
 });
 
 // ---------------------------------------------------------------------------
+// listWorkItemComments / listWorkItemCommentsWithRetryAsync:
+// includeEditState opt-in (#3246) -- lastEditedAt's three-state contract.
+// ---------------------------------------------------------------------------
+
+function graphqlNodesLastEditedAtBody(
+  entries: { id: string; lastEditedAt: unknown }[],
+): string {
+  return JSON.stringify({ data: { nodes: entries } });
+}
+
+test('listWorkItemComments: a call that does not ask for edit state leaves lastEditedAt undefined, even when updated_at differs from created_at (#3246)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          // Simulates the GitHub minimizeComment shape (#3173): updated_at
+          // moved, but that must never be read as evidence of an edit --
+          // and this REST-only read never even resolves lastEditedAt.
+          updated_at: '2026-01-05T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () => {
+        throw new Error('ghText must not be called without includeEditState');
+      },
+    }),
+  );
+  const result = port.listWorkItemComments(900);
+  assert.equal(result.length, 1);
+  assert.equal(Object.hasOwn(result[0], 'lastEditedAt'), false);
+  assert.equal(result[0].updatedAt, '2026-01-05T00:00:00Z');
+});
+
+test('listWorkItemComments: includeEditState maps a stubbed GraphQL null lastEditedAt to null', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () =>
+        graphqlNodesLastEditedAtBody([{ id: 'IC_1', lastEditedAt: null }]),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0].lastEditedAt, null);
+});
+
+test('listWorkItemComments: includeEditState maps a stubbed GraphQL timestamp lastEditedAt to that timestamp', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:05:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () =>
+        graphqlNodesLastEditedAtBody([
+          { id: 'IC_1', lastEditedAt: '2026-01-01T00:05:00Z' },
+        ]),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0].lastEditedAt, '2026-01-01T00:05:00Z');
+});
+
+test('listWorkItemComments: includeEditState throws when the GraphQL batch read fails', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () => {
+        throw new Error('gh api graphql failed');
+      },
+    }),
+  );
+  assert.throws(() =>
+    port.listWorkItemComments(900, { includeEditState: true }),
+  );
+});
+
+test('listWorkItemComments: includeEditState throws when a comment is missing node_id', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    port.listWorkItemComments(900, { includeEditState: true }),
+  );
+});
+
+test('listWorkItemCommentsWithRetryAsync: a call that does not ask for edit state leaves last_edited_at absent (#3246)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify([
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]),
+    }),
+  );
+  const result = (await port.listWorkItemCommentsWithRetryAsync(900)) as Record<
+    string,
+    unknown
+  >[];
+  assert.equal(Object.hasOwn(result[0], 'last_edited_at'), false);
+});
+
+test('listWorkItemCommentsWithRetryAsync: includeEditState merges last_edited_at from the GraphQL batch read', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        if (args[1] === 'graphql') {
+          return graphqlNodesLastEditedAtBody([
+            { id: 'IC_1', lastEditedAt: null },
+          ]);
+        }
+        return JSON.stringify([
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]);
+      },
+    }),
+  );
+  const result = (await port.listWorkItemCommentsWithRetryAsync(900, {
+    includeEditState: true,
+  })) as Record<string, unknown>[];
+  assert.equal(result[0].last_edited_at, null);
+});
+
+test('fetchLastEditedAtByNodeId: chunks a 101-id batch into two requests of 100 and 1 (C1 review)', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `IC_${i}`);
+  const calls: string[][] = [];
+  const ghTextStub = (args: string[]): string => {
+    calls.push(args);
+    const idArgs = args.filter((arg) => arg.startsWith('ids[]='));
+    return graphqlNodesLastEditedAtBody(
+      idArgs.map((arg) => ({
+        id: arg.slice('ids[]='.length),
+        lastEditedAt: null,
+      })),
+    );
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    nodeIds,
+  );
+  assert.equal(calls.length, 2, 'expected exactly two chunked requests');
+  assert.equal(
+    calls[0].filter((arg) => arg.startsWith('ids[]=')).length,
+    100,
+    'first request carries 100 ids',
+  );
+  assert.equal(
+    calls[1].filter((arg) => arg.startsWith('ids[]=')).length,
+    1,
+    'second request carries the remaining 1 id',
+  );
+  assert.equal(result.size, 101);
+  for (const id of nodeIds) {
+    assert.equal(
+      result.get(id),
+      null,
+      `missing/incorrect resolution for ${id}`,
+    );
+  }
+});
+
+test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
+  const ghTextStub = (): string => {
+    throw new Error('ghText must not be called for an empty id list');
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    [],
+  );
+  assert.equal(result.size, 0);
+});
+
+// ---------------------------------------------------------------------------
 // searchOpenWorkItems (#2266): discover-roadmap-graph.mts's
 // buildSearchIssuesRunner, previously never directly tested (only exercised
 // through live production wiring) -- net-new coverage.
@@ -1566,6 +1803,9 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
                       url: 'https://example.invalid/c/1',
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
+                      // #3246: proves the field is selected and mapped,
+                      // not merely tolerated when absent.
+                      lastEditedAt: '2026-01-01T00:05:00Z',
                       author: { login: 'reviewer' },
                       pullRequestReview: { id: 'PRR_1' },
                     },
@@ -1604,6 +1844,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
           updatedAt: '2026-01-01T00:00:00Z',
           authorLogin: 'reviewer',
           pullRequestReviewId: 'PRR_1',
+          lastEditedAt: '2026-01-01T00:05:00Z',
         },
       ],
     },
@@ -1619,6 +1860,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
           authorLogin: 'reviewer',
+          lastEditedAt: '2026-01-01T00:05:00Z',
         },
       ],
     },
@@ -2269,6 +2511,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
                       updatedAt: '2026-01-01T00:00:00Z',
                       author: { login: 'copilot', __typename: 'Bot' },
                       pullRequestReview: { id: 'PRR_1' },
+                      lastEditedAt: null,
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -2306,6 +2549,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
           authorLogin: 'copilot',
           authorTypename: 'Bot',
           pullRequestReviewId: 'PRR_1',
+          lastEditedAt: null,
         },
       ],
     },
@@ -3247,6 +3491,9 @@ test('listChangeRequestGraphqlComments returns nodes on a normal payload', () =>
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
                       author: { login: 'octocat' },
+                      // #3246: proves the field is selected and mapped,
+                      // not merely tolerated when absent.
+                      lastEditedAt: '2026-01-01T00:05:00Z',
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -3264,6 +3511,7 @@ test('listChangeRequestGraphqlComments returns nodes on a normal payload', () =>
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
       authorLogin: 'octocat',
+      lastEditedAt: '2026-01-01T00:05:00Z',
     },
   ]);
 });

@@ -485,8 +485,18 @@ export function createFakeProviderAdapter(
       return fixture.issueBranchRefs ?? [];
     },
 
-    listWorkItemComments(number: number): ProviderComment[] {
-      return fixture.comments?.[number] ?? [];
+    listWorkItemComments(
+      number: number,
+      options?: { includeEditState?: boolean },
+    ): ProviderComment[] {
+      const rows = fixture.comments?.[number] ?? [];
+      // #3246: parity with the real adapter's opt-in contract -- a caller
+      // that does not request edit state must see `lastEditedAt` as
+      // `undefined`, even when the fixture happens to carry a value.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map(({ lastEditedAt: _lastEditedAt, ...rest }) => rest);
     },
 
     postWorkItemComment(number: number, body: string): ProviderPostedComment {
@@ -571,8 +581,25 @@ export function createFakeProviderAdapter(
 
     async listWorkItemCommentsWithRetryAsync(
       number: number,
+      options?: { includeEditState?: boolean },
     ): Promise<unknown[]> {
-      return fixture.traversalComments?.[number] ?? [];
+      const rows = fixture.traversalComments?.[number] ?? [];
+      // #3246: same opt-in parity as `listWorkItemComments`, but the
+      // snake_case `last_edited_at` key -- this method's fixture rows are
+      // a raw passthrough, not `ProviderComment`.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map((row) => {
+        if (row != null && typeof row === 'object' && 'last_edited_at' in row) {
+          const { last_edited_at: _lastEditedAt, ...rest } = row as Record<
+            string,
+            unknown
+          >;
+          return rest;
+        }
+        return row;
+      });
     },
 
     searchOpenWorkItems(): unknown[] {

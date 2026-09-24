@@ -106,6 +106,10 @@ interface IssueCommentPayload {
   created_at?: string | null;
   updated_at?: string | null;
   user?: GhAuthorPayload | null;
+  /** #3246: see `ProviderComment.lastEditedAt`'s doc comment
+   * (provider-port.mts) for the three-state contract. Only populated when
+   * the fetch that produced this row requested `includeEditState`. */
+  last_edited_at?: string | null;
 }
 
 /** PR review payload fields consumed by this helper. */
@@ -840,8 +844,13 @@ export function collectPreMergeReadiness(
   const timelineEvents = port.getWorkItemTimeline(
     args.prNumber,
   ) as TimelineEventPayload[];
+  // #3246: `includeEditState` resolves each comment's GraphQL
+  // `lastEditedAt` -- needed so `waiverEvidence` (fed by these PR
+  // comments) can reject a body-edited external-check-waiver marker.
+  // `claimComments` below deliberately does NOT opt in: the claim-marker
+  // family's own edit-state consumer is a separate, sibling issue.
   const comments = port
-    .listWorkItemComments(args.prNumber)
+    .listWorkItemComments(args.prNumber, { includeEditState: true })
     .map(toIssueCommentPayload);
   const claimComments = args.claimless
     ? []
@@ -1718,6 +1727,10 @@ function toIssueCommentPayload(comment: ProviderComment): IssueCommentPayload {
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
     user: { login: comment.authorLogin },
+    // #3246: passthrough only -- `undefined` for every caller that did not
+    // request `includeEditState` from the port, unchanged from before this
+    // field existed.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 
@@ -1728,6 +1741,10 @@ export function normalizeComment(comment: IssueCommentPayload) {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     updatedAt: comment.updated_at ?? comment.created_at ?? '',
+    // #3246: carried through to the `CommentLike` shape
+    // `summarizeExternalCheckWaivers` reads (protocol-helpers.mts) --
+    // never derived from `updatedAt`/`updated_at`.
+    lastEditedAt: comment.last_edited_at,
   };
 }
 

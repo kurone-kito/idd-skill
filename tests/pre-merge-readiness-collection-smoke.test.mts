@@ -45,6 +45,7 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       body: 'looks good',
       createdAt: '2026-07-31T11:00:00Z',
       updatedAt: '2026-07-31T11:00:00Z',
+      lastEditedAt: undefined,
     },
   );
   assert.equal(
@@ -53,6 +54,29 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       updated_at: '2026-07-31T12:00:00Z',
     }).updatedAt,
     '2026-07-31T12:00:00Z',
+  );
+});
+
+test('normalizeComment carries last_edited_at through to lastEditedAt (#3246)', () => {
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: null,
+    }).lastEditedAt,
+    null,
+  );
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: '2026-07-31T11:30:00Z',
+    }).lastEditedAt,
+    '2026-07-31T11:30:00Z',
   );
 });
 
@@ -259,6 +283,7 @@ function buildStubGhScript(
   const prComments = [
     {
       id: 1,
+      node_id: 'IC_kwDOexample001',
       body: 'looks good',
       created_at: '2026-07-31T11:00:00Z',
       user: { login: 'commenter-user' },
@@ -367,6 +392,19 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 }
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
+// #3246: listWorkItemComments' includeEditState opt-in batch-resolves
+// each PR comment's lastEditedAt via nodes(ids:) -- every fixture
+// comment is unedited by construction.
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) out(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        nodes: prComments.map((comment) => ({
+          id: comment.node_id,
+          lastEditedAt: null,
+        })),
+      },
+    }),
+  )});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/commits`}') out(${JSON.stringify(ndjson(options.commits ?? []))});
 ${
@@ -940,6 +978,143 @@ test('collectPreMergeReadiness against a fake provider: a required check reporti
   }
 });
 
+// kurone-kito/idd-skill#3246 (E2 critique, C1 round 2): every `edited`-bucket
+// test elsewhere in this repository (tests/pre-merge-readiness.test.mts)
+// exercises `summarizeExternalCheckWaivers` or `buildPreMergeReadinessSummary`
+// with a hand-built comment list -- none proves `collectPreMergeReadiness`'s
+// own `port.listWorkItemComments(prNumber, { includeEditState: true })` wiring
+// genuinely carries a fixture's `lastEditedAt` through to the report a real
+// GitHub-backed run would produce. The sibling `advisory-convergence.mts`
+// collector already got exactly this negative-control end-to-end test
+// ("C1 round 2" in tests/advisory-convergence-fake-provider.test.mts); this
+// closes the same gap for `pre-merge-readiness.mts`.
+test('collectPreMergeReadiness against a fake provider: a body-edited external-check-waiver comment never covers a failing required check (kurone-kito/idd-skill#3246, C1 round 2)', () => {
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-fake-edited-waiver-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+
+    const waiverBody = renderExternalCheckWaiverComment({
+      agentId: 'claude-test',
+      claimId: 'none',
+      headSha: 'a'.repeat(40),
+      checkSelector: 'lint',
+      reason: 'lint flaked on an unrelated infra outage',
+      expiresAt: '2099-01-01T00:00:00Z',
+      actor: 'kurone-kito',
+    });
+
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: 'lint',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              completedAt: '2026-08-01T00:00:00Z',
+              workflowName: 'CI',
+            },
+          ],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: {
+        'o/r/main': [
+          {
+            type: 'required_status_checks',
+            parameters: { required_status_checks: [{ context: 'lint' }] },
+          },
+        ],
+      },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+      comments: {
+        42: [
+          {
+            id: 1,
+            body: waiverBody,
+            createdAt: '2026-08-01T00:00:00Z',
+            updatedAt: '2026-08-01T00:00:00Z',
+            authorLogin: 'kurone-kito',
+            // GitHub reports this waiver's body was edited after posting --
+            // resolved only because `includeEditState: true` is genuinely
+            // threaded through this collector's own comment read, not
+            // hand-built into the test's input like every other #3246 test
+            // in tests/pre-merge-readiness.test.mts.
+            lastEditedAt: '2026-08-01T00:05:00Z',
+          },
+        ],
+      },
+      changedFiles: { 42: [] },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:10:00Z',
+      ],
+      () => port,
+      () =>
+        ({
+          ciGate: {
+            externalCheckWaivers: { mode: 'maintainer-authorized' },
+            externalChecks: {
+              waivable: [{ selector: 'lint', matchMode: 'exact' }],
+            },
+          },
+        }) as never,
+    );
+
+    const waiverEvidence = report.waiverEvidence as {
+      valid: unknown[];
+      edited: { authorLogin: string; editState: string }[];
+    };
+    assert.equal(waiverEvidence.valid.length, 0);
+    assert.equal(waiverEvidence.edited.length, 1);
+    assert.equal(waiverEvidence.edited[0].authorLogin, 'kurone-kito');
+    assert.equal(waiverEvidence.edited[0].editState, 'edited');
+
+    const ciReport = report.ci as {
+      status: string;
+      requiredChecksPassing: boolean;
+      checks: { name: string; coveredByWaiver?: boolean }[];
+    };
+    assert.equal(ciReport.status, 'failed');
+    assert.equal(ciReport.requiredChecksPassing, false);
+    const lintCheck = ciReport.checks.find((c) => c.name === 'lint');
+    assert.equal(lintCheck?.coveredByWaiver, undefined);
+    const blockers = report.blockers as { gate: string }[];
+    assert.ok(
+      blockers.some((blocker) => blocker.gate === 'ci'),
+      `expected a "ci" blocker, got: ${JSON.stringify(blockers)}`,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
+
 test('collectPreMergeReadiness against a fake provider: a matching CODEOWNER resolves via the injected port, not a fresh live adapter (Codex review, PR #2429)', () => {
   // resolveEligibleCodeownerUserLogins's default fetchPermission
   // constructed its own createGithubProviderAdapter(owner, repo) instead
@@ -1400,6 +1575,9 @@ function selfWaiverMarkerCollectionComment(payload: {
     createdAt: payload.createdAt,
     updatedAt: payload.createdAt,
     authorLogin: 'github-actions[bot]',
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
