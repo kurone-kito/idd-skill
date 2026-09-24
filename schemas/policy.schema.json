@@ -67,7 +67,7 @@
         "hybrid-reviewer-ack",
         "strict-reviewer-resolve"
       ],
-      "description": "Selects which review threads an agent may resolve on its own initiative. Required; the distributed default lets agents resolve after acting on feedback. Branch-protection conversation-resolution rules always override this policy."
+      "description": "Records which review-thread-resolution profile is selected. Required; the distributed default (fast-agent-resolve) lets agents resolve after acting on feedback. No helper or gate reads this value: a non-default profile (hybrid-reviewer-ack or strict-reviewer-resolve) takes effect only through matching edits to the phase files listed in docs/idd-review-policy-profiles.md, and idd-doctor warns while a non-default profile is configured. Branch-protection conversation-resolution rules always override this policy."
     },
     "authoringLanguage": {
       "type": "string",
