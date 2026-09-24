@@ -28,7 +28,7 @@ import {
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
@@ -356,7 +356,7 @@ function isAttributedLongQuote(text, start, selfIssueNumber) {
  * #2760).
  */
 export function detectRuntimeObservationPrecondition(body, selfIssueNumber) {
-  const stripped = stripMarkdownCodeRegions(String(body ?? ''));
+  const stripped = maskMarkdownForScan(String(body ?? ''));
   for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
     pattern.lastIndex = 0;
     let match = pattern.exec(stripped);
@@ -417,10 +417,17 @@ export function classifyIssue(issue, options) {
   );
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
-  if (roadmapMarkerRegex.test(body)) {
+  // #3281: these two marker tests previously ran against the raw body,
+  // unlike the rest of this function's later checks — an issue that only
+  // *quotes* a `roadmap-id`/`blocked-by` marker as an example (inside a
+  // code span, fence, or indented code block) was wrongly classified as
+  // a real roadmap node or blocked leaf. Mask first, HTML comments kept
+  // (the default): the markers themselves are HTML comments.
+  const bodyForMarkerTests = maskMarkdownForScan(body);
+  if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
-  if (blockedMarkerRegex.test(body)) {
+  if (blockedMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'blocked_by_marker' };
   }
   const blockedLabels = new Set([

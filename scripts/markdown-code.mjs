@@ -1159,6 +1159,72 @@ function isHtmlBlockContainerEnded(
   }
   return false;
 }
+// #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
+// leaves hidden instructional scaffolding as an HTML comment -- e.g.
+// `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
+// -->` -- invisible in the rendered issue but still present in a
+// code-masked body (Markdown code masking does not touch HTML comments).
+// Masked the same way as inline/fenced code, before the inline-decision
+// pattern scan. An unterminated `<!--` (no matching `-->`) extends to
+// end-of-body: CommonMark renders such an HTML block through EOF, so the
+// entire remaining body -- a genuine marker and Acceptance Criteria
+// included -- can be invisible in the rendered issue while still matching
+// this scan if left unmasked (round 7, PR #2662).
+//
+// #2711: an issue that documents this convention's own syntax inside a
+// fenced code example -- e.g. a fence containing a literal, deliberately
+// unterminated `<!--` to illustrate the shape -- must not have that
+// example's opener treated as a REAL unterminated comment: doing so masks
+// through EOF and swallows a genuine later "Maintainer decision (...)"
+// that follows the fence. The same applies to an INLINE code span
+// demonstrating the same syntax (PR #2735 Codex review round 2) -- e.g.
+// `` `<!--` `` followed by a later bullet naming the real artifact.
+// `ignoredOpenerRanges` (optional, defaults to none so existing callers
+// with no code content to worry about are unaffected) lets a caller
+// exclude any `<!--` whose own opening `<` falls inside one of these
+// ranges from consideration entirely; pass fenced + indented + inline
+// ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
+// shape, not just fenced blocks.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped opener
+// (`\<!--`) renders as a literal string in CommonMark, not a real HTML
+// comment start -- an issue documenting the literal marker syntax (e.g.
+// `Document the literal \<!-- marker`) must not have everything after it
+// masked through EOF. A single preceding backslash is enough to treat it
+// as escaped (soft heuristic, matching this file's existing style; does
+// not attempt full backslash-run parity for a doubly-escaped `\\<!--`).
+//
+// Moved here from `resolved-decision.mts` (#3281): `maskMarkdownForScan`
+// below needs to call this directly, and `resolved-decision.mts` already
+// imports FROM this file, so the reverse direction would be circular.
+// `resolved-decision.mts` re-exports this name so its own callers
+// (`suitability-triage.mts`, `triage-structural-evidence.mts`) compile
+// unchanged.
+export function findHtmlCommentRanges(text, ignoredOpenerRanges = []) {
+  const ranges = [];
+  const openPattern = /<!--/g;
+  let openMatch = openPattern.exec(text);
+  while (openMatch) {
+    const openIndex = openMatch.index;
+    const isEscaped = text[openIndex - 1] === '\\';
+    const isIgnored =
+      isEscaped ||
+      ignoredOpenerRanges.some(
+        (range) => openIndex >= range.start && openIndex < range.end,
+      );
+    if (isIgnored) {
+      openPattern.lastIndex = openIndex + 4;
+      openMatch = openPattern.exec(text);
+      continue;
+    }
+    const closeIndex = text.indexOf('-->', openIndex + 4);
+    const end = closeIndex === -1 ? text.length : closeIndex + 3;
+    ranges.push({ start: openIndex, end });
+    openPattern.lastIndex = end;
+    openMatch = openPattern.exec(text);
+  }
+  return ranges;
+}
 export function findHtmlBlockRanges(text, fencedRanges = []) {
   const ranges = [];
   let lineStart = 0;
@@ -1700,7 +1766,15 @@ export function findIndentedCodeRanges(text, fencedRanges) {
   }
   return ranges;
 }
-function mergeMarkdownCodeRanges(ranges) {
+/**
+ * Sort `ranges` by `start` and coalesce any that overlap or touch into
+ * one, so a downstream consumer never has to reason about two adjacent
+ * or overlapping ranges separately. Exported (#3281) so
+ * {@link maskMarkdownForScan} can compose ranges from more than one
+ * finder (fenced, indented, inline, HTML block, HTML comment) without
+ * duplicating this merge logic.
+ */
+export function mergeMarkdownCodeRanges(ranges) {
   const merged = [];
   for (const range of ranges.sort((left, right) => left.start - right.start)) {
     const previous = merged.at(-1);
@@ -2097,4 +2171,52 @@ export function maskMarkdownCodeRegionsPreservingPositions(
     }
   }
   return masked.join('');
+}
+/**
+ * One documented entry point (#3281) for masking a Markdown issue/PR body
+ * before scanning it for machine-readable markers or dependency
+ * references, replacing the ad hoc mix of {@link stripMarkdownCodeRegions}
+ * (fenced + inline only -- misses indented code) and no masking at all
+ * that the Discover helpers previously used inconsistently. Always:
+ *
+ * - normalizes `\r\n` to `\n` first, so the result never contains a bare
+ *   `\r` regardless of the input's line endings;
+ * - masks fenced ({@link findFencedCodeRanges}) and indented
+ *   ({@link findIndentedCodeRanges}) code blocks;
+ * - replaces every masked character with a space and keeps every `\n`,
+ *   so the result has the same length and line structure as the
+ *   normalized input (line-number math on the returned text stays
+ *   valid, matching {@link stripMarkdownCodeRegions}'s existing
+ *   contract).
+ *
+ * `options.inlineCode`/`options.htmlComments`/`options.htmlBlocks`
+ * control the three optional mask categories; see
+ * {@link MaskMarkdownForScanOptions} for their defaults and rationale.
+ */
+export function maskMarkdownForScan(text, options = {}) {
+  const normalized = text.replace(/\r\n/g, '\n');
+  const inlineCode = options.inlineCode ?? 'mask';
+  const htmlComments = options.htmlComments ?? 'keep';
+  const htmlBlocks = options.htmlBlocks ?? 'keep';
+  const fencedRanges = findFencedCodeRanges(normalized);
+  let ranges =
+    inlineCode === 'mask'
+      ? findMarkdownCodeRanges(normalized)
+      : mergeMarkdownCodeRanges([
+          ...fencedRanges,
+          ...findIndentedCodeRanges(normalized, fencedRanges),
+        ]);
+  if (htmlBlocks === 'mask') {
+    ranges = mergeMarkdownCodeRanges([
+      ...ranges,
+      ...findHtmlBlockRanges(normalized, fencedRanges),
+    ]);
+  }
+  if (htmlComments === 'mask') {
+    ranges = mergeMarkdownCodeRanges([
+      ...ranges,
+      ...findHtmlCommentRanges(normalized, ranges),
+    ]);
+  }
+  return maskMarkdownCodeRegionsPreservingPositions(normalized, ranges);
 }

@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
+import { extractBlockedByRoadmapMarkers } from '../src/scripts/discover-readiness-check.mts';
 import {
   renderAuthoringOwnerMarker,
   renderAuthoringPublicationIntentMarker,
@@ -994,6 +995,22 @@ test('dependency-marker-rule fails when an orphan issue carries a blocked-by mar
   );
   const report = auditAuthoredIssue(body, { shape: 'orphan' });
   assert.equal(findingResult(report, 'dependency-marker-rule'), 'fail');
+});
+
+test('dependency-marker-rule agrees with extractBlockedByRoadmapMarkers that a blocked-by marker only quoted inline is not real (#2441-shaped, #3281)', () => {
+  // Reproduces the exact shape reported against issue #2441: the body's
+  // only blocked-by marker sits inside an inline code span, illustrating
+  // the marker's own syntax rather than declaring a real dependency.
+  // Before #3281, Discover's extractBlockedByRoadmapMarkers read the raw
+  // body (no masking at all) and disagreed with auditAuthoredIssue (which
+  // already masked code here) — this asserts both now agree.
+  const body = orphanBody().replace(
+    '## Background',
+    'See `<!-- idd-skill-blocked-by: some-roadmap -->` for syntax.\n\n## Background',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  assert.equal(findingResult(report, 'dependency-marker-rule'), 'pass');
+  assert.deepEqual(extractBlockedByRoadmapMarkers(body), []);
 });
 
 test('dependency-marker-rule fails when a child blocked-by marker is missing its value', () => {

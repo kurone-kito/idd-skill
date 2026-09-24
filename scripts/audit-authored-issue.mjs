@@ -61,7 +61,10 @@ import {
   loadIddConfig,
   loadPolicyConfig,
 } from './idd-config.mjs';
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import {
+  maskMarkdownForScan,
+  stripMarkdownCodeRegions,
+} from './markdown-code.mjs';
 import {
   classifyAuthoringMarkerFamily,
   countMarkerOccurrences,
@@ -208,7 +211,7 @@ function consumeNonBlockingRefList(segment) {
   return numbers;
 }
 function extractNonBlockingReferenceIssueNumbers(text) {
-  const stripped = stripMarkdownCodeRegions(text);
+  const stripped = maskMarkdownForScan(text);
   const numbers = [];
   for (const match of stripped.matchAll(NON_BLOCKING_REFERENCE_LINE_PATTERN)) {
     numbers.push(...consumeNonBlockingRefList(match[1]));
@@ -414,14 +417,16 @@ if (import.meta.main) {
  */
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
-  // Strip Markdown code regions (fenced blocks and inline spans) once, up
-  // front, and run every check (marker counting, heading detection,
-  // visible-line scoping) against the result. A pasted template/example
-  // snippet — quoting a marker or heading for illustration — must never
-  // count as the real thing. Reuses the same stripMarkdownCodeRegions
-  // primitive extractRoadmapMarkerId already relies on, rather than a
-  // second, independently-maintained fence tracker.
-  const text = stripMarkdownCodeRegions(rawText);
+  // Mask Markdown code regions (fenced blocks, indented blocks, and
+  // inline spans) once, up front, and run every check (marker counting,
+  // heading detection, visible-line scoping) against the result. A
+  // pasted template/example snippet — quoting a marker or heading for
+  // illustration — must never count as the real thing. Reuses the same
+  // maskMarkdownForScan primitive extractRoadmapMarkerId already relies
+  // on (#3281; originally stripMarkdownCodeRegions, which missed
+  // indented code), rather than a second, independently-maintained
+  // fence tracker.
+  const text = maskMarkdownForScan(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const blockedByHumanLabelName =

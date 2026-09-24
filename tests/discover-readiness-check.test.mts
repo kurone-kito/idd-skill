@@ -451,6 +451,20 @@ test('extractBlockedByRoadmapMarkers regex-escapes a metacharacter prefix', () =
   assert.deepEqual(extractBlockedByRoadmapMarkers(body, 'a(b'), ['grouped']);
 });
 
+test('extractBlockedByRoadmapMarkers ignores a marker only quoted inside an inline code span (#3281)', () => {
+  const codeQuoted =
+    'See `<!-- idd-skill-blocked-by: parent-roadmap -->` for the syntax.';
+  assert.deepEqual(extractBlockedByRoadmapMarkers(codeQuoted), []);
+  // The same marker outside code still resolves — this is a scoping fix,
+  // not a regression in the real-marker path.
+  assert.deepEqual(
+    extractBlockedByRoadmapMarkers(
+      '<!-- idd-skill-blocked-by: parent-roadmap -->',
+    ),
+    ['parent-roadmap'],
+  );
+});
+
 test('buildRoadmapMarkerSearchQuery threads the prefix as a literal, unescaped term', () => {
   // Default prefix.
   assert.equal(
@@ -513,6 +527,36 @@ test('threads a configured marker prefix into blocked-by extraction and roadmap-
     summary.filteredOut[0].reasons.join(','),
     /blocked_by_open_roadmap_marker:roadmap-y/,
   );
+});
+
+test('does not report unresolvable_blocked_by_marker for a roadmap marker only quoted inside a code span (#3281)', async () => {
+  const issues = new Map([
+    [
+      1602,
+      {
+        number: 1602,
+        title: 'code-quoted blocked-by example',
+        state: 'OPEN',
+        body: 'See `<!-- idd-skill-blocked-by: parent-roadmap -->` for the syntax.',
+        labels: [],
+      },
+    ],
+  ]);
+  const searchedMarkers: string[] = [];
+  const summary = await evaluateDiscoverReadiness([1602], {
+    includeUnresolvable: true,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async (marker) => {
+      searchedMarkers.push(marker);
+      return [];
+    },
+  });
+
+  // The quoted example never reaches the roadmap-id lookup at all.
+  assert.deepEqual(searchedMarkers, []);
+  assert.equal(summary.ready.length, 1);
+  assert.deepEqual(summary.filteredOut, []);
+  assert.deepEqual(summary.unresolvable, []);
 });
 
 test('filters issue with blocked labels', async () => {

@@ -678,6 +678,15 @@ test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)
   ]);
 });
 
+test('extractTaskListReferences ignores a checkbox inside a top-level 4-space indented code block (#3281)', () => {
+  // A top-level indented block (4 spaces, after a blank line, no
+  // enclosing list) is code per CommonMark — unlike a fence, the OLD
+  // stripMarkdownCodeRegions primitive left this unmasked, wrongly
+  // walking it as a real task-list edge.
+  const body = ['para', '', '    - [ ] #12'].join('\n');
+  assert.deepEqual(extractTaskListReferences(body), []);
+});
+
 test('extractTaskListReferences accepts a trailing (#N) reference on the checkbox line itself (#2765)', () => {
   const line = '- [ ] Track 1: text (#2752)';
   assert.deepEqual(extractTaskListReferences(line), [

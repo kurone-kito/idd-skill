@@ -90,6 +90,22 @@ test('parseEffortMarker reports present/value/malformed per case', () => {
   );
 });
 
+test('parseEffortMarker ignores a code-quoted example marker and reads the real footer (#3281)', () => {
+  const body = [
+    'Example usage:',
+    '```',
+    '<!-- idd-skill-effort: L -->',
+    '```',
+    '',
+    '<!-- idd-skill-effort: S -->',
+  ].join('\n');
+  assert.deepEqual(parseEffortMarker(body), {
+    present: true,
+    value: 'S',
+    malformed: false,
+  });
+});
+
 test('parseEffort is the value-only view of the shared marker parser', () => {
   for (const body of [
     '<!-- idd-skill-effort: S -->',

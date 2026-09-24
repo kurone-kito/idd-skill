@@ -8,6 +8,8 @@ import {
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
+  maskMarkdownForScan,
+  mergeMarkdownCodeRanges,
   stripMarkdownCodeRegions,
 } from '../src/scripts/markdown-code.mts';
 
@@ -1380,5 +1382,97 @@ test('findMarkdownCodeRanges: many unresolved link-like prefixes stay linear eve
   assert.ok(
     elapsedMs < 2000,
     `expected a bounded scan to stay well under 2s, took ${elapsedMs}ms`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// maskMarkdownForScan (#3281) — the entry point issue-body scanners route
+// through instead of the ad hoc stripMarkdownCodeRegions (fenced + inline
+// only, misses indented code) or no masking at all.
+// ---------------------------------------------------------------------------
+
+test('maskMarkdownForScan masks a backtick fence (position-preserving, unlike stripMarkdownCodeRegions)', () => {
+  const body = ['before', '```', 'inside #1', '```', 'after'].join('\n');
+  assert.equal(
+    maskMarkdownForScan(body),
+    ['before', '   ', '         ', '   ', 'after'].join('\n'),
+  );
+});
+
+test('maskMarkdownForScan masks a tilde fence', () => {
+  const body = ['before', '~~~', 'inside #1', '~~~', 'after'].join('\n');
+  assert.equal(
+    maskMarkdownForScan(body),
+    ['before', '   ', '         ', '   ', 'after'].join('\n'),
+  );
+});
+
+test('maskMarkdownForScan masks a top-level 4-space indented block after a blank line (the #3281 bug: stripMarkdownCodeRegions leaves this unmasked)', () => {
+  const body = ['para', '', '    indented #1', 'after'].join('\n');
+  assert.equal(
+    maskMarkdownForScan(body),
+    ['para', '', '               ', 'after'].join('\n'),
+  );
+  // Confirms the bug this issue targets: the OLD primitive really does
+  // leave this line unmasked.
+  assert.equal(stripMarkdownCodeRegions(body), body);
+});
+
+test('maskMarkdownForScan does not mask an indented continuation of an open list item', () => {
+  const body = ['- Parent item', '', '    indented #1', ''].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
+  const body = 'text \\`escaped #1\\` tail';
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan masks a double-backtick code span', () => {
+  const body = 'see ``code #1`` end';
+  assert.equal(maskMarkdownForScan(body), 'see             end');
+});
+
+test('maskMarkdownForScan normalizes a CRLF body to LF-only, keeping the same line count', () => {
+  const body = 'line1\r\nline2\r\nline3';
+  const masked = maskMarkdownForScan(body);
+  assert.equal(masked.includes('\r'), false);
+  assert.equal(masked.split('\n').length, body.split(/\r\n/).length);
+  assert.equal(masked, 'line1\nline2\nline3');
+});
+
+test('maskMarkdownForScan keeps an HTML comment by default (markers are HTML comments)', () => {
+  const body = 'before <!-- marker #1 --> after';
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan masks an HTML comment when htmlComments: "mask" is requested', () => {
+  const body = 'before <!-- marker #1 --> after';
+  assert.equal(
+    maskMarkdownForScan(body, { htmlComments: 'mask' }),
+    `before ${' '.repeat('<!-- marker #1 -->'.length)} after`,
+  );
+});
+
+test('maskMarkdownForScan keeps inline code when inlineCode: "keep" is requested, but still masks fenced/indented blocks', () => {
+  const body = ['see `code #1` here', '```', 'fenced #2', '```'].join('\n');
+  const masked = maskMarkdownForScan(body, { inlineCode: 'keep' });
+  assert.equal(
+    masked,
+    ['see `code #1` here', '   ', '         ', '   '].join('\n'),
+  );
+});
+
+test('mergeMarkdownCodeRanges coalesces overlapping and touching ranges, sorted by start', () => {
+  assert.deepEqual(
+    mergeMarkdownCodeRanges([
+      { start: 10, end: 15 },
+      { start: 0, end: 5 },
+      { start: 5, end: 8 },
+    ]),
+    [
+      { start: 0, end: 8 },
+      { start: 10, end: 15 },
+    ],
   );
 });

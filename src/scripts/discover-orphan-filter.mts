@@ -35,7 +35,7 @@ import {
 } from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
@@ -629,7 +629,7 @@ export function detectRuntimeObservationPrecondition(
   body: unknown,
   selfIssueNumber?: number,
 ): boolean {
-  const stripped = stripMarkdownCodeRegions(String(body ?? ''));
+  const stripped = maskMarkdownForScan(String(body ?? ''));
   for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
     pattern.lastIndex = 0;
     let match = pattern.exec(stripped);
@@ -701,12 +701,19 @@ export function classifyIssue(
   );
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
+  // #3281: these two marker tests previously ran against the raw body,
+  // unlike the rest of this function's later checks — an issue that only
+  // *quotes* a `roadmap-id`/`blocked-by` marker as an example (inside a
+  // code span, fence, or indented code block) was wrongly classified as
+  // a real roadmap node or blocked leaf. Mask first, HTML comments kept
+  // (the default): the markers themselves are HTML comments.
+  const bodyForMarkerTests = maskMarkdownForScan(body);
 
-  if (roadmapMarkerRegex.test(body)) {
+  if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
 
-  if (blockedMarkerRegex.test(body)) {
+  if (blockedMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'blocked_by_marker' };
   }
 
