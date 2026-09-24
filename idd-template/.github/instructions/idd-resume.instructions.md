@@ -127,6 +127,11 @@ When helper runtime is enabled, you may collect Step 1 evidence with:
 node scripts/resume-claim-routing.mjs --issue {issue-number}
 ```
 
+When the issue is closed or its PR merged, skip every bullet below and
+go directly to the table's first three rows (§MC): the helper's routing
+verdict (`state`/`action`) reflects claim state only, never merge or
+close state.
+
 Use helper output as evidence mapped to this table, not as an
 authoritative replacement:
 
@@ -165,7 +170,7 @@ stop before re-claim or takeover; never treat failure as no match.
 | Claim state                                                                                    | Route                                                                                                         |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | PR merged; claim = this session's verified `{claim-id}`                                        | Run F4 steps 4-7 (guarded); also step 1 if non-default branch + open closing issue; STOP (§MC)                |
-| PR merged; claim is `none`/released; no local worktree for `{branch}`                          | Run F4 step 4 + step 5's `git branch -d` only (guarded); skip steps 6-7; STOP (§MC)                           |
+| PR merged; claim released (no active claim); its branch = `{branch}`; no local worktree for it | Run F4 step 4 + step 5's `git branch -d` only (guarded); skip steps 6-7; STOP (§MC)                           |
 | Issue closed with no PR merged, or any other closed/merged state                               | Post a hold comment naming the state; STOP — never remove a worktree or branch                                |
 | This session's claim; branch starts with `roadmap-audit/`                                      | Re-run A1.5; skip worktree creation; STOP (roadmap coordination only)                                         |
 | Active claim = this session's verified `{claim-id}`                                            | Continue with same `{claim-id}`; ignore stale FH evidence citing a different displaced `{claim-id}`; → Step 2 |

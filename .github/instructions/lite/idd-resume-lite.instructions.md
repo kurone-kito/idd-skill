@@ -51,7 +51,7 @@ Use GitHub **server** timestamps only. Stale age default: **24 h**
 
 | Condition                                                          | Action                                                                 |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Issue closed or PR merged                                          | Step 1 report only → STOP                                              |
+| Issue closed or PR merged                                          | STOP — report; do not remove worktree/branch                           |
 | Valid human-gated forced-handoff matching live claim/branch/PR     | Step 1 forced-handoff path (skip stall)                                |
 | Forced-handoff evidence present but mismatches live state          | STOP — report mismatch; do not claim/push                              |
 | Non-owned active claim + operator-present (below) + input received | Operator-present path (below); skip stall                              |
@@ -111,7 +111,6 @@ A stale or released claim with a local worktree is STOP — verify claim-id.
 
 | Claim state                                                                                 | Action                                                        |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Closed / PR merged                                                                          | Stop and report; do not remove worktree/branch                |
 | Active claim = this session's verified `{claim-id}` and branch starts with `roadmap-audit/` | Re-run A1.5 only → STOP                                       |
 | Active claim = this session's verified `{claim-id}`                                         | → Step 2                                                      |
 | Forced-handoff names this session's verified `{claim-id}` as displaced                      | STOP — displaced; no push/comment/resolve/merge               |
