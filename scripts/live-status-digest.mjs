@@ -172,10 +172,21 @@ function main() {
     nextAction: args.nextAction,
     authoritativeBy: args.authoritativeBy,
   };
+  // Issue #3337: the ordinary create/update/duplicate-detection path below
+  // only ever considers a current-digest comment authored by a trusted
+  // marker actor -- an untrusted actor's digest-marker comment is neither
+  // rewritten nor treated as a duplicate, so this helper creates or
+  // updates its own digest alongside it instead. The maintainer repair
+  // path (`runDuplicateDigestRepair` above) never uses this filter, so it
+  // keeps seeing every author and can still retire a stranger's marker.
+  const isTrustedDigestAuthor = (login) =>
+    isTrustedMarkerAuthor(owner, repo, login);
   const comments = fetchIssueComments(owner, repo, targetNumber);
   let planned;
   try {
-    planned = planLiveStatusDigestUpsert(comments, fields);
+    planned = planLiveStatusDigestUpsert(comments, fields, {
+      isTrustedAuthor: isTrustedDigestAuthor,
+    });
   } catch (error) {
     fail(error.message);
   }
@@ -212,6 +223,7 @@ function main() {
           planLiveStatusDigestUpsert(
             fetchIssueComments(owner, repo, targetNumber),
             fields,
+            { isTrustedAuthor: isTrustedDigestAuthor },
           ),
         assertClaim: () =>
           assertActiveClaim(

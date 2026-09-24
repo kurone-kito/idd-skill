@@ -369,10 +369,26 @@ export function summarizeExternalCheckWaivers(
     modeDisabled,
   };
 }
-export function findLiveStatusDigestComments(comments) {
-  return comments.filter((comment) => {
+export function findLiveStatusDigestComments(comments, options = {}) {
+  const matches = comments.filter((comment) => {
     return firstLine(comment.body ?? '') === LIVE_STATUS_DIGEST_MARKER;
   });
+  // Issue #3337: the ordinary create/update/duplicate-detection callers pass
+  // `isTrustedAuthor` so a digest-marker comment from an untrusted actor is
+  // neither selected for update nor counted toward the duplicate check --
+  // the helper then creates or updates its own digest alongside it instead
+  // of rewriting a stranger's comment. The maintainer repair path
+  // (`planLiveStatusDigestRepair`, `createLiveStatusDigestSnapshot`, and
+  // `runDuplicateDigestRepair`'s own call sites) never passes this option,
+  // so it keeps seeing every author -- a maintainer can still retire a
+  // stranger's current-marker comment.
+  if (!options.isTrustedAuthor) {
+    return matches;
+  }
+  const { isTrustedAuthor } = options;
+  return matches.filter((comment) =>
+    isTrustedAuthor(String(comment.author?.login ?? comment.user?.login ?? '')),
+  );
 }
 function sha256Hex(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -644,8 +660,8 @@ export function renderLiveStatusDigest(fields) {
 | Authoritative by | ${escapeMarkdownTableCell(normalized.authoritativeBy)} |
 `;
 }
-export function planLiveStatusDigestUpsert(comments, fields) {
-  const matches = findLiveStatusDigestComments(comments);
+export function planLiveStatusDigestUpsert(comments, fields, options = {}) {
+  const matches = findLiveStatusDigestComments(comments, options);
   const nextBody = renderLiveStatusDigest(fields);
   if (matches.length > 1) {
     return {
@@ -4047,18 +4063,24 @@ export function buildActivitySnapshotSummary(
   // #3194 (round 36 field feedback): a live-status digest edit must never
   // perturb review-currency (idd-overview-appendix.instructions.md's "Live
   // status digest" section) -- the same fail-closed, first-line-only digest
-  // recognition `isOperationalOrDigestCommentForGate` already uses for
+  // recognition `isOperationalOrDigestCommentForGate` uses for
   // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`.
-  // Checked unconditionally (not gated by `trustedMarkerLogins`, mirroring
-  // that function's own digest branch): a comment merely mentioning the
-  // marker text on a line other than its first still counts as regular
-  // activity below.
+  // Issue #3337: gated by `trustedMarkerLogins` (unlike the pre-#3337
+  // unconditional exclusion this comment used to describe) -- a digest is
+  // only ever the agent's own activity, so only a trusted author's
+  // digest-marker comment is excluded here; an untrusted actor's
+  // digest-marker-shaped comment counts as ordinary activity requiring
+  // disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract"). A
+  // comment merely mentioning the marker text on a line other than its
+  // first still counts as regular activity below, regardless of author.
   const filteredComments = comments.filter((comment) => {
     const body = comment.body ?? '';
+    const authorLogin = (comment.author?.login ?? '').toLowerCase();
     if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
-      return false;
+      return !trustedMarkerLogins.has(authorLogin);
     }
-    if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
+    if (!trustedMarkerLogins.has(authorLogin)) {
       return true;
     }
     return operationalMarkerPrefixByStart(body) === null;
@@ -4443,6 +4465,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
         comment.body,
         comment.authorLogin,
         trustedMarkerLogins,
+        iddAgentLogins,
       ) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
@@ -4486,6 +4509,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
@@ -4827,6 +4851,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter(
@@ -4995,6 +5020,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .sort((left, right) => {
@@ -9325,6 +9351,19 @@ function isOperationalOrDigestCommentForGate(
   body,
   authorLogin,
   trustedMarkerLogins,
+  // Issue #3337: a digest-marker comment is only ever the target's OWN
+  // agent activity, so it must be excluded here only when its author is
+  // recognized as trusted OR as an IDD agent -- never unconditionally.
+  // Checking `trustedMarkerLogins` alone would fail open: a digest posted
+  // by an `iddAgentLogins` member outside the trusted set would then count
+  // as a genuine IDD reply, wrongly advancing `lastIddReplyAt`
+  // (`summarizeRegularCommentsForGate`) or entering `agentReplyComments`
+  // (`summarizeDispositionEvidenceForGate`), which could mark earlier
+  // feedback as answered. An author in neither set is a genuine stranger,
+  // so their digest-marker-shaped comment now counts as ordinary activity
+  // requiring disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract").
+  iddAgentLogins = new Set(),
 ) {
   const marker = operationalMarkerPrefix(body);
   if (marker === '<!-- forced-handoff:') {
@@ -9334,7 +9373,16 @@ function isOperationalOrDigestCommentForGate(
         .toLowerCase(),
     );
   }
-  return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+  if (marker !== null) {
+    return true;
+  }
+  if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
+    const login = String(authorLogin ?? '')
+      .trim()
+      .toLowerCase();
+    return trustedMarkerLogins.has(login) || iddAgentLogins.has(login);
+  }
+  return false;
 }
 function buildBodyPreview(body) {
   return firstLine(String(body ?? '')).slice(0, 120);

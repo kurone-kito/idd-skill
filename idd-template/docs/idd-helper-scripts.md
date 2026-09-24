@@ -1150,6 +1150,14 @@ The adopted helper boundaries are intentionally narrow:
 - it creates or updates only the single current digest comment and
   refuses duplicate marked digests with repair URLs instead of choosing
   one, deleting, or minimizing audit history
+- the ordinary create/update/duplicate-detection path considers only
+  current-digest comments authored by a trusted marker actor
+  (`isTrustedMarkerAuthor`, kurone-kito/idd-skill#3337): an untrusted
+  actor's digest-marker comment is neither updated nor counted toward
+  the duplicate check, so the helper creates or updates its own digest
+  alongside it instead of rewriting a stranger's comment; the
+  maintainer repair mode below still sees every author's current-digest
+  comment, so a maintainer can still retire a stranger's marker there
 - `--repair-duplicate --retain-comment-id <id>` is a separate maintainer
   repair mode for an already-duplicate current-digest set; it requires an
   authenticated owner/maintainer permission check and, in apply mode, all

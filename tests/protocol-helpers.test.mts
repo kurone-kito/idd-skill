@@ -9,6 +9,7 @@ import {
   MALFORMED_DISPOSITION_PREFIX_HINT,
   resolveActiveClaim,
   summarizeDispositionEvidenceForGate,
+  summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
 // #2014: `buildActivitySnapshotSummary` (the `reviewCurrency` producer) and
@@ -3272,9 +3273,9 @@ test('buildActivitySnapshotSummary excludes a live-status digest edit from both 
   const digestEdit = {
     id: 'D-2',
     // The digest is posted by the same trusted IDD agent that holds the
-    // claim, but recognition below must not depend on that -- it mirrors
-    // `isOperationalOrDigestCommentForGate`'s own unconditional digest
-    // branch.
+    // claim -- exclusion here does depend on that (issue #3337 gates the
+    // digest branch on `trustedMarkerLogins`); see the untrusted-author
+    // counterpart test below for the inverted case.
     author: { login: 'idd-bot' },
     body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |\n| --- | --- |\n| Phase | still waiting |`,
     createdAt: '2026-05-12T02:00:00Z',
@@ -3341,15 +3342,14 @@ test('buildActivitySnapshotSummary still counts a comment that only mentions the
   assert.equal(activitySummary.counts.comments, 1);
 });
 
-// Pins the "unconditional, not gated by trustedMarkerLogins" claim in the
-// source comment above -- an author outside `trustedMarkerLogins` still has
-// their digest-marker-shaped first line excluded, exactly like
-// `isOperationalOrDigestCommentForGate`'s own digest branch (never author-
-// gated, unlike its `forced-handoff` branch). Without this test, an
-// accidental move of the digest check to *after* the trust-gate early
-// return would still pass the two tests above (both use a trusted author)
-// while silently changing this behavior.
-test('buildActivitySnapshotSummary excludes a digest-marker-shaped first line from an untrusted author too', () => {
+// #3337: reverses the pre-#3337 "unconditional, not gated by
+// trustedMarkerLogins" digest exclusion this test used to pin. A digest is
+// only ever the posting agent's own activity, so an author outside
+// `trustedMarkerLogins` (a genuine stranger, never configured as trusted)
+// gets no special treatment at all -- their digest-marker-shaped comment now
+// counts as ordinary activity requiring disposition, exactly like any other
+// comment from that author. The trusted-author case above is unchanged.
+test('buildActivitySnapshotSummary counts a digest-marker-shaped first line from an untrusted author as activity', () => {
   const untrustedDigestShaped = {
     id: 'D-4',
     author: { login: 'not-a-trusted-marker-actor' },
@@ -3380,12 +3380,114 @@ test('buildActivitySnapshotSummary excludes a digest-marker-shaped first line fr
     },
   );
 
-  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T00:00:00Z');
+  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T05:00:00Z');
   assert.equal(
     activitySummary.effective.maxActivityUpdatedAt,
-    '2026-05-12T00:00:00Z',
+    '2026-05-12T05:00:00Z',
   );
-  assert.equal(activitySummary.counts.comments, 1);
+  assert.equal(activitySummary.counts.comments, 2);
+  assert.equal(activitySummary.effective.totalItemCount, 2);
+});
+
+// #3337: `summarizeRegularCommentsForGate` mirrors `buildActivitySnapshotSummary`'s
+// trust-gated digest exclusion -- a trusted author's digest stays excluded,
+// but a genuine stranger's digest-marker-shaped comment now counts as an
+// ordinary unreplied regular comment.
+test('summarizeRegularCommentsForGate excludes a trusted author digest but counts an untrusted author digest as unreplied', () => {
+  const comments = [
+    {
+      id: 'RC-1',
+      author: { login: 'idd-bot' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      id: 'RC-2',
+      author: { login: 'not-a-trusted-marker-actor' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+      createdAt: '2026-05-12T01:00:00Z',
+      updatedAt: '2026-05-12T01:00:00Z',
+    },
+  ];
+
+  const summary = summarizeRegularCommentsForGate(comments, {
+    iddAgentLogins: [],
+    trustedMarkerLogins: ['idd-bot'],
+  });
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['RC-2'],
+  );
+});
+
+// #3337: the digest branch must exclude on `trustedMarkerLogins.has(login)
+// || iddAgentLogins.has(login)`, never `trustedMarkerLogins` alone --
+// otherwise a digest posted by an `iddAgentLogins` member outside the
+// trusted set would wrongly count as a genuine IDD reply and advance the
+// `lastIddReplyAt` watermark past earlier, still-outstanding human
+// feedback.
+test('a digest by an iddAgentLogins member outside trustedMarkerLogins never advances lastIddReplyAt', () => {
+  const humanComment = {
+    id: 'REG-1',
+    author: { login: 'reviewer-a' },
+    body: 'Early feedback that must stay outstanding.',
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const agentDigest = {
+    id: 'REG-2',
+    author: { login: 'agent-x' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+
+  const summary = summarizeRegularCommentsForGate([humanComment, agentDigest], {
+    iddAgentLogins: ['agent-x'],
+    trustedMarkerLogins: [],
+  });
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['REG-1'],
+  );
+});
+
+// Same regression, on the disposition-evidence side: if the digest branch
+// excluded only on `trustedMarkerLogins`, `agent-x`'s digest would wrongly
+// enter `agentReplyComments` and clear the human comment as a
+// presence-only reply (#2139) -- it must stay outstanding instead.
+test('a digest by an iddAgentLogins member outside trustedMarkerLogins never pairs as a clearing reply', () => {
+  const humanComment = {
+    id: 'REG-3',
+    createdAt: '2026-05-12T00:00:00Z',
+    body: 'Please double-check the error-handling path here.',
+    author: { login: 'reviewer-a' },
+  };
+  const agentDigest = {
+    id: 'REG-4',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    author: { login: 'agent-x' },
+  };
+
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [humanComment, agentDigest], threads: [] },
+    {
+      iddAgentLogins: ['agent-x'],
+      trustedMarkerLogins: [],
+      advisoryBotLogins: [],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].id, 'REG-3');
 });
 
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
