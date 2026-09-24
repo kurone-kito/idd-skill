@@ -49,6 +49,7 @@
 // pin).
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -1335,12 +1336,30 @@ function assertSafeGuardWorkflowDestination(
   if (!isSafeRelativePath(path)) {
     throw new Error(`refusing to write an unsafe path: ${path}`);
   }
-  if (hasNonDirectoryAncestor(targetDir, path)) {
+  assertSafePlainFileDestination(targetDir, path);
+}
+
+/**
+ * Fail closed (throw) unless `relativePath` (already confirmed safe and
+ * `targetDir`-relative by the caller — this does not itself run
+ * {@link isSafeRelativePath}) has no symlinked or otherwise
+ * non-directory ancestor under `targetDir`, and its leaf is either
+ * absent or a plain file. Generalized out of
+ * {@link assertSafeGuardWorkflowDestination} (#3292) so the
+ * `--write-policy-doc` destination guard and the `.github/idd/config.json`
+ * write guard share the same ancestor/leaf check instead of each writing
+ * their own.
+ */
+function assertSafePlainFileDestination(
+  targetDir: string,
+  relativePath: string,
+): void {
+  if (hasNonDirectoryAncestor(targetDir, relativePath)) {
     throw new Error(
-      `refusing to write ${path}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
+      `refusing to write ${relativePath}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
     );
   }
-  const absolute = resolve(targetDir, path);
+  const absolute = resolve(targetDir, relativePath);
   let leafStat: ReturnType<typeof lstatSync> | null;
   try {
     leafStat = lstatSync(absolute);
@@ -1349,7 +1368,7 @@ function assertSafeGuardWorkflowDestination(
   }
   if (leafStat !== null && !leafStat.isFile()) {
     throw new Error(
-      `refusing to write ${path}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
+      `refusing to write ${relativePath}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
     );
   }
 }
@@ -3342,8 +3361,10 @@ function buildFilledPolicyDocument(
   ).map((row) => {
     const transcriptValue = valueById.get(row.id) as string;
     const value =
-      options.issueMediated && row.id === 'issue-authoring-companion'
-        ? 'not installed'
+      row.id === 'issue-authoring-companion'
+        ? options.issueMediated
+          ? 'not installed'
+          : normalizeCompanionStatusDisplay(transcriptValue)
         : transcriptValue;
     const rawBody = row.renderBody
       ? row.renderBody(value)
@@ -3366,6 +3387,169 @@ function buildFilledPolicyDocument(
 }
 
 /**
+ * Map the `issue-authoring-companion` catalog's enum value
+ * (`hearing-catalog.json`'s `not-installed` / `installed` options) to the
+ * documented display form the rest of the template ecosystem uses
+ * (`{installed | not installed}` in `policy-decisions.md`,
+ * `issue-mediated-bootstrap.md`, and `--issue-mediated`'s own override
+ * above). Only `not-installed` has a differing display form; `installed`
+ * is already identical either way (#3292).
+ */
+function normalizeCompanionStatusDisplay(value: string): string {
+  return value === 'not-installed' ? 'not installed' : value;
+}
+
+/**
+ * HTML-comment marker naming the generator, so a re-run can recognize its
+ * own prior output (see {@link buildPolicyDocWithSentinel}). Not a secret
+ * or a security boundary by itself -- only the accompanying content hash
+ * proves the body is unedited.
+ */
+const POLICY_DOC_SENTINEL_TAG = 'idd-onboard-generated-policy-document';
+
+/** The literal text preceding the sentinel's hex digest, used by both render and parse. */
+const POLICY_DOC_SENTINEL_MARKER = `\n\n<!-- ${POLICY_DOC_SENTINEL_TAG}\nsha256: `;
+
+/**
+ * Append a trailing sentinel to `body` (the rendered
+ * {@link buildFilledPolicyDocument} output) before it is written to
+ * `--write-policy-doc`'s destination (#3292): an HTML comment naming the
+ * generator and carrying a SHA-256 of `body` on its own line, so every
+ * sentinel line stays well inside `MD013`'s 80-column limit. Placed after
+ * a blank line at the very end of the document -- never at the top --
+ * so it cannot interfere with #3227's first-line `# IDD Policy
+ * Configuration Record` heading. `body` itself (the return value of
+ * `buildFilledPolicyDocument`) is never mutated; only the file this
+ * function's result is written to carries the sentinel -- the JSON
+ * verdict's `policyDocument` field stays sentinel-free.
+ */
+function buildPolicyDocWithSentinel(body: string): string {
+  const hash = createHash('sha256').update(body).digest('hex');
+  return `${body}${POLICY_DOC_SENTINEL_MARKER}${hash}\n-->\n`;
+}
+
+/**
+ * Parse a previously written {@link buildPolicyDocWithSentinel} document
+ * back into its pre-sentinel `body` and the hex digest the sentinel
+ * carries, or `null` when no well-formed sentinel is found at the end of
+ * `content` (absent, truncated, or followed by anything other than the
+ * closing `-->` and an optional trailing newline). Uses the *last*
+ * occurrence of the marker so a coincidental match earlier in `content`
+ * (never expected in practice — the rendered template does not contain
+ * this literal text) cannot be mistaken for the real, trailing sentinel.
+ */
+function parsePolicyDocSentinel(
+  content: string,
+): { body: string; hash: string } | null {
+  const markerIndex = content.lastIndexOf(POLICY_DOC_SENTINEL_MARKER);
+  if (markerIndex === -1) {
+    return null;
+  }
+  const afterMarker = content.slice(
+    markerIndex + POLICY_DOC_SENTINEL_MARKER.length,
+  );
+  const match = /^([0-9a-f]{64})\n-->\n?$/.exec(afterMarker);
+  if (!match) {
+    return null;
+  }
+  return { body: content.slice(0, markerIndex), hash: match[1] };
+}
+
+/**
+ * Whether `content` is exactly this generator's own, unedited prior
+ * output: it carries a well-formed {@link parsePolicyDocSentinel} sentinel
+ * whose embedded hash matches a fresh SHA-256 of its own preceding body.
+ * A hand-edited former generated document (body changed without touching
+ * or recomputing the sentinel) or a file this generator never wrote both
+ * return `false` here -- the anti-clobber check
+ * ({@link assertPolicyDocNotClobbered}) refuses to overwrite either
+ * without `--force` (#3292).
+ */
+function isUneditedGeneratedPolicyDoc(content: string): boolean {
+  const parsed = parsePolicyDocSentinel(content);
+  return (
+    parsed !== null &&
+    createHash('sha256').update(parsed.body).digest('hex') === parsed.hash
+  );
+}
+
+/**
+ * Resolve and validate `--write-policy-doc`'s raw argument as a write
+ * destination confined to `targetDir` (#3292). `rawPath` is resolved
+ * against the current working directory exactly as the write itself
+ * already did (documented in `ONBOARDING.md`'s Step 5 -- a relative path
+ * is not rooted at `--target`), then the result must land inside
+ * `targetDir` itself: a path resolving outside it (an absolute path
+ * elsewhere, or enough `..` segments to escape) is refused before any
+ * write, rather than silently writing there. `assertSafePlainFileDestination`
+ * then applies the same ancestor/leaf checks
+ * `assertSafeGuardWorkflowDestination` uses for the guard-workflow write
+ * (no symlinked or otherwise non-directory ancestor below `targetDir`,
+ * and a leaf that is either absent or a plain file) -- reused rather than
+ * duplicated, per this issue's own proposed change. Every violation here
+ * is a usage error (thrown, exit `2`), matching `resolveConfinedDirectory`'s
+ * own convention for `--target`/`--source`/`--allow-root`.
+ */
+function resolvePolicyDocDestination(
+  targetDir: string,
+  rawPath: string,
+): string {
+  const absolute = resolve(rawPath);
+  const relativeToTarget = relative(targetDir, absolute);
+  if (
+    relativeToTarget === '' ||
+    relativeToTarget === '..' ||
+    relativeToTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeToTarget)
+  ) {
+    throw new Error(
+      `--write-policy-doc must resolve inside --target, not outside it: ${rawPath}`,
+    );
+  }
+  assertSafePlainFileDestination(
+    targetDir,
+    relativeToTarget.split(sep).join('/'),
+  );
+  return absolute;
+}
+
+/**
+ * Fail closed (throw, usage error, exit `2`) when writing `content` to
+ * `absolutePath` would silently destroy content this generator did not
+ * itself produce (#3292): an absent destination is always safe (first
+ * write); an existing plain file is safe to overwrite only when it is
+ * already this generator's own unedited output
+ * ({@link isUneditedGeneratedPolicyDoc}) or `force` was passed. A
+ * non-plain-file leaf (a symlink, a directory) is never reachable here --
+ * `resolvePolicyDocDestination`'s own `assertSafePlainFileDestination`
+ * call already refused it earlier, and unlike this content check,
+ * `force` cannot override that one (matching `--import`'s own
+ * non-file-collision convention).
+ */
+function assertPolicyDocNotClobbered(
+  absolutePath: string,
+  force: boolean,
+): void {
+  if (force) {
+    return;
+  }
+  let existing: string | null;
+  try {
+    existing = readFileSync(absolutePath, 'utf8');
+  } catch {
+    existing = null;
+  }
+  if (existing === null || isUneditedGeneratedPolicyDoc(existing)) {
+    return;
+  }
+  throw new Error(
+    `refusing to overwrite ${absolutePath}: it already exists and is not ` +
+      'an unedited idd-onboard --record-policy generated document -- pass ' +
+      '--force to overwrite it anyway, or choose a different --write-policy-doc path',
+  );
+}
+
+/**
  * Exported (not just called from the CLI dispatcher below) so the
  * `readers` parameter is a genuine injection point unit tests can reach
  * directly, matching {@link OnboardEvidenceReaders.readRemoteBranchExists}'s
@@ -3384,6 +3568,12 @@ export function runRecordPolicyCli(
     args.allowRoots,
   );
   const configPath = join(targetDir, '.github', 'idd', 'config.json');
+  // #3292: the same ancestor/leaf guard the --write-policy-doc destination
+  // uses below, applied to .github/idd/config.json itself before this
+  // function reads or writes it -- a symlinked ancestor or a symlinked
+  // config.json leaf pointing outside --target must never be silently
+  // followed by either the read further down or the --apply write.
+  assertSafePlainFileDestination(targetDir, '.github/idd/config.json');
   if (!existsSync(configPath)) {
     throw new Error(
       `--record-policy is post-import only; missing ${configPath}`,
@@ -3508,10 +3698,36 @@ export function runRecordPolicyCli(
   });
   // --dry-run always wins over --apply, matching runImportCli's convention.
   const canWrite = args.apply && !args.dryRun;
+  // #3292: resolve and validate the --write-policy-doc destination (and
+  // refuse an unsafe/clobbering one) before either write below, so a
+  // refusal here never leaves config.json written while the doc write is
+  // skipped -- the ordering the issue's own proposed change requires.
+  let policyDocDestination: string | null = null;
+  if (canWrite && args.writePolicyDoc) {
+    policyDocDestination = resolvePolicyDocDestination(
+      targetDir,
+      args.writePolicyDoc,
+    );
+    assertPolicyDocNotClobbered(policyDocDestination, args.force);
+    // Create a missing parent directory before either write below (#3292
+    // review, CodeRabbit): the ancestor check inside
+    // resolvePolicyDocDestination only refuses a non-directory ancestor,
+    // by design leaving a genuinely absent one for this recursive
+    // mkdirSync to create -- matching applyUntrustedLabelerGuardPlan's
+    // own mkdirSync-then-write convention. Doing this before the
+    // config.json write keeps a missing-directory failure from landing
+    // config.json first and then failing the doc write on the very next
+    // line, which is exactly the half-applied --apply the ordering
+    // requirement above exists to prevent.
+    mkdirSync(dirname(policyDocDestination), { recursive: true });
+  }
   if (canWrite) {
     writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`);
-    if (args.writePolicyDoc) {
-      writeFileSync(resolve(args.writePolicyDoc), `${policyDocument}\n`);
+    if (policyDocDestination) {
+      writeFileSync(
+        policyDocDestination,
+        buildPolicyDocWithSentinel(policyDocument),
+      );
     }
   }
   const verdict = {
@@ -3521,8 +3737,7 @@ export function runRecordPolicyCli(
     transcript: resolve(args.transcript),
     configPatch: renderPatchForVerdict(patch),
     policyDocument,
-    writtenPolicyDocPath:
-      canWrite && args.writePolicyDoc ? resolve(args.writePolicyDoc) : null,
+    writtenPolicyDocPath: policyDocDestination,
     written: canWrite,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
@@ -3852,9 +4067,14 @@ async function runCli(): Promise<void> {
   }
   if (args.recordPolicy) {
     // Not hearOnlyFlagsPresent(args): that set includes bare --apply,
-    // which --record-policy shares and must accept.
+    // which --record-policy shares and must accept. Not the full
+    // importOnlyFlagsPresent(args) either (#3292): --force is meaningful
+    // here too -- it lets --write-policy-doc overwrite a destination that
+    // is not this generator's own unedited output -- so it is excluded
+    // from this stage's own foreign-flag list even though --hear and bare
+    // --substitute below still reject it via the unfiltered helper.
     const foreign = [
-      ...importOnlyFlagsPresent(args),
+      ...importOnlyFlagsPresent(args).filter((flag) => flag !== '--force'),
       ...substituteOnlyFlagsPresent(args),
       ...(args.propose ? ['--propose'] : []),
       ...(args.answers !== undefined ? ['--answers'] : []),
@@ -4147,7 +4367,7 @@ function printHelp(): void {
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
-       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>]
+       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>] [--force]
 
 Onboarding automation.
 
@@ -4311,8 +4531,14 @@ never writes .github/idd/config.json, never requires --source.
 
 --record-policy (#2282): consumes a confirmed --hear transcript's
 policy-kind answers. Post-import only: --target must already contain
-.github/idd/config.json. Never edits ONBOARDING.md, CLAUDE.md,
-AGENTS.md, or GEMINI.md.
+.github/idd/config.json. Refuses (exit 2) to edit ONBOARDING.md,
+CLAUDE.md, AGENTS.md, or GEMINI.md -- or any other --write-policy-doc
+destination -- unless it is absent, is already this generator's own
+unedited prior output, or --force is passed (#3292). The destination
+must also resolve inside --target with no symlinked or otherwise
+non-directory ancestor and no non-plain-file leaf; --force cannot
+override that part of the check, only the content-differs refusal.
+The same ancestor/leaf check applies to .github/idd/config.json itself.
 
   --record-policy --transcript <file> --target <dir>
                                dry-run (default): print the JSON verdict
@@ -4333,7 +4559,16 @@ AGENTS.md, or GEMINI.md.
                                appear in the filled Markdown template only.
   --write-policy-doc <path>    also write the filled Markdown template to
                                <path> (--apply only); without this flag the
-                               template is stdout-only.
+                               template is stdout-only. The written file
+                               carries a trailing generated-document
+                               sentinel (an HTML comment with a content
+                               hash) the anti-clobber check above reads on
+                               a later run; the stdout-only JSON verdict's
+                               policyDocument field never carries it.
+  --force                       allow --write-policy-doc to overwrite an
+                               existing destination that is not this
+                               generator's own unedited output (has no
+                               effect without --write-policy-doc).
   --issue-mediated              record the issue-authoring companion as
                                \`not installed\` in the policy document,
                                regardless of the transcript value.

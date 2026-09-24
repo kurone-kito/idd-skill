@@ -5901,6 +5901,401 @@ test("bin/idd-onboard.mjs --record-policy --write-policy-doc output passes the t
   );
 });
 
+// ---------------------------------------------------------------------------
+// --record-policy --write-policy-doc confinement, anti-clobber, and
+// config.json write guard (#3292)
+// ---------------------------------------------------------------------------
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses to overwrite an existing plain file that is not its own generated output, and --force overrides it (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  // AGENTS.md mirrors the issue's own reproduction: an adopter-authored
+  // file a reader could reasonably point --write-policy-doc at.
+  const docPath = join(root, 'AGENTS.md');
+  const handWritten = '# Adopter-authored AGENTS.md\n\nHand-written content.\n';
+  writeFileSync(docPath, handWritten);
+  const before = snapshotTree(root);
+
+  const refused = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(refused.status, 2);
+  assert.match(String(refused.stderr), /refusing to overwrite/);
+  // Neither AGENTS.md nor .github/idd/config.json changed.
+  assertTreeUnchanged(root, before);
+
+  const forced = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+    '--force',
+  ]);
+  assert.equal(forced.status, 0);
+  assert.equal(forced.verdict.writtenPolicyDocPath, resolve(docPath));
+  assert.match(
+    readFileSync(docPath, 'utf8'),
+    /# IDD Policy Configuration Record/,
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination outside --target, writing nothing (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+  // A dedicated tracked tmp dir (not a fixed filename directly under the
+  // shared tmpdir() -- this repository's heavy concurrent-session load
+  // could otherwise collide two parallel test runs on the same path,
+  // #3292 review): inside the --allow-root-widened confined root, but
+  // still outside --target itself, which is what this guard checks.
+  const outsideDocPath = join(
+    trackedMkdtemp('idd-onboard-outside-'),
+    'outside-policy-doc.md',
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      outsideDocPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /must resolve inside --target/);
+  assert.equal(existsSync(outsideDocPath), false);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination that is itself a symlink, leaving the link target unchanged (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const outsideFile = join(trackedMkdtemp('idd-onboard-outside-'), 'evil.md');
+  writeFileSync(outsideFile, '# pre-existing\n');
+  const docPath = join(root, 'policy-doc.md');
+  symlinkSync(outsideFile, docPath);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      // #3292 review (CodeRabbit): without --allow-root, root's own
+      // location outside this test process's cwd trips
+      // resolveConfinedDirectory's unrelated --target confinement check
+      // first, so this never actually reached the destination-safety
+      // guard under test. --allow-root tmpdir() clears that unrelated
+      // check, and the stderr match below pins down which guard fired.
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /non-plain-file entry/);
+  assert.equal(readFileSync(outsideFile, 'utf8'), '# pre-existing\n');
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination that sits under a symlinked ancestor directory (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const outsideDir = trackedMkdtemp('idd-onboard-outside-');
+  symlinkSync(outsideDir, join(root, 'docs-link'));
+  const docPath = join(root, 'docs-link', 'policy-doc.md');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      // See the sibling leaf-symlink test above for why --allow-root is
+      // required here to actually reach the guard under test.
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /non-directory .* sits on its path/);
+  assert.equal(existsSync(join(outsideDir, 'policy-doc.md')), false);
+});
+
+test('bin/idd-onboard.mjs --record-policy refuses when .github/idd/config.json is a symlink to a file outside --target, with or without --write-policy-doc (#3292)', () => {
+  const outsideConfigPath = join(
+    trackedMkdtemp('idd-onboard-outside-'),
+    'config.json',
+  );
+  const outsideConfigContent = JSON.stringify({
+    markerPrefix: 'x',
+    trustedMarkerActors: ['x'],
+    commands: {
+      'install-deps': 'x',
+      'fix-validate': 'x',
+      'pre-push-validate': 'x',
+      'post-fix-validate': 'x',
+    },
+  });
+  writeFileSync(outsideConfigPath, outsideConfigContent);
+
+  for (const withDocFlag of [false, true]) {
+    const root = makeFixtureDir();
+    mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+    symlinkSync(outsideConfigPath, join(root, '.github', 'idd', 'config.json'));
+    const transcriptPath = join(root, 'transcript.json');
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ version: '1.0.0', answers: [] }),
+    );
+    const extraArgs = withDocFlag
+      ? ['--write-policy-doc', join(root, 'policy-doc.md')]
+      : [];
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        ...extraArgs,
+        // See the write-policy-doc symlink tests above for why
+        // --allow-root is required here to actually reach the guard
+        // under test rather than an unrelated --target confinement error.
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2, `withDocFlag=${withDocFlag}`);
+    assert.match(
+      String(result.stderr),
+      /refusing to write \.github\/idd\/config\.json:.*non-plain-file entry/,
+      `withDocFlag=${withDocFlag}`,
+    );
+  }
+  assert.equal(readFileSync(outsideConfigPath, 'utf8'), outsideConfigContent);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc creates a missing parent directory under --target instead of failing after config.json is already written (#3292 review, CodeRabbit)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  // docs/onboarding/ does not exist yet under root -- the destination
+  // guard only refuses a *non-directory* ancestor, by design leaving a
+  // genuinely absent one for the write path to create.
+  const docPath = join(root, 'docs', 'onboarding', 'policy-doc.md');
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.writtenPolicyDocPath, resolve(docPath));
+  assert.match(
+    readFileSync(docPath, 'utf8'),
+    /# IDD Policy Configuration Record/,
+  );
+  // config.json was genuinely merged and written too, not left stale by
+  // an earlier partial failure on the doc write.
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal(config.mergePolicy, answers['merge-policy']);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc allows re-running over its own unedited output, but refuses after a manual edit (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+  const cliArgs = [
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ];
+
+  const first = runCliBin(cliArgs);
+  assert.equal(first.status, 0);
+  const firstContent = readFileSync(docPath, 'utf8');
+  assert.match(firstContent, /<!-- idd-onboard-generated-policy-document/);
+  // The written file carries the sentinel, but the JSON verdict's
+  // policyDocument field (also used for the stdout-only dry-run preview)
+  // never does -- it stays exactly buildFilledPolicyDocument's own output
+  // (#3292 review).
+  assert.doesNotMatch(
+    first.verdict.policyDocument as string,
+    /idd-onboard-generated-policy-document/,
+  );
+
+  // Re-running over its own unedited output succeeds without --force.
+  const second = runCliBin(cliArgs);
+  assert.equal(second.status, 0);
+  assert.equal(readFileSync(docPath, 'utf8'), firstContent);
+
+  // Appending a line breaks the sentinel's self-consistency; re-running
+  // without --force is now refused, and the edited content survives.
+  const edited = `${firstContent}extra line\n`;
+  writeFileSync(docPath, edited);
+  const third = spawnSync(
+    process.execPath,
+    [BIN_PATH, ...cliArgs, '--allow-root', tmpdir()],
+    { encoding: 'utf8' },
+  );
+  assert.equal(third.status, 2);
+  assert.equal(readFileSync(docPath, 'utf8'), edited);
+});
+
+test('bin/idd-onboard.mjs --record-policy renders a not-installed companion answer as `not installed`, matching the --issue-mediated override text (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // buildValidHearAnswers() answers issue-authoring-companion with its
+  // documented default: the catalog's own hyphenated enum value
+  // (hearing-catalog.json's "not-installed"), not the documented display
+  // form ("not installed", used in policy-decisions.md and
+  // issue-mediated-bootstrap.md).
+  assert.equal(answers['issue-authoring-companion'], 'not-installed');
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 0);
+  assert.match(
+    verdict.policyDocument as string,
+    /### Issue-Authoring Companion\n\n\*\*Status\*\*: `not installed`/,
+  );
+  assert.doesNotMatch(verdict.policyDocument as string, /`not-installed`/);
+});
+
+test('bin/idd-onboard.mjs --record-policy --force is accepted alone, and --help documents it under --record-policy (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--force',
+  ]);
+  assert.equal(status, 0);
+
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--force\s+allow --write-policy-doc to overwrite an/);
+});
+
+test("idd-template/ONBOARDING.md's Step 5 no longer describes --write-policy-doc as silently writing into the clone, and its CLI-assisted --record-policy bullet names the same --force exception as --help (#3292)", () => {
+  const doc = readFileSync(ONBOARDING_DOC, 'utf8');
+  assert.doesNotMatch(doc, /writes into the clone/);
+  assert.match(doc, /refuses \(exit `2`\) a path resolving outside/);
+  assert.match(doc, /`GEMINI\.md` without `--force`/);
+
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  // The whole --record-policy intro paragraph (up to its first blank
+  // line) must name the same --force exception ONBOARDING.md's bullet
+  // does, alongside the same four agent-entry filenames.
+  const helpIntro = /--record-policy \(#2282\):[\s\S]*?\n\n/.exec(help)?.[0];
+  assert.ok(
+    helpIntro,
+    'expected --help to include a --record-policy intro paragraph',
+  );
+  assert.match(helpIntro as string, /GEMINI\.md/);
+  assert.match(helpIntro as string, /--force/);
+});
+
 test('bin/idd-onboard.mjs --record-policy exits 2 when config.json does not already exist (post-import only)', () => {
   const root = makeFixtureDir();
   const transcriptPath = join(root, 'transcript.json');
