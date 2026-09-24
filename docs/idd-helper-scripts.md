@@ -3274,7 +3274,12 @@ reflexively as any other CLI option.
   pass `--claim-issue`). It skips claim fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
-  `idd-merge-execute` still requires `--claim-issue`.
+  `idd-merge-execute` still requires `--claim-issue`. Optional
+  `--closing-issues <n>[,<n>...]` (#3298) declares the deliberate
+  multi-issue closing set for the `closingSet` gate below; it must
+  include `--claim-issue`'s own number and cannot combine with
+  `--claimless`. Omit it for the ordinary single-issue case, where the
+  claimed issue alone is the deliberate set.
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
@@ -3293,6 +3298,28 @@ reflexively as any other CLI option.
   is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
   async-still-computing state F1 and the E-phase branch-sync check
   already re-poll, not a blocker here.
+- `closingSet` (#3298) is the closing-set / stray-commit-close merge-gate
+  evidence, mirroring `idd-pr-submit.instructions.md`'s D3.5 steps 6-7 so
+  both the lite and standard profiles get this safety check from the
+  helper verdict itself instead of only from prose steps a standard
+  profile session must remember to run. Unlike every other optional
+  evidence section above, `closingSet` is always emitted by a real
+  `collectPreMergeReadiness` run and the schema lists it as `required` --
+  an older report missing it is caught by the lite "missing required
+  field -> stop" rule. `status` is `"match"` (live
+  `closingIssuesReferences` equals the deliberate set from `--claim-issue`
+  or `--closing-issues`, and no branch commit message carries a closing
+  keyword for an issue number outside that set) or
+  `"skipped-non-default-branch"` (the PR base branch is not the live
+  repository default branch -- `closingIssuesReferences` never populates
+  there, the same exemption D3.5 itself applies) -- neither blocks.
+  `"mismatch"` (an extra or missing closing reference, or a stray
+  commit-message close) or `"unavailable"` (the live default branch or
+  the PR's own commit list could not be read, or the commit list hit the
+  REST API's 250-commit pagination cap) is a `closing-set` merge-gate
+  blocker, whose detail names the extra/missing issue numbers (an extra
+  number's detail names `--closing-issues` as the remedy for a genuine
+  multi-issue close) and each stray commit's `sha` + issue number.
 - `ci.discardedNonPassingRequiredChecks` (#1745) surfaces a same-producer
   (name/type/workflowName/workflowPath -- kurone-kito/idd-skill#2919 widened
   this from the original name/type/workflowName 3-tuple) required-check
