@@ -255,10 +255,10 @@ below instead.
    in `.github/idd/config.json` — dropping the flag loses them. Root
    `<path>` under `<target-repo>` explicitly — `--record-policy`
    resolves a relative path against the current working directory, not
-   `--target`, so a bare relative path run from this clone silently
-   writes into the clone instead of the target repository. Link the
-   written file from the repository's agent entry files (Step 5 below)
-   so future sessions can find it.
+   `--target`, and refuses (exit `2`) a path resolving outside
+   `--target` instead of silently writing there. Link the written file
+   from the repository's agent entry files (Step 5 below) so future
+   sessions can find it.
 
    ```sh
    node scripts/idd-onboard.mjs --record-policy \
@@ -658,9 +658,9 @@ error), so an agent can gate on the exit code without parsing prose.
   patch into `.github/idd/config.json` (omitting `helperRuntime` for a
   confirmed `instructions-only` profile, and writing
   `skipIssueAuthorApprovalGate` only when the operator opted out); add
-  `--write-policy-doc <path>` (with `--apply` — it has no effect during
-  the dry-run default) to also write the filled template to that path.
-  Never edits `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`.
+  `--write-policy-doc <path>` (`--apply` only) to also write the
+  filled template to that path. Refuses `ONBOARDING.md`, `CLAUDE.md`,
+  `AGENTS.md`, or `GEMINI.md` without `--force`.
 
   ```sh
   node scripts/idd-onboard.mjs --record-policy --transcript <transcript-file> \
