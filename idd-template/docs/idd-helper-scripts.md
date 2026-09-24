@@ -2907,13 +2907,39 @@ close.
   `warnings`, and `evidence`
 - Stable enums:
   - `state`:
-    `unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed`
+    `unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|owner_evidence_required|disputed`
   - `action`: `re_claim|takeover|keep|stop`
 - When a stale or released claim is inspected against the current clone, the
   helper adds `evidence.local_worktree` with `{status, paths, reason}`.
   `occupied` and `unreadable` are fail-closed stop states; an owner resume or
   authorized forced handoff must be verified before reusing the worktree
   (#3141).
+- `owner_evidence_required` (kurone-kito/idd-skill#3272): when `--claim-id`
+  matches the active claim but a local worktree probe for the claimed branch
+  did not come back `absent` and no independent owner evidence proves this
+  session holds it (see `--worktree` below), the helper reports this state
+  instead of reusing `non_inheritable`. `action`/`reason` stay
+  `stop`/`claim-id-match-without-independent-owner-evidence`. Treat it as
+  distinct from `non_inheritable`: it means "the claim-id matches, but
+  ownership is unproven", not "a live competitor holds this claim" — a
+  genuine later competing claim still routes to `disputed` unchanged.
+- Optional `--worktree <path>` (kurone-kito/idd-skill#3272): when
+  `--claim-id` matches the active claim, read the independent owner-evidence
+  proof (the claim lock, the generated-tokens record, and the current
+  branch) from `<path>` instead of `process.cwd()`. Use this from the
+  primary checkout, before the claimed branch's own worktree exists as the
+  current directory; the occupancy probe must still report the claimed
+  branch as occupied only by that same (canonicalized) path. Omitting it
+  keeps reading from `process.cwd()` unchanged.
+- `--trusted-marker-logins` (kurone-kito/idd-skill#3272): trusted actors now
+  resolve through the same ladder `pre-merge-readiness.mts` uses
+  (`resolveTrustedMarkerActors`: flag, then `IDD_TRUSTED_MARKER_ACTORS`,
+  then the config's `trustedMarkerActors` array), with the viewer login
+  always added on top. A non-empty `--trusted-marker-logins` now REPLACES
+  both the env var and the config array instead of adding to them — a
+  behavior change from the prior union-everything resolution. The output's
+  `policy.trusted_marker_actors_source` field reports which input supplied
+  the ladder's value: `flag|env|config|none`.
 - Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
   matches the active claim, also requires it to equal the winning trusted
   `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);

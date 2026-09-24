@@ -32,11 +32,13 @@ import {
   DEFAULT_STALE_AGE_MS,
   isStaleByAge,
   normalizeLinkedPrReference,
+  normalizeTrustedMarkerLogins,
   orderClaimEvents,
   parseClaimComment,
   parseReleaseComment,
   readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
+  resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -160,6 +162,7 @@ interface ResumeClaimRoutingArgs {
   staleAgeMs: number;
   trustedMarkerLogins: string;
   freshClaimGate: boolean;
+  worktree: string;
   format: string;
   help: boolean;
 }
@@ -187,6 +190,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--stale-age-ms': { type: 'string' },
   '--trusted-marker-logins': { type: 'string' },
   '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--worktree': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -382,7 +386,19 @@ export function evaluateResumeClaimRouting(
       // is no second session to disambiguate from, and requiring ownership
       // proof anyway would wrongly reject the successor's own
       // still-to-be-created worktree.
-      routeState = 'non_inheritable';
+      //
+      // A distinct state, not the reused `non_inheritable` (#3272): a
+      // claim-id match with no independent owner evidence is not the same
+      // fact as a genuinely disputed claim (a real later competing claim,
+      // handled below by the `laterCompetingClaim` branch, which this
+      // owner-resume path deliberately ignores per the comment above). Both
+      // used to report `non_inheritable`, which every consumer reads as "a
+      // live competitor claim" -- conflating "you haven't proven you're the
+      // owner yet" with "someone else genuinely holds this". Keeping the
+      // `action`/`reason` unchanged (`stop` /
+      // `claim-id-match-without-independent-owner-evidence`) preserves the
+      // fail-closed behavior; only `state` becomes distinguishable.
+      routeState = 'owner_evidence_required';
       action = 'stop';
       reason = 'claim-id-match-without-independent-owner-evidence';
     } else {
@@ -576,6 +592,10 @@ export interface FreshClaimGateResult {
  * - `stale` → `stale-reclaimable`
  * - `non_inheritable` / `disputed` (a live competitor) → `already-claimed`
  *
+ * `owner_evidence_required` (#3272) is never produced here: that state only
+ * arises on the claim-id-match branch, and a fresh claim always passes
+ * `claimId: undefined` (below) so it can never reach that branch.
+ *
  * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
  * (the resolver's already-owned / same-second-loss branches need a checked id
  * and would otherwise mask pure contention). `winningClaimId` is the active
@@ -655,12 +675,25 @@ function runCli(): void {
   const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
-  const trustedLogins = resolveTrustedLogins({
-    fromArgs: args.trustedMarkerLogins,
-    fromPolicy: policy.trustedMarkerActors,
-    currentLogin: port.resolveViewerLogin(),
-  });
-  const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
+  const viewerLogin = port.resolveViewerLogin();
+  // Same ladder shape as pre-merge-readiness.mts's own
+  // `resolveTrustedMarkerActors` call (#3272): a non-empty
+  // `--trusted-marker-logins` flag REPLACES both `IDD_TRUSTED_MARKER_ACTORS`
+  // and the config's `trustedMarkerActors` rather than adding to them, and
+  // `IDD_TRUSTED_MARKER_ACTORS` is now read at all (it previously never
+  // was here). The viewer login is still unconditionally added on top of
+  // the ladder result, same as pre-merge-readiness.mts.
+  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: { trustedMarkerActors: policy.trustedMarkerActors },
+    });
+  const trustedLogins = normalizeTrustedMarkerLogins([
+    viewerLogin,
+    ...configuredTrustedActors,
+  ]);
+  const trustedSet = new Set(trustedLogins);
   const comments = fetchIssueComments(port, args.issue);
   const rawIssue = port.getWorkItem(args.issue ?? 0);
   if (!rawIssue) {
@@ -720,7 +753,10 @@ function runCli(): void {
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
     isCurrentSessionOwner: (claim: ParsedClaimMarker) => {
-      const evidence = resolveCurrentSessionClaimEvidence(claim.claimId);
+      const evidence = resolveCurrentSessionClaimEvidence(
+        claim.claimId,
+        args.worktree || undefined,
+      );
       if (
         evidence === null ||
         evidence.agentId !== claim.agentId ||
@@ -770,6 +806,7 @@ function runCli(): void {
       source: policy.source,
       stale_age_ms: staleAgeMs,
       trusted_marker_logins: trustedLogins,
+      trusted_marker_actors_source: trustedMarkerActorsSource,
       forced_handoff_mode: policy.forcedHandoff.mode,
       forced_handoff_authority_policy: forcedHandoffAuthorityPolicy,
     },
@@ -1206,6 +1243,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
     trustedMarkerLogins:
       (values['trusted-marker-logins'] as string | undefined) ?? '',
     freshClaimGate: values['fresh-claim-gate'] as boolean,
+    worktree: (values.worktree as string | undefined) ?? '',
     format,
     help,
   };
@@ -1213,7 +1251,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1237,17 +1275,36 @@ function printHelp(): void {
                       comparison. Omit --nonce when 2+ trusted nonces exist
                       and this session has no local nonce: route to
                       disputed/stop (cold-recovery collision, #1529).
+  --worktree <path>   read the independent owner-evidence proof (the claim
+                      lock, the generated-tokens record, and the current
+                      branch) from this path instead of process.cwd() when
+                      --claim-id matches the active claim (#3272). Use this
+                      when running from the primary checkout, before the
+                      claimed branch's own worktree exists as the current
+                      directory -- the evidence bar is unchanged, only the
+                      path it is read from. Omit it to keep reading from
+                      process.cwd(), the prior behavior.
+  --trusted-marker-logins "<a,b,...>"
+                      a non-empty value REPLACES both the
+                      IDD_TRUSTED_MARKER_ACTORS env var and the config's
+                      trustedMarkerActors array, rather than adding to them
+                      (#3272; matches pre-merge-readiness.mts's own ladder:
+                      flag, then env, then config). The viewer login is
+                      always added on top of whichever source wins.
 
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
 {
-  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed",
+  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|owner_evidence_required|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
   "evidence": {"...": "...", "activation_nonce_winner": "..."|null},
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
+
+policy.trusted_marker_actors_source reports which input supplied the
+trusted-marker-logins ladder's value: "flag" | "env" | "config" | "none".
 `);
 }
 
@@ -1301,29 +1358,6 @@ export function loadPolicy(policyPath: string) {
       authorityPolicy: normalized.forcedHandoff.authorityPolicy,
     },
   };
-}
-
-function resolveTrustedLogins({
-  fromArgs,
-  fromPolicy,
-  currentLogin,
-}: {
-  fromArgs?: unknown;
-  fromPolicy?: string[] | null;
-  currentLogin?: unknown;
-}): string[] {
-  const fromCsv = String(fromArgs ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const merged = [
-    ...fromCsv,
-    ...(fromPolicy ?? []),
-    String(currentLogin ?? '').trim(),
-  ]
-    .map((value) => value.toLowerCase())
-    .filter(Boolean);
-  return [...new Set(merged)];
 }
 
 function normalizeStaleAgeMs(value: unknown): number {
