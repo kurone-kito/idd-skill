@@ -234,12 +234,17 @@ Apply one outcome:
   work can be discovered. Before creating a new issue, run the narrow
   A1.5 duplicate/reuse check for that gap and link a matching existing
   issue instead.
-  1. Before any other step, link the follow-up as a native GitHub
-     sub-issue of the roadmap being mutated. For a new follow-up,
-     create it with `gh issue create --parent <number>`. For a reused
-     existing follow-up, or when `--parent` is unavailable, run
-     `gh issue edit <number> --add-sub-issue <n>`. Only on an older
-     `gh` without either flag, fall back to:
+  1. First among the linking steps, once the duplicate/reuse check
+     above has decided create vs. reuse, link the follow-up as a
+     native GitHub sub-issue of the roadmap being mutated. Create a
+     new follow-up only through the repository's issue-authoring
+     rules — never a bare `gh issue create` outside that flow
+     (`idd-pr-submit.instructions.md`'s D3 direct-creation rule). When
+     that flow's own creation call is `gh issue create`, pass
+     `--parent <number>` so the follow-up lands already linked. For a
+     reused existing follow-up, or when `--parent` was not applied to
+     a new one, run `gh issue edit <number> --add-sub-issue <n>`.
+     Only on an older `gh` without either flag, fall back to:
 
      ```sh
      gh api --method POST \
@@ -257,9 +262,10 @@ Apply one outcome:
      create no more issues and report the created issue link. While
      the roadmap-audit claim is still this session's, also route the
      gap through the existing "Non-autonomous gaps found" outcome —
-     comment with the decision, apply the configured needs-decision
-     label, and stop before A2 for this roadmap exactly as that
-     outcome already does; if the claim was lost, skip that outcome
+     comment with the decision, naming the unlinked follow-up issue,
+     apply the configured needs-decision label, and stop before A2
+     for this roadmap exactly as that outcome already does; if the
+     claim was lost, skip that outcome
      and only report. If just one of the two links fails, report it
      and continue.
   4. New follow-up issue bodies must still reference the roadmap (for
