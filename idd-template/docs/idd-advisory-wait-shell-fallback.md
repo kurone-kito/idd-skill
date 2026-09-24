@@ -116,7 +116,7 @@ TRUSTED_MARKER_LOGIN_JSON=$(
     printf '%s\n' "$TRUSTED_MARKER_ACTORS" | tr ',' '\n'
     if printf '%s\n' "$TRUST_COLLABORATOR_MARKERS" | grep -Eiq '^(1|true|yes)$'; then
       printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
-        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!-- advisory-wait:|^advisory-reroll:")) | .user.login // empty' \
+        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!--\\s*advisory-wait:|^advisory-reroll:")) | .user.login // empty' \
         | sort -fu \
         | while IFS= read -r login; do
           permission=$(
@@ -144,9 +144,9 @@ EARLIEST_SAME_HEAD_AT=$(
         [.[] | select(
           trusted_marker_actor
           and (
-            ((.body // "") | test("^advisory-wait: [^ ]+ " + $sha + "(?: |$)")) or
-            ((.body // "") | test("^advisory-wait-recovery: [^ ]+ " + $sha + "(?: |$)")) or
-            ((.body // "") | test("^<!-- advisory-wait: [^ ]+ " + $sha + " [^ ]+ -->$"))
+            ((.body // "") | test("^advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s*$")) or
+            ((.body // "") | test("^advisory-wait-recovery:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z(?:\\s+claim:\\S+\\s+attempt:[1-9]\\d*)?\\s*$")) or
+            ((.body // "") | test("^<!--\\s*advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\S+\\s*-->\\s*$"))
           )
         )]
         | min_by(.created_at) | .created_at // ""
@@ -164,7 +164,7 @@ REQUEST_MARKER_COUNT=$(
           and (($trusted_marker_logins | index($login)) != null);
         [.[] | select(
           trusted_marker_actor
-          and ((.body // "") | test("^advisory-wait:|^<!-- advisory-wait:"))
+          and ((.body // "") | test("^advisory-wait:|^<!--\\s*advisory-wait:"))
         )]
         | length
       '
@@ -186,8 +186,8 @@ SAME_HEAD_REQUEST_MARKER_PRESENT=$(
         [.[] | select(
           trusted_marker_actor
           and (
-            ((.body // "") | test("^advisory-wait: [^ ]+ " + $sha + "(?: |$)")) or
-            ((.body // "") | test("^<!-- advisory-wait: [^ ]+ " + $sha + " [^ ]+ -->$"))
+            ((.body // "") | test("^advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s*$")) or
+            ((.body // "") | test("^<!--\\s*advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\S+\\s*-->\\s*$"))
           )
         )] | length > 0
       '

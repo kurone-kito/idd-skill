@@ -50,6 +50,7 @@ import {
 } from './policy-helpers.mts';
 import {
   isCopilotReviewerLogin,
+  parseAdvisoryWaitRequestMarker,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 
@@ -270,38 +271,20 @@ interface GhWorkflowRun {
   pull_requests?: { number?: number }[] | null;
 }
 
-// Matches both canonical `advisory-wait:` request-marker forms a trusted
-// actor may post (marker-helpers.mts OPERATIONAL_MARKER_ENTRIES): the
-// plain-text `advisory-wait: {agentId} {headSha} {timestamp}` line and the
-// `<!-- advisory-wait: {agentId} {headSha} {timestamp} -->` HTML-comment
-// form. Anchored to the whole trimmed comment body -- both forms are always
-// posted as their own dedicated comment, never embedded in a larger one.
-const ISO_TIMESTAMP_SOURCE =
-  '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z';
-const ADVISORY_WAIT_REQUEST_MARKER_RE = new RegExp(
-  `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+(${ISO_TIMESTAMP_SOURCE})\\s*$`,
-);
-const ADVISORY_WAIT_REQUEST_MARKER_HTML_RE = new RegExp(
-  `^<!--\\s*advisory-wait:\\s*\\S+\\s+[0-9a-f]{40}\\s+(${ISO_TIMESTAMP_SOURCE})\\s*-->\\s*$`,
-);
-
-/**
- * Extracts a marker body's own embedded `{ISO8601-requested-at}` field --
- * distinct from the comment's `created_at`. `idd-review-fix.instructions.md`
- * documents the REQUEST_NEEDED flow as requesting the bot's review FIRST,
- * then posting this marker, so the comment is always posted at or after the
- * embedded timestamp; using `created_at` as the registration-timing anchor
- * would make the review_requested timeline event (recorded at request time)
- * look like it arrived BEFORE the request, misclassifying the ordinary
- * healthy case as failure.
- */
-function parseAdvisoryWaitRequestMarker(body: string): string | null {
-  const trimmed = body.trim();
-  const match =
-    ADVISORY_WAIT_REQUEST_MARKER_RE.exec(trimmed) ??
-    ADVISORY_WAIT_REQUEST_MARKER_HTML_RE.exec(trimmed);
-  return match ? match[1] : null;
-}
+// #3338: `parseAdvisoryWaitRequestMarker` (imported above from
+// protocol-helpers.mts, re-exported from marker-helpers.mts, where its doc
+// comment carries the full contract) replaces a private, `body.trim()`-based
+// copy that used to live here -- trimming BOTH ends let a marker that did
+// not actually start at byte 0 still be recognized. The shared parser
+// trims only trailing whitespace, matching every other marker consumer.
+//
+// `idd-review-fix.instructions.md` documents the REQUEST_NEEDED flow as
+// requesting the bot's review FIRST, then posting this marker, so the
+// comment is always posted at or after the embedded timestamp; using
+// `created_at` as the registration-timing anchor (elsewhere in this file)
+// would make the review_requested timeline event (recorded at request
+// time) look like it arrived BEFORE the request, misclassifying the
+// ordinary healthy case as failure.
 
 /**
  * Compares two ISO-8601 timestamps by parsed instant (epoch ms), not

@@ -31,6 +31,7 @@ export * from './marker-helpers.mjs';
 
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
   findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
@@ -38,6 +39,7 @@ import {
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
+  parseAdvisoryWaitFamilyMarker,
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
@@ -9447,21 +9449,32 @@ function isOperationalOrDigestCommentForGate(
 function buildBodyPreview(body) {
   return firstLine(String(body ?? '')).slice(0, 120);
 }
+// #3338: delegates to the shared `parseAdvisoryWaitFamilyMarker` grammar
+// (marker-helpers.mts) instead of a hand-copied `[^ ]`-spaced regex trio,
+// so a canonical-but-differently-spaced marker (double space, tab,
+// trailing whitespace, fractional seconds, `<!--advisory-wait:`) is
+// recognized the same way `OPERATIONAL_MARKERS` recognizes it.
+// `advisory-reroll:` is deliberately excluded from same-HEAD detection --
+// unchanged from this function's pre-#3338 behavior, which never matched
+// that prefix either.
 function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
+  const parsed = parseAdvisoryWaitFamilyMarker(body);
   return (
-    new RegExp(`^advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(
-      body,
-    ) ||
-    new RegExp(
-      `^advisory-wait-recovery: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`,
-    ).test(body) ||
-    new RegExp(
-      `^<!-- advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)} [^ ]+ -->$`,
-    ).test(body)
+    parsed !== null &&
+    parsed.family !== 'advisory-reroll' &&
+    parsed.headSha === String(prHeadSha).trim().toLowerCase()
   );
 }
+// #3338: prefix-only (not full-grammar-valid), matching this function's
+// pre-#3338 behavior -- a field-invalid body (e.g. a `pending` timestamp
+// placeholder) still counts toward `requestMarkerCount`, which bounds the
+// re-request cap regardless of whether the rest of the marker parses.
+// Delegates to the shared `advisoryWaitFamilyMarkerStart` byte-0-anchored
+// predicate (marker-helpers.mts) instead of its own `<!-- advisory-wait:`
+// exact-single-space literal, so the HTML spacing variants count too.
 function advisoryWaitRequestMarker(body) {
-  return /^advisory-wait:/.test(body) || /^<!-- advisory-wait:/.test(body);
+  const family = advisoryWaitFamilyMarkerStart(body);
+  return family === 'advisory-wait' || family === 'advisory-wait-html';
 }
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
