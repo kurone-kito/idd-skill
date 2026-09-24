@@ -1657,3 +1657,20 @@ test('findHtmlCommentRanges still masks an under-indented line that exits the li
     { start: 12, end: body.length },
   ]);
 });
+
+test("findHtmlCommentRanges does not let a fenced example's own list-marker-shaped content leak an inherited indent past the fence (Copilot review round 4, PR #3413)", () => {
+  // A fenced example's own "- x" line is literal demonstration text, not
+  // a real list item -- but without freezing the list-content-indent
+  // tracker across the fence, it could still spuriously adopt
+  // contentIndent 2, and if the closing fence delimiter happens to be
+  // indented to that same column (2), the tracker's own indentation-drop
+  // reset (a strict "<", not "<=") never fires to clear it, leaking the
+  // spurious indent to a later top-level line at column 5 (2 inherited +
+  // 3 extra). `gh api markdown` confirms this exact body does NOT
+  // swallow the rest of the document -- the "<!--" line renders as its
+  // own top-level indented code block, unrelated to any list, and
+  // "After" renders as its own paragraph.
+  const body =
+    '```\n- x\n  ```\n     <!-- trigger\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});

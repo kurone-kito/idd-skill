@@ -1465,17 +1465,59 @@ function isAtHtmlBlockOpenerPosition(
  * fence/HTML-block bookkeeping -- this scan does not need it, since it
  * only ever reads `lineTracker.contentIndent`, never the fence or
  * HTML-block state those other fields drive.
+ *
+ * Copilot review round 4, same PR: a fenced example's own content is
+ * opaque to this tracker too, the same "frozen while inside a fence"
+ * choice {@link findHtmlBlockRanges} and {@link blankFencedCodeBlocks}
+ * both already make -- without it, a line inside a fence that merely
+ * *looks* like a list marker (e.g. a fenced shell example's own
+ * "- item" demonstration) could spuriously adopt a `contentIndent`,
+ * and if the closing fence delimiter happens to be indented to that
+ * same column, {@link resetListContentIndentTrackerForLine}'s own
+ * indentation-drop check never fires to clear it (its guard is a
+ * strict `<`, not `<=`) -- leaking that spurious indent past the fence
+ * to a later, genuinely top-level line. `gh api markdown` confirms a
+ * real case of this shape ("```\n- x\n  ```\n     <!-- trigger") does
+ * NOT swallow the rest of the document (the "<!--" line renders as its
+ * own indented code block, unrelated to any list), which the
+ * unfrozen tracker wrongly masked. `fencedRanges` reuses
+ * {@link findFencedCodeRanges}'s own opaque-content boundaries
+ * ({@link findHtmlBlockRanges}'s identical `lineStart > start &&
+ * lineStart < end` condition -- the fence's own opening line is real,
+ * unfrozen content, but every line after it through the closing
+ * delimiter, inclusive, is frozen).
  */
 function computeLineListContentIndents(
   text: string,
 ): Map<number, number | null> {
   const indents = new Map<number, number | null>();
+  const fencedRanges = findFencedCodeRanges(text);
+  let fencedRangeIndex = 0;
   const listTracker = createListContentIndentTrackerState();
   let lineStart = 0;
   while (lineStart <= text.length) {
     const newlineIndex = text.indexOf('\n', lineStart);
     const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
     const line = text.slice(lineStart, lineEnd);
+    while (
+      fencedRangeIndex < fencedRanges.length &&
+      lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
+    ) {
+      fencedRangeIndex += 1;
+    }
+    const fencedRange = fencedRanges[fencedRangeIndex];
+    const isOpaqueFenceContent =
+      fencedRange !== undefined &&
+      lineStart > fencedRange.start &&
+      lineStart < fencedRange.end;
+    if (isOpaqueFenceContent) {
+      indents.set(lineStart, listTracker.contentIndent);
+      if (newlineIndex === -1) {
+        break;
+      }
+      lineStart = newlineIndex + 1;
+      continue;
+    }
     const containerLine = parseContainerLine(line);
     const isBlank = containerLine.content.trim() === '';
     resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
