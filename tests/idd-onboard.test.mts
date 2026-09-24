@@ -2423,6 +2423,80 @@ test('bin/idd-onboard.mjs exits 2 on usage errors, distinct from residue', () =>
   }
 });
 
+// #3291 review: an isolated copy of the compiled bundle (bin/idd-onboard.mjs
+// + its full scripts/*.mjs dependency closure + schemas/, mirroring
+// tests/sync-docs.test.mts's own isolated-bundle pattern) with a
+// package.json/schemas/ pair present -- so resolveBundleRoot resolves a
+// root via its schemas/policy.schema.json marker -- but no
+// audit/sync-manifest.json in that same root. Reproduces the "running
+// bundle lacks a readable manifest" case `--substitute`'s own doc comment
+// describes as effectively unreachable for a full idd-skill clone, but
+// real for a vendored-node bundle whose deployment omitted the manifest.
+function makeIsolatedOnboardBundle(): string {
+  const bundleDir = mkdtempSync(join(tmpdir(), 'idd-onboard-isolated-'));
+  mkdirSync(join(bundleDir, 'bin'), { recursive: true });
+  mkdirSync(join(bundleDir, 'scripts'), { recursive: true });
+  cpSync(BIN_PATH, join(bundleDir, 'bin', 'idd-onboard.mjs'));
+  // bin/idd-onboard.mjs spawns scripts/idd-onboard.mjs as a child process
+  // via its sibling run-helper.mjs (see src/bin/run-helper.mts) -- without
+  // this copy, the outer process itself fails to resolve that import
+  // (ERR_MODULE_NOT_FOUND, exit 1) before ever reaching --substitute's
+  // own fail-closed logic in the inner process this test targets.
+  cpSync(
+    join(REPO_ROOT, 'bin', 'run-helper.mjs'),
+    join(bundleDir, 'bin', 'run-helper.mjs'),
+  );
+  const scriptsDir = join(REPO_ROOT, 'scripts');
+  for (const entry of readdirSync(scriptsDir)) {
+    if (entry.endsWith('.mjs')) {
+      cpSync(join(scriptsDir, entry), join(bundleDir, 'scripts', entry));
+    }
+  }
+  // The bundle marker resolveBundleRoot looks for (#3238) -- present, so
+  // resolution lands on this isolated root rather than throwing outright.
+  cpSync(join(REPO_ROOT, 'schemas'), join(bundleDir, 'schemas'), {
+    recursive: true,
+  });
+  writeFileSync(join(bundleDir, 'package.json'), '{}\n');
+  // Deliberately absent: audit/sync-manifest.json.
+  return bundleDir;
+}
+
+test('bin/idd-onboard.mjs --substitute exits 2 and writes nothing when the running bundle has no readable manifest (#3291 review)', () => {
+  const bundleDir = makeIsolatedOnboardBundle();
+  const targetRoot = makeFixtureDir();
+  writeTemplateFixture(targetRoot);
+  const before = snapshotTree(targetRoot);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(bundleDir, 'bin', 'idd-onboard.mjs'),
+        '--substitute',
+        '--target',
+        targetRoot,
+        ...CLI_OVERRIDE_FLAGS,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(
+      String(failed.stderr),
+      /--substitute could not resolve its own core file set/,
+    );
+    assert.match(String(failed.stderr), /audit[\\/]sync-manifest\.json/);
+  }
+  // Fails closed before any write, exactly like the usage-error case above
+  // -- never a silent fallback to scanning the whole --target tree.
+  assertTreeUnchanged(targetRoot, before);
+  rmSync(bundleDir, { recursive: true, force: true });
+});
+
 test('bin/idd-onboard.mjs --import --dry-run prints the plan and writes nothing', () => {
   const targetRoot = makeFixtureDir();
   const before = snapshotTree(targetRoot);

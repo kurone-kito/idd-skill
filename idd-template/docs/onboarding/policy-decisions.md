@@ -630,9 +630,9 @@ without doubled braces (for example `REPO_NAME`, not `{{REPO_NAME}}`);
 `idd-onboard.mjs --verify` flags a doubled-brace token there as
 leftover residue. This policy document is a fixed scanner exclusion
 (tokens here are skipped, never scanned); a custom
-`--write-policy-doc` target sits outside the imported set instead, so
-the same token lands under `outOfScopeTokens` — non-blocking either
-way. See
+`--write-policy-doc` target sits outside the imported set unless its
+path matches one, so its token usually lands under
+`outOfScopeTokens` instead. See
 [Onboarding Reference — Placeholder Values](placeholders.md) for the
 full placeholder list.
 
