@@ -24,6 +24,8 @@ CI-polling instructions instead of this file.
   check whose provenance the helper cannot verify — its name may be
   unresolvable, or resolvable-and-passing but not confirmably from the
   pinned source).
+- `requiredChecks.status` is `unreadable` (a protection/ruleset read
+  could not be determined) — never fall back to `checks[]`.
 - A non-pass check is not clearly code-caused or recognized
   infra-flaky/pre-existing, except the sole-failing
   `idd-advisory-convergence` exception the caller's own routing names.
@@ -56,20 +58,14 @@ CI-polling instructions instead of this file.
 ## Timing defaults
 
 For context only — the policy helper above already resolves and
-emits these; the distributed defaults below are what it falls back to
-when the repository sets no `ciWait.*` config, not values to derive by
-hand:
-
-- `ciWait.runningTimeout`: `PT30M` — max time a running required check
-  may stay running, measured from its server `startedAt`, before the
-  stalled-run route applies.
-- `ciWait.generationTimeout`: `PT10M` — max time to wait for required
-  checks to appear at all, or for a `startedAt` to appear on a
-  started-less running state.
-- `ciWait.rerunPolicy`: `rerun-once` — the first eligible infra or
-  stalled route reruns exactly once; the next recurrence stops and
-  asks. `hold` never auto-reruns; it stops and asks at the first
-  eligible route.
+emits these; not values to derive by hand. Distributed fallbacks when
+the repository sets no `ciWait.*` config: `runningTimeout` `PT30M`
+(max time a required check may stay running, from its server
+`startedAt`), `generationTimeout` `PT10M` (max time to wait for a
+required check to appear, or for `startedAt` to appear on a
+started-less running state), `rerunPolicy` `rerun-once` (the first
+eligible infra/stalled route reruns once; `hold` always stops and asks
+instead).
 
 ## Required-check discovery
 
@@ -95,6 +91,7 @@ CI-polling shared helper file), never this one. Read
   `pending`); any `failure`, or `checks[]` itself empty → stop and ask.
   Never treat an empty required-check set as a vacuous pass.
 - `source-pinned`: stop and ask (see Stop-and-ask conditions above).
+- `unreadable`: stop and ask (see Stop-and-ask conditions above).
 
 ## Polling algorithm
 

@@ -48,11 +48,10 @@ session already claimed and implemented. If the repository is
   edit.
 - `closingIssuesReferences` still does not exactly match the deliberate
   closing set after one corrective edit.
-- The required-check set for D4 cannot be determined (protection or
-  ruleset reads are unreadable, or `ci-wait-state`'s
-  `requiredChecks.status` reports `source-pinned`, or reports
-  `no-required-checks` with an empty or failing `checks[]` fallback —
-  see D4 step 3).
+- The required-check set for D4 cannot be determined: `ci-wait-state`'s
+  `requiredChecks.status` reports `unreadable` (protection or ruleset
+  reads are unreadable), `source-pinned`, or `no-required-checks` with
+  an empty or failing `checks[]` fallback — see D4 step 3/4.
 - Any required check other than `idd-advisory-convergence` reaches a
   failing terminal state, or `idd-advisory-convergence` is failing
   without satisfying D4 step 8's exception.
@@ -117,13 +116,9 @@ This section's rebase only applies **before the branch's first push**.
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
      package-manager-profile `idd:branch-conflict-state` command
      (resolve the exact command from `docs/idd-helper-scripts.md` if
-     unsure). This is the same helper `idd-review-triage.instructions.md`
-     uses for its own branch-sync check (the standard
-     `idd-pr-submit.instructions.md` file does not reference it directly,
-     since D1 there only covers the pre-first-push case), so it already
-     accounts for whether a merely-`BEHIND` head actually needs a resync
-     (branch protection requiring an up-to-date head) rather than treating
-     every non-`CLEAN` state the same:
+     unsure) — it already accounts for whether a merely-`BEHIND` head
+     needs a resync (an up-to-date-head branch-protection requirement)
+     rather than treating every non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
        earlier session. Run D3.5's closing-keyword check first — it is
        idempotent even if an earlier session already verified it, and
@@ -337,10 +332,10 @@ than the run it supersedes. Once both have completed, the later
    package-manager-profile `idd:ci-wait-state` command (same
    `docs/idd-helper-scripts.md` resolution as above). Read its
    `requiredChecks.status` field: `success`, `pending`, `failing`,
-   `missing`, `no-required-checks`, or `source-pinned`. If either helper
-   is unavailable, fails, or disagrees with live GitHub
-   state, stop and ask — do not re-derive branch-protection or ruleset
-   rules by hand.
+   `missing`, `no-required-checks`, `source-pinned`, or `unreadable`.
+   If either helper is unavailable, fails, or disagrees with live
+   GitHub state, stop and ask — do not re-derive branch-protection or
+   ruleset rules by hand.
 3. **`no-required-checks`**: a repository can legitimately have no
    _required_ checks while still running normal CI, so this is not
    automatically a stop. Instead, fall back to the same helper's
@@ -352,9 +347,10 @@ than the run it supersedes. Once both have completed, the later
    settled result yet, so treat it like `pending`); any entry `failure`
    → stop per the condition above; `checks[]` itself empty (no CI ran
    at all for this HEAD) → stop per the condition above.
-4. **`source-pinned`** (a ruleset or integration-pinned required check
-   exists but cannot be enumerated by name): always stop per the
-   condition above — this is a real gating check, never treat it like
+4. **`unreadable`** (a branch-protection or ruleset read could not be
+   determined) or **`source-pinned`** (a ruleset or integration-pinned
+   required check exists but cannot be enumerated by name): always
+   stop per the condition above — never treat either like
    `no-required-checks`.
 5. **`failing`**: check every `checks[]` entry where `required` is
    true and its `checkName` is not `idd-advisory-convergence`

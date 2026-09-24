@@ -3037,8 +3037,9 @@ to post it is the consuming track's job.
   `requiredChecks` (`names`, `missingNames`, `allRequiredPresent`,
   `allRequiredPassing`, `anyRequiredPending`, `anyRequiredFailing`,
   `anyRequiredUnknown`, `requiredCheckSourcePinned`,
-  `requiredCheckSourcePinnedUnresolved`, and a top-level `status` of
-  `success|pending|failing|missing|no-required-checks|source-pinned`)
+  `requiredCheckSourcePinnedUnresolved`, `protectionReadsUnreadable`,
+  and a top-level `status` of
+  `success|pending|failing|missing|no-required-checks|source-pinned|unreadable`)
 - **Source-pinned required checks**: when a ruleset `workflows` rule or an
   app/integration-pinned classic required check is in force but cannot be
   enumerated by name, `requiredCheckSourcePinned` is `true` and `status` is
@@ -3058,6 +3059,23 @@ to post it is the consuming track's job.
   clears `status` back to `success` while this is `true`, even when a
   separate, named-and-pinned check on the same required-check set would
   itself qualify.
+- **Unreadable protection/ruleset reads** (#3300): a `404` on the branch
+  rules or classic branch-protection read is unreadable by default,
+  never a vacuous "nothing configured" — mirroring how the full-size
+  `idd-ci.instructions.md`'s Required-check discovery step 4 treats a
+  masked `403`-as-`404` — unless the repository opts in via
+  `ciGate.trustEmptyProtectionReads: true` in `.github/idd/config.json`
+  (the same opt-in `pre-merge-readiness` and `resume-route-selection`
+  already honor). When either read is unreadable and the opt-in is
+  absent, `requiredChecks.protectionReadsUnreadable` is `true` and
+  `status` is `unreadable`, taking precedence over every other status
+  (including `success`) so a passing subset of a possibly incomplete
+  required-check set is never reported as settled. An explicit `403` on
+  either read still fails the command closed with a non-zero exit,
+  unchanged from before. This command resolves `.github/idd/config.json`
+  from the PR's trusted base ref (via the same `loadTrustedIddConfig`
+  `pre-merge-readiness` uses, #2373), never the PR worktree's own local
+  copy, so a PR cannot widen its own CI-wait trust.
 - it remains read-only; the command performs no reruns and posts no
   GitHub comment
 
