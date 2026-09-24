@@ -3592,7 +3592,8 @@ test('checkMergePolicyAcknowledgement names idd-policy.json when only the legacy
 });
 
 // idd-skill#3295: threadResolutionPolicy is a required schema key that
-// nothing in src/ or .github/instructions/ currently reads. These tests
+// no enforcement helper or gate reads (checkThreadResolutionPolicy
+// itself reads it, but only to emit the warning below). These tests
 // pin the exported five-basename list to literal strings pulled directly
 // from the issue/docs/idd-review-policy-profiles.md -- not derived from
 // THREAD_RESOLUTION_POLICY_PHASE_FILES itself, so a wrong or missing
