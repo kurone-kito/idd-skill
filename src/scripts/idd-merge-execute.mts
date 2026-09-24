@@ -991,13 +991,25 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> [--claim-id <claim-id>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
 
   Every flag except --apply is forwarded verbatim to the read-only
   pre-merge-readiness collector, so the full collector flag surface is
-  accepted here — including --idd-agent-logins, --now, and the deprecated
+  accepted here — including --idd-agent-logins and the deprecated
   --expected-claim-id / --expected-agent-id aliases. --owner and --repo
   must be passed together or not at all.
+
+  #3252 required claim binding: --claim-id (or the deprecated
+  --expected-claim-id alias) is required unless --claimless is also
+  given (only valid for a PR with no closingIssuesReferences) -- checked
+  here, before this helper ever collects readiness evidence or merges,
+  since the collector's own claim gate only checks whether a SUPPLIED
+  claim-id matches the active claim, never whether one was supplied.
+
+  #3252 --now is dry-run only: passing --now together with --apply is
+  rejected before any collection or merge call, since --now overrides
+  every merge-gate clock and picking one under --apply would let the
+  caller steer which clock the merge is actually gated on.
 
   Default (no --apply): dry-run. Evaluates every F3 merge gate via the
   read-only pre-merge-readiness collector and prints { ready, blockers,
@@ -1011,15 +1023,18 @@ function printHelp(): void {
   #1521 solo-CODEOWNER --admin fallback: if the plain merge command fails
   with GitHub's "base branch policy prohibits the merge" error, and the
   repository has not set mergeGate.soloCodeownerAdminFallback to
-  "hold-and-report" in .github/idd/config.json, this retries ONCE with
-  --admin -- but ONLY when reviewerStates.codeownerSelfApproval proves the
-  PR author is the sole eligible codeowner (status "clear", a bypass-actor
-  reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
-  outstanding review from any other codeowner never triggers this retry.
-  The retry also requires a second immediate head/claim/readiness
-  re-validation and a live MERGEABLE state; a BEHIND state is accepted only
-  when the fresh branch-currency evidence says an up-to-date head is not
-  required. Unreadable or unsafe live state aborts the retry.
+  "hold-and-report" in .github/idd/config.json (#3252: read from the PR's
+  base ref, falling back to the repository's live default branch --
+  never the PR's head SHA and never a local worktree read), this retries
+  ONCE with --admin -- but ONLY when reviewerStates.codeownerSelfApproval
+  proves the PR author is the sole eligible codeowner (status "clear", a
+  bypass-actor reason, and prAuthorIsSoleEligibleCodeowner true). A
+  genuinely outstanding review from any other codeowner never triggers
+  this retry. The retry also requires a second immediate
+  head/claim/readiness re-validation and a live MERGEABLE state; a
+  BEHIND state is accepted only when the fresh branch-currency evidence
+  says an up-to-date head is not required. Unreadable or unsafe live
+  state aborts the retry.
   The verdict's adminFallbackUsed field records whether this path fired.
 
   Local-head-drift warning (#2453): when the invoking worktree's local

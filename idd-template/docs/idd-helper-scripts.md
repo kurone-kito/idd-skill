@@ -3274,12 +3274,13 @@ reflexively as any other CLI option.
   pass `--claim-issue`). It skips claim fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
-  `idd-merge-execute` still requires `--claim-issue`. Optional
-  `--closing-issues <n>[,<n>...]` (#3298) declares the deliberate
-  multi-issue closing set for the `closingSet` gate below; it must
-  include `--claim-issue`'s own number and cannot combine with
-  `--claimless`. Omit it for the ordinary single-issue case, where the
-  claimed issue alone is the deliberate set.
+  `idd-merge-execute` also requires `--claim-id` (or the deprecated
+  `--expected-claim-id` alias) unless `--claimless` is passed
+  (`#3252`). Optional `--closing-issues <n>[,<n>...]` (#3298) declares
+  the deliberate multi-issue closing set for the `closingSet` gate
+  below; it must include `--claim-issue`'s own number and cannot
+  combine with `--claimless`. Omit it for the ordinary single-issue
+  case, where the claimed issue alone is the deliberate set.
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
@@ -3457,6 +3458,23 @@ reflexively as any other CLI option.
   optional flags as `pre-merge-readiness` (`--agent-id`, `--owner`,
   `--repo`, `--trusted-marker-logins`, `--advisory-bot-logins`); add
   `--apply` to merge.
+- **Required claim binding (`#3252`).** `--claim-id` (or the deprecated
+  `--expected-claim-id` alias) is required unless `--claimless` is also
+  given — the same "no-issue PR" exemption `pre-merge-readiness` itself
+  honors — checked before this helper ever collects readiness evidence
+  or merges: the collector's own claim gate only checks whether a
+  _supplied_ claim-id matches the active claim, never whether one was
+  supplied at all, so an `--apply` run with neither flag would merge
+  under whichever claim happened to be active rather than the caller's
+  own.
+- **`--now` is dry-run only (`#3252`).** Passing `--now` together with
+  `--apply` is rejected before any collection or merge call: `--now`
+  overrides every merge-gate clock (claim staleness, waiver expiry,
+  advisory-convergence deadline, terminal-unavailability window,
+  secondary-bot quiet window), which is safe for read-only dry-run
+  evaluation but would otherwise let the caller pick the clock an
+  `--apply` merge is actually gated on. `--now` stays fully supported
+  without `--apply`.
 - Stable contract:
   [`idd-merge-execute.schema.json`][idd-merge-execute-schema]
 - It WRAPS the read-only `pre-merge-readiness` collector and adds no new
@@ -3491,7 +3509,12 @@ reflexively as any other CLI option.
   command fails with GitHub's "base branch policy prohibits the merge"
   error, the helper checks `mergeGate.soloCodeownerAdminFallback` in
   `.github/idd/config.json` (distributed default `auto-admin-retry`;
-  absent behaves the same). Unless the repository has set it to
+  absent behaves the same), read from the PR's **base ref** — falling
+  back to the repository's live default branch when a base ref cannot
+  be determined — never the PR's head SHA and never a local worktree
+  read (`#3252`): either would let the PR under merge steer whether its
+  own plain-merge failure gets retried with `--admin`. Unless the
+  repository has set it to
   `hold-and-report`, it retries exactly once with `--admin`, bound to
   the same validated head, but ONLY when the freshly re-validated
   report's `reviewerStates.codeownerSelfApproval` has `status: "clear"`
