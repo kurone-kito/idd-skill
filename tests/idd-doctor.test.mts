@@ -45,6 +45,7 @@ import {
   evaluateBranchProtectionFindings,
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
+  evaluateRoadmapIdentityConsistency,
   extractMarkerPrefixes,
   fetchGhApiJsonAt,
   filterIddBranchMergedPrs,
@@ -274,6 +275,99 @@ test('autopilot-suitability consistency: floor 1 treats score-1 + blocked-by-hum
   assert.match(
     warnings.find((w) => /issue #23/.test(w)) ?? '',
     /issue #23 is scored 2 \(>= floor 1\) but carries status:blocked-by-human/,
+  );
+});
+
+test('roadmap-identity consistency: label without a marker warns (#3286)', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    { number: 30, body: 'no marker here', labels: [{ name: 'roadmap' }] },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /roadmap-identity: issue #30 carries the roadmap label but no idd-skill-roadmap-id marker; Discover treats it as an ordinary issue/,
+  );
+});
+
+test('roadmap-identity consistency: a marker quoted only in inline code still counts as absent (#3286)', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    {
+      number: 31,
+      body: 'see `<!-- idd-skill-roadmap-id: example -->` for the format',
+      labels: [{ name: 'roadmap' }],
+    },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /issue #31 carries the roadmap label/);
+});
+
+test('roadmap-identity consistency: a real marker stays silent regardless of the label', () => {
+  const withLabel = evaluateRoadmapIdentityConsistency([
+    {
+      number: 32,
+      body: '<!-- idd-skill-roadmap-id: root -->',
+      labels: [{ name: 'roadmap' }],
+    },
+  ]);
+  assert.deepEqual(withLabel.warnings, []);
+
+  const withoutLabel = evaluateRoadmapIdentityConsistency([
+    { number: 33, body: '<!-- idd-skill-roadmap-id: root -->', labels: [] },
+  ]);
+  assert.deepEqual(withoutLabel.warnings, []);
+});
+
+test('roadmap-identity consistency: no roadmap label stays silent regardless of the marker', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    { number: 34, body: 'ordinary issue, no marker', labels: [] },
+    {
+      number: 35,
+      body: 'ordinary issue, no marker',
+      labels: [{ name: 'enhancement' }],
+    },
+  ]);
+  assert.deepEqual(warnings, []);
+});
+
+test('roadmap-identity consistency: honors a non-default roadmapLabelName', () => {
+  // A custom label ('epic') without a marker warns...
+  const custom = evaluateRoadmapIdentityConsistency(
+    [{ number: 36, body: 'no marker', labels: [{ name: 'epic' }] }],
+    { roadmapLabelName: 'epic' },
+  );
+  assert.equal(custom.warnings.length, 1);
+  assert.match(custom.warnings[0], /issue #36 carries the epic label/);
+
+  // ...and the stock 'roadmap' label no longer matches once overridden.
+  const stockNoLongerMatches = evaluateRoadmapIdentityConsistency(
+    [{ number: 37, body: 'no marker', labels: [{ name: 'roadmap' }] }],
+    { roadmapLabelName: 'epic' },
+  );
+  assert.deepEqual(stockNoLongerMatches.warnings, []);
+});
+
+test('roadmap-identity consistency: matches the configured label name case-insensitively (Copilot review, PR #3362)', () => {
+  // GitHub label names are case-insensitive; a differently-cased label on
+  // the issue still counts as the configured roadmap label.
+  const differentIssueCase = evaluateRoadmapIdentityConsistency([
+    { number: 38, body: 'no marker', labels: [{ name: 'Roadmap' }] },
+  ]);
+  assert.equal(differentIssueCase.warnings.length, 1);
+  assert.match(
+    differentIssueCase.warnings[0],
+    /issue #38 carries the roadmap label/,
+  );
+
+  // A differently-cased configured roadmapLabelName also still matches.
+  const differentConfigCase = evaluateRoadmapIdentityConsistency(
+    [{ number: 39, body: 'no marker', labels: [{ name: 'epic' }] }],
+    { roadmapLabelName: 'Epic' },
+  );
+  assert.equal(differentConfigCase.warnings.length, 1);
+  // The warning text echoes the configured (un-normalized) spelling.
+  assert.match(
+    differentConfigCase.warnings[0],
+    /issue #39 carries the Epic label/,
   );
 });
 

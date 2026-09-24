@@ -25,7 +25,6 @@ import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { resolveLegacyClaimState } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
-  POLICY_DEFAULTS,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 import {
@@ -196,7 +195,6 @@ if (import.meta.main) {
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
-        roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
         milestoneScope: policy.discover?.milestoneScope,
         owner,
@@ -208,7 +206,6 @@ if (import.meta.main) {
           repo,
           policy.markerPrefix,
           buildSearchIssuesRunner(),
-          policy.labels?.roadmapLabelName,
           policy.discover?.legacyRoots,
         ),
         claimState,
@@ -217,7 +214,6 @@ if (import.meta.main) {
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
-        roadmapLabelName: policy.labels?.roadmapLabelName,
         owner,
         repo,
         loadIssue: buildIssueLoader(port),
@@ -268,7 +264,6 @@ async function mapPool(items, limit, task) {
 }
 export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
-  const roadmapLabelName = normalizeRoadmapLabelName(options.roadmapLabelName);
   const loadIssueOption = options.loadIssue;
   const loadSubIssues =
     typeof options.loadSubIssues === 'function'
@@ -623,7 +618,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   }
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
-    const classification = classifyIssue(issue, markerPrefix, roadmapLabelName);
+    const classification = classifyIssue(issue, markerPrefix);
     if (issue.number === rootIssue.number) {
       classification.kind = 'roadmap';
     }
@@ -697,11 +692,12 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
 /**
  * Cross-roadmap autopilot discovery (additive `--all-roadmaps` mode).
  *
- * Discovers every OPEN roadmap root (an open issue carrying the
- * `roadmap` label OR an `<!-- {markerPrefix}-roadmap-id: ... -->`
- * marker), runs the existing single-root {@link enumerateRoadmapGraph}
- * from each root, and returns the UNION of open execution leaves. A leaf
- * reachable from several sibling roots is recorded once, carrying every
+ * Discovers every OPEN roadmap root (an open issue carrying an
+ * `<!-- {markerPrefix}-roadmap-id: ... -->` marker, or a configured
+ * `discover.legacyRoots` entry), runs the existing single-root
+ * {@link enumerateRoadmapGraph} from each root, and returns the UNION of
+ * open execution leaves. A leaf reachable from several sibling roots is
+ * recorded once, carrying every
  * `sourceRoots` it is reachable from (provenance), so it is never
  * double-counted.
  *
@@ -751,7 +747,6 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
     try {
       graph = await enumerateRoadmapGraph(rootNumber, {
         markerPrefix,
-        roadmapLabelName: options.roadmapLabelName,
         owner: options.owner,
         repo: options.repo,
         loadIssue: options.loadIssue,
@@ -1607,37 +1602,21 @@ export function extractRoadmapMarkerId(
   const match = regex.exec(stripMarkdownCodeRegions(String(body ?? '')));
   return match ? match[1] : '';
 }
-export function classifyIssue(
-  issue,
-  markerPrefix = DEFAULT_MARKER_PREFIX,
-  roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
-) {
-  // Re-validate even though the parameter already has a default: a caller
-  // (direct or test) that explicitly passes an empty string would otherwise
-  // bypass the default (parameter defaults only trigger on `undefined`) and
-  // silently disable the roadmap-label check. Use a cheap non-empty-string
-  // check rather than the full normalizeRoadmapLabelName()/
-  // normalizePolicyConfig() — classifyIssue() runs once per node during
-  // graph enumeration, so rebuilding the whole policy-defaults object here
-  // would be avoidable per-node overhead; callers that need policy-level
-  // normalization already do it once via normalizeRoadmapLabelName() before
-  // reaching this function.
-  const resolvedRoadmapLabelName =
-    typeof roadmapLabelName === 'string' && roadmapLabelName.length > 0
-      ? roadmapLabelName
-      : POLICY_DEFAULTS.labels.roadmapLabelName;
+/**
+ * Classify one issue node as `roadmap` or `execution`. The `roadmap-id`
+ * marker is the ONLY roadmap identity (#3286, Groom hearing
+ * 2026-09-24): the configured roadmap label is informational only and
+ * never contributes to this classification, even though `issue.labels`
+ * is still accepted here (unused) so callers can pass a full issue
+ * object without narrowing it first. `idd-doctor`'s
+ * `evaluateRoadmapIdentityConsistency` warns separately about an open
+ * issue that carries the label without the marker.
+ */
+export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
-  const labels = normalizeLabels(issue.labels);
-  if (roadmapMarkerId || labels.has(resolvedRoadmapLabelName)) {
-    return {
-      kind: 'roadmap',
-      roadmapMarkerId,
-    };
-  }
-  return {
-    kind: 'execution',
-    roadmapMarkerId: '',
-  };
+  return roadmapMarkerId
+    ? { kind: 'roadmap', roadmapMarkerId }
+    : { kind: 'execution', roadmapMarkerId: '' };
 }
 /**
  * True when `line` opens a new Markdown block that must terminate a
@@ -2267,23 +2246,13 @@ function normalizeMarkerPrefix(markerPrefix) {
   return normalized || DEFAULT_MARKER_PREFIX;
 }
 /**
- * Resolve the configured `labels.roadmapLabelName` (#1273), falling back to
- * the `policy-helpers.mts` default (`'roadmap'`) for an absent or invalid
- * value. Routing an already-`unknown` field through `normalizePolicyConfig`
- * (rather than hand-rolling the same non-empty-string check again) keeps the
- * validation and the default in the single source of truth.
- */
-function normalizeRoadmapLabelName(roadmapLabelName) {
-  return normalizePolicyConfig({ labels: { roadmapLabelName } }).labels
-    .roadmapLabelName;
-}
-/**
  * Resolve the configured `discover.legacyRoots` (issue numbers of legacy
- * roadmap roots that predate the `roadmap` label / `roadmap-id` marker),
+ * roadmap roots that predate the `roadmap-id` marker convention),
  * falling back to the `policy-helpers.mts` default (`[]`) for an absent or
- * invalid value. Same routing-through-`normalizePolicyConfig` shape as
- * {@link normalizeRoadmapLabelName}, so the fail-safe parsing stays in the
- * single source of truth.
+ * invalid value. Routing an already-`unknown` field through
+ * `normalizePolicyConfig` (rather than hand-rolling the same validation
+ * again) keeps the fail-safe parsing and the default in the single source
+ * of truth.
  */
 function normalizeLegacyRoots(legacyRoots) {
   return normalizePolicyConfig({ discover: { legacyRoots } }).discover
@@ -2347,90 +2316,67 @@ export function buildSubIssueLoader(port) {
 /**
  * Live open-roadmap-roots loader (#1017): search-narrowed root discovery.
  *
- * Replaces the previous full open-issue scan (which fetched every open
- * issue's `body` plus up to 100 labels just to detect a root) with two
- * cheap server-side searches whose union is the SAME open-root set:
+ * Replaces a full open-issue scan (which fetched every open issue's
+ * `body` just to detect a root) with one cheap server-side search unioned
+ * with configured legacy roots. The root set is the marker-identified
+ * open issues plus configured `discover.legacyRoots` -- a label-only open
+ * issue is deliberately NOT a root (#3286: the roadmap label no longer
+ * identifies a root by itself):
  *
- *   1. Label roots — `gh search issues --label <roadmapLabelName> --state
- *      open` (the configured `labels.roadmapLabelName`, #1273; defaults to
- *      `roadmap`) returns every open issue carrying that label. These are
- *      roots by label with NO body inspection needed; the old scan's
- *      `labels.has(roadmapLabelName)` branch is reproduced exactly (the
- *      GitHub search `--label` qualifier is a case-insensitive exact-name
- *      match, as is the `normalizeLabels`-backed `Set.has(...)` it
- *      replaces).
- *   2. Marker-only roots — `gh search issues --match body "<...>roadmap-id"
+ *   1. Marker roots — `gh search issues --match body "<...>roadmap-id"
  *      --state open` narrows to open issues whose body text contains the
  *      `idd-skill-roadmap-id`-style marker token, then RE-CONFIRMS each
  *      candidate with the same `extractRoadmapMarkerId(body, prefix)` regex
  *      the old scan used (the search already returns the body, so no extra
  *      per-issue fetch is made). Only confirmed markers are kept, so a
- *      non-marker text hit on the token never inflates the root set.
- *   3. Configured legacy roots (#1315) — the `discover.legacyRoots` policy
- *      array (issue numbers), for roots that predate both signals above
- *      (e.g. an ad-hoc umbrella convention adopted before IDD). No extra
- *      search or fetch: the numbers are unioned in directly, and each still
- *      goes through the normal per-root {@link enumerateRoadmapGraph} fetch
- *      downstream, so a stale or now-closed configured root is handled the
- *      same way a race-closed label/marker root already is.
+ *      non-marker text hit on the token never inflates the root set. The
+ *      roadmap label alone no longer identifies a root (#3286): the
+ *      marker is the only roadmap identity Discover recognizes, and
+ *      `idd-doctor`'s `evaluateRoadmapIdentityConsistency` warns about an
+ *      open issue that carries the label without it.
+ *   2. Configured legacy roots (#1315) — the `discover.legacyRoots` policy
+ *      array (issue numbers), for roots that predate the marker
+ *      convention (e.g. an ad-hoc umbrella adopted before IDD, or one
+ *      still missing its marker). No extra search or fetch: the numbers
+ *      are unioned in directly, and each still goes through the normal
+ *      per-root {@link enumerateRoadmapGraph} fetch downstream, so a
+ *      stale or now-closed configured root is handled the same way a
+ *      race-closed marker root already is.
  *
  * The candidate sets are unioned and deduped by number, then sorted
- * ascending. The output is the identical `number[]` (deduped, ascending) the
- * previous scan returned, so the downstream union/provenance/ranking is
- * byte-stable.
+ * ascending. The output shape is a deduped, ascending `number[]` -- the
+ * same contract the loader has always returned, so downstream
+ * union/provenance/ranking code needs no change -- but the root
+ * **membership** itself is narrower than before this file's #3286
+ * change: an open issue reachable only via the (now-removed) label
+ * search no longer appears here.
  *
  * Result-cap boundary: `gh search` is hard-capped at
- * {@link GH_SEARCH_RESULT_CAP} results per query. When a single label or
- * body-marker search returns the full cap it may have been truncated, so a
- * repo with >= {@link GH_SEARCH_RESULT_CAP} hits could silently yield an
- * incomplete root set. The loader emits a NON-FATAL one-line WARNING to stderr
- * in that case (see {@link warnOnSearchResultCap}) rather than aborting — the
- * body-marker search can legitimately match many re-confirmed-and-dropped
- * prose mentions, so a hard error would over-abort. The JSON report itself
- * goes to stdout, so the stderr warning never corrupts it.
- *
- * Boundary (documented parity note): the marker search uses GitHub's
- * full-text body index. The label search is exact and complete on its own,
- * so every LABELED root is always found regardless of the marker index. A
- * marker-ONLY root (no `roadmap` label, marker only in the body) is found
- * when the body-text index surfaces the broad `roadmap-id` token, which the
- * `re`-confirm step then verifies — this is the only path that depends on
- * the search index rather than an exact qualifier. The IDD authoring path
- * applies the `roadmap` label to roadmap roots, so in practice marker-only
- * roots are covered by the label search; the marker search is the additive
- * safety net for unlabeled markers.
+ * {@link GH_SEARCH_RESULT_CAP} results per query. When the body-marker
+ * search returns the full cap it may have been truncated, so a repo with
+ * >= {@link GH_SEARCH_RESULT_CAP} marker-token hits could silently yield
+ * an incomplete root set. The loader emits a NON-FATAL one-line WARNING to
+ * stderr in that case (see {@link warnOnSearchResultCap}) rather than
+ * aborting — the body-marker search can legitimately match many
+ * re-confirmed-and-dropped prose mentions, so a hard error would
+ * over-abort. The JSON report itself goes to stdout, so the stderr
+ * warning never corrupts it.
  */
 export function buildOpenRoadmapRootsLoader(
   owner,
   repo,
   markerPrefix,
   searchIssues = buildSearchIssuesRunner(),
-  roadmapLabelName,
   legacyRoots,
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
-  const label = normalizeRoadmapLabelName(roadmapLabelName);
   const configuredLegacyRoots = normalizeLegacyRoots(legacyRoots);
   return async () => {
-    // 3. Configured legacy roots: seeded directly into the Set ahead of the
-    //    two searches below so they dedupe against label/marker roots for
+    // 2. Configured legacy roots: seeded directly into the Set ahead of the
+    //    marker search below so they dedupe against marker roots for
     //    free; see the loader's doc comment for why no extra fetch is made.
     const numbers = new Set(configuredLegacyRoots);
-    // 1. Label roots: roadmap-labeled open issues are roots by label.
-    const labelResults = searchIssues({
-      owner,
-      repo,
-      label,
-      fields: ['number'],
-    });
-    warnOnSearchResultCap(labelResults, 'label');
-    for (const issue of labelResults) {
-      const issueNumber = normalizeSearchIssueNumber(issue);
-      if (issueNumber !== null) {
-        numbers.add(issueNumber);
-      }
-    }
-    // 2. Marker-only roots: narrow to open issues whose body carries the
+    // 1. Marker roots: narrow to open issues whose body carries the
     //    marker token, then re-confirm with the exact regex on the body the
     //    search already returned (no extra per-issue body fetch).
     const markerResults = searchIssues({
