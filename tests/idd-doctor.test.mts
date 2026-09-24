@@ -3710,6 +3710,53 @@ test('checkThreadResolutionPolicy pushes a warning for a non-default profile, no
   }
 });
 
+// PR #3349 review: checkThreadResolutionPolicy uses
+// resolveLiveConfigDocument's canonical-then-legacy walk (the same
+// reader checkMergePolicyAcknowledgement uses), but the fixture test
+// above only ever exercised the canonical .github/idd/config.json
+// path -- a regression to a canonical-only read would still pass it.
+// Mirrors "checkMergePolicyAcknowledgement names idd-policy.json when
+// only the legacy candidate is present (#2301 review)" above.
+test('checkThreadResolutionPolicy also reads the legacy idd-policy.json path when the canonical file is absent, and prefers canonical when both exist', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-thread-resolution-policy-legacy-'),
+  );
+  try {
+    // Legacy-only: the warning still fires.
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ threadResolutionPolicy: 'strict-reviewer-resolve' }),
+    );
+    const legacyOnlyReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, legacyOnlyReport);
+    assert.equal(legacyOnlyReport.errors.length, 0);
+    assert.equal(legacyOnlyReport.warnings.length, 1);
+    assert.match(legacyOnlyReport.warnings[0], /strict-reviewer-resolve/);
+
+    // Canonical-first precedence: when both files exist, the canonical
+    // file's own (also non-default) value wins -- positively proven by
+    // asserting the warning names canonical's value, not a bare
+    // zero-warnings check that a bailed-to-null regression would also
+    // satisfy vacuously.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ threadResolutionPolicy: 'hybrid-reviewer-ack' }),
+    );
+    const bothPresentReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, bothPresentReport);
+    assert.equal(bothPresentReport.errors.length, 0);
+    assert.equal(bothPresentReport.warnings.length, 1);
+    assert.match(bothPresentReport.warnings[0], /hybrid-reviewer-ack/);
+    assert.doesNotMatch(
+      bothPresentReport.warnings[0],
+      /strict-reviewer-resolve/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // CLI-level coverage that `runDoctor` actually calls
 // checkThreadResolutionPolicy, spawning the real compiled
 // scripts/idd-doctor.mjs the same way
