@@ -451,10 +451,12 @@ if (import.meta.main) {
  * `currentRepo` (`"owner/repo"`) resolves a qualified `owner/repo#N`/URL
  * token naming this repository to a local number; a token naming another
  * repository (or a qualified token when `currentRepo` is unset) is
- * excluded here, the same fail-safe way an unrecognized token always has
- * been — this filter does not itself surface the richer
- * `unresolvable`/`cross_repository_reference` detail
- * `evaluateDiscoverReadiness` reports for the identical case.
+ * excluded from this function's own return value the same fail-safe way
+ * an unrecognized token always has been. `classifyIssue` (below) does not
+ * rely on this function alone for that case: it separately collects the
+ * shared grammar's own `unresolvable`/`cross_repository_reference` detail
+ * and routes it through the `unresolvable_reference` outcome, so a
+ * cross-repository-only reference still keeps the issue non-selectable.
  */
 export function extractBlockedByReferences(
   body: unknown,

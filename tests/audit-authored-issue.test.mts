@@ -1359,6 +1359,37 @@ test('prose-dependency does not warn on a cross-repo shorthand reference', () =>
   assert.equal(finding.severity, undefined);
 });
 
+test('#3284 review fix: prose-dependency does not warn on a same-repo qualified Blocked by encoding when currentRepo is supplied', () => {
+  // checkProseOnlyDependency already received its own `currentRepo`
+  // parameter but never forwarded it into
+  // extractBlockedByIssueNumbers/extractDependencyIssueNumbers, so a
+  // same-repo qualified `Blocked by owner/repo#N` line was not recognized
+  // as an existing dependency encoding and could still trigger this
+  // advisory. Pin both directions: warns without `currentRepo` (proving
+  // the forward is load-bearing, not a no-op), and does not warn with it.
+  const body = childBody({
+    extraMarkers:
+      'Blocked by kurone-kito/idd-skill#1391\n\nOnce #1391 merges, this can start.',
+  });
+
+  const withoutRepo = auditAuthoredIssue(body, { shape: 'child' });
+  const findingWithoutRepo = withoutRepo.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(findingWithoutRepo, 'prose-dependency finding should be present');
+  assert.equal(findingWithoutRepo.severity, 'warning');
+
+  const withRepo = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const findingWithRepo = withRepo.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(findingWithRepo, 'prose-dependency finding should be present');
+  assert.equal(findingWithRepo.severity, undefined);
+});
+
 test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
   const body = childBody({
     extraMarkers: 'Blocked by #1391\n\nOnce #1391 merges, this can start.',
