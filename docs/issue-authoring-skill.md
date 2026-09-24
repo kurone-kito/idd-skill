@@ -653,6 +653,26 @@ required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
 footers.
 
+For the `orphan` and `child` shapes, it also runs the same A4 viability
+and A4.5 suitability evaluators the IDD discover phase runs later, at
+claim time (`triage-title-missing`, one `triage-a4-<criterion id>`
+finding per A4 criterion, and one `triage-a45-<check id>` finding per
+A4.5 check) — so a body that would fail A4 or A4.5 at claim time is
+caught here, before it is ever published, instead of only after.
+`triage-a45-duplicate_or_superseded` (Check 4) always reports "not
+applicable" (it needs a live repository, which this offline linter never
+has); the `roadmap` shape reports every one of these findings as not
+applicable, since Discover never routes a roadmap node through A4 or
+A4.5 in the first place. A title is required for these checks to
+actually evaluate: pass `--title`, or lead the drafted body with a
+`# <title>` line; without either, `triage-title-missing` fails and every
+`triage-a45-*` finding reports "not evaluated" instead of a noisy Check
+2/Coherence cascade (the three `triage-a4-*` findings still evaluate
+normally, since A4's criteria are title-independent). With
+`--expect-bucket`, a failing triage finding is downgraded to a warning
+instead of failing the report, mirroring how this linter already treats
+a bucket body as deliberately non-ready everywhere else.
+
 It also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) used near coordination language (for example
@@ -714,10 +734,14 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
-  --marker-prefix <resolved-target-prefix> \
+  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+Omit `--title` when the drafted body already leads with a `# <title>`
+line; for the `orphan` and `child` shapes, at least one of the two is
+required for the `triage-a45-*` findings above to actually evaluate.
 
 **Always keep `--marker-prefix`, and always replace the placeholder**
 with the resolved target prefix before running the command — in this
