@@ -10,6 +10,7 @@ import {
   buildForcedHandoffEnabledGate,
   evaluateFreshClaimGate,
   evaluateResumeClaimRouting,
+  loadPolicy,
 } from '../src/scripts/resume-claim-routing.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -17,6 +18,35 @@ function trusted(logins: string[]) {
   const set = new Set(logins);
   return (login: string) => set.has(login);
 }
+
+// #3270: before this fix, `loadPolicy`'s own local `parseDurationToMs` was a
+// loose, case-insensitive copy that accepted a schema-invalid lowercase
+// `pt12h` as 12h, diverging from `pre-merge-readiness.mts`'s case-sensitive
+// `normalizePolicyConfig`, which fell back to the distributed 24h default
+// for the identical value. `loadPolicy` now delegates to the same shared
+// `readClaimStaleAgeMs` both files use, so the two can no longer disagree.
+test('loadPolicy (#3270) resolves a schema-invalid claimTiming.staleAge ("pt12h") to the distributed 24h default, matching pre-merge-readiness.mts', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-claim-routing-policy-'),
+  );
+  const policyPath = join(tempRoot, 'config.json');
+  try {
+    writeFileSync(
+      policyPath,
+      JSON.stringify({ claimTiming: { staleAge: 'pt12h' } }),
+    );
+    assert.equal(loadPolicy(policyPath).staleAgeMs, 24 * 60 * 60 * 1000);
+
+    // A well-formed, case-correct value still parses normally.
+    writeFileSync(
+      policyPath,
+      JSON.stringify({ claimTiming: { staleAge: 'PT12H' } }),
+    );
+    assert.equal(loadPolicy(policyPath).staleAgeMs, 12 * 60 * 60 * 1000);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('returns unclaimed when no trusted markers exist', () => {
   const result = evaluateResumeClaimRouting(

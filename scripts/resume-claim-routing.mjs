@@ -25,6 +25,7 @@ import {
   normalizeLinkedPrReference,
   parseClaimComment,
   parseReleaseComment,
+  readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mjs';
 import {
@@ -932,15 +933,20 @@ function fetchIssueComments(port, issueNumber) {
 // loadPolicyConfig makes internally -- so the option (and this function's
 // own try/catch around the read) is no longer needed; a load failure now
 // propagates the shared reader's own error.
-function loadPolicy(policyPath) {
+export function loadPolicy(policyPath) {
   const { path: source, config } = loadPolicyConfig(policyPath);
   const typedConfig = config;
   const normalized = normalizePolicyConfig(typedConfig);
   return {
     source,
-    staleAgeMs:
-      parseDurationToMs(typedConfig?.claimTiming?.staleAge) ??
-      DEFAULT_STALE_AGE_MS,
+    // #3270: was a loose, case-insensitive local `parseDurationToMs` copy
+    // applied to the RAW value -- a schema-invalid `pt12h` parsed to 12h
+    // here but fell back to the distributed 24h default in
+    // `pre-merge-readiness.mts` (case-sensitive). Now the same shared,
+    // strict `readClaimStaleAgeMs` every other caller uses, applied to the
+    // already-normalized `claimTiming.staleAge` (fail-safe to `PT24H`), so
+    // a schema-invalid value resolves identically everywhere.
+    staleAgeMs: readClaimStaleAgeMs(typedConfig),
     trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
       ? typedConfig.trustedMarkerActors
           .map((value) => String(value ?? '').trim())
@@ -951,23 +957,6 @@ function loadPolicy(policyPath) {
       authorityPolicy: normalized.forcedHandoff.authorityPolicy,
     },
   };
-}
-function parseDurationToMs(value) {
-  const text = String(value ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) {
-    return null;
-  }
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
 function resolveTrustedLogins({ fromArgs, fromPolicy, currentLogin }) {
   const fromCsv = String(fromArgs ?? '')
