@@ -76,7 +76,7 @@ evidence for those child issues. For each closed child or descendant,
 also fetch its REST close reason, for example
 `gh api repos/<owner>/<repo>/issues/<n> --jq .state_reason` (lowercase
 `not_planned` / `duplicate` / `completed` — prefer this REST form over
-`gh issue view --json stateReason`, which returns the same value
+`gh issue view --json stateReason`, which returns the same value in
 SCREAMING_SNAKE_CASE), so the completion-audit evidence below can name
 a child closed as not planned or a duplicate instead of reporting it
 as completed. Use the same outbound traversal sources as A2, including

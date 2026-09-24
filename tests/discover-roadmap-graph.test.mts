@@ -1845,7 +1845,7 @@ test('nodes carry the authored autopilot-suitability score (null when unscored)'
 });
 
 test('a CLOSED child carries stateReason only when closed without completion (#3326)', async () => {
-  const issues = new Map([
+  const issues = new Map<number, unknown>([
     [
       645,
       roadmapIssue(
