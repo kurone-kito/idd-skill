@@ -98,7 +98,34 @@ if (import.meta.main) {
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call.
 function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const summary = collectCiWaitState(process.argv.slice(2));
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+}
+/**
+ * Collect the CI-wait-state snapshot for `--pr <number>`: resolve owner/
+ * repo, fetch the PR's branch/checks and governance reads from `port`,
+ * resolve the trusted `.github/idd/config.json` via `loadTrustedConfig`
+ * against the PR's base ref (or the repository's live default branch when
+ * `baseRefName` is empty), classify governance-read unreadability (#3300),
+ * and build the final summary via {@link buildCiWaitStateSummary}.
+ *
+ * `createPort`/`loadTrustedConfig` are injectable (default: the real
+ * GitHub adapter / trusted-ref loader) so a test can drive this whole
+ * collection entry end to end against `createFakeProviderAdapter`
+ * fixtures instead of a live `gh` process -- mirrors
+ * `pre-merge-readiness.mts`'s `collectPreMergeReadiness` injectable-
+ * parameter pattern. Before this, only the pure functions below
+ * (`isProtectionReadUnreadable`, `buildCiWaitStateSummary`) had a test
+ * seam; this orchestration itself -- choosing `trustedConfigRef`,
+ * applying `ciGate.trustEmptyProtectionReads` -- had none (Copilot
+ * review, PR #3350).
+ */
+export function collectCiWaitState(
+  argv,
+  createPort = createGithubProviderAdapter,
+  loadTrustedConfig = loadTrustedIddConfig,
+) {
+  const args = parseArgs(argv);
   if (args.help) {
     printHelp();
     process.exit(0);
@@ -113,7 +140,7 @@ function main() {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
+  const port = createPort(owner, repo);
   const pr = port.getChangeRequestBranchAndChecks(args.prNumber);
   // Raw (unencoded) branch name: listBranchRules/getBranchProtection do
   // their own encodeURIComponent internally, matching pre-merge-readiness's
@@ -153,7 +180,7 @@ function main() {
       `cannot resolve a trusted ref for .github/idd/config.json: PR #${args.prNumber} has no baseRefName and the repository's live default branch could not be determined`,
     );
   }
-  const iddConfig = loadTrustedIddConfig(owner, repo, trustedConfigRef);
+  const iddConfig = loadTrustedConfig(owner, repo, trustedConfigRef);
   const ciGate = normalizePolicyConfig(iddConfig).ciGate;
   const trustEmptyProtectionReads = ciGate.trustEmptyProtectionReads === true;
   // #1689: `ciGate.trustSourcePinnedRequiredChecks` -- see
@@ -187,7 +214,7 @@ function main() {
       protectionReadsUnreadable,
     },
   );
-  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  return summary;
 }
 /**
  * Classify whether a branch-rules or classic branch-protection governance

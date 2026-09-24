@@ -3,11 +3,13 @@ import { test } from 'node:test';
 
 import {
   buildCiWaitStateSummary,
+  collectCiWaitState,
   isProtectionReadUnreadable,
   parseArgs,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
 import { classifyCiChecks } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -1095,4 +1097,129 @@ test('required-checks rollup: unreadable takes precedence over a not-yet-generat
   assert.equal(summary.requiredChecks.status, 'unreadable');
   assert.deepEqual(summary.requiredChecks.missingNames, ['test']);
   assert.equal(summary.requiredChecks.allRequiredPresent, false);
+});
+
+// --- #3300 (Copilot review, PR #3350): end-to-end coverage for
+// collectCiWaitState's own orchestration -- trusted-config-ref resolution
+// and the ciGate.trustEmptyProtectionReads opt-in -- via
+// createFakeProviderAdapter, mirroring pre-merge-readiness.mts's
+// collectPreMergeReadiness fake-provider smoke tests. Before this, only the
+// pure functions above (isProtectionReadUnreadable, buildCiWaitStateSummary)
+// had a test seam; main()'s own wiring (choosing trustedConfigRef, applying
+// the opt-in) had none.
+
+test('collectCiWaitState against a fake provider: an unreadable governance read reports status unreadable with no gh process spawned', () => {
+  const port = createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        statusCheckRollup: [],
+      },
+    },
+    // branchRules/branchProtection deliberately omit the 'o/r/main' key,
+    // so listBranchRules/getBranchProtection both report {outcome:
+    // 'not-found'} -- the masked-403-as-404 case this issue fixes.
+  });
+
+  const summary = collectCiWaitState(
+    ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+    () => port,
+    // trustEmptyProtectionReads defaults to false (absent), matching the
+    // pre-#3300 conservative default.
+    () => ({}),
+  );
+
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, true);
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+});
+
+test('collectCiWaitState against a fake provider: ciGate.trustEmptyProtectionReads from the trusted config suppresses the unreadable status', () => {
+  const port = createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        statusCheckRollup: [],
+      },
+    },
+    // Same missing-fixture shape as the previous test -- only the
+    // trusted-config opt-in differs.
+  });
+
+  let loadTrustedConfigCalledWithRef: string | null = null;
+  const summary = collectCiWaitState(
+    ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+    () => port,
+    (_owner, _repo, ref) => {
+      loadTrustedConfigCalledWithRef = ref;
+      return { ciGate: { trustEmptyProtectionReads: true } };
+    },
+  );
+
+  // The config read must use the PR's actual base ref ('main'), the trust
+  // boundary #2373/#3300 require -- never the PR worktree's own local copy.
+  assert.equal(loadTrustedConfigCalledWithRef, 'main');
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, false);
+  assert.equal(summary.requiredChecks.status, 'no-required-checks');
+});
+
+test('collectCiWaitState against a fake provider: an empty baseRefName falls back to the repository default branch for the trusted config read, while the governance reads themselves still key on the empty ref (fail closed)', () => {
+  // Regression test for the exact asymmetry a Copilot review on PR #3350
+  // flagged: listBranchRules/getBranchProtection intentionally keep using
+  // the PR's own (possibly empty) baseRefName -- never the default-branch
+  // fallback, which would read protection for the wrong branch -- so an
+  // empty baseRefName still resolves the trusted CONFIG ref via the
+  // fallback, but the governance reads themselves come back unreadable
+  // (fail closed), never a silent "nothing configured" pass.
+  const port = createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: '',
+        statusCheckRollup: [],
+      },
+    },
+    repositoryDefaultBranch: 'main',
+    // branchRules/branchProtection omit the 'o/r/' (empty-ref) key, so both
+    // governance reads report not-found.
+  });
+
+  let loadTrustedConfigCalledWithRef: string | null = null;
+  const summary = collectCiWaitState(
+    ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+    () => port,
+    (_owner, _repo, ref) => {
+      loadTrustedConfigCalledWithRef = ref;
+      return {};
+    },
+  );
+
+  assert.equal(loadTrustedConfigCalledWithRef, 'main');
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, true);
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+});
+
+test('collectCiWaitState against a fake provider: an empty baseRefName with no resolvable default branch fails closed with a thrown error', () => {
+  const port = createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: '',
+        statusCheckRollup: [],
+      },
+    },
+    // repositoryDefaultBranch omitted -> getRepositoryDefaultBranch returns
+    // null, so no trusted ref can be resolved at all.
+  });
+
+  assert.throws(
+    () =>
+      collectCiWaitState(
+        ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+        () => port,
+        () => ({}),
+      ),
+    /cannot resolve a trusted ref for \.github\/idd\/config\.json/,
+  );
 });
