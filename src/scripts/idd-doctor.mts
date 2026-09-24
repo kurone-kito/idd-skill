@@ -1584,15 +1584,17 @@ export interface ThreadResolutionPolicyFinding {
 }
 
 /**
- * `threadResolutionPolicy` is a required schema key that nothing in
- * `src/` or `.github/instructions/` currently reads (idd-skill#3295):
- * the distributed phase files encode the `fast-agent-resolve` behavior
+ * `threadResolutionPolicy` is a required schema key that no
+ * *enforcement* helper or gate reads (idd-skill#3295): the
+ * distributed phase files encode the `fast-agent-resolve` behavior
  * directly, and a non-default profile takes effect only through the
  * manual phase-file edits `docs/idd-review-policy-profiles.md`
- * documents. An adopter who selects `hybrid-reviewer-ack` or
- * `strict-reviewer-resolve` during onboarding therefore gets a
- * schema-valid config with no effect, and no diagnostic said so before
- * this check.
+ * documents. This diagnostic itself reads the key -- only to emit the
+ * warning below, never to change gate or merge behavior -- so its own
+ * read does not contradict that gap. Before this check existed, an
+ * adopter who selected `hybrid-reviewer-ack` or `strict-reviewer-resolve`
+ * during onboarding got a schema-valid config with no enforcement
+ * effect, and no diagnostic said so.
  *
  * Returns null (no finding, stay silent) for `fast-agent-resolve`
  * (the enforced default, nothing to warn about), for a missing/absent
@@ -1615,7 +1617,8 @@ export function classifyThreadResolutionPolicy(
     level: 'warning',
     message:
       `threadResolutionPolicy is "${value}", a non-default profile -- no ` +
-      'helper or gate reads this key. It takes effect only through ' +
+      'enforcement helper or gate reads this key (this diagnostic itself ' +
+      'only reads it to print this warning). It takes effect only through ' +
       `matching edits to these phase files: ${phaseFiles}. See ` +
       'docs/idd-review-policy-profiles.md.',
   };

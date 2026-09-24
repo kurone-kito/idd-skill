@@ -3643,6 +3643,18 @@ test('classifyThreadResolutionPolicy warns exactly once for strict-reviewer-reso
   assert.match(finding?.message ?? '', /docs\/idd-review-policy-profiles\.md/);
 });
 
+// PR #3349 review (idd-skill#3295): the message must qualify "no ...
+// helper or gate reads this key" as *enforcement* helper/gate -- an
+// unqualified claim is self-contradictory, since this very diagnostic
+// is itself a helper that reads the key to print the message.
+test('classifyThreadResolutionPolicy message never claims plainly that no helper reads the key -- it must qualify "enforcement"', () => {
+  const finding = classifyThreadResolutionPolicy({
+    threadResolutionPolicy: 'strict-reviewer-resolve',
+  });
+  assert.match(finding?.message ?? '', /no enforcement helper or gate reads/);
+  assert.doesNotMatch(finding?.message ?? '', /\bno helper or gate reads\b/);
+});
+
 test('classifyThreadResolutionPolicy stays silent for fast-agent-resolve, an absent key, and a non-enum string', () => {
   assert.equal(
     classifyThreadResolutionPolicy({
