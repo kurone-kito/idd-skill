@@ -561,7 +561,7 @@ Before any mutating action in F3, apply the
      `error: the branch '<branch-name>' is not fully merged`. If it
      still does, compare `git rev-parse <branch-name>` with `gh pr
      view {pr-number} --json state,headRefOid`: matching `MERGED`
-     head → keep it, comment that the operator may run
+     head → keep it, re-validate claim, comment: operator may run
      `git branch -D <branch-name>`, continue to step 6 (`Next action:
      none`); otherwise hold `local-branch-unmerged-commits`, stop
      before step 7, keep claim.

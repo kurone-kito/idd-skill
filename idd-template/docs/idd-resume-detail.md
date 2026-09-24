@@ -153,12 +153,14 @@ local-only steps: F4 step 4 (fast-forward `{development-branch}`) and step
 7 (its revalidation gate stops on any claim that is not this session's,
 including none). On this row, step 4's own `primary-worktree-dirty` guard
 still applies, but degrades to a plain hold comment rather than F4's usual
-Hold / suspend: there is no held claim on this row to suspend. Step 5's
-`local-branch-unmerged-commits` hold (kurone-kito/idd-skill#3327) degrades
-the same way on this row: "keep claim" and "stop before step 7" both
-assume the owned row's held claim and later steps, neither of which this
-row has — post a plain hold comment describing the branch state instead
-and stop; do not treat "keep claim" as an instruction to claim the issue.
+Hold / suspend: there is no held claim on this row to suspend. All three
+of F4's newer holds (kurone-kito/idd-skill#3327) —
+`development-branch-in-use`, `development-branch-diverged` (both step 4),
+and `local-branch-unmerged-commits` (step 5) — degrade the same way: each
+assumes the owned row's held claim and later steps (naming that claim,
+"keep claim", "stop before step 7"), none of which this row has. Post a
+plain hold comment describing the branch/worktree state instead and stop;
+do not treat any of their wording as an instruction to claim the issue.
 A merged PR
 whose issue was **never claimed at all** has no released-claim branch to
 bind and nothing local to clean up — it falls to the catch-all row below,
