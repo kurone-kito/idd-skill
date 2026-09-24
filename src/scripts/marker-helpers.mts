@@ -941,10 +941,20 @@ export function parseClaimComment(
   if (!match || !isValidIsoTimestamp(match[4])) {
     return null;
   }
+  // #3339: the grammar above is case-insensitive (`/i`), so a trusted,
+  // otherwise well-formed marker hand-composed with `supersedes: None` or
+  // `supersedes: NONE` parses successfully but carries a non-lowercase
+  // token. `applyClaimEvent` activates a fresh claim only when
+  // `claim.supersedes === 'none'` exactly, so leaving it verbatim would
+  // silently drop such a claim instead of activating it. Mirror
+  // `renderClaimedByMarker`'s emit-side normalization here on the parse
+  // side; a real claim ID (never a case-variant of `none`) passes through
+  // unchanged.
+  const supersedes = match[3].toLowerCase() === 'none' ? 'none' : match[3];
   return {
     agentId: match[1],
     claimId: match[2],
-    supersedes: match[3],
+    supersedes,
     branch: match[5],
     createdAt,
   };
@@ -2535,11 +2545,12 @@ export function renderClaimedByMarker(payload: {
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const supersedesToken = normalizeNonWhitespaceToken(payload?.supersedes);
   // Normalize any case-variant of the sentinel to lowercase `none`. The claim
-  // parser matches case-insensitively, but the claim lifecycle
+  // grammar matches case-insensitively on both the emit side (here) and the
+  // parse side (`parseClaimComment`, #3339), but the claim lifecycle
   // (`applyClaimEvent`) accepts a fresh claim only when `supersedes === 'none'`
-  // exactly, so an emitted `None`/`NONE` would round-trip into a claim that is
-  // silently ignored. Real claim IDs (never a case-variant of `none`) pass
-  // through verbatim.
+  // exactly, so an unnormalized `None`/`NONE` on either side would round-trip
+  // into a claim that is silently ignored. Real claim IDs (never a
+  // case-variant of `none`) pass through verbatim.
   const supersedes =
     supersedesToken === '' || supersedesToken.toLowerCase() === 'none'
       ? 'none'

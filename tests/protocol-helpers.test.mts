@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildActivitySnapshotSummary,
   classifyThreadAckOnlyPostDisposition,
   EDITED_AFTER_DISPOSITION_HINT,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
+  resolveActiveClaim,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
@@ -3709,4 +3711,48 @@ test('disposition evidence does not hint edited-after-disposition when the autho
 
   assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// #3339: the claimed-by grammar is case-insensitive (`/i`), so a trusted,
+// otherwise well-formed first claim hand-composed with `supersedes: None`
+// or `supersedes: NONE` used to parse successfully yet carry a
+// non-lowercase token, which `applyClaimEvent` (reachable here via
+// `resolveActiveClaim`) then silently ignored -- it activates a fresh
+// claim only when `claim.supersedes === 'none'` exactly. Both
+// `parseClaimComment` and the full `resolveActiveClaim` round trip must
+// now treat each case variant as an ordinary fresh claim.
+for (const supersedesToken of ['None', 'NONE']) {
+  test(`parseClaimComment and resolveActiveClaim accept a first claim carrying supersedes: ${supersedesToken}`, () => {
+    const body =
+      `<!-- claimed-by: claude-x claim-1 supersedes: ${supersedesToken} ` +
+      '2026-05-10T00:00:00Z branch: issue/1-fix -->\n\n' +
+      '_claude-x: issue claim — IDD automation marker. Do not edit._';
+
+    const parsed = parseClaimComment(body, '2026-05-10T00:00:00Z');
+    assert.ok(parsed, `expected ${supersedesToken} to parse as a claim`);
+    assert.equal(parsed?.supersedes, 'none');
+
+    const active = resolveActiveClaim([
+      {
+        author: { login: 'claude-x' },
+        body,
+        createdAt: '2026-05-10T00:00:00Z',
+      },
+    ]);
+    assert.ok(active, `expected ${supersedesToken} to activate the claim`);
+    assert.equal(active?.claimId, 'claim-1');
+    assert.equal(active?.agentId, 'claude-x');
+  });
+}
+
+// A real claim ID must never be mistaken for a case-variant of the `none`
+// sentinel and coerced away -- only the literal sentinel normalizes.
+test('parseClaimComment leaves a real supersedes claim ID verbatim', () => {
+  const body =
+    '<!-- claimed-by: claude-y claim-2 supersedes: claim-NoneSuffix-1 ' +
+    '2026-05-10T00:00:00Z branch: issue/2-fix -->\n\n' +
+    '_claude-y: issue claim — IDD automation marker. Do not edit._';
+
+  const parsed = parseClaimComment(body, '2026-05-10T00:00:00Z');
+  assert.equal(parsed?.supersedes, 'claim-NoneSuffix-1');
 });

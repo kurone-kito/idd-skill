@@ -4317,14 +4317,21 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
 }
 /**
  * Scans the same trusted-author comment stream `resolveLatestReviewWatermark`
- * consumes for a `review-watermark`/`review-baseline`-shaped comment whose
- * body fails the strict canonical `pattern` (e.g. a hand-authored note glued
- * directly to the leading underscore, `_IDD ...` with no space, missing
- * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary). Such a comment
- * already reads as absent to `resolveLatestReviewWatermark` (#2251) -- this
- * gives the F2 caller a way to tell "malformed marker found" apart from
- * "no watermark-shaped comment at all" without changing
- * `resolveLatestReviewWatermark`'s own return shape or selection behavior.
+ * consumes for a `review-watermark`/`review-baseline`-shaped comment that is
+ * malformed in either of two ways: (1) the body fails the strict canonical
+ * `pattern` (e.g. a hand-authored note glued directly to the leading
+ * underscore, `_IDD ...` with no space, missing
+ * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary), or (2) for
+ * `review-watermark` specifically, the loose shape `pattern` accepts the
+ * body (so `operationalMarkerPrefix` recognizes it) but the stricter
+ * field-level `parseReviewWatermarkComment` rejects it -- e.g. a head SHA
+ * shorter than the required 40 hex characters, or a timestamp field that is
+ * neither a valid ISO-8601 string nor the literal `none` sentinel (#3339).
+ * Either way, such a comment already reads as absent to
+ * `resolveLatestReviewWatermark` (#2251) -- this gives the F2 caller a way
+ * to tell "malformed marker found" apart from "no watermark-shaped comment
+ * at all" without changing `resolveLatestReviewWatermark`'s own return
+ * shape or selection behavior.
  *
  * `options.expectedClaimId`, when set, restricts the scan to a malformed
  * comment whose own claim-id token (the second token after the marker
@@ -4349,10 +4356,28 @@ export function detectMalformedReviewWatermarkComments(comments, options = {}) {
     }
     const body = comment.body ?? '';
     const label = detectMalformedOperationalMarker(body);
-    if (
-      label !== '<!-- review-watermark:' &&
-      label !== '<!-- review-baseline:'
-    ) {
+    const isShapeMalformed =
+      label === '<!-- review-watermark:' || label === '<!-- review-baseline:';
+    // #3339: OPERATIONAL_MARKER_ENTRIES' review-watermark shape `pattern`
+    // uses `\S+` for the head-SHA and both timestamp fields, so
+    // `operationalMarkerPrefix` already recognizes a body with e.g. a
+    // 12-hex-char SHA or a non-ISO/non-`none` timestamp as a well-formed
+    // marker -- `detectMalformedOperationalMarker` above then returns
+    // `null` for it (already recognized, so "not malformed" from that
+    // function's own point of view). `parseReviewWatermarkComment` then
+    // separately rejects it (`[0-9a-f]{40}` / `isValidIsoTimestamp`), so
+    // without this second check the comment silently reads as a genuinely
+    // absent watermark instead of a malformed one. Scoped to
+    // `review-watermark` only: no equivalent strict field parser exists
+    // for `review-baseline`.
+    const isFieldInvalidWatermark =
+      !isShapeMalformed &&
+      operationalMarkerPrefix(body) === '<!-- review-watermark:' &&
+      parseReviewWatermarkComment(
+        body,
+        comment.createdAt ?? comment.created_at ?? '',
+      ) === null;
+    if (!isShapeMalformed && !isFieldInvalidWatermark) {
       return false;
     }
     if (!expectedClaimId) {
