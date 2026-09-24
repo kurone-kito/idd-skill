@@ -6172,12 +6172,14 @@ test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd
   assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
 });
 
-test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/CONFIG.JSON refuses the case-insensitive-filesystem alias to config.json (#3292 review round 2, Copilot)', // NTFS (Windows' default filesystem) is case-insensitive but
-// case-preserving, so this collision is only genuinely reproducible
-// on the "Windows platform tests" CI lane -- ext4 (this repo's other
+// NTFS (Windows' default filesystem) is case-insensitive but
+// case-preserving, so this collision is only genuinely reproducible on
+// the "Windows platform tests" CI lane -- ext4 (this repo's other
 // lanes) is case-sensitive and would not exercise
 // isSameExistingFile's realpathSync-based comparison at all.
-{ skip: process.platform !== 'win32' }, () => {
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/CONFIG.JSON refuses the case-insensitive-filesystem alias to config.json (#3292 review round 2, Copilot)', {
+  skip: process.platform !== 'win32',
+}, () => {
   const root = makeFixtureDir();
   writeRecordPolicyFixture(root);
   const answers = buildValidHearAnswers();
