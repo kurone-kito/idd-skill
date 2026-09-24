@@ -310,7 +310,8 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": [],
-      "modeDisabled": []
+      "modeDisabled": [],
+      "edited": []
     },
     "advisoryConvergenceWaiverPrecondition": {
       "checkSelector": "idd-advisory-convergence",

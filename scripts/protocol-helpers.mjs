@@ -174,6 +174,76 @@ function waiverSelectorOverlapsConfiguredWaivable(
       ) || matchCheckSelectorLocal(sel?.selector, waiverSelector),
   );
 }
+/**
+ * #3246: `true` when `value` is a parseable ISO-8601 timestamp GitHub
+ * DateTime fields use. Mirrors `authoring-owner-provenance.mts`'s own
+ * `isParseableTimestamp` (the issue #3173 precedent this feature copies)
+ * rather than the stricter round-trip check `isValidIsoTimestamp`
+ * (marker-helpers.mts) uses for hand-authored marker fields -- a
+ * GraphQL-emitted timestamp is trusted server output, not
+ * operator-typed input.
+ */
+function isParseableGraphqlTimestamp(value) {
+  return (
+    typeof value === 'string' &&
+    value.trim() !== '' &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+/**
+ * #3246: classify one comment's edit state from its GraphQL
+ * `lastEditedAt` (or a snake_case `last_edited_at`, whichever key the
+ * caller's shape carries -- {@link CommentLike} declares both). Reads
+ * nothing else off the comment: never `updatedAt`/`updated_at`, since
+ * GitHub's `minimizeComment` mutation (IDD's own hide-on-supersede
+ * sweeps call it) advances `updatedAt` while leaving `lastEditedAt`
+ * `null` (kurone-kito/idd-skill#3173).
+ *
+ * - `'unedited'`: `lastEditedAt` is an explicit JSON `null` -- GitHub
+ *   reports the comment was never body-edited.
+ * - `'edited'`: `lastEditedAt` is a parseable timestamp -- the comment
+ *   was body-edited after posting.
+ * - `'unknown'`: `lastEditedAt` is absent, empty, or unparseable -- the
+ *   caller never resolved edit state for this comment (or the read came
+ *   back incomplete). Never coerced to `'unedited'`: an unresolved edit
+ *   state must fail closed the same way a genuine edit does.
+ */
+export function classifyCommentEditState(comment) {
+  if (comment == null) {
+    return 'unknown';
+  }
+  const raw =
+    comment.lastEditedAt !== undefined
+      ? comment.lastEditedAt
+      : comment.last_edited_at;
+  if (raw === null) {
+    return 'unedited';
+  }
+  if (isParseableGraphqlTimestamp(raw)) {
+    return 'edited';
+  }
+  return 'unknown';
+}
+/**
+ * #3246: `true` only when `comment`'s author passes the caller's own
+ * trust check AND its edit state is `'unedited'`. The shared per-comment
+ * trust predicate every trust-bearing-marker consumer (this file's own
+ * waiver classification below, and the sibling claim-marker and
+ * review/merge-evidence/disposition tracks) can build on so neither
+ * sibling has to re-derive edit-state trust independently.
+ */
+export function isTrustEvidenceComment(comment, isTrustedAuthor) {
+  if (comment == null) {
+    return false;
+  }
+  const authorLogin = String(
+    comment.author?.login ?? comment.user?.login ?? '',
+  );
+  return (
+    isTrustedAuthor(authorLogin) &&
+    classifyCommentEditState(comment) === 'unedited'
+  );
+}
 export function summarizeExternalCheckWaivers(
   comments,
   {
@@ -201,6 +271,7 @@ export function summarizeExternalCheckWaivers(
   const malformed = [];
   const notConfigured = [];
   const modeDisabled = [];
+  const edited = [];
   // An empty `mode` leaves this gate off (legacy/unit-caller default); a
   // non-empty value must equal `maintainer-authorized` exactly, mirroring
   // `advisory-convergence.mts`'s own guard.
@@ -232,6 +303,23 @@ export function summarizeExternalCheckWaivers(
       !allowSelfReferentialBootstrapAuto &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
     ) {
+      continue;
+    }
+    // kurone-kito/idd-skill#3246: a body-edited (or edit-state-unresolved)
+    // marker is never trust evidence, regardless of author, HEAD, claim,
+    // or expiry -- GitHub lets any Write-role collaborator or App rewrite
+    // an existing comment's body in place while keeping its `id`, author,
+    // and `created_at`, so those alone are not proof the body is still
+    // the one that was posted. Checked before every other classification
+    // (only the #2657 reason-token exclusion above runs first) so an
+    // edited marker can never land in `valid` via any other path either.
+    const editState = classifyCommentEditState(comment);
+    if (editState !== 'unedited') {
+      edited.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        editState,
+      });
       continue;
     }
     if (!trustedSet.has(authorLogin)) {
@@ -381,6 +469,7 @@ export function summarizeExternalCheckWaivers(
     malformed,
     notConfigured,
     modeDisabled,
+    edited,
   };
 }
 export function findLiveStatusDigestComments(comments, options = {}) {

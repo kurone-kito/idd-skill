@@ -5273,12 +5273,60 @@ test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence',
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
 test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', () => {
   const head = 'b'.repeat(40);
   const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.valid[0].authorLogin, 'kurone-kito');
+});
+
+// --- #3246: edited waiver comments are never trust evidence ----------------
+
+test('summarizeExternalCheckWaivers: an otherwise-valid waiver with a non-null lastEditedAt lands in edited, not valid', () => {
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: '2026-05-17T00:10:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
+  assert.equal(result.edited[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.edited[0].authorLogin, 'kurone-kito');
+  assert.equal(result.edited[0].editState, 'edited');
+});
+
+test('summarizeExternalCheckWaivers: a waiver with an absent lastEditedAt lands in edited with editState unknown', () => {
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  // No lastEditedAt/last_edited_at at all -- the caller never resolved edit
+  // state for this comment, which must fail closed, never default to
+  // "unedited".
   const comment = {
     body,
     author: { login: 'kurone-kito' },
@@ -5290,9 +5338,32 @@ test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', ()
     trustedMarkerLogins: ['kurone-kito'],
     now: '2026-05-17T00:00:00Z',
   });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
+  assert.equal(result.edited[0].editState, 'unknown');
+});
+
+test('summarizeExternalCheckWaivers: a waiver with lastEditedAt null (never edited) stays valid, even when updatedAt moved past createdAt (minimizeComment shape)', () => {
+  // kurone-kito/idd-skill#3173: GitHub's minimizeComment advances
+  // updated_at without touching lastEditedAt -- a hide-on-supersede sweep
+  // must never look like a body edit.
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    updatedAt: '2026-05-17T05:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
   assert.equal(result.valid.length, 1);
-  assert.equal(result.valid[0].checkSelector, 'CodeRabbit');
-  assert.equal(result.valid[0].authorLogin, 'kurone-kito');
+  assert.equal(result.edited.length, 0);
 });
 
 test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto marker from generic evidence by default (Codex review, PR #2895)', () => {
@@ -5316,6 +5387,7 @@ test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto 
     body,
     author: { login: 'github-actions[bot]' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5334,6 +5406,7 @@ test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto 
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
@@ -5352,6 +5425,7 @@ test('summarizeExternalCheckWaivers: allowSelfReferentialBootstrapAuto opts a ca
     body,
     author: { login: 'github-actions[bot]' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5382,6 +5456,7 @@ test('summarizeExternalCheckWaivers: an odd-cased marker is still recognized', (
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -5400,6 +5475,7 @@ test('summarizeExternalCheckWaivers: a prose mention of the marker name is ignor
     body: 'We should document the idd-external-check-waiver flow for maintainers.',
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'b'.repeat(40),
@@ -5423,6 +5499,7 @@ test('summarizeExternalCheckWaivers: expired waiver goes to expired bucket', () 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5443,6 +5520,7 @@ test('summarizeExternalCheckWaivers: wrong head SHA goes to wrongHead bucket', (
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'b'.repeat(40),
@@ -5460,6 +5538,7 @@ test('summarizeExternalCheckWaivers: wrong claim ID goes to wrongClaim bucket', 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5477,6 +5556,7 @@ test('summarizeExternalCheckWaivers: unauthorized actor goes to unauthorized buc
     body,
     author: { login: 'unknown-actor' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5492,6 +5572,7 @@ test('summarizeExternalCheckWaivers: malformed waiver comment goes to malformed 
     body: '<!-- idd-external-check-waiver: bad-format -->',
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'a'.repeat(40),
@@ -5906,6 +5987,7 @@ test('summarizeExternalCheckWaivers: multiple valid waivers for different checks
     }),
     user: { login: 'owner' },
     created_at: '2026-05-17T10:00:00Z',
+    lastEditedAt: null,
   };
   const comment2 = {
     body: makeWaiverComment({
@@ -5915,6 +5997,7 @@ test('summarizeExternalCheckWaivers: multiple valid waivers for different checks
     }),
     user: { login: 'owner' },
     created_at: '2026-05-17T10:01:00Z',
+    lastEditedAt: null,
   };
 
   const result = summarizeExternalCheckWaivers([comment1, comment2], {
@@ -5937,6 +6020,7 @@ test('summarizeExternalCheckWaivers: suspicious marker-shaped comment from untru
     body,
     user: { login: 'untrusted-actor' },
     created_at: '2026-05-17T10:00:00Z',
+    lastEditedAt: null,
   };
 
   const result = summarizeExternalCheckWaivers([comment], {
@@ -5974,16 +6058,19 @@ test('summarizeExternalCheckWaivers: mixed valid, expired, and wrongClaim in sep
       body: validBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     },
     {
       body: expiredBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:01:00Z',
+      lastEditedAt: null,
     },
     {
       body: wrongClaimBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:02:00Z',
+      lastEditedAt: null,
     },
   ];
   const result = summarizeExternalCheckWaivers(comments, {
@@ -6004,6 +6091,7 @@ test('summarizeExternalCheckWaivers: an empty active claim fails closed to wrong
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No active claim resolves at the gate (`activeClaimId === ''`); the
   // otherwise-matching waiver must be rejected, not pass unbound.
@@ -6026,6 +6114,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on an unclaimed PR is valid
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No active claim resolves at the gate -- the literal `none` sentinel
   // explicitly declares this a claimless waiver, satisfying the
@@ -6049,6 +6138,7 @@ test('summarizeExternalCheckWaivers: "NONE"/"None" (any case) on an unclaimed PR
       body,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     };
     const result = summarizeExternalCheckWaivers([comment], {
       prHeadSha: head,
@@ -6067,6 +6157,7 @@ test('summarizeExternalCheckWaivers: a non-none, non-matching claim id on an unc
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6085,6 +6176,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on a claimed PR is rejected
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // A real claim resolves at the gate -- the `none` sentinel only applies
   // when the gate independently confirms no claim exists, so it must never
@@ -6109,6 +6201,7 @@ test('summarizeExternalCheckWaivers: a none-sentinel waiver still fails on a cla
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6128,6 +6221,7 @@ test('summarizeExternalCheckWaivers: a waiver bound to the immediate supersedes 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6147,6 +6241,7 @@ test('summarizeExternalCheckWaivers: a two-hop-old claim id stays in wrongClaim 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6166,6 +6261,7 @@ test('summarizeExternalCheckWaivers: an empty head SHA fails closed to wrongHead
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No head SHA is known at the gate; the waiver cannot be bound to the
   // current PR HEAD and must be rejected.
@@ -6192,6 +6288,7 @@ test('summarizeExternalCheckWaivers: a window longer than maxValidity is rejecte
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const opts = {
     prHeadSha: head,
@@ -6226,6 +6323,7 @@ test('summarizeExternalCheckWaivers: a window within maxValidity stays valid', (
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6247,7 +6345,11 @@ test('summarizeExternalCheckWaivers: an unknown creation time fails closed to ex
   });
   // No created_at / createdAt on the comment → parsed.createdAt resolves to
   // 'none', so the window cannot be measured and the gate fails closed.
-  const comment = { body, author: { login: 'kurone-kito' } };
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
     activeClaimId: 'claim-123',
@@ -6269,6 +6371,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
       body: 'This is a regular PR comment',
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     },
     {
       body:
@@ -6277,6 +6380,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
         ' 2026-05-17T00:00:00Z 1 none -->',
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:01:00Z',
+      lastEditedAt: null,
     },
   ];
   const result = summarizeExternalCheckWaivers(comments, {
@@ -6294,6 +6398,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
@@ -6345,6 +6450,7 @@ test('summarizeExternalCheckWaivers: validity-passing waiver for a non-waivable 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6370,6 +6476,7 @@ test('summarizeExternalCheckWaivers: an otherwise-valid, configured-waivable wai
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6397,6 +6504,7 @@ test('summarizeExternalCheckWaivers: an empty mode leaves the mode gate off (leg
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6420,6 +6528,7 @@ test('summarizeExternalCheckWaivers: waiver naming a configured-waivable check s
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6443,6 +6552,7 @@ test('summarizeExternalCheckWaivers: a glob waivable selector admits a matching 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6466,6 +6576,7 @@ test('summarizeExternalCheckWaivers: omitting waivableSelectors keeps the legacy
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6488,6 +6599,7 @@ test('summarizeExternalCheckWaivers: an empty waivable list waives nothing', () 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6612,6 +6724,7 @@ test('summarizeExternalCheckWaivers: a glob waiver selector overlaps an exact wa
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -7839,6 +7952,7 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -7962,6 +8076,7 @@ test('#2021: idd-advisory-convergence waiver posted but precondition window not 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8051,6 +8166,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) is also withheld from coveredBy
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8118,6 +8234,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) still does not cover coveredByW
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8224,6 +8341,7 @@ test('#2021: withholding coverage from idd-advisory-convergence does not remove 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8280,6 +8398,7 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8344,6 +8463,7 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8607,6 +8727,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed but
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8675,6 +8796,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed and
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8735,6 +8857,7 @@ test('#2034: idd-advisory-convergence waiver posted, precondition open, but the 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8817,6 +8940,7 @@ test('#2034: the same idd-advisory-convergence waiver is covered once the check 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -10932,6 +11056,9 @@ function selfWaiverMarkerComment(payload: {
     }),
     createdAt: payload.createdAt,
     updatedAt: payload.createdAt,
+    // #3246: unedited by construction -- these fixtures model a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

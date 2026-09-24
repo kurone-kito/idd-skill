@@ -1443,6 +1443,7 @@ const preMergeReadinessFixture = {
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   },
   advisoryConvergenceWaiverPrecondition: {
     checkSelector: 'idd-advisory-convergence',
