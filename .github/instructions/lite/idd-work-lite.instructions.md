@@ -93,8 +93,12 @@ worktree removal) behind the
    primary worktree — each of these violates this rule.
 6. Reuse the existing branch name verbatim for takeover.
 7. Run `git worktree list` (and `git worktree list --porcelain` when checking
-   prunable entries). If a sibling worktree already exists, inspect that exact
-   path with the profile-selected `claim-lock` helper before reuse or removal.
+   prunable entries). If a sibling worktree already exists, inspect and
+   acquire its worktree-local claim lock with the profile-selected
+   `claim-lock` helper before reuse or removal. A `collision` result is
+   fail-closed: do not reuse or remove the path — resolve it via the
+   Claim-state rule in `idd-claim.instructions.md`, and only remove the
+   path once the current claim is authorized to take it over.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
