@@ -6172,6 +6172,48 @@ test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd
   assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
 });
 
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/CONFIG.JSON refuses the case-insensitive-filesystem alias to config.json (#3292 review round 2, Copilot)', // NTFS (Windows' default filesystem) is case-insensitive but
+// case-preserving, so this collision is only genuinely reproducible
+// on the "Windows platform tests" CI lane -- ext4 (this repo's other
+// lanes) is case-sensitive and would not exercise
+// isSameExistingFile's realpathSync-based comparison at all.
+{ skip: process.platform !== 'win32' }, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+  const upperCaseAlias = join(root, '.github', 'idd', 'CONFIG.JSON');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      upperCaseAlias,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+});
+
 // Permission-denied is a distinct failure from ENOENT and must fail closed
 // (never silently treated as "absent"). Skipped when running as root or on
 // a platform where chmod does not restrict the owning user's own access

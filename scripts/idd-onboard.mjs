@@ -2880,6 +2880,26 @@ function assertPolicyDocNotClobbered(absolutePath, force) {
   );
 }
 /**
+ * Whether `pathA` and `pathB` -- both already confirmed to exist and be
+ * plain files by the caller -- denote the same underlying file, via
+ * `realpathSync` rather than a literal string comparison (#3292 review,
+ * Copilot): on a case-insensitive filesystem (default on Windows and
+ * macOS), `.github/idd/CONFIG.JSON` and `.github/idd/config.json` are
+ * the same file despite differing as strings, so a plain `===` check
+ * alone misses that alias. Returns `false` on any `realpathSync`
+ * failure (for example one path no longer exists by the time this
+ * runs) rather than throwing here -- the caller's own ancestor/leaf
+ * checks are the authoritative existence guard; this helper only
+ * decides sameness for two paths already known to exist.
+ */
+function isSameExistingFile(pathA, pathB) {
+  try {
+    return realpathSync(pathA) === realpathSync(pathB);
+  } catch {
+    return false;
+  }
+}
+/**
  * Exported (not just called from the CLI dispatcher below) so the
  * `readers` parameter is a genuine injection point unit tests can reach
  * directly, matching {@link OnboardEvidenceReaders.readRemoteBranchExists}'s
@@ -3042,8 +3062,14 @@ export function runRecordPolicyCli(args, readers = {}) {
     // short-circuits before even reading the file), then the Markdown
     // document write below would immediately overwrite the config
     // write that already landed on the very same path, leaving the
-    // required config.json invalid.
-    if (policyDocDestination === resolve(configPath)) {
+    // required config.json invalid. The literal-string check catches
+    // the common identical-path case cheaply; isSameExistingFile also
+    // catches a case-insensitive-filesystem alias (#3292 review round
+    // 2, Copilot) that differs as a string but denotes the same file.
+    if (
+      policyDocDestination === resolve(configPath) ||
+      isSameExistingFile(policyDocDestination, configPath)
+    ) {
       throw new Error(
         `--write-policy-doc must not resolve to .github/idd/config.json itself: ${args.writePolicyDoc}`,
       );
