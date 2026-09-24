@@ -312,6 +312,7 @@ interface ExternalCheckWaiverReport {
     checkSelector: string;
     deadlineMinutes: number;
     headCommittedAt: string;
+    headObservedAt: string;
     elapsedMinutes: number | null;
     deadlinePassed: boolean;
     terminalUnavailable: boolean;

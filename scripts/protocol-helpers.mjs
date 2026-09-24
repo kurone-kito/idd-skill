@@ -2843,13 +2843,13 @@ export function dispositionNamesAdvisoryBot(
 // own `normalizeComment` pass, must not silently fail-closed here just
 // because it used the other field-name form.
 //
-// kurone-kito/idd-skill#3253: the `headCommittedAt` parameter name is kept
-// unchanged for compatibility with this function's own direct unit tests
-// (which exercise the cutoff-comparison logic in isolation, independent of
-// which upstream timestamp source feeds it), but every LIVE caller now
-// passes the GitHub-observed anchor (`headObservedAt`: the earliest
-// check-suite `createdAt` for the current HEAD) here, not the
-// committer-supplied `committedDate` -- see
+// kurone-kito/idd-skill#3253: the `headCommittedAt` parameter here names a
+// ROLE (the cutoff timestamp this function compares comments against), not
+// a SOURCE -- this pure function is anchor-agnostic and never itself reads
+// or knows about committedDate vs. an observed check-suite time, so it is
+// not renamed. Every LIVE caller now passes the GitHub-observed anchor
+// (`headObservedAt`: the earliest check-suite `createdAt` for the current
+// HEAD) here, not the committer-supplied `committedDate` -- see
 // `buildPreMergeReadinessSummary`'s own call site below.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments,

@@ -182,7 +182,7 @@
         },
         "headObservedAt": {
           "type": "string",
-          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit -- the actual clock elapsedMinutes is measured from; empty when unavailable (kurone-kito/idd-skill#3253)."
+          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit -- the actual clock elapsedMinutes is measured from; empty (never the literal 'none') when unavailable, matching headCommittedAt's own raw-empty convention on this object -- unlike the 'none' sentinel this same field uses in pre-merge-readiness.schema.json's advisoryConvergenceWaiverPrecondition, which mirrors ITS sibling headCommittedAt's own convention there instead (kurone-kito/idd-skill#3253)."
         },
         "elapsedMinutes": {
           "type": ["number", "null"],
