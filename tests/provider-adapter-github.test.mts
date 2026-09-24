@@ -1016,6 +1016,30 @@ test('getWorkItemForTraversalAsync rethrows a secondary-rate-limit 403 after exh
   assert.equal(calls, 3);
 });
 
+// CodeRabbit review, #3335: a repo/owner name containing "visibility" must
+// never leak into wrapTraversalGhFailure's wrapped error text and
+// false-positive INACCESSIBLE_403_WORDING's `visibility` alternative --
+// this still rethrows after bounded retries, exactly like the
+// non-"visibility"-named case above, never downgrading to 'inaccessible'.
+test('getWorkItemForTraversalAsync does not let an owner/repo name containing "visibility" leak into 403 wording classification', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'visibility-org',
+    'visibility-repo',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('secondaryRateLimit403');
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
+});
+
 // ---------------------------------------------------------------------------
 // listWorkItemSubIssueNodesAsync (#2266)
 // ---------------------------------------------------------------------------

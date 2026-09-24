@@ -889,18 +889,28 @@ function fetchReviewThreadsGeneric(
  * shared classifier re-derives its status from. Returns `''` on a
  * genuine 404 (`getWorkItemForTraversalAsync` treats "not found" as an
  * empty successful lookup, not a thrown error); otherwise re-throws with
- * the full joined diagnostic text (stderr + stdout + message) preserved,
- * so a status embedded in any of those streams on the original error
- * still classifies correctly once re-derived from the wrapped error.
+ * the joined diagnostic text (stderr + stdout + message) from the
+ * *original* error preserved verbatim as `.stderr`, so a status embedded
+ * in any of those streams still classifies correctly once re-derived
+ * from the wrapped error.
+ *
+ * Deliberately never folds `args` (the `repos/{owner}/{repo}/issues/{n}`
+ * endpoint) into `.stderr`/`.message` when real diagnostic text exists:
+ * `classifyInaccessibleIssueLookup`'s `visibility` wording alternative
+ * would otherwise false-positive on any owner/repo name that happens to
+ * contain that substring, silently downgrading an unrelated 403 (e.g. a
+ * secondary rate limit) instead of retrying it (CodeRabbit review,
+ * #3335). `args` is used only in the no-diagnostic-text fallback branch,
+ * where no status is derivable either way, so it can never feed a
+ * wording match.
  */
 function wrapTraversalGhFailure(error, args) {
   if (classifyInaccessibleIssueLookup(error) === 'not-found') {
     return '';
   }
   const diagnosticText = ghErrorText(error).trim();
-  const prefix = `gh ${args.join(' ')}`;
   const wrapped = new Error(
-    diagnosticText ? `${prefix} failed: ${diagnosticText}` : `${prefix} failed`,
+    diagnosticText || `gh ${args.join(' ')} failed with no diagnostic output`,
   );
   wrapped.stderr = diagnosticText;
   throw wrapped;
