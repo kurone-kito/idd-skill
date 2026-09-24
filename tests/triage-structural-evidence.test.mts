@@ -777,6 +777,60 @@ test('hasVerificationCommandSignal: a mixed multi-line double-backtick span with
   assert.equal(hasVerificationCommandSignal(body), true);
 });
 
+// #3287: `hasVerificationCommandSignal` now recognizes every Acceptance
+// Criteria heading form `findAcceptanceCriteriaHeadings` accepts (minus
+// the bold pseudo-heading, deliberately not opted in here), not only the
+// plain "## Acceptance Criteria" ATX form.
+
+test('hasVerificationCommandSignal: true on a runnable command bullet under the trailing-colon ATX form (#3287)', () => {
+  const body = `## Acceptance Criteria:\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: true on a runnable command bullet under the Setext form (#3287)', () => {
+  const body = `Acceptance Criteria\n-----\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: false under the bold pseudo-heading form -- deliberately not opted in (#3287)', () => {
+  const body = `**Acceptance Criteria**\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: false under the underscore bold pseudo-heading form -- deliberately not opted in (Copilot review, #3287)', () => {
+  // ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN accepts both "**" and "__"
+  // (backreferenced via \1, so a mismatched pair like "**...__" never
+  // matches); this test was missing for the "__" alternative specifically.
+  const body = `__Acceptance Criteria__\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a Setext-looking heading line preceded by non-blank prose does not count (CodeRabbit review, #3287)', () => {
+  // CommonMark only recognizes a Setext heading when its text line begins
+  // a fresh paragraph -- "Some intro.\nAcceptance Criteria\n-----"
+  // renders as ONE combined two-line heading ("Some intro.\nAcceptance
+  // Criteria"), never a standalone "Acceptance Criteria" heading, so this
+  // must not open a fake Acceptance Criteria section even though the
+  // command bullet right after it would otherwise satisfy the signal.
+  const body = `Some intro.\nAcceptance Criteria\n-----\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), false);
+});
+
+test('hasVerificationCommandSignal: a Setext heading right after a blank line still counts, even mid-body (CodeRabbit review, #3287)', () => {
+  const body = `## Background\n\nSome prose here.\n\nAcceptance Criteria\n-----\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
+test('hasVerificationCommandSignal: a Setext heading right after an ATX heading with no blank line still counts (CodeRabbit review, round 2, #3287)', () => {
+  // An ATX heading line always closes any open paragraph and can never
+  // itself take a "lazy continuation" line, so the very next line still
+  // begins a fresh paragraph even with no blank line separating them --
+  // `gh api /markdown` confirms this renders as two real, separate
+  // headings, not one combined heading swallowing "## Background".
+  const body = `## Background\nAcceptance Criteria\n-----\n\n- Run \`node --test tests/foo.test.mts\` and it passes\n`;
+  assert.equal(hasVerificationCommandSignal(body), true);
+});
+
 // --- candidateFilesExistOnDisk -----------------------------------------------
 
 test('candidateFilesExistOnDisk: true when at least one listed path exists', () => {

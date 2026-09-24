@@ -369,7 +369,9 @@ function findCandidateFilesSectionBounds(
       // GitHub as a level-2 heading titled exactly "Candidate files" --
       // the trailing `##` is closing-sequence syntax, not part of the
       // title -- the same trailing-hash tolerance
-      // `ACCEPTANCE_CRITERIA_HEADING_PATTERN` already carries for the
+      // `triage-structural-evidence.mts`'s own Acceptance Criteria ATX
+      // heading pattern (#3287:
+      // `findAcceptanceCriteriaHeadings`) already carries for the
       // sibling section. Without this, the round-12 exact-match fix
       // rejected a heading GitHub itself renders identically to the bare
       // form, silently dropping every candidate path in that section.

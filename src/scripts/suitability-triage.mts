@@ -68,6 +68,7 @@ import {
   buildTrustedLoginPredicate,
   candidateFilesExistOnDisk,
   evaluateStructuralEvidence,
+  findAcceptanceCriteriaHeadings,
   hasAllStructuralSignals,
   hasVerificationCommandSignal,
   type StructuralEvidence,
@@ -917,37 +918,21 @@ function isEnumeratedParentheticalEntry(
   const otherEntries = [...beforeEntries, ...afterEntries];
   return otherEntries.length > 0 && otherEntries.every(looksLikeLabelEntry);
 }
-// #2767 round 4 (Codex review, PR #2840): required at least one space/tab
-// after the `#` run (`[ \t]+`, not `\s*`) -- CommonMark requires that
-// whitespace (or end of line) for a real ATX heading, so a malformed line
-// like "##Acceptance Criteria" with no space renders as plain paragraph
-// text, never a heading, yet the original `\s*` still matched it (and,
-// since `\s` also matches a newline under the `/m` flag, even matched
-// across a line break, e.g. "#\nAcceptance Criteria"). This is the same
-// pattern triage-structural-evidence.mts's own
-// ACCEPTANCE_CRITERIA_HEADING_PATTERN copied from, and Codex's finding
-// there applies here too -- `[ \t]+` still matches every real heading;
-// only a line Markdown itself would not render as a heading now misses.
-// #2767 round 7 (E9 whole-class sweep, same PR): the *interior* gap
-// between "Acceptance" and "Criteria" was still `\s+`, which also
-// matches a newline, so "## Acceptance\nCriteria" -- two separate
-// lines, only the first of which Markdown renders as the actual ATX
-// heading text -- still matched as one combined heading. Narrowed to
-// `[ \t]+`, matching the same fix on the sibling pattern.
-// #2767 round 9 (advisor review, same PR, closing a self-documented
-// deferral): two more CommonMark ATX-heading shapes this pattern still
-// missed, both false negatives (denying a genuine heading its demotion
-// benefit, never a false-positive risk): an ATX heading may carry up to
-// three leading spaces (`^ {0,3}`, matching `parseCandidateFiles`'s own
-// heading regex, which already tolerated this), and may end in an
-// optional closing sequence of `#` characters preceded by whitespace
-// (`(?:[ \t]+#+)?`), e.g. "## Acceptance Criteria ##".
-const ACCEPTANCE_CRITERIA_PATTERN =
-  /^ {0,3}#+[ \t]+Acceptance[ \t]+Criteria(?:[ \t]+#+)?[ \t]*$/im;
+// #3287: this file used to keep its own copy of the Acceptance Criteria
+// heading pattern (`ACCEPTANCE_CRITERIA_PATTERN`, history in #2767 rounds
+// 4/7/9) here, independently of triage-structural-evidence.mts's own
+// `ACCEPTANCE_CRITERIA_HEADING_PATTERN` copy -- so a heading form either
+// pattern didn't recognize (a trailing `:`, a parenthetical suffix, a
+// Setext underline, ...) silently skipped Check 7's escape-hatch scan
+// below. Both call sites now use that file's exported
+// `findAcceptanceCriteriaHeadings`, single-sourcing the heading shape
+// (see its own doc comment for the full recognition history) instead of
+// maintaining two copies that could drift apart again.
 // #2711 PR #2735 review (Codex): this repo's own "## Candidate files"
 // convention (#2589) names files to EDIT, never a verification signal --
-// matched here (mirroring ACCEPTANCE_CRITERIA_PATTERN's own shape) so the
-// "Alternative" whole-body fallback below can exclude just this specific,
+// matched here (mirroring the shared Acceptance Criteria ATX-heading
+// shape in triage-structural-evidence.mts) so the "Alternative"
+// whole-body fallback below can exclude just this specific,
 // already-recognized non-verification section instead of every sibling
 // section unconditionally.
 const CANDIDATE_FILES_SECTION_PATTERN = /^#+\s*Candidate\s+files\s*$/im;
@@ -1032,8 +1017,28 @@ const EXAMPLE_PLACEHOLDER_DOMAIN_PATTERN = /^example\.(?:com|org|net|edu)$/i;
 // immediately following a list-item line is treated as a Setext boundary
 // even where CommonMark itself would keep it inside the list -- full
 // container-aware disambiguation is out of scope for this fix.
+//
+// CRLF-safe (Copilot review, #3287): the content line's char class is
+// `[^\r\n]` (not `[^\n]`) and both the content line's own terminator and
+// the underline's own trailing whitespace/terminator use `\r?\n` (not a
+// bare `\n`), matching `triage-structural-evidence.mts`'s own
+// `NEXT_ATX_HEADING_PATTERN` fix for the identical class of bug. Without
+// this, a CRLF-terminated Setext underline's own `\r` sat right before
+// where the pattern required either `\n` or end-of-string, so the whole
+// alternative never matched at all in a CRLF body -- not a false match,
+// a total miss that left the AC section scan unbounded and able to
+// silently absorb a later, unrelated section's substantive bullet (see
+// `tests/fixtures/issue-body-corpus/gap-2767-13.json`, previously tracked
+// as an accepted gap; this fix closes it and flips that fixture's own
+// `expected.triage.verifiability` from `pass` to `fail`). Pre-existing
+// and already fully reachable via the fixture's own ATX-headed AC
+// section (the bug is in finding the section's END boundary, not in
+// which heading form opened it) -- this PR's own Setext AC heading
+// support just adds a second way to reach the same class of leak, which
+// is why fixing it now, while touching this exact boundary logic, is in
+// scope rather than a purely unrelated drive-by.
 const NEXT_HEADING_PATTERN =
-  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*(?:\n|$)))/;
+  /\n(?: {0,3}#{1,6}\s|(?=[ \t]*\S[^\r\n]*\r?\n {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
 // CodeRabbit review (PR #2602): scanning the whole AC section's raw text
 // -- rather than just its list-item lines -- let a placeholder bullet
 // ("- [ ] TODO") followed by unrelated, non-list prose containing a
@@ -2499,8 +2504,8 @@ export function checkActionability(context: Context): CheckOutcome {
   // realistically reachable structural-evidence demotion branch, unlike
   // Checks 6/7 -- `hasAcceptance` above already matches the bare phrase
   // "Acceptance Criteria" (or "Output"/"Deliverables") ANYWHERE in the
-  // body, which `verificationCommand`'s own heading requirement
-  // (`ACCEPTANCE_CRITERIA_HEADING_PATTERN`, a real ATX/Setext heading
+  // body, which `verificationCommand`'s own heading requirement (#3287:
+  // `findAcceptanceCriteriaHeadings`, a real ATX/Setext heading
   // containing that same phrase) almost always also satisfies -- any body
   // with a normally-written "## Acceptance Criteria" heading has already
   // returned `pass: true` above, before this check ever reaches its own
@@ -2810,9 +2815,25 @@ export function checkVerifiability(context: Context): CheckOutcome {
     ...findIndentedCodeRanges(body, fencedRangesForVerifiability),
     ...findHtmlCommentRanges(body, codeRangesForVerifiability),
   ]);
-  const acceptanceCriteriaMatch = fenceMaskedBody.match(
-    ACCEPTANCE_CRITERIA_PATTERN,
-  );
+  // #3287: recognizes every accepted Acceptance Criteria heading form (ATX
+  // with an optional trailing ':'/parenthetical, or Setext) via the shared
+  // recognizer, not just the plain ATX form the old local pattern matched.
+  // Bold pseudo-headings are deliberately NOT opted in here, matching
+  // `hasVerificationCommandSignal`'s own choice -- only the step-2
+  // escape-hatch scan further below opts in.
+  //
+  // Considered and rejected (CodeRabbit review, #3287): looping this
+  // primary scan over every recognized section (like the escape-hatch scan
+  // below now does) to find the first one with substantive content, not
+  // just literally the first section. Out of this issue's own stated
+  // scope, which names only the escape-hatch scan for multi-section
+  // looping; also a pre-existing limitation this PR doesn't regress (the
+  // pre-#3287 code had the same single-section behavior here). In
+  // practice a real second section's own checklist/numbered content is
+  // usually still caught by the "Alternative" whole-body fallback further
+  // below, which is not scoped to just the first section's own bounds.
+  const acceptanceCriteriaMatch =
+    findAcceptanceCriteriaHeadings(fenceMaskedBody)[0] ?? null;
   // #2711 PR #2735 review round 6 (Codex): tracks whether the primary scan
   // below actually reached its list-shaped outer gate, so the Alternative
   // fallback (further down) only treats the AC section as "already fairly
@@ -2825,8 +2846,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
   let acListGateReached = false;
   if (acceptanceCriteriaMatch) {
     const indexAfter =
-      (acceptanceCriteriaMatch.index ?? 0) +
-      (acceptanceCriteriaMatch[0]?.length ?? 0);
+      acceptanceCriteriaMatch.index + acceptanceCriteriaMatch.length;
     const contentAfter = fenceMaskedBody
       .slice(indexAfter, indexAfter + 500)
       .trim();
@@ -2879,9 +2899,8 @@ export function checkVerifiability(context: Context): CheckOutcome {
   if (!hasObjectiveCriteria) {
     const alternativeScanExclusions: MarkdownCodeRange[] = [];
     if (acceptanceCriteriaMatch && acListGateReached) {
-      const acHeadingStart = acceptanceCriteriaMatch.index ?? 0;
-      const acContentStart =
-        acHeadingStart + (acceptanceCriteriaMatch[0]?.length ?? 0);
+      const acHeadingStart = acceptanceCriteriaMatch.index;
+      const acContentStart = acHeadingStart + acceptanceCriteriaMatch.length;
       const acRestOfBody = fenceMaskedBody.slice(acContentStart);
       const acNextHeadingIdx = acRestOfBody.search(NEXT_HEADING_PATTERN);
       const acSectionEnd =
@@ -3188,12 +3207,40 @@ export function checkVerifiability(context: Context): CheckOutcome {
     return true;
   };
 
-  const acSectionMatch = normalizedCodeMaskedBody.match(
-    ACCEPTANCE_CRITERIA_PATTERN,
+  // #3287: scans EVERY recognized Acceptance Criteria section in the body,
+  // not only the first (item 12 of the #2767 tokenizer-gap comment) -- a
+  // placeholder first section followed by a second, genuine one holding an
+  // undocumented escape hatch used to pass Check 7 entirely, since the old
+  // single `.match()` call never looked past the first heading it found.
+  // Opts into the bold pseudo-heading form (unlike the primary substantive-
+  // content scan and `hasVerificationCommandSignal` above): a bold
+  // "**Acceptance Criteria**" line is common enough in this repository's
+  // own issue history that the escape-hatch scan -- whose whole job is
+  // routing an ambiguous documentation branch to human judgment -- should
+  // not silently skip it.
+  //
+  // Accepted limitation (CodeRabbit review, round 2, #3287): a bold AC
+  // pseudo-heading's own end-boundary is computed via NEXT_HEADING_PATTERN
+  // below, which only recognizes real ATX/Setext headings -- a bold
+  // pseudo-heading is not real Markdown block structure, so it does not
+  // stop that scan either. The realistic trigger shape is a bold
+  // "**Acceptance Criteria**" pseudo-heading followed by an UNRELATED
+  // bold sibling heading later in the body (e.g. "**Alternatives
+  // considered**") -- not only the narrower two-bold-AC-sections case --
+  // so the "section" this scan evaluates can bleed into that sibling's
+  // own content instead of stopping at it. This fails safe rather than
+  // silently under-scanning: the extra content can only make the
+  // escape-hatch scan MORE likely to (correctly or over-eagerly) flag a
+  // needs-decision, never less. This is the same narrow, pre-existing
+  // limitation `NEXT_HEADING_PATTERN`'s own general-purpose boundary
+  // detection already carries; widening it to also treat a bold
+  // pseudo-heading as a section boundary is out of this issue's scope.
+  const acSectionMatches = findAcceptanceCriteriaHeadings(
+    normalizedCodeMaskedBody,
+    { includeBoldPseudoHeading: true },
   );
-  if (acSectionMatch) {
-    const acSectionStart =
-      (acSectionMatch.index ?? 0) + (acSectionMatch[0]?.length ?? 0);
+  for (const acSectionMatch of acSectionMatches) {
+    const acSectionStart = acSectionMatch.index + acSectionMatch.length;
     const restOfBody = normalizedCodeMaskedBody.slice(acSectionStart);
     const nextHeadingIdx = restOfBody.search(NEXT_HEADING_PATTERN);
     const acSectionEnd =
