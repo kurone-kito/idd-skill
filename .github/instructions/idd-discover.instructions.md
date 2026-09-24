@@ -563,6 +563,11 @@ ascending issue-number order:
   worktree probe finds a live match or is unreadable without verified owner
   resume or authorized handoff (#3141, Round 21 report). Otherwise it
   **remains eligible**.
+- **Own-claim check:** before ruling non-stale foreign, run
+  `claim-lock.mjs --read-tokens` on the primary/sibling worktree;
+  `present: true` is local evidence -- route to
+  `idd-resume.instructions.md` to adjudicate it, not
+  ineligible outright.
 
 After scanning the current batch:
 
