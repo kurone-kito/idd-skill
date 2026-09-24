@@ -86,6 +86,48 @@ in §CSA before those commits are pushed or bundled into a PR. The
 displaced session is by definition unreachable, so its own planning
 comment can never substitute for this independent check.
 
+## §MC — F4 Cleanup Routing for a Merged or Closed Issue
+
+Applies to Step 1's merged-PR and closed-issue rows in
+`idd-resume.instructions.md` (kurone-kito/idd-skill#3319; preventive, no
+observed incident yet — a resuming session finding the PR merged while the
+prior worker was still running F4 could otherwise remove that worker's
+live worktree).
+
+**Ownership condition.** The owned row (active claim = this session's
+verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
+contract (steps 4-7, plus step 1 when `{development-branch}` is not the
+default branch and a closing-set issue is still open) because this session
+can satisfy F4's own claim-revalidation gate at each mutation. This is also
+what makes F4's own `primary-worktree-dirty` hold's "resume: ... then
+re-run from this step through step 7" instruction reachable from Resume for
+the first time — previously nothing routed a resuming session back into F4
+at all. The unowned row (no active claim, or only a released one) runs
+local-only steps: F4 step 4 (fast-forward `{development-branch}`) and step
+5's `git branch -d` bullet. It skips step 5's `git worktree remove`
+(nothing local to remove — see the worktree condition below), step 6
+(remote branch deletion needs the same authority as a held claim), and step
+7 (its revalidation gate stops on any claim that is not this session's,
+including none). On this row, step 4's own `primary-worktree-dirty` guard
+still applies, but degrades to a plain hold comment rather than F4's usual
+Hold / suspend: there is no held claim on this row to suspend.
+
+**Worktree condition.** "No local worktree matches `{branch}`" means
+`git worktree list` reports no entry for that branch at all — a plain
+absence check, not the A5(e) collision scan's occupied/unreadable/absent
+classification. A worktree that does exist for `{branch}` while the claim
+is unowned falls to the catch-all row instead: without a held claim to
+revalidate against, this session cannot tell whether that worktree is
+safely idle or another session's live workspace, so it holds rather than
+guesses.
+
+**Closed-with-no-PR and catch-all rows.** Closing an issue without a
+merging PR leaves nothing for F4 to reconcile, so this row holds instead.
+The catch-all row covers every other closed/merged combination (a live
+competing claim, an unverified worktree state, forced-handoff evidence
+naming this session as displaced) the same way: each needs a human or a
+future resume pass with better evidence, never a mechanical removal.
+
 ## §W1 — PR exists (1 match), no worktree
 
 Run `git fetch origin` from the primary worktree (this is a
