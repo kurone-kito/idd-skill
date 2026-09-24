@@ -57,6 +57,7 @@ import {
   readClaimStaleAgeMs,
   resolveActiveClaim,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolveCodeownersForFiles,
   resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
@@ -928,7 +929,15 @@ export function collectPreMergeReadiness(
   // before `comments`/`trustedMarkerLogins` existed to classify against.
   let outOfLoopMembership: PrLoopMembershipResult | null = null;
   if (args.claimless && closingRefsAtEntry.length > 0) {
-    const closingIssueNumbers = extractSameRepoClosingIssueNumbers(
+    // C1 critique pass (live-reproduced): a same-repo-only extraction fed
+    // straight to the classifier would silently read a cross-repo-only (or
+    // all-malformed) closing reference as "no closing references",
+    // accepting --claimless with NO marker required for a PR the pre-#3328
+    // code always refused. resolveClosingIssueNumbersForClassifier reports
+    // `null` (unreadable) for exactly that case instead, which the
+    // classifier fails closed to `in-loop` for -- reproducing the
+    // original refusal.
+    const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
       closingRefsAtEntry,
       owner,
       repo,
@@ -940,7 +949,10 @@ export function collectPreMergeReadiness(
           .toLowerCase(),
       );
     let closingIssueClaimState: PrClosingIssueClaimState = 'none';
-    for (const issueNumber of closingIssueNumbers) {
+    // No closing-issue reads needed when the classifier already fails
+    // closed to in-loop regardless of claim state (closingIssueNumbers is
+    // null).
+    for (const issueNumber of closingIssueNumbers ?? []) {
       try {
         const issueEvents = port
           .listWorkItemComments(issueNumber)

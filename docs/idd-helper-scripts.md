@@ -1966,6 +1966,19 @@ still fails closed:
   viewer identity, a closing-issue or PR-comment read failure -- fails
   closed to "not eligible" rather than a partial read manufacturing a
   false accept.
+- **The classifier's own `closingIssueNumbers` input is never the bare
+  same-repo extraction.** Both consumers derive it through
+  `resolveClosingIssueNumbersForClassifier()` (`protocol-helpers.mts`)
+  instead: a genuinely empty raw `closingIssuesReferences` still
+  reports `[]` (`out-of-loop-claimless`, unchanged), but a _non-empty_
+  raw array whose same-repo extraction comes back empty -- every entry
+  cross-repo or otherwise unparseable -- reports `null` (unreadable),
+  which the classifier fails closed to `in-loop` for. This reproduces
+  the pre-#3328 behavior exactly: both prior definitions refused ANY
+  non-empty raw `closingIssuesReferences` regardless of repository, so
+  a same-repo-only filter applied directly would otherwise silently
+  widen eligibility for a cross-repo-only (or all-malformed) closing
+  reference -- caught live during this issue's own C1 self-review pass.
 
 ### Provider health helper
 

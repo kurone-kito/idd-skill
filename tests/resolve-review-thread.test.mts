@@ -185,6 +185,50 @@ test('isClaimlessEligible refuses a closing reference whose issue has an active 
   assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
 });
 
+test('isClaimlessEligible refuses a PR whose only closing reference is cross-repo, even with a valid marker (C1 critique regression guard)', () => {
+  // A same-repo-only extraction fed straight to the classifier would
+  // otherwise silently read this as "no closing references" (the #2017
+  // claimless case), returning eligible with no marker required -- the
+  // pre-#3328 code always refused ANY non-empty raw
+  // closingIssuesReferences regardless of repo.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName: 'issue/5-linked',
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: [
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    comments: {
+      42: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
 // #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
 // below lands 20h later (2026-05-13T05:00:00Z) -- squarely in the 18-24h
 // gap the issue describes: stale under an 18h configured age, not stale

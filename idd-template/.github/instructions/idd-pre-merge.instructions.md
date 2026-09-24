@@ -97,8 +97,8 @@ nonce was recorded for the active claim.
 `--claim-issue <issue-number>` (with `--claim-id`) or `--claimless`
 (#2017) — pass `--claimless` for a PR with no linked issue
 (`closingIssuesReferences` empty) or a valid `reason:bootstrap`
-out-of-loop marker; it cannot combine with `--claim-issue`/`--claim-id`
-and fails closed on a non-empty `closingIssuesReferences`. See
+out-of-loop marker; it cannot combine with `--claim-issue`/`--claim-id`,
+and otherwise fails closed on a non-empty `closingIssuesReferences`. See
 [docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md).
 
 **Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the

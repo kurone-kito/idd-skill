@@ -28,7 +28,6 @@ import { loadIddConfig } from './idd-config.mts';
 import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
   classifyPrLoopMembership,
-  extractSameRepoClosingIssueNumbers,
   isDispositionComment,
   isRejectionConfirmedDisposition,
   normalizeTrustedMarkerLogins,
@@ -37,6 +36,7 @@ import {
   readClaimStaleAgeMs,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
+  resolveClosingIssueNumbersForClassifier,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -350,7 +350,15 @@ export function isClaimlessEligible(
     return true;
   }
   try {
-    const closingIssueNumbers = extractSameRepoClosingIssueNumbers(
+    // C1 critique pass (live-reproduced): a same-repo-only extraction fed
+    // straight to the classifier would silently read a cross-repo-only
+    // (or all-malformed) closing reference as "no closing references",
+    // accepting --claimless with NO marker required for a PR the
+    // pre-#3328 code always refused (kurone-kito/idd-skill#3328).
+    // resolveClosingIssueNumbersForClassifier reports `null` (unreadable)
+    // for exactly that case instead, which the classifier fails closed to
+    // `in-loop` for -- reproducing the original refusal.
+    const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
       closingRefsArray,
       options.owner ?? '',
       options.repo ?? '',
@@ -367,7 +375,10 @@ export function isClaimlessEligible(
           .toLowerCase(),
       );
     let closingIssueClaimState: PrClosingIssueClaimState = 'none';
-    for (const issueNumber of closingIssueNumbers) {
+    // No closing-issue reads needed when the classifier already fails
+    // closed to in-loop regardless of claim state (closingIssueNumbers is
+    // null).
+    for (const issueNumber of closingIssueNumbers ?? []) {
       const events = port.listWorkItemComments(issueNumber).map((comment) => ({
         body: comment.body,
         createdAt: comment.createdAt,

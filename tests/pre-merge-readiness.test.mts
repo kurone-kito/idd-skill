@@ -11477,6 +11477,71 @@ test('collectPreMergeReadiness: --claimless refuses a closing reference whose is
   );
 });
 
+test('collectPreMergeReadiness: --claimless still refuses a PR whose only closing reference is cross-repo, even with a valid marker (C1 critique regression guard)', () => {
+  // A same-repo-only extraction fed straight to the classifier would
+  // otherwise silently read this as "no closing references" (the #2017
+  // claimless case), accepting --claimless with no marker required --
+  // the pre-#3328 code always refused ANY non-empty raw
+  // closingIssuesReferences regardless of repo. Confirms
+  // resolveClosingIssueNumbersForClassifier's null (unreadable) signal
+  // actually reaches this end-to-end path.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // kurone-kito/idd-skill#2911: stale-self-waiver merge blocker.
 //

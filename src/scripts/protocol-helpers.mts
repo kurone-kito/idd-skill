@@ -1130,6 +1130,44 @@ export function extractSameRepoClosingIssueNumbers(
   return numbers;
 }
 
+/**
+ * kurone-kito/idd-skill#3328 (C1 critique pass, live-reproduced against
+ * both `--claimless` consumers): derive `classifyPrLoopMembership`'s own
+ * `closingIssueNumbers` input from an already-array-coerced
+ * `closingIssuesReferences` value, distinguishing "genuinely no closing
+ * references" from "closing references exist, but none resolve to a
+ * same-repo issue number" (every entry cross-repo or otherwise
+ * unparseable by {@link extractSameRepoClosingIssueNumbers}).
+ *
+ * The two cases must NOT collapse to the same classifier input: before
+ * #3328, both consumers refused `--claimless` outright whenever the RAW
+ * `closingIssuesReferences` was non-empty, regardless of repo -- a
+ * same-repo-only filter applied before the classifier would otherwise
+ * silently treat a cross-repo-only (or all-malformed) closing reference
+ * as `closingIssueNumbers: []`, which the classifier's own `'no closing
+ * issue references'` row (#2017, unchanged) reads as
+ * `out-of-loop-claimless` -- accepting `--claimless` with **no marker
+ * required** for a PR the pre-#3328 code always refused. Returning
+ * `null` here instead reproduces that original refusal: the classifier's
+ * own `null` row fails closed to `'in-loop'`. A genuinely empty
+ * `closingRefsArray` still returns `[]` (the unchanged claimless case).
+ */
+export function resolveClosingIssueNumbersForClassifier(
+  closingRefsArray: readonly unknown[],
+  owner: string,
+  repo: string,
+): number[] | null {
+  if (closingRefsArray.length === 0) {
+    return [];
+  }
+  const sameRepoNumbers = extractSameRepoClosingIssueNumbers(
+    closingRefsArray,
+    owner,
+    repo,
+  );
+  return sameRepoNumbers.length === 0 ? null : sameRepoNumbers;
+}
+
 export function summarizeExternalCheckWaivers(
   comments: CommentLike[] | null | undefined,
   {

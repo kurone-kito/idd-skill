@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { renderOutOfLoopMarker } from '../src/scripts/marker-helpers.mts';
-import { classifyPrLoopMembership } from '../src/scripts/protocol-helpers.mts';
+import {
+  classifyPrLoopMembership,
+  resolveClosingIssueNumbersForClassifier,
+} from '../src/scripts/protocol-helpers.mts';
 
 // kurone-kito/idd-skill#3328: `classifyPrLoopMembership` is the single
 // shared definition of "does this PR run outside the IDD claim loop",
@@ -205,4 +208,77 @@ test('a preamble before the marker token defeats detection entirely -> in-loop',
     trustedMarkerLogins: [TRUSTED_LOGIN],
   });
   assert.strictEqual(result.membership, 'in-loop');
+});
+
+// --- resolveClosingIssueNumbersForClassifier (C1 critique pass finding) ---
+//
+// A same-repo-only filter fed straight to classifyPrLoopMembership would
+// silently read a cross-repo-only (or all-malformed) closing reference as
+// "no closing references" -- the classifier's own out-of-loop-claimless
+// row -- accepting --claimless with NO marker required for a PR the
+// pre-#3328 code always refused (both prior definitions refused ANY
+// non-empty raw closingIssuesReferences regardless of repo).
+// resolveClosingIssueNumbersForClassifier exists to prevent that
+// regression: see the two integration-level tests in
+// pre-merge-readiness.test.mts / resolve-review-thread.test.mts for the
+// end-to-end reproduction this unit-level coverage backs.
+
+test('resolveClosingIssueNumbersForClassifier: an empty array stays [] (unchanged #2017 claimless case)', () => {
+  assert.deepStrictEqual(
+    resolveClosingIssueNumbersForClassifier([], 'o', 'r'),
+    [],
+  );
+});
+
+test('resolveClosingIssueNumbersForClassifier: same-repo entries pass through unchanged', () => {
+  assert.deepStrictEqual(
+    resolveClosingIssueNumbersForClassifier([{ number: 7 }], 'o', 'r'),
+    [7],
+  );
+});
+
+test('resolveClosingIssueNumbersForClassifier: a cross-repo-only closing reference reports null, not [] (regression guard)', () => {
+  const crossRepoOnly = [
+    {
+      number: 5,
+      repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+    },
+  ];
+  assert.strictEqual(
+    resolveClosingIssueNumbersForClassifier(crossRepoOnly, 'o', 'r'),
+    null,
+  );
+});
+
+test('resolveClosingIssueNumbersForClassifier: an all-malformed non-empty array reports null', () => {
+  assert.strictEqual(
+    resolveClosingIssueNumbersForClassifier([{}, { number: -1 }], 'o', 'r'),
+    null,
+  );
+});
+
+test('resolveClosingIssueNumbersForClassifier: a mix of same-repo and cross-repo entries returns only the same-repo numbers', () => {
+  const mixed = [
+    { number: 7 },
+    {
+      number: 5,
+      repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+    },
+  ];
+  assert.deepStrictEqual(
+    resolveClosingIssueNumbersForClassifier(mixed, 'o', 'r'),
+    [7],
+  );
+});
+
+test('classifyPrLoopMembership: null closingIssueNumbers (unreadable) is in-loop even with a valid marker', () => {
+  const result = classifyPrLoopMembership({
+    prNumber: PR_NUMBER,
+    closingIssueNumbers: null,
+    closingIssueClaimState: 'none',
+    prComments: [validMarkerComment()],
+    trustedMarkerLogins: [TRUSTED_LOGIN],
+  });
+  assert.strictEqual(result.membership, 'in-loop');
+  assert.match(result.reason, /unreadable/);
 });
