@@ -223,13 +223,19 @@ input still matches the evidence.
 Apply one outcome:
 
 - **Audit passes**: post an `IDD roadmap completion audit` comment with
-  a concise evidence summary, then close the roadmap. In recursive
-  hierarchies, this outcome applies only when the selected roadmap is
-  the deepest remaining open roadmap on its path whose descendants are
-  all complete. After closing a nested roadmap, release that
-  roadmap-audit claim, re-fetch the ancestor graph, and return to
-  `idd-discover.instructions.md` (A1) so the parent roadmap can be
-  re-evaluated from fresh state. No child task issue is claimed.
+  a concise evidence summary, then close the roadmap. Every referenced
+  child and descendant is closed, but not all of them completed —
+  a child closed as not planned or a duplicate is still closed work,
+  not completed work, so name it and its close reason in the evidence
+  summary (for example `#1234 (not_planned)`) rather than folding it
+  into an undifferentiated "closed or otherwise complete" count. In
+  recursive hierarchies, this outcome applies only when the selected
+  roadmap is the deepest remaining open roadmap on its path whose
+  descendants are all complete. After closing a nested roadmap,
+  release that roadmap-audit claim, re-fetch the ancestor graph, and
+  return to `idd-discover.instructions.md` (A1) so the parent roadmap
+  can be re-evaluated from fresh state. No child task issue is
+  claimed.
 - **Autonomous gaps found**: create or link follow-up issues using the
   repository's issue-authoring rules, then continue to A2 so the new
   work can be discovered. Before creating a new issue, run the narrow
