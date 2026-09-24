@@ -41,6 +41,7 @@ import {
   buildPreMergeReadinessSummary,
   classifyPrLoopMembership,
   deriveIddAgentLogins,
+  extractSameRepoClosingIssueNumbers,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parseExternalCheckWaiverComment,
@@ -1503,57 +1504,6 @@ function printHelp() {
  * field-mapping drift (e.g. `user.login` -> `author.login`) would surface
  * only in production.
  */
-/**
- * kurone-kito/idd-skill#3328: same-repo positive-integer issue numbers
- * extracted from a raw `closingIssuesReferences` passthrough, applying the
- * identical repository-matching rules `computeClosingSetEvidence`
- * (`supersession-detection.mts`) uses internally for its own
- * `sameRepoNumbers` set. Used for two out-of-loop-membership purposes: the
- * classifier's own `closingIssueNumbers` input, and (once membership is
- * confirmed `'out-of-loop-authorized'`) the expected closing set fed back
- * into `computeClosingSetEvidence` -- see the `expectedClosingIssues`
- * comment below. Deliberately best-effort rather than fail-closed the way
- * `computeClosingSetEvidence` itself is: a malformed or unusable entry is
- * simply skipped here, never aborting the whole extraction, because
- * `computeClosingSetEvidence`'s OWN malformed-entry checks already fail
- * the real merge gate closed to `'unavailable'` regardless of what this
- * function returns for that same input -- this extraction only ever feeds
- * a *candidate* expected set, never the gate's own pass/fail decision.
- */
-function extractSameRepoClosingIssueNumbers(
-  closingIssuesReferences,
-  owner,
-  repo,
-) {
-  if (!Array.isArray(closingIssuesReferences)) {
-    return [];
-  }
-  const ownerLower = owner.toLowerCase();
-  const repoLower = repo.toLowerCase();
-  const numbers = [];
-  for (const entry of closingIssuesReferences) {
-    const record = entry !== null && typeof entry === 'object' ? entry : null;
-    const rawNumber = record && 'number' in record ? record.number : entry;
-    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
-    if (!Number.isInteger(number) || number <= 0) {
-      continue;
-    }
-    const repository = record?.repository;
-    if (repository !== null && repository !== undefined) {
-      if (typeof repository !== 'object') {
-        continue;
-      }
-      const repoRecord = repository;
-      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
-      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
-      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
-        continue;
-      }
-    }
-    numbers.push(number);
-  }
-  return numbers;
-}
 /**
  * Map a `ProviderPort.listWorkItemComments` result back onto the REST
  * `issues/{n}/comments` shape this file's `normalizeComment`/

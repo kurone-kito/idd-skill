@@ -348,6 +348,57 @@ export function classifyPrLoopMembership({
       'no closing issue has an active claim, and no valid out-of-loop marker was found',
   };
 }
+/**
+ * kurone-kito/idd-skill#3328: same-repo positive-integer issue numbers
+ * extracted from a raw `closingIssuesReferences` passthrough, applying the
+ * identical repository-matching rules `computeClosingSetEvidence`
+ * (`supersession-detection.mts`) uses internally for its own
+ * `sameRepoNumbers` set. Shared by both `--claimless` consumers
+ * (`pre-merge-readiness.mts`'s `classifyPrLoopMembership` input and its
+ * `expectedClosingIssues` closing-set fix, `resolve-review-thread.mts`'s
+ * `isClaimlessEligible`) so neither re-derives its own copy. Deliberately
+ * best-effort rather than fail-closed the way `computeClosingSetEvidence`
+ * itself is: a malformed or unusable entry is simply skipped here, never
+ * aborting the whole extraction, because `computeClosingSetEvidence`'s OWN
+ * malformed-entry checks already fail the real merge gate closed to
+ * `'unavailable'` regardless of what this function returns for that same
+ * input -- this extraction only ever feeds a *candidate* expected/input
+ * set, never a gate's own pass/fail decision.
+ */
+export function extractSameRepoClosingIssueNumbers(
+  closingIssuesReferences,
+  owner,
+  repo,
+) {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return [];
+  }
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  const numbers = [];
+  for (const entry of closingIssuesReferences) {
+    const record = entry !== null && typeof entry === 'object' ? entry : null;
+    const rawNumber = record && 'number' in record ? record.number : entry;
+    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const repository = record?.repository;
+    if (repository !== null && repository !== undefined) {
+      if (typeof repository !== 'object') {
+        continue;
+      }
+      const repoRecord = repository;
+      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
+      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
+      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
+        continue;
+      }
+    }
+    numbers.push(number);
+  }
+  return numbers;
+}
 export function summarizeExternalCheckWaivers(
   comments,
   {
