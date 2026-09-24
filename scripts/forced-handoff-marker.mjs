@@ -22,6 +22,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
   renderForcedHandoffComment,
   summarizeClaimValidation,
   unionTrustedMarkerActorSources,
@@ -42,12 +43,14 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     timestamp,
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
+    staleAgeMs,
   } = options;
   const resolveOpts = {
     isAuthorizedForcedHandoff:
       typeof isAuthorizedForcedHandoff === 'function'
         ? isAuthorizedForcedHandoff
         : () => false,
+    staleAgeMs,
   };
   // First pass: resolve without PR filter to obtain the claim branch.
   const firstPassClaim = resolveHelperActiveClaim(
@@ -183,6 +186,7 @@ export function main(argv = process.argv.slice(2)) {
         permissionCache,
       );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
     const tempClaim = resolveHelperActiveClaim(
       issueComments,
       trustedMarkerLogins,
@@ -195,6 +199,7 @@ export function main(argv = process.argv.slice(2)) {
             forcedHandoffAuthorityPolicy,
             permissionCache,
           ),
+        staleAgeMs,
       },
     );
     let linkedPrs = [];
@@ -229,6 +234,7 @@ export function main(argv = process.argv.slice(2)) {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs,
     });
     console.log(
       JSON.stringify(
@@ -311,6 +317,7 @@ export function main(argv = process.argv.slice(2)) {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs: readClaimStaleAgeMs(loadIddConfig()),
     },
   );
   if (!activeClaim) {
@@ -412,6 +419,7 @@ export function resolveHelperActiveClaim(
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
           : () => false,
+      staleAgeMs: options.staleAgeMs,
     },
   );
   return summary.activeClaimPresent ? summary.activeClaim : null;

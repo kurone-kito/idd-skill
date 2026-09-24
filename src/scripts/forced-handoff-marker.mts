@@ -25,6 +25,7 @@ import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
   renderForcedHandoffComment,
   summarizeClaimValidation,
   unionTrustedMarkerActorSources,
@@ -69,6 +70,12 @@ interface PlanHandoffOptions {
   timestamp?: string;
   trustedMarkerLogins?: TrustedMarkerLoginsInput;
   isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
+  /** Configured `claimTiming.staleAge` window (#3270), e.g. via
+   * {@link readClaimStaleAgeMs}. Threaded into {@link resolveHelperActiveClaim}
+   * so a takeover claim inside that window resolves as active instead of
+   * being silently evaluated against the hardcoded 24h default. Omitted
+   * keeps `summarizeClaimValidation`'s own 24h fallback. */
+  staleAgeMs?: number;
 }
 
 /** Successor identifiers generated for a forced handoff. */
@@ -124,6 +131,7 @@ export function planHandoff(
     timestamp,
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
+    staleAgeMs,
   } = options;
 
   const resolveOpts = {
@@ -131,6 +139,7 @@ export function planHandoff(
       typeof isAuthorizedForcedHandoff === 'function'
         ? isAuthorizedForcedHandoff
         : () => false,
+    staleAgeMs,
   };
 
   // First pass: resolve without PR filter to obtain the claim branch.
@@ -278,6 +287,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
         permissionCache,
       );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
 
     const tempClaim = resolveHelperActiveClaim(
       issueComments,
@@ -291,6 +301,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
             forcedHandoffAuthorityPolicy,
             permissionCache,
           ),
+        staleAgeMs,
       },
     );
 
@@ -327,6 +338,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs,
     });
 
     console.log(
@@ -412,6 +424,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
           forcedHandoffAuthorityPolicy,
           permissionCache,
         ),
+      staleAgeMs: readClaimStaleAgeMs(loadIddConfig()),
     },
   );
 
@@ -496,6 +509,10 @@ export function resolveHelperActiveClaim(
   options: {
     expectedLinkedPrs?: string[];
     isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
+    /** Configured `claimTiming.staleAge` window (#3270). Omitted keeps
+     * `summarizeClaimValidation`'s own hardcoded-24h fallback -- unchanged
+     * for `external-check-waiver.mts`'s call, which does not pass it. */
+    staleAgeMs?: number;
   } = {},
 ): ActiveClaim | null {
   const trustedSources = Array.isArray(trustedMarkerLogins)
@@ -522,6 +539,7 @@ export function resolveHelperActiveClaim(
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
           : () => false,
+      staleAgeMs: options.staleAgeMs,
     },
   );
 

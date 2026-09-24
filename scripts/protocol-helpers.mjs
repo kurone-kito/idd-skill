@@ -46,6 +46,7 @@ import {
 } from './marker-helpers.mjs';
 import {
   getReviewEscalationChangesRequestedPolicy,
+  normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 export const LIVE_STATUS_DIGEST_MARKER = '<!-- idd-live-status: current -->';
@@ -6615,11 +6616,15 @@ export function buildForcedHandoffEnableGate(options) {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
- * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
- *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
- *   (non-numeric/non-finite), or non-positive, staleness falls back to the
- *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
- *   pass it keep today's exact behavior. See `isStaleByAge`.
+ * - `staleAgeMs` (#1310) is the config-aware claim-staleness window, in
+ *   milliseconds (a parsed `claimTiming.staleAge`, e.g. via
+ *   {@link readClaimStaleAgeMs}) -- REQUIRED (#3270) so the type checker
+ *   catches a future write-gate caller that forgets it, instead of it
+ *   silently falling back to the hardcoded 24h `isStaleAt` default the way
+ *   every pre-#3270 caller did. A caller that deliberately wants the
+ *   distributed 24h default passes {@link DEFAULT_STALE_AGE_MS} explicitly.
+ *   Invalid (non-numeric/non-finite) or non-positive values still fall back
+ *   to {@link isStaleAt} via `resolveStalePredicate`. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(events, options) {
   const expectedLinkedPrReferences = new Set(
@@ -6780,6 +6785,26 @@ export function summarizeClaimValidation(
     claimLost: reason !== 'match',
     reason,
   };
+}
+/**
+ * Write-gate wrapper around {@link summarizeClaimValidation} with a
+ * REQUIRED `staleAgeMs` (#1310/#3270). `summarizeClaimValidation` itself
+ * keeps `staleAgeMs` optional because it also has non-write-gate callers
+ * (status/summary building such as `buildPreMergeReadinessSummary`, and
+ * tests exercising unrelated forced-handoff/nonce behavior) that must not
+ * be forced to thread a claim-staleness window they do not care about.
+ * Every claim-OWNERSHIP write-gate caller (a helper that decides whether
+ * THIS session may still mutate GitHub state) should call this wrapper
+ * instead, so the type checker catches a future write-gate caller that
+ * forgets to resolve and pass the configured window -- the exact class of
+ * bug #3270 fixes for the eight callers that previously omitted it.
+ */
+export function summarizeClaimValidationForWriteGate(
+  claimEvents = [],
+  options,
+  captureTraceInto,
+) {
+  return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
@@ -8520,6 +8545,41 @@ function resolveStalePredicate(staleAgeMs) {
   }
   return (activeCreatedAt, nextCreatedAt) =>
     isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs);
+}
+/**
+ * Resolve the configured claim-staleness window (`claimTiming.staleAge`,
+ * #1310) in milliseconds from an already-loaded `.github/idd/config.json`
+ * object (or `null`) -- e.g. `loadIddConfig()`'s or `loadTrustedIddConfig()`'s
+ * return value directly, or a raw untyped config object a caller already
+ * parsed itself. The single shared config-read point every write-gate
+ * caller of {@link resolveActiveClaimForWriteGate} /
+ * {@link summarizeClaimValidationForWriteGate} should use, so a caller that
+ * already has its config in hand needs no second local copy of this
+ * parse-with-fallback (#3270 hoists this out of `pre-merge-readiness.mts`,
+ * its sole pre-#3270 home, to a shared façade every caller across the
+ * codebase can import). `normalizePolicyConfig(config).claimTiming.staleAge`
+ * is already fail-safe-normalized (a valid ISO-8601 duration, or the
+ * distributed `PT24H` default when the configured value is missing or
+ * malformed), so `parseIsoDurationToMs` only needs its own `?? fallback` for
+ * belt-and-suspenders defense, not as the primary fallback path.
+ *
+ * Deliberately defined here, not in `policy-helpers.mts` (the issue's own
+ * proposed location): `policy-helpers.mts` -> `protocol-helpers.mts` ->
+ * `idd-config.mts` -> `policy-helpers.mts` would be a real import cycle,
+ * since `idd-config.mts` already imports the critique-loop resolvers from
+ * `policy-helpers.mts` and this file already imports `loadIddConfig` from
+ * `idd-config.mts`. This file already imports `normalizePolicyConfig` /
+ * `parseIsoDurationToMs` FROM `policy-helpers.mts` with no cycle (that file
+ * has no dependency back on this one), so co-locating this reader beside
+ * {@link DEFAULT_STALE_AGE_MS} / {@link isStaleAt} / {@link isStaleByAge} —
+ * the other claim-staleness primitives it composes — avoids the cycle
+ * entirely while keeping every claim-staleness primitive in one module.
+ */
+export function readClaimStaleAgeMs(config) {
+  return (
+    parseIsoDurationToMs(normalizePolicyConfig(config).claimTiming.staleAge) ??
+    DEFAULT_STALE_AGE_MS
+  );
 }
 function compareClaimIds(left, right) {
   if (left === right) {

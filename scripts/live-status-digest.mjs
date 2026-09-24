@@ -18,6 +18,7 @@ import {
   ghApiJson,
   ghText,
 } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
@@ -31,11 +32,12 @@ import {
   parsePaginatedGhNdjson,
   planLiveStatusDigestRepair,
   planLiveStatusDigestUpsert,
+  readClaimStaleAgeMs,
   renderLiveStatusDigestRepairEvidence,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   retireLiveStatusDigestBody,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -1265,7 +1267,7 @@ function assertActiveClaim(
     );
   }
 }
-function readActiveClaim(owner, repo, issueNumber, options = {}) {
+export function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map(
     (comment) => {
       return {
@@ -1278,13 +1280,16 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call
-  // would be a needless I/O hot path.
+  // would be a needless I/O hot path. staleAgeMs (#3270) reuses the same
+  // read.
   const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
-  const summary = summarizeClaimValidation(comments, {
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
+  const summary = summarizeClaimValidationForWriteGate(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
     prFirstCommitAt: options.prFirstCommitAt ?? null,
+    staleAgeMs,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,

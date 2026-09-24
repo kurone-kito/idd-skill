@@ -37,6 +37,7 @@ import {
   classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
+  DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
   hasFreshDisposition,
@@ -44,6 +45,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
+  readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
@@ -6800,6 +6802,7 @@ test('resolveActiveClaimForWriteGate recognizes an authorized issue-only handoff
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6814,6 +6817,7 @@ test('resolveActiveClaimForWriteGate keeps the original on an unauthorized appro
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6830,6 +6834,7 @@ test('resolveActiveClaimForWriteGate keeps the original on a self-signed handoff
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6843,6 +6848,7 @@ test('resolveActiveClaimForWriteGate keeps the original when mode is disabled', 
       forcedHandoffEnabled: false,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6859,6 +6865,7 @@ test('resolveActiveClaimForWriteGate is inert on an old-claim-id mismatch', () =
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6872,6 +6879,7 @@ test('resolveActiveClaimForWriteGate is inert on a branch mismatch', () => {
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6886,6 +6894,7 @@ test('resolveActiveClaimForWriteGate defaults isAuthorizedForcedHandoff to fail 
       isTrustedAuthor: wgTrusted,
       forcedHandoffEnabled: true,
       expectedLinkedPrs: null,
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6895,6 +6904,7 @@ test('resolveActiveClaimForWriteGate resolves a plain claim like a bare predicat
   const events = [wgClaimEvent()];
   const writeGate = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor: wgTrusted,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
   // A non-FH repo (no handoff marker) must resolve identically to the bare
   // resolveActiveClaim(events, predicate) path.
@@ -6913,6 +6923,7 @@ test('Part B: PR-backed claim accepts an issue-only handoff that predates the PR
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T12:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6929,6 +6940,7 @@ test('Part B: PR-backed claim rejects an issue-only handoff at/after the PR firs
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T10:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6942,6 +6954,7 @@ test('Part B: PR-backed claim rejects an issue-only handoff with no prFirstCommi
       forcedHandoffEnabled: true,
       expectedLinkedPrs: ['#359'],
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -6961,6 +6974,7 @@ test('Part B: PR-backed claim accepts an issue-plus-pr handoff with a matching l
       // by the linked-pr match, not by the predates-PR rule.
       prFirstCommitAt: '2026-05-12T10:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
@@ -6978,6 +6992,7 @@ test('Part B: PR-backed claim rejects an issue-plus-pr handoff with a mismatchin
       expectedLinkedPrs: ['#359'],
       prFirstCommitAt: '2026-05-12T12:00:00Z',
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -7046,11 +7061,18 @@ test('resolveActiveClaimForWriteGate recognizes a takeover claim inside a config
   assert.equal(active?.agentId, 'cli-new');
 });
 
-test('resolveActiveClaimForWriteGate keeps the old claim active for the same 20h gap without staleAgeMs (old hardcoded 24h)', () => {
+test('resolveActiveClaimForWriteGate keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default (#3270)', () => {
+  // #3270: `staleAgeMs` is now a REQUIRED option (the type checker catches a
+  // future caller that forgets it), so this can no longer be expressed by
+  // omission the way the pre-#3270 version of this test did. A caller that
+  // deliberately wants the distributed 24h default now passes
+  // DEFAULT_STALE_AGE_MS explicitly -- the 20h-old claim is correctly still
+  // NOT stale under that window, so the takeover does not activate.
   const active = resolveActiveClaimForWriteGate(
     [wgClaimEvent(), wgTakeoverEvent()],
     {
       isTrustedAuthor: wgTrusted,
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
   assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
@@ -7072,12 +7094,15 @@ test('summarizeClaimValidation reports no claimLost for a takeover inside a conf
   assert.equal(summary.activeClaim.claimId, WG_TAKEOVER_CLAIM_ID);
 });
 
-test('summarizeClaimValidation falsely reports claimLost for the same takeover without staleAgeMs (the #1310 bug, pinned)', () => {
-  // Documents the exact production symptom from the issue: the legitimate
-  // successor's session recorded WG_TAKEOVER_CLAIM_ID as its expected claim,
-  // but the write gate — with no staleAgeMs override — still resolves the
-  // hardcoded-stale old claim as active, so a live successor reads as
-  // claimLost. Fixed by passing staleAgeMs from the resolved policy.
+test('summarizeClaimValidation reports claimLost for the same takeover when staleAgeMs is omitted (its own documented 24h default, #3270)', () => {
+  // #3270: `summarizeClaimValidation` itself deliberately keeps `staleAgeMs`
+  // OPTIONAL -- it has non-write-gate callers (status/summary building,
+  // other tests) that must not be forced to thread a window they do not
+  // care about. This is no longer "the #1310 bug" (every WRITE-GATE caller
+  // now goes through `summarizeClaimValidationForWriteGate`, which makes
+  // `staleAgeMs` required and closes the omission class of bug); it is this
+  // primitive's own intended, documented fallback for a caller that
+  // genuinely omits the window.
   const summary = summarizeClaimValidation(
     [wgClaimEvent(), wgTakeoverEvent()],
     {
@@ -7089,6 +7114,31 @@ test('summarizeClaimValidation falsely reports claimLost for the same takeover w
   assert.equal(summary.claimLost, true);
   assert.equal(summary.reason, 'claim-id-mismatch');
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+// #3270: `readClaimStaleAgeMs` is the single shared config-read point
+// `pre-merge-readiness.mts` (`readClaimStaleAgeMs(iddConfig)` at its own
+// F2/F3 claim-gate call site) and `resume-claim-routing.mts`'s `loadPolicy`
+// (`staleAgeMs: readClaimStaleAgeMs(typedConfig)`) both delegate to now --
+// so a schema-invalid value necessarily resolves to the identical
+// milliseconds in both by construction, not by two independently-maintained
+// parsers happening to agree. Before #3270, resume-claim-routing.mts had its
+// own loose, case-insensitive local `parseDurationToMs` that accepted
+// `pt12h` as 12h, while `pre-merge-readiness.mts`'s case-sensitive
+// `normalizePolicyConfig` fell back to the 24h default -- a genuine
+// cross-helper divergence this test pins against regressing.
+test('readClaimStaleAgeMs resolves a schema-invalid claimTiming.staleAge (lowercase "pt12h") to the distributed 24h default', () => {
+  assert.equal(
+    readClaimStaleAgeMs({ claimTiming: { staleAge: 'pt12h' } }),
+    DEFAULT_STALE_AGE_MS,
+  );
+  // A well-formed, case-correct value still parses normally.
+  assert.equal(
+    readClaimStaleAgeMs({ claimTiming: { staleAge: 'PT12H' } }),
+    12 * 60 * 60 * 1000,
+  );
+  // Absent config: same distributed default.
+  assert.equal(readClaimStaleAgeMs(null), DEFAULT_STALE_AGE_MS);
 });
 
 test('buildPreMergeReadinessSummary threads staleAgeMs to the F2/F3 claim gate (#1310)', () => {

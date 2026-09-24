@@ -33,10 +33,11 @@ import {
 } from './discover-shared-file-overlap.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
+  DEFAULT_STALE_AGE_MS,
   normalizeApplyNow,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
@@ -44,8 +45,6 @@ import {
 } from './provider-adapter-github.mjs';
 import { collectHighConfidenceDuplicateEvidence } from './suitability-triage.mjs';
 import { evaluateHighConfidenceDuplicate } from './supersession-detection.mjs';
-
-const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /**
  * Branch pattern for a suitability-close coordination claim on issue
  * `issueNumber`: a logical coordination name (no worktree), mirroring A1.5's
@@ -67,10 +66,15 @@ export function suitabilityCloseBranchPattern(issueNumber) {
  * close), and not be stale.
  */
 export function evaluateSuitabilityCloseClaim(comments, options) {
-  const summary = summarizeClaimValidation(comments, {
+  // #3270: resolved once so both the claim-identity match below (via the
+  // write-gate wrapper) and the staleness check further down honor the
+  // same configured window -- previously only the latter did.
+  const effectiveStaleAgeMs = options.staleAgeMs ?? DEFAULT_STALE_AGE_MS;
+  const summary = summarizeClaimValidationForWriteGate(comments, {
     isTrustedAuthor: options.isTrustedAuthor,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    staleAgeMs: effectiveStaleAgeMs,
   });
   if (!summary.matchesExpectedClaim) {
     return {
@@ -95,7 +99,7 @@ export function evaluateSuitabilityCloseClaim(comments, options) {
   const stale = isClaimStaleByAge(
     summary.activeClaim.createdAt,
     options.nowIso,
-    options.staleAgeMs ?? DEFAULT_CLAIM_STALE_AGE_MS,
+    effectiveStaleAgeMs,
   );
   if (stale) {
     return {
@@ -371,12 +375,22 @@ function buildTrustedAuthorPredicate({ owner, viewerLogin, rawConfig }) {
         .toLowerCase(),
     );
 }
-function loadPolicy(policyPath) {
+export function loadPolicy(policyPath) {
   if (!policyPath) {
     return null;
   }
   try {
-    return loadPolicyConfig(policyPath);
+    // #3270 (CodeRabbit review): `loadPolicyConfig` returns a `{ path,
+    // config }` wrapper, not the raw config object -- returning it
+    // unwrapped meant `createProductionDeps`'s
+    // `rawConfig?.claimTiming?.staleAge` and
+    // `rawConfig.trustedMarkerActors` below always read through
+    // nonexistent properties on the wrapper, so a configured
+    // `claimTiming.staleAge` (and `trustedMarkerActors`) never reached
+    // this CLI's `--policy` path at all -- `idd-roadmap-audit-execute.mts`'s
+    // own `loadPolicy` already unwraps `.config` correctly; this one did
+    // not.
+    return loadPolicyConfig(policyPath).config;
   } catch {
     return null;
   }
@@ -396,7 +410,7 @@ function createProductionDeps(args) {
   });
   const staleAgeMs =
     parseClaimStaleAgeMs(rawConfig?.claimTiming?.staleAge) ??
-    DEFAULT_CLAIM_STALE_AGE_MS;
+    DEFAULT_STALE_AGE_MS;
   const repoRef = `${owner}/${repo}`;
   return {
     getIssue: (issueNumber) => {

@@ -256,6 +256,48 @@ test('forced handoff helper replays prior handoffs when resolving the active cla
   });
 });
 
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the plain
+// (non-forced-handoff) takeover below lands 20h later
+// (2026-05-13T05:00:00Z) -- squarely in the 18-24h gap the issue describes:
+// stale under an 18h configured age, not stale under the old hardcoded 24h
+// `summarizeClaimValidation` silently fell back to when
+// `resolveHelperActiveClaim` omitted `staleAgeMs`.
+test('resolveHelperActiveClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const trustedLogins = ['cli-old', 'cli-new'];
+  const oldClaim = {
+    body: [
+      '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+      '',
+      '_cli-old: issue claim — IDD automation marker._',
+    ].join('\n'),
+    created_at: '2026-05-12T09:00:00Z',
+    user: { login: 'cli-old' },
+  };
+  const takeover = {
+    body: [
+      '<!-- claimed-by: cli-new claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+      '',
+      '_cli-new: issue claim — IDD automation marker._',
+    ].join('\n'),
+    created_at: '2026-05-13T05:00:00Z',
+    user: { login: 'cli-new' },
+  };
+
+  const withConfiguredWindow = resolveHelperActiveClaim(
+    [oldClaim, takeover],
+    trustedLogins,
+    { staleAgeMs: 18 * 60 * 60 * 1000 },
+  );
+  assert.equal(withConfiguredWindow?.claimId, 'claim-20260513T050000Z-337-new');
+
+  const withDefaultWindow = resolveHelperActiveClaim(
+    [oldClaim, takeover],
+    trustedLogins,
+    { staleAgeMs: 24 * 60 * 60 * 1000 },
+  );
+  assert.equal(withDefaultWindow?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
 test('forced handoff helper keeps PR-scoped active claim when issue-only handoff exists', () => {
   const trustedLogins = [
     'github-copilot-cli-old',
