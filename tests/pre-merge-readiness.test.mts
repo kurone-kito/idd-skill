@@ -33,10 +33,13 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
+  CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
+  CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
   classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
+  computeSecondaryAdvisoryReviewSettlement,
   DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
@@ -45,6 +48,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
+  isReviewSummaryComment,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
@@ -5291,12 +5295,60 @@ test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence',
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
 test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', () => {
   const head = 'b'.repeat(40);
   const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.valid[0].authorLogin, 'kurone-kito');
+});
+
+// --- #3246: edited waiver comments are never trust evidence ----------------
+
+test('summarizeExternalCheckWaivers: an otherwise-valid waiver with a non-null lastEditedAt lands in edited, not valid', () => {
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: '2026-05-17T00:10:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
+  assert.equal(result.edited[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.edited[0].authorLogin, 'kurone-kito');
+  assert.equal(result.edited[0].editState, 'edited');
+});
+
+test('summarizeExternalCheckWaivers: a waiver with an absent lastEditedAt lands in edited with editState unknown', () => {
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  // No lastEditedAt/last_edited_at at all -- the caller never resolved edit
+  // state for this comment, which must fail closed, never default to
+  // "unedited".
   const comment = {
     body,
     author: { login: 'kurone-kito' },
@@ -5308,9 +5360,32 @@ test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', ()
     trustedMarkerLogins: ['kurone-kito'],
     now: '2026-05-17T00:00:00Z',
   });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
+  assert.equal(result.edited[0].editState, 'unknown');
+});
+
+test('summarizeExternalCheckWaivers: a waiver with lastEditedAt null (never edited) stays valid, even when updatedAt moved past createdAt (minimizeComment shape)', () => {
+  // kurone-kito/idd-skill#3173: GitHub's minimizeComment advances
+  // updated_at without touching lastEditedAt -- a hide-on-supersede sweep
+  // must never look like a body edit.
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    updatedAt: '2026-05-17T05:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
   assert.equal(result.valid.length, 1);
-  assert.equal(result.valid[0].checkSelector, 'CodeRabbit');
-  assert.equal(result.valid[0].authorLogin, 'kurone-kito');
+  assert.equal(result.edited.length, 0);
 });
 
 test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto marker from generic evidence by default (Codex review, PR #2895)', () => {
@@ -5334,6 +5409,7 @@ test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto 
     body,
     author: { login: 'github-actions[bot]' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5352,6 +5428,7 @@ test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto 
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
@@ -5370,6 +5447,7 @@ test('summarizeExternalCheckWaivers: allowSelfReferentialBootstrapAuto opts a ca
     body,
     author: { login: 'github-actions[bot]' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5400,6 +5478,7 @@ test('summarizeExternalCheckWaivers: an odd-cased marker is still recognized', (
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -5418,6 +5497,7 @@ test('summarizeExternalCheckWaivers: a prose mention of the marker name is ignor
     body: 'We should document the idd-external-check-waiver flow for maintainers.',
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'b'.repeat(40),
@@ -5441,6 +5521,7 @@ test('summarizeExternalCheckWaivers: expired waiver goes to expired bucket', () 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5461,6 +5542,7 @@ test('summarizeExternalCheckWaivers: wrong head SHA goes to wrongHead bucket', (
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'b'.repeat(40),
@@ -5478,6 +5560,7 @@ test('summarizeExternalCheckWaivers: wrong claim ID goes to wrongClaim bucket', 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5495,6 +5578,7 @@ test('summarizeExternalCheckWaivers: unauthorized actor goes to unauthorized buc
     body,
     author: { login: 'unknown-actor' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -5510,6 +5594,7 @@ test('summarizeExternalCheckWaivers: malformed waiver comment goes to malformed 
     body: '<!-- idd-external-check-waiver: bad-format -->',
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: 'a'.repeat(40),
@@ -5924,6 +6009,7 @@ test('summarizeExternalCheckWaivers: multiple valid waivers for different checks
     }),
     user: { login: 'owner' },
     created_at: '2026-05-17T10:00:00Z',
+    lastEditedAt: null,
   };
   const comment2 = {
     body: makeWaiverComment({
@@ -5933,6 +6019,7 @@ test('summarizeExternalCheckWaivers: multiple valid waivers for different checks
     }),
     user: { login: 'owner' },
     created_at: '2026-05-17T10:01:00Z',
+    lastEditedAt: null,
   };
 
   const result = summarizeExternalCheckWaivers([comment1, comment2], {
@@ -5955,6 +6042,7 @@ test('summarizeExternalCheckWaivers: suspicious marker-shaped comment from untru
     body,
     user: { login: 'untrusted-actor' },
     created_at: '2026-05-17T10:00:00Z',
+    lastEditedAt: null,
   };
 
   const result = summarizeExternalCheckWaivers([comment], {
@@ -5992,16 +6080,19 @@ test('summarizeExternalCheckWaivers: mixed valid, expired, and wrongClaim in sep
       body: validBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     },
     {
       body: expiredBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:01:00Z',
+      lastEditedAt: null,
     },
     {
       body: wrongClaimBody,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:02:00Z',
+      lastEditedAt: null,
     },
   ];
   const result = summarizeExternalCheckWaivers(comments, {
@@ -6022,6 +6113,7 @@ test('summarizeExternalCheckWaivers: an empty active claim fails closed to wrong
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No active claim resolves at the gate (`activeClaimId === ''`); the
   // otherwise-matching waiver must be rejected, not pass unbound.
@@ -6044,6 +6136,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on an unclaimed PR is valid
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No active claim resolves at the gate -- the literal `none` sentinel
   // explicitly declares this a claimless waiver, satisfying the
@@ -6067,6 +6160,7 @@ test('summarizeExternalCheckWaivers: "NONE"/"None" (any case) on an unclaimed PR
       body,
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     };
     const result = summarizeExternalCheckWaivers([comment], {
       prHeadSha: head,
@@ -6085,6 +6179,7 @@ test('summarizeExternalCheckWaivers: a non-none, non-matching claim id on an unc
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6103,6 +6198,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on a claimed PR is rejected
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // A real claim resolves at the gate -- the `none` sentinel only applies
   // when the gate independently confirms no claim exists, so it must never
@@ -6127,6 +6223,7 @@ test('summarizeExternalCheckWaivers: a none-sentinel waiver still fails on a cla
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6146,6 +6243,7 @@ test('summarizeExternalCheckWaivers: a waiver bound to the immediate supersedes 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6165,6 +6263,7 @@ test('summarizeExternalCheckWaivers: a two-hop-old claim id stays in wrongClaim 
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6184,6 +6283,7 @@ test('summarizeExternalCheckWaivers: an empty head SHA fails closed to wrongHead
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   // No head SHA is known at the gate; the waiver cannot be bound to the
   // current PR HEAD and must be rejected.
@@ -6210,6 +6310,7 @@ test('summarizeExternalCheckWaivers: a window longer than maxValidity is rejecte
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const opts = {
     prHeadSha: head,
@@ -6244,6 +6345,7 @@ test('summarizeExternalCheckWaivers: a window within maxValidity stays valid', (
     body,
     author: { login: 'kurone-kito' },
     createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
@@ -6265,7 +6367,11 @@ test('summarizeExternalCheckWaivers: an unknown creation time fails closed to ex
   });
   // No created_at / createdAt on the comment → parsed.createdAt resolves to
   // 'none', so the window cannot be measured and the gate fails closed.
-  const comment = { body, author: { login: 'kurone-kito' } };
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  };
   const result = summarizeExternalCheckWaivers([comment], {
     prHeadSha: head,
     activeClaimId: 'claim-123',
@@ -6287,6 +6393,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
       body: 'This is a regular PR comment',
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
     },
     {
       body:
@@ -6295,6 +6402,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
         ' 2026-05-17T00:00:00Z 1 none -->',
       author: { login: 'kurone-kito' },
       createdAt: '2026-05-17T00:01:00Z',
+      lastEditedAt: null,
     },
   ];
   const result = summarizeExternalCheckWaivers(comments, {
@@ -6312,6 +6420,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   });
 });
 
@@ -6363,6 +6472,7 @@ test('summarizeExternalCheckWaivers: validity-passing waiver for a non-waivable 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6388,6 +6498,7 @@ test('summarizeExternalCheckWaivers: an otherwise-valid, configured-waivable wai
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6415,6 +6526,7 @@ test('summarizeExternalCheckWaivers: an empty mode leaves the mode gate off (leg
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6438,6 +6550,7 @@ test('summarizeExternalCheckWaivers: waiver naming a configured-waivable check s
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6461,6 +6574,7 @@ test('summarizeExternalCheckWaivers: a glob waivable selector admits a matching 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6484,6 +6598,7 @@ test('summarizeExternalCheckWaivers: omitting waivableSelectors keeps the legacy
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6506,6 +6621,7 @@ test('summarizeExternalCheckWaivers: an empty waivable list waives nothing', () 
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -6630,6 +6746,7 @@ test('summarizeExternalCheckWaivers: a glob waiver selector overlaps an exact wa
         body,
         author: { login: 'kurone-kito' },
         createdAt: '2026-05-17T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     {
@@ -7857,6 +7974,7 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -7980,6 +8098,7 @@ test('#2021: idd-advisory-convergence waiver posted but precondition window not 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8070,6 +8189,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) is also withheld from coveredBy
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8138,6 +8258,7 @@ test('#2021: a glob-selector waiver (e.g. idd-*) still does not cover coveredByW
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8245,6 +8366,7 @@ test('#2021: withholding coverage from idd-advisory-convergence does not remove 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8302,6 +8424,7 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8339,6 +8462,84 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
   assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
 });
 
+// kurone-kito/idd-skill#3246 (E2 critique, C1 round 2): every other
+// `edited`-bucket test in this file exercises `summarizeExternalCheckWaivers`
+// directly (unit level) -- none asserted `coveredByWaiver` through the full
+// `buildPreMergeReadinessSummary` pipeline the F2/F3 CI gate actually reads,
+// unlike the sibling `advisory-convergence.mts` collector, which got exactly
+// this negative-control end-to-end test
+// (`tests/advisory-convergence-fake-provider.test.mts`, "C1 round 2"). Reuses
+// the immediately preceding test's otherwise-open precondition (deadline
+// passed) so this proves the edit-state check alone withholds coverage, not
+// merely a closed precondition doing so incidentally.
+test('#3246: a body-edited idd-advisory-convergence waiver never sets coveredByWaiver, even once the deadline has passed', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const input = withAdvisoryConvergenceRequiredCheck(fixture);
+  const waivableCheckSelectors = [
+    { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+  ];
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: fixture.options.expectedAgentId,
+    claimId: fixture.options.expectedClaimId,
+    headSha: fixture.input.prHeadSha,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'idd-advisory-convergence would not converge across 3 rounds',
+    expiresAt: '2026-05-13T00:00:00Z',
+    actor: 'kurone-kito',
+  });
+
+  const waived = buildPreMergeReadinessSummary(
+    {
+      ...input,
+      comments: [
+        ...(input.comments ?? []),
+        {
+          id: 'edited-deadline-waiver',
+          author: { login: 'kurone-kito' },
+          body: waiverBody,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+          // GitHub reports this waiver's body was edited after posting --
+          // never trust evidence, regardless of how favorable every other
+          // classification would otherwise be.
+          lastEditedAt: '2026-05-12T00:05:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      waivableCheckSelectors,
+      externalCheckWaiverMaxValidity: 'PT24H',
+      // Same deadline-passed precondition as the preceding test, where an
+      // unedited waiver DOES reach `coveredByWaiver: true`.
+      advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
+    },
+  );
+
+  const waiverEvidence = waived.waiverEvidence as {
+    valid: unknown[];
+    edited: { authorLogin: string; editState: string }[];
+  };
+  assert.equal(waiverEvidence.valid.length, 0);
+  assert.equal(waiverEvidence.edited.length, 1);
+  assert.equal(waiverEvidence.edited[0].authorLogin, 'kurone-kito');
+  assert.equal(waiverEvidence.edited[0].editState, 'edited');
+
+  const check = ciCheckByName(waived, 'idd-advisory-convergence');
+  assert.equal(check?.coveredByWaiver, undefined);
+  // #3246 (E10 critique): pin the exact failed state, matching the
+  // sibling tests this one mirrors, rather than the weaker `!== 'success'`
+  // -- `withAdvisoryConvergenceRequiredCheck`'s COMPLETED/FAILURE check
+  // makes `classifyCiChecks` deterministically report `failed`.
+  assert.equal((waived.ci as Record<string, unknown>).status, 'failed');
+  assert.equal(
+    (waived.ci as Record<string, unknown>).requiredChecksPassing,
+    false,
+  );
+  assert.deepEqual(waived.blockers, computePreMergeReadinessBlockers(waived));
+});
+
 test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavailability is proven is covered even before the deadline passes', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const input = withAdvisoryConvergenceRequiredCheck(fixture);
@@ -8367,6 +8568,7 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8631,6 +8833,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed but
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8700,6 +8903,7 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed and
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8761,6 +8965,7 @@ test('#2034: idd-advisory-convergence waiver posted, precondition open, but the 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -8844,6 +9049,7 @@ test('#2034: the same idd-advisory-convergence waiver is covered once the check 
           body: waiverBody,
           createdAt: '2026-05-12T00:00:00Z',
           updatedAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -9744,6 +9950,194 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
 
   assert.equal(result, null);
 });
+
+// #3260: CodeRabbit edits its summary comment IN PLACE when it starts (or
+// pauses) a review, so an in-progress or paused revision is byte-for-byte
+// indistinguishable from a genuine walkthrough at the outer
+// `summarize by coderabbit.ai` wrapper level. Fixtures below are trimmed
+// (exact marker HTML comments + minimal surrounding structure) from the
+// live comments the issue cites, verified against their GraphQL
+// `userContentEdits` revision history on 2026-09-24:
+// - PR #3196 comment `5789875341`: HEAD `a5a56e57` committed at
+//   2026-09-23T07:12:24Z (confirmed via `gh api
+//   repos/kurone-kito/idd-skill/commits/a5a56e57...`). The 07:13:25Z
+//   revision is the in-progress state (no "No actionable comments"
+//   text); the 07:20:35Z revision is the completed review (with that
+//   sentence); the 06:10:19Z revision is a genuine completed walkthrough
+//   without that sentence.
+// - PR #3154 comment `5743189569`: one of 23 (of 48 total) paused
+//   revisions, still trailing the "No actionable comments were
+//   generated" sentence retained from the prior completed review.
+{
+  const PR3196_IN_PROGRESS_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+    '> [!NOTE]\n' +
+    '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+    '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->';
+  const PR3196_COMPLETED_NO_ACTIONABLE_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+  const PR3154_PAUSED_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_PAUSED_MARKER}\n\n` +
+    '> [!NOTE]\n> ## Reviews paused\n> \n' +
+    '> It looks like this branch is under active development. To avoid ' +
+    'overwhelming you with review comments due to an influx of new ' +
+    'commits, CodeRabbit has automatically paused this review.\n\n' +
+    '<!-- end of auto-generated comment: review paused by coderabbit.ai -->\n' +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+  const PR3160_IN_PROGRESS_STALE_SENTENCE_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+    '> [!NOTE]\n' +
+    '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+    '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->\n\n' +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+
+  test('#3260: computeSecondaryAdvisoryReviewSettlement reports pending (neither settled nor declined) for the PR #3196 in-progress revision', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:13:25Z',
+          body: PR3196_IN_PROGRESS_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.deepEqual(result, {
+      settled: false,
+      settledAt: null,
+      declined: false,
+    });
+  });
+
+  // Copilot review (PR #3412): the in-progress marker predicate is
+  // CodeRabbit-specific, so it must not fire for a DIFFERENTLY configured
+  // secondary bot whose own comment happens to contain the same literal
+  // marker text -- `computeSecondaryAdvisoryReviewSettlement` filters
+  // `comments` by whichever login `secondaryBotLogin` names, not
+  // necessarily CodeRabbit, before these body-shape checks ever run.
+  test('#3260: computeSecondaryAdvisoryReviewSettlement settles a non-CodeRabbit secondary bot even if its body coincidentally contains the in-progress marker text', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'some-other-bot[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:13:25Z',
+          body: PR3196_IN_PROGRESS_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'some-other-bot[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.equal(result.settled, true);
+    assert.equal(result.settledAt, '2026-09-23T07:13:25Z');
+    assert.equal(result.declined, false);
+  });
+
+  test('#3260: computeSecondaryAdvisoryReviewSettlement settles once the same comment is edited into the completed revision', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:20:35Z',
+          body: PR3196_COMPLETED_NO_ACTIONABLE_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.equal(result.settled, true);
+    assert.equal(result.settledAt, '2026-09-23T07:20:35Z');
+    assert.equal(result.declined, false);
+  });
+
+  test('#3260: a paused CodeRabbit revision is a non-review notice, not a summary, and settles as declined', () => {
+    assert.equal(isAdvisoryNonReviewNotice(PR3154_PAUSED_BODY), true);
+    assert.equal(isReviewSummaryComment(PR3154_PAUSED_BODY), false);
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-19T15:44:25Z',
+          updatedAt: '2026-09-20T11:16:35Z',
+          body: PR3154_PAUSED_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-19T00:00:00Z',
+      },
+    );
+    assert.equal(result.declined, true);
+    assert.equal(result.settled, false);
+  });
+
+  // #1191-style positive control: `threads: []` and the real
+  // `coderabbitai[bot]` author, asserting `=== null` explicitly (not merely
+  // "not RESOLVED") so the fixture is proven to actually reach the new
+  // early return rather than passing for an unrelated reason
+  // (`classifyRegularBotComment` also returns `null` for a non-CodeRabbit
+  // author, an unresolved known-bot thread, or a body that never starts
+  // with `CODERABBIT_SUMMARY_MARKER`).
+  test('#3260: classifyRegularBotComment never resolves the PR #3160 in-progress revision, even with a stale "No actionable comments" sentence', () => {
+    const comment = {
+      id: 1,
+      createdAt: '2026-09-20T11:13:47Z',
+      body: PR3160_IN_PROGRESS_STALE_SENTENCE_BODY,
+      author: { login: 'coderabbitai[bot]' },
+    };
+    const result = classifyRegularBotComment(comment, [comment], []);
+    assert.equal(result, null);
+    // Positive control: the same trailing "No actionable comments"
+    // sentence, minus the in-progress marker block, resolves via the
+    // pre-existing branch -- proving the marker (not some other property
+    // of the fixture) is what gates the null above.
+    const withoutMarker = {
+      ...comment,
+      body: PR3196_COMPLETED_NO_ACTIONABLE_BODY,
+    };
+    assert.equal(
+      classifyRegularBotComment(withoutMarker, [withoutMarker], [])?.classifier,
+      'RESOLVED',
+    );
+  });
+
+  test('#3260: classifyRegularBotComment never resolves the PR #3154 paused revision', () => {
+    const comment = {
+      id: 2,
+      createdAt: '2026-09-20T11:16:35Z',
+      body: PR3154_PAUSED_BODY,
+      author: { login: 'coderabbitai[bot]' },
+    };
+    const result = classifyRegularBotComment(comment, [comment], []);
+    assert.equal(result, null);
+    // Positive control: the same body minus the paused marker block still
+    // resolves via the "No actionable comments" sentence it retains.
+    const withoutMarker = {
+      ...comment,
+      body: `${CODERABBIT_SUMMARY_MARKER}\n<!-- recent_review_start -->\n\nNo actionable comments were generated in the recent review. 🎉`,
+    };
+    assert.equal(
+      classifyRegularBotComment(withoutMarker, [withoutMarker], [])?.classifier,
+      'RESOLVED',
+    );
+  });
+}
 
 // #2335: buildPreMergeReadinessSummary/computePreMergeReadinessBlockers --
 // advisoryWait.secondaryQuietWindow.
@@ -11001,6 +11395,9 @@ function selfWaiverMarkerComment(payload: {
     }),
     createdAt: payload.createdAt,
     updatedAt: payload.createdAt,
+    // #3246: unedited by construction -- these fixtures model a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

@@ -599,8 +599,13 @@ export function collectPreMergeReadiness(
     args.prNumber,
   );
   const timelineEvents = port.getWorkItemTimeline(args.prNumber);
+  // #3246: `includeEditState` resolves each comment's GraphQL
+  // `lastEditedAt` -- needed so `waiverEvidence` (fed by these PR
+  // comments) can reject a body-edited external-check-waiver marker.
+  // `claimComments` below deliberately does NOT opt in: the claim-marker
+  // family's own edit-state consumer is a separate, sibling issue.
   const comments = port
-    .listWorkItemComments(args.prNumber)
+    .listWorkItemComments(args.prNumber, { includeEditState: true })
     .map(toIssueCommentPayload);
   const claimComments = args.claimless
     ? []
@@ -1432,6 +1437,10 @@ function toIssueCommentPayload(comment) {
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
     user: { login: comment.authorLogin },
+    // #3246: passthrough only -- `undefined` for every caller that did not
+    // request `includeEditState` from the port, unchanged from before this
+    // field existed.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 export function normalizeComment(comment) {
@@ -1441,6 +1450,10 @@ export function normalizeComment(comment) {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     updatedAt: comment.updated_at ?? comment.created_at ?? '',
+    // #3246: carried through to the `CommentLike` shape
+    // `summarizeExternalCheckWaivers` reads (protocol-helpers.mts) --
+    // never derived from `updatedAt`/`updated_at`.
+    lastEditedAt: comment.last_edited_at,
   };
 }
 /**

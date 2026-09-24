@@ -34,6 +34,7 @@ import {
   renderExternalCheckWaiverComment,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 import { fetchHeadObservedAt } from './review-clause.mjs';
 
@@ -1165,6 +1166,17 @@ export async function runExternalCheckWaiver(options = {}) {
  * #2328: the pull request's own issue comments, where waiver markers live.
  * Paginated so a long conversation cannot hide an existing waiver and cause
  * a duplicate to be appended.
+ *
+ * #3246: also resolves each comment's GraphQL edit state via a follow-up
+ * `fetchLastEditedAtByNodeId` batch read, keyed by the REST row's own
+ * `node_id`. Without this, `summarizeExternalCheckWaivers` would see every
+ * comment's edit state as `unknown` (never `unedited`), so an existing,
+ * genuinely-unedited waiver would never be classified `valid` -- reuse
+ * would never fire, and `--apply` would keep appending a duplicate marker.
+ * Deliberately NOT routed through `ProviderPort.listWorkItemComments`: this
+ * function's callers need `html_url`/`url` for `ReusableWaiver.commentUrl`,
+ * fields `ProviderComment` does not carry, so the existing REST read stays
+ * as-is and only gains the extra GraphQL round trip.
  */
 function fetchPrComments({ owner, repo, prNumber }) {
   // Never fail open: an unreadable list is not an empty one. Swallowing the
@@ -1179,7 +1191,29 @@ function fetchPrComments({ owner, repo, prNumber }) {
       `external-check waiver apply blocked: could not read PR #${prNumber} comments to check for an existing waiver`,
     );
   }
-  return payload;
+  const rows = payload;
+  if (rows.length === 0) {
+    return rows;
+  }
+  const nodeIds = rows.map((row) => String(row.node_id ?? ''));
+  if (nodeIds.some((id) => id === '')) {
+    throw new Error(
+      `external-check waiver apply blocked: PR #${prNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return rows.map((row) => {
+    const nodeId = String(row.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `external-check waiver apply blocked: missing edit-state resolution for comment #${row.id} on PR #${prNumber}`,
+      );
+    }
+    return {
+      ...row,
+      lastEditedAt: lastEditedAtByNodeId.get(nodeId) ?? null,
+    };
+  });
 }
 /**
  * #2328: find an existing valid waiver for this exact selector so a repeated

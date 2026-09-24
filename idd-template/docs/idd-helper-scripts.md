@@ -1083,17 +1083,22 @@ The adopted helper boundaries are intentionally narrow:
   unreplied comments, reviewer states, advisory state, CI, claim
   validation, and `waiverEvidence` (parsed external-check waiver comments
   classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
-  `unauthorized`, `malformed`, `notConfigured`, or `modeDisabled` —
-  `notConfigured` for a valid waiver naming a check the policy never
-  declared waivable in `ciGate.externalChecks.waivable`, `modeDisabled`
-  (`#2046`) for an otherwise-valid, configured-waivable waiver while
-  `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
-  (schema default: `disabled`) — mirroring `advisory-convergence.mjs`'s
-  own mode guard, so a `waivable` list left over from a prior
-  `maintainer-authorized` configuration can never make this gate report
-  a check covered on its own; only a `valid` waiver for a
-  configured-waivable check is reported with `coveredByWaiver: true` and
-  treated as passing by the CI gate)
+  `unauthorized`, `malformed`, `notConfigured`, `modeDisabled`, or
+  `edited` — `notConfigured` for a valid waiver naming a check the
+  policy never declared waivable in `ciGate.externalChecks.waivable`,
+  `modeDisabled` (`#2046`) for an otherwise-valid, configured-waivable
+  waiver while `ciGate.externalCheckWaivers.mode` is not
+  `maintainer-authorized` (schema default: `disabled`) — mirroring
+  `advisory-convergence.mjs`'s own mode guard, so a `waivable` list left
+  over from a prior `maintainer-authorized` configuration can never make
+  this gate report a check covered on its own; `edited` (`#3246`) for a
+  marker-shaped waiver comment whose GraphQL `lastEditedAt` is a
+  parseable timestamp (`editState: 'edited'`) or could not be resolved
+  (`editState: 'unknown'`) — checked before every other classification,
+  so a body-edited waiver never reaches `valid` regardless of author,
+  HEAD, claim, or expiry; only a `valid` waiver for a configured-waivable
+  check is reported with `coveredByWaiver: true` and treated as passing
+  by the CI gate)
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
@@ -1272,6 +1277,17 @@ The adopted helper boundaries are intentionally narrow:
   their own threads, gated independently. The body names the bot by its login
   (never the standalone word "CodeRabbit") so per-HEAD re-disposition is
   preserved.
+- **CodeRabbit in-progress / paused revisions (#3260)**: CodeRabbit edits its
+  summary comment in place, so a revision can carry a `review in progress by
+  coderabbit.ai` or `review paused by coderabbit.ai` marker instead of a
+  completed walkthrough — even while an older "No actionable comments were
+  generated" sentence from the review it superseded is still present in the
+  body. An in-progress revision is skipped with reason
+  `coderabbit-review-in-progress` (the CodeRabbit analog of Codex's own
+  in-progress "Running" state, never `**Accepted**`); a paused revision is a
+  terminal non-review notice —
+  routed through the same `**Rejected**` path as a rate-limit notice, with
+  its own `noticeReason` label, never `**Accepted**`.
 - **Fail-closed**: only classifier-recognized notices are dispositioned;
   real reviews and review threads are never touched. `--apply`
   re-validates the active claim and retries once on a transient post
@@ -1496,6 +1512,14 @@ Interpretation rules:
 - Missing or unparseable body fields, unknown selectors, expired
   comments, wrong HEAD, wrong claim, or untrusted authors must fail
   closed.
+- An edited comment is not waiver evidence (kurone-kito/idd-skill#3246):
+  GitHub GraphQL `lastEditedAt` must be an explicit `null` (never
+  body-edited). A comment whose `lastEditedAt` is a timestamp, or whose
+  edit state cannot be determined, is excluded from `valid` into its own
+  `edited` bucket even when every other check (author, HEAD, claim,
+  expiry) passes -- `updated_at` is not a substitute, since GitHub's
+  `minimizeComment` advances it without touching `lastEditedAt`
+  (kurone-kito/idd-skill#3173).
 - `claim-id` accepts the case-insensitive literal sentinel `none`
   (#1905) alongside an arbitrary claim id, declaring a deliberately
   claimless waiver. It satisfies the claim-binding check only when the
@@ -4448,7 +4472,23 @@ same as `AW4`/`AW5`.
     text, rather than as a normal inline review comment, when it targets a
     line the diff-hunk view cannot host; `N == 0` or an absent block is an
     ordinary walkthrough/summary review with nothing outside the diff and
-    stays unsurfaced. Trusted IDD operational markers, IDD
+    stays unsurfaced. A review from the _configured_ primary advisory bot
+    (`isCopilotReviewerLogin`, `advisoryWait.primaryBotLogin` /
+    `readAdvisoryPrimaryBotLogin`, Copilot by default) is also surfaced when
+    `classifyCopilotReviewBody` reports either a nonzero `suppressedCount`,
+    or — only under the Copilot default — shape `unrecognized`
+    (kurone-kito/idd-skill#3259): Copilot's reviews are always `COMMENTED`,
+    so a thread-less "Previously missed" / `Suppressed comments (N)` finding
+    embedded in the review body never reaches the `CHANGES_REQUESTED` rule
+    above. Unlike every other surfacing rule here, this one has its own
+    narrower escape hatch instead of the whole-PR disposition check: a
+    trusted `review-ack:` marker (`hasTrustedReviewAckAfter`,
+    protocol-helpers.mts — the same check `idd-advisory-convergence`'s own
+    Clause 1 uses) naming that SPECIFIC review's own reviewed commit,
+    posted after it, clears the finding; an unrelated later disposition
+    comment does not, since a thread-less body-embedded finding has no
+    discrete comment or thread an ordinary disposition reply could address.
+    Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
     automation such as `github-actions[bot]`), and a genuine CodeRabbit
@@ -4477,8 +4517,9 @@ same as `AW4`/`AW5`.
     configured `advisoryBotLogins` author) so the operator can prioritize human
     feedback over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
-  `advisoryBotLogins`, `iddAgentLogins`, `prs` (each entry has `number`,
-  `mergedAt`, `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`),
+  `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
+  entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
+  `unaddressedComments`),
   and `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
   `unaddressedCommentCount`).
 - Read-only boundary: the helper performs no minimization, no posting, and no
@@ -4588,6 +4629,61 @@ same as `AW4`/`AW5`.
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
+
+### F4 branch-failure routes
+
+Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
+(issue #3327), which quote only the message fragment each acceptance
+check greps for and point here for the rest. Step 4 fast-forwards
+`{development-branch}` before step 5 removes the issue worktree so
+WorkTrunk's merge-status check sees the branch as merged instead of
+reporting `branch_outcome: retained_unmerged` (issue #2331).
+
+- **`development-branch-in-use`** (step 4): the switch fails because
+  `{development-branch}` is checked out in a sibling worktree —
+  `fatal: '{development-branch}' is already used by worktree at
+  '<path>'`. Its `||` fallback then fails too (`a branch named
+  '{development-branch}' already exists`), so the compound command
+  exits non-zero; chaining the fast-forward behind `&&` instead of
+  running it as a separate command stops it from silently advancing
+  whatever branch the primary worktree happens to be on.
+  Message-independent check: `git worktree list --porcelain` shows the
+  branch's `worktree`/`branch` pair.
+- **`development-branch-diverged`** (step 4): the fast-forward refuses
+  because local `{development-branch}` holds a commit
+  `origin/{development-branch}` lacks — `fatal: Not possible to
+  fast-forward, aborting.`. Never reset or rebase it: `git reset
+  --hard` is on the baseline deny list (`docs/permissions.md`).
+  Message-independent check:
+  `git log origin/{development-branch}..{development-branch}` is
+  non-empty.
+- **`local-branch-unmerged-commits`** (step 5): `git branch -d
+  <branch-name>` still refuses `error: the branch '<branch-name>' is
+  not fully merged` after step 4's fast-forward — expected once the PR
+  merged as a squash or rebase (for example a human merge under
+  `human_merge`), since the squash commit is not an ancestor-of match
+  for the branch's own commits even though nothing is lost. Compare
+  `git rev-parse <branch-name>` against the merged PR's own head via
+  `gh pr view {pr-number} --json state,headRefOid` — the only check
+  that actually proves this; `git branch -vv` showing
+  `[origin/<branch-name>: gone]` is a corroborating symptom (the
+  upstream ref was deleted), never a substitute, since an unmerged or
+  closed PR can show the same marker. Equal tips with a `MERGED` PR
+  mean the branch holds nothing beyond what already merged, so F4
+  keeps it (never `-D`) and tells the operator they may delete it by
+  hand; unequal tips mean genuinely unmerged
+  local work, so F4 holds instead of discarding it.
+
+The two step 4 holds reuse the `primary-worktree-dirty` resume rule
+(#3192): once the hold clears, re-run F4 from step 4 through step 7.
+`local-branch-unmerged-commits` holds after step 5's worktree-removal
+bullet already succeeded, so its resume is narrower: once resolved,
+redo only the `git branch -d` bullet and continue through step 7 —
+re-running step 4 or the worktree-removal bullet is unnecessary and
+the latter would fail against the already-removed path. If step 6
+(remote branch delete) already ran before this hold fired, redoing it
+on resume is a harmless no-op (or a "ref does not exist" error), never
+a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 

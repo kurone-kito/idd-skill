@@ -49,6 +49,7 @@ import {
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
+  isCodeRabbitReviewInProgressSummary,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
@@ -139,6 +140,11 @@ export function noticeReason(body: unknown): string {
   if (/skip review by coderabbit\.ai/i.test(text)) {
     return 'review skipped (billing failure or below the manual-trigger star-count gate)';
   }
+  // #3260: CodeRabbit's paused-review marker ("Reviews paused") -- paraphrased
+  // rather than quoting the bot's own resume/review commands.
+  if (/review paused by coderabbit\.ai/i.test(text)) {
+    return 'reviews paused by the bot; a resume is needed';
+  }
   return 'advisory non-review notice';
 }
 
@@ -197,9 +203,17 @@ export function buildSummaryDispositionBody(
 // findings as their own review threads) would let the disposition-evidence
 // gate treat the review as settled ahead of findings that arrive later --
 // "a false positive is a false merge", the same hazard the CodeRabbit
-// per-HEAD re-disposition above guards against. CodeRabbit's own summary
-// marker has no analogous in-progress state (only posted once a walkthrough
-// is genuinely complete), so this gate applies to Codex only. Parses the
+// per-HEAD re-disposition above guards against. #3260 corrects this
+// comment's prior claim that "CodeRabbit's own summary marker has no
+// analogous in-progress state": CodeRabbit edits its OWN summary comment in
+// place too, nesting a "review in progress by coderabbit.ai" marker next to
+// the previous review's content while it processes new commits (live
+// evidence: kurone-kito/idd-skill#3260, PR #3196 comment `5789875341`).
+// `buildDispositionPlan`'s own summary-walkthrough loop below gates on that
+// state via `isCodeRabbitReviewInProgressSummary` before this function ever
+// runs -- this table-parsing gate itself still applies to Codex only,
+// because Codex's own in-progress signal is this status table, not a
+// CodeRabbit-shaped marker. Parses the
 // comment's own status table (columns identified by header text, so a
 // reordered or renamed non-Status/Commit column does not break it) and
 // requires the row for the current HEAD's (possibly-abbreviated) commit to
@@ -447,6 +461,24 @@ export function buildDispositionPlan(
       // `**Accepted**` it here, so a comment id gets at most one disposition.
       isAdvisoryNonReviewNotice(comment.body)
     ) {
+      continue;
+    }
+    // #3260: never auto-accept a CodeRabbit summary while it is still
+    // processing new commits -- checked BEFORE the "No actionable comments"
+    // check below, because CodeRabbit's in-place edit can leave an older
+    // review's "No actionable comments were generated" sentence trailing
+    // beneath the in-progress marker (live evidence: PR #3160 comment
+    // `5747892562`, 2026-09-20T11:13:47Z); that stale sentence must not be
+    // mistaken for this revision's own completed, actionable-free review.
+    if (
+      identity === 'coderabbitai' &&
+      isCodeRabbitReviewInProgressSummary(comment.body)
+    ) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'coderabbit-review-in-progress',
+      });
       continue;
     }
     // The gate already classifies a "No actionable comments were generated"

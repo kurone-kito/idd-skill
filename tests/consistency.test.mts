@@ -2821,6 +2821,57 @@ test('idd-merge.instructions.md F4 step 4 holds on a dirty primary worktree with
   );
 });
 
+test('idd-merge.instructions.md F4 routes the worktree-in-use, diverged, and unmerged-branch failures (#3327)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const step4Start = text.indexOf(
+    '4. Concurrent workers sharing one clone',
+    text.indexOf('## F4'),
+  );
+  const step4End = text.indexOf(
+    '\n5. Run from the **primary worktree**',
+    step4Start,
+  );
+  const step5End = text.indexOf(
+    '\n6. If GitHub auto-delete is disabled',
+    step4End,
+  );
+  const f4End = text.indexOf('\n## F5', step5End);
+  assert.ok(
+    step4Start >= 0 &&
+      step4End > step4Start &&
+      step5End > step4End &&
+      f4End > step5End,
+    'F4 step 4/5 boundaries not found',
+  );
+  const step4 = text.slice(step4Start, step4End);
+  const step5 = text.slice(step4End, step5End);
+  const f4 = text.slice(step4Start, f4End);
+  // \s+ between words tolerates a Markdown reflow (dprint) that moves a
+  // wrap point mid-phrase without changing the semantic content.
+  assert.match(step4, /already\s+used\s+by\s+worktree/);
+  assert.match(step4, /`development-branch-in-use`/);
+  assert.match(step4, /Not\s+possible\s+to\s+fast-forward/);
+  assert.match(step4, /`development-branch-diverged`/);
+  assert.match(step4, /&&\s+git\s+merge\s+--ff-only/);
+  assert.match(step5, /headRefOid/);
+  assert.match(step5, /`local-branch-unmerged-commits`/);
+  assert.match(step5, /If\s+it\s+still\s+does/);
+  assert.doesNotMatch(text, /investigate\s+rather\s+than\s+assume/);
+  assert.doesNotMatch(f4, /update-ref\s+-d/);
+  assert.doesNotMatch(f4, /reset\s+--hard/);
+  // `branch -D` may appear only inside the step 5 operator-facing note,
+  // never as a bare agent instruction elsewhere in F4.
+  const branchDMatches = f4.match(/branch\s+-D/g) ?? [];
+  assert.equal(
+    branchDMatches.length,
+    1,
+    'expected exactly one `branch -D` mention in F4 (the operator note)',
+  );
+  assert.match(step5, /operator[\s\S]{0,40}branch\s+-D/);
+});
+
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
   const text = readText(
     'idd-template/.github/instructions/idd-work.instructions.md',

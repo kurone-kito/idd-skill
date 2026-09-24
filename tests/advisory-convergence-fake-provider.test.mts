@@ -288,6 +288,9 @@ function autoWaiverComment() {
     createdAt: '2026-07-31T09:00:00Z',
     updatedAt: '2026-07-31T09:00:00Z',
     authorLogin: 'github-actions[bot]',
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -910,6 +913,76 @@ test("end-to-end: a genuine marker whose comment id matches the cited run's own 
       },
     );
     assert.equal(verdict.waiver.autoWaiverValid, true);
+  });
+});
+
+test('end-to-end: collectFromGitHub genuinely resolves comment edit state through its own includeEditState wiring -- a body-edited marker never validates the auto-waiver (kurone-kito/idd-skill#3246, C1 round 2)', () => {
+  // Negative-control sibling of the positive-control test above, closing a
+  // C1 round-2 gap: every other #3246 test either hand-builds `comments`
+  // for computeAdvisoryConvergenceVerdict directly (bypassing
+  // collectFromGitHub entirely) or exercises collectFromGitHub without
+  // ever asserting on an edit-state-dependent outcome. This test proves
+  // collectFromGitHub's own `port.listWorkItemComments(prNumber,
+  // {includeEditState: true})` call and its toIssueCommentPayload shim
+  // genuinely carry a fixture's lastEditedAt through to the verdict --
+  // not merely that the two are syntactically wired, but that a
+  // regression dropping `includeEditState` (or the shim's `lastEditedAt`
+  // field) would be caught here.
+  withHermeticCwd(() => {
+    const editedComment = {
+      ...autoWaiverComment(),
+      // GitHub reports this comment was body-edited after posting.
+      lastEditedAt: '2026-07-31T09:02:00Z',
+    };
+    const port = createFakeProviderAdapter({
+      ...baseFixture(),
+      comments: { [PR_NUMBER]: [editedComment] },
+      workflowRuns: {
+        [`o/r/${RUN_ID}`]: {
+          path: ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+          head_sha: HEAD_SHA,
+          head_repository: { full_name: 'o/r' },
+          event: 'pull_request_target',
+        },
+      },
+      workflowRunJobs: { [`o/r/${RUN_ID}`]: acceptedRunJobsFixture() },
+      workflowRunArtifacts: {
+        [`o/r/${RUN_ID}`]: {
+          artifacts: [
+            {
+              name: `idd-self-waiver-marker-1-${digestExternalCheckWaiverMarkerBody(editedComment.body)}`,
+            },
+          ],
+        },
+      },
+      changedFiles: { [PR_NUMBER]: [ADVISORY_CONVERGENCE_WORKFLOW_PATH] },
+    });
+
+    const { inputs, options } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => port,
+    );
+
+    // Confirms the wiring itself, independent of the verdict computation
+    // below: the fixture's lastEditedAt must have survived
+    // collectFromGitHub's own comment normalization.
+    const carriedComment = (
+      inputs.comments as { id?: unknown; lastEditedAt?: unknown }[]
+    ).find((c) => String(c.id) === '1');
+    assert.equal(carriedComment?.lastEditedAt, '2026-07-31T09:02:00Z');
+
+    const verdict = computeAdvisoryConvergenceVerdict(
+      { ...inputs, claimEvents: [] },
+      {
+        ...options,
+        now: '2026-07-31T09:05:00Z',
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: [
+          { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+        ],
+      },
+    );
+    assert.equal(verdict.waiver.autoWaiverValid, false);
   });
 });
 

@@ -296,7 +296,13 @@ results before this status is built -- any login still pending keeps the
 full configured window; once every login has declined, the wait completes
 immediately; otherwise (no login pending, at least one settled) the short
 settled buffer anchors on the _latest_ of those settled logins' own
-timestamps, and a declined sibling never extends that wait.
+timestamps, and a declined sibling never extends that wait. **#3260**:
+CodeRabbit edits its summary comment in place while it starts (or pauses) a
+review, so the latest matching comment can be an in-progress or paused
+revision rather than genuine settlement evidence -- an in-progress revision
+stays pending (the full window, never the short buffer), and a paused
+revision reaches `#2547`'s zero-wait decline the same way a rate-limit
+notice does.
 `advisoryWait.exemptBotAuthoredPrs` (#1906) is an opt-in, off-by-default
 flag effective only under `advisoryWait.convergenceScope: "all-prs"`. When
 `true`, a PR whose author resolves to a GitHub Bot-typed account AND has no

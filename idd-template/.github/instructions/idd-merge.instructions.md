@@ -127,7 +127,9 @@ Before any mutating action in F3, apply the
    **Preferred path (helper runtime enabled)**: run the F3 merge helper
    documented in
    [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3).
-   First run it in dry-run (no `--apply`) and confirm `ready: true` with
+   Pass `--closing-issues <n>,<m>` for a multi-issue close
+   (forwarded to the collector). First run it in dry-run
+   (no `--apply`) and confirm `ready: true` with
    an empty `blockers[]` — it wraps the read-only `pre-merge-readiness`
    gate and adds no new authority. Then re-run with `--apply`: when
    `ready`, it re-fetches the head SHA and re-validates the claim
@@ -172,7 +174,8 @@ Before any mutating action in F3, apply the
    - D3.5 steps 6-7 and D3.7 (`idd-pr-submit.instructions.md`) have
      been re-run against `${PR_HEAD_SHA_F3}` (#2749) — covers commits
      that landed between F2 and this final gate, for example a
-     required `{development-branch}` sync. Before running them,
+     required `{development-branch}` sync. `closing-set` (readiness)
+     evidences steps 6-7 here; D3.7 stays local. Before running them,
      confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
      exactly (after fetch, the claim gate must confirm
      `git branch --show-current` is `{branch-name}`; else hold).
@@ -479,42 +482,43 @@ Before any mutating action in F3, apply the
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
    format, and fallback GraphQL commands.
-4. Concurrent workers sharing one clone: serialize this step's fetch
-   and step 5's `worktree remove` behind the
+4. Concurrent workers sharing one clone: serialize this fetch and
+   step 5's `worktree remove` behind the
    [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
-   From the **primary worktree** (the issue worktree is still on its
-   branch, so running elsewhere would fast-forward the wrong branch),
-   switch to `{development-branch}` (the PR's validated target; see
+   From the **primary worktree** (elsewhere would fast-forward the
+   wrong branch), switch to `{development-branch}` (the PR's
+   validated target; see
    [B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch))
    and fast-forward it:
 
    ```sh
    git fetch origin {development-branch}
-   git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch}
-   git merge --ff-only origin/{development-branch}
+   git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch} \
+     && git merge --ff-only origin/{development-branch}
    ```
 
-   The switch falls back to a local tracking branch when the primary
-   worktree has none yet (expected for a non-default
-   `{development-branch}`: B1 branches worktrees from its origin ref).
+   The switch falls back to a local tracking branch if the primary
+   worktree has none yet (non-default `{development-branch}`: B1
+   branches worktrees from origin).
 
-   If the switch or fast-forward refuses because dirty primary-worktree
-   paths would be overwritten, re-validate the claim, hold per
+   If the switch or fast-forward refuses over dirty primary-worktree
+   paths, re-validate the claim, hold per
    [Hold / suspend](idd-overview-appendix.instructions.md#hold--suspend)
-   as `primary-worktree-dirty` (resume: the operator cleans those paths
-   — never stash or discard them yourself — then re-run from this step
-   through step 7), and stop before step 5. This is primary-worktree
-   state, not an issue-worktree failure: never remove the issue worktree
-   because of it.
+   as `primary-worktree-dirty` (the operator cleans those paths — never
+   stash/discard them — then re-run step 4 through step 7), and
+   stop before step 5 — primary-worktree state, so never remove the
+   issue worktree because of it.
 
-   Doing this before deletion lets WorkTrunk's merge-status check,
-   which reads the local `{development-branch}`, see the branch as
-   merged instead of reporting `branch_outcome: retained_unmerged`
-   (`#2331`). This plain git operation is unrelated to B1 item 1's
-   trusted-checkout contract — if `{development-branch}` is not the
-   repository's default branch, run `git switch <default-branch>`
-   once F4 completes or holds so the next B1 finds it on the trusted
-   checkout.
+   Two more failures (stop before step 5; see
+   [detail](../../docs/idd-helper-scripts.md#f4-branch-failure-routes)):
+
+   - `already used by worktree` → hold as `development-branch-in-use`;
+     name the path, don't touch it.
+   - `Not possible to fast-forward, aborting.` → hold as
+     `development-branch-diverged`; don't reset/rebase.
+
+   Off-default `{development-branch}`: `git switch <default-branch>`
+   once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, never inside the one being
    removed. Any removal (plain or `--force`) silently discards
    ignored files too, including inside a submodule. Scope Git
@@ -551,14 +555,17 @@ Before any mutating action in F3, apply the
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
      denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
-     was fast-forwarded in step 4, so this should not fail with
-     `error: the branch '<branch-name>' is not fully merged`; if it
-     still does, investigate rather than assume a stale local
-     `{development-branch}`.
+     was fast-forwarded in step 4, so this shouldn't fail with
+     `error: the branch '<branch-name>' is not fully merged`. If it
+     still does, compare `git rev-parse <branch-name>` with `gh pr
+     view {pr-number} --json state,headRefOid`: matching `MERGED`
+     head → keep it, re-validate claim, comment: operator may run
+     `git branch -D <branch-name>`, continue to step 6 (`Next action:
+     none`); otherwise hold `local-branch-unmerged-commits`, stop
+     before step 7, keep claim.
 
 6. If GitHub auto-delete is disabled: delete the remote branch too.
-   (WorkTrunk may run steps 5–6; step 4's local `{development-branch}`
-   update stays a plain git operation, not a WorkTrunk one.)
+   (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
 7. Re-validate the active claim before each mutation below. If it
    still uses your `{claim-id}`, upsert the claimed issue's own digest
    with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open

@@ -93,6 +93,21 @@ interface CommentLike {
   updated_at?: string | null;
   html_url?: string | null;
   url?: string | null;
+  /** #3246: GraphQL `IssueComment.lastEditedAt`, or its snake_case
+   * `last_edited_at` equivalent -- see `classifyCommentEditState`'s doc
+   * comment for the three-state contract this reads. */
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
+  /** #3246 (Copilot review, PR #3403, round 3): the flat author-login shape
+   * `provider-port.mts`'s `ProviderComment` and its review-thread comment
+   * types actually carry -- distinct from this interface's own nested
+   * `author.login`/`user.login` REST/GraphQL shapes. `isTrustEvidenceComment`
+   * below reads this as a third fallback so a genuine provider-port comment
+   * object (as the sibling claim-marker and review/merge-evidence/
+   * disposition tracks this predicate exists for will pass it) doesn't
+   * silently compute an empty login and fail closed for every trusted
+   * caller. */
+  authorLogin?: string | null;
 }
 
 /** Review-thread reply node (GraphQL `reviewThreads` comment). */
@@ -477,6 +492,24 @@ export interface ExternalCheckWaiverEvidence {
     checkSelector: string;
     expiresAt: string;
   }[];
+  /**
+   * #3246: waivers whose marker-shaped comment is body-edited
+   * (`editState: 'edited'`) or whose edit state could not be determined
+   * (`editState: 'unknown'`) -- checked right after the #2657
+   * reason-token exclusion and before every other classification, so a
+   * body-edited or edit-state-unresolved marker never reaches `valid`
+   * (or any other bucket) regardless of author, HEAD, claim, or expiry.
+   * GitHub lets any Write-role collaborator or App rewrite an existing
+   * comment's body in place while keeping its `id`, author, and
+   * `created_at`, so those alone are not proof the body is still the one
+   * that was posted -- see `classifyCommentEditState`'s doc comment for
+   * the three-state contract this reads.
+   */
+  edited: {
+    authorLogin: string;
+    checkSelector: string;
+    editState: 'edited' | 'unknown';
+  }[];
 }
 
 /** Classification outcome for a single review thread at the gate. */
@@ -828,6 +861,94 @@ function waiverSelectorOverlapsConfiguredWaivable(
   );
 }
 
+/**
+ * #3246: `true` when `value` is a parseable ISO-8601 timestamp GitHub
+ * DateTime fields use. Mirrors `authoring-owner-provenance.mts`'s own
+ * `isParseableTimestamp` (the issue #3173 precedent this feature copies)
+ * rather than the stricter round-trip check `isValidIsoTimestamp`
+ * (marker-helpers.mts) uses for hand-authored marker fields -- a
+ * GraphQL-emitted timestamp is trusted server output, not
+ * operator-typed input.
+ */
+function isParseableGraphqlTimestamp(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim() !== '' &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+/**
+ * #3246: classify one comment's edit state from its GraphQL
+ * `lastEditedAt` (or a snake_case `last_edited_at`, whichever key the
+ * caller's shape carries -- {@link CommentLike} declares both). Reads
+ * nothing else off the comment: never `updatedAt`/`updated_at`, since
+ * GitHub's `minimizeComment` mutation (IDD's own hide-on-supersede
+ * sweeps call it) advances `updatedAt` while leaving `lastEditedAt`
+ * `null` (kurone-kito/idd-skill#3173).
+ *
+ * - `'unedited'`: `lastEditedAt` is an explicit JSON `null` -- GitHub
+ *   reports the comment was never body-edited.
+ * - `'edited'`: `lastEditedAt` is a parseable timestamp -- the comment
+ *   was body-edited after posting.
+ * - `'unknown'`: `lastEditedAt` is absent, empty, or unparseable -- the
+ *   caller never resolved edit state for this comment (or the read came
+ *   back incomplete). Never coerced to `'unedited'`: an unresolved edit
+ *   state must fail closed the same way a genuine edit does.
+ */
+export function classifyCommentEditState(
+  comment: CommentLike | null | undefined,
+): 'unedited' | 'edited' | 'unknown' {
+  if (comment == null) {
+    return 'unknown';
+  }
+  const raw =
+    comment.lastEditedAt !== undefined
+      ? comment.lastEditedAt
+      : comment.last_edited_at;
+  if (raw === null) {
+    return 'unedited';
+  }
+  if (isParseableGraphqlTimestamp(raw)) {
+    return 'edited';
+  }
+  return 'unknown';
+}
+
+/**
+ * #3246: `true` only when `comment`'s author passes the caller's own
+ * trust check AND its edit state is `'unedited'`. The shared per-comment
+ * trust predicate every trust-bearing-marker consumer (this file's own
+ * waiver classification below, and the sibling claim-marker and
+ * review/merge-evidence/disposition tracks) can build on so neither
+ * sibling has to re-derive edit-state trust independently.
+ */
+export function isTrustEvidenceComment(
+  comment: CommentLike | null | undefined,
+  isTrustedAuthor: (login: string) => boolean,
+): boolean {
+  if (comment == null) {
+    return false;
+  }
+  // Normalized the same way summarizeExternalCheckWaivers' own inline
+  // authorLogin computation is (#3246 C1 review): a caller-supplied
+  // isTrustedAuthor typically checks a lowercased trusted-login set, so
+  // an unnormalized mixed-case GitHub login would silently read as
+  // untrusted. #3246 (Copilot review, PR #3403, round 3): also falls back
+  // to the flat `authorLogin` field -- the shape `ProviderComment` and its
+  // review-thread comment siblings actually carry -- so a genuine
+  // provider-port comment object never computes an empty login here.
+  const authorLogin = String(
+    comment.author?.login ?? comment.user?.login ?? comment.authorLogin ?? '',
+  )
+    .trim()
+    .toLowerCase();
+  return (
+    isTrustedAuthor(authorLogin) &&
+    classifyCommentEditState(comment) === 'unedited'
+  );
+}
+
 export function summarizeExternalCheckWaivers(
   comments: CommentLike[] | null | undefined,
   {
@@ -937,6 +1058,7 @@ export function summarizeExternalCheckWaivers(
   const malformed: ExternalCheckWaiverEvidence['malformed'] = [];
   const notConfigured: ExternalCheckWaiverEvidence['notConfigured'] = [];
   const modeDisabled: ExternalCheckWaiverEvidence['modeDisabled'] = [];
+  const edited: ExternalCheckWaiverEvidence['edited'] = [];
   // An empty `mode` leaves this gate off (legacy/unit-caller default); a
   // non-empty value must equal `maintainer-authorized` exactly, mirroring
   // `advisory-convergence.mts`'s own guard.
@@ -972,6 +1094,24 @@ export function summarizeExternalCheckWaivers(
       !allowSelfReferentialBootstrapAuto &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
     ) {
+      continue;
+    }
+
+    // kurone-kito/idd-skill#3246: a body-edited (or edit-state-unresolved)
+    // marker is never trust evidence, regardless of author, HEAD, claim,
+    // or expiry -- GitHub lets any Write-role collaborator or App rewrite
+    // an existing comment's body in place while keeping its `id`, author,
+    // and `created_at`, so those alone are not proof the body is still
+    // the one that was posted. Checked before every other classification
+    // (only the #2657 reason-token exclusion above runs first) so an
+    // edited marker can never land in `valid` via any other path either.
+    const editState = classifyCommentEditState(comment);
+    if (editState !== 'unedited') {
+      edited.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        editState,
+      });
       continue;
     }
 
@@ -1130,6 +1270,7 @@ export function summarizeExternalCheckWaivers(
     malformed,
     notConfigured,
     modeDisabled,
+    edited,
   };
 }
 
@@ -1657,6 +1798,62 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   'i',
 );
 
+// #3260: CodeRabbit edits its summary comment IN PLACE when it starts
+// reviewing new commits, nesting this inner marker (plus a "Currently
+// processing new changes in this PR" note) next to the previous review's
+// own content inside the same outer `CODERABBIT_SUMMARY_MARKER` wrapper --
+// so an in-progress revision is byte-for-byte indistinguishable from a
+// genuine walkthrough at the outer-wrapper level. Unlike
+// `CODERABBIT_SKIP_REVIEW_MARKER`, this marker deliberately does NOT
+// exclude a comment from `isReviewSummaryComment` -- it mirrors Codex's
+// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`
+// in disposition-non-review-notices.mts): the comment is still
+// summary-shaped, but a separate completeness gate
+// (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
+// auto-accept eligibility. Single-sourced so the settlement classifier,
+// `buildDispositionPlan`'s completeness gate, and
+// `classifyRegularBotComment`'s RESOLVED guard all recognize
+// byte-for-byte the same marker and cannot drift.
+export const CODERABBIT_REVIEW_IN_PROGRESS_MARKER =
+  '<!-- This is an auto-generated comment: review in progress by coderabbit.ai -->';
+
+const CODERABBIT_REVIEW_IN_PROGRESS_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_REVIEW_IN_PROGRESS_MARKER),
+  'i',
+);
+
+// #3260: CodeRabbit's paused-review marker ("Reviews paused"): like
+// `CODERABBIT_SKIP_REVIEW_MARKER`, this means the bot will not review new
+// commits until someone resumes it, so it is a terminal non-review notice
+// (declined), never a completed review -- added to
+// `ADVISORY_NON_REVIEW_NOTICE_PATTERNS` below and excluded from
+// `isReviewSummaryComment` the same way #2161 excludes the skip-review
+// marker.
+export const CODERABBIT_REVIEW_PAUSED_MARKER =
+  '<!-- This is an auto-generated comment: review paused by coderabbit.ai -->';
+
+const CODERABBIT_REVIEW_PAUSED_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_REVIEW_PAUSED_MARKER),
+  'i',
+);
+
+/**
+ * True when `body` carries CodeRabbit's #3260 in-progress marker anywhere in
+ * its text -- the caller is expected to have already confirmed the body is
+ * CodeRabbit's summary shape (`isReviewSummaryComment`, which deliberately
+ * still returns `true` for this marker) before treating this as a
+ * completeness signal. Consumed by
+ * {@link computeSecondaryAdvisoryReviewSettlement} (reports pending, not
+ * settled), `disposition-non-review-notices.mts`'s `buildDispositionPlan`
+ * (skips with reason `coderabbit-review-in-progress`, mirroring Codex's own
+ * `codex-review-running`), and `classifyRegularBotComment` (never RESOLVED
+ * for it, even when an older "No actionable comments were generated"
+ * sentence is still present in the body).
+ */
+export function isCodeRabbitReviewInProgressSummary(body: unknown): boolean {
+  return CODERABBIT_REVIEW_IN_PROGRESS_MARKER_RE.test(String(body ?? ''));
+}
+
 // The exact marker `chatgpt-codex-connector[bot]` prefixes its own recurring
 // PR-level review-status comment with: a single issue-level comment it edits
 // in place (not reposts) on every push, showing a "Running"/"Completed"
@@ -1952,6 +2149,17 @@ export function classifyRegularBotComment(
   const body = (comment.body ?? '').trimStart();
 
   if (body.startsWith(CODERABBIT_SUMMARY_MARKER)) {
+    // #3260: an in-progress or paused revision must never resolve, even
+    // when an older "No actionable comments were generated" sentence (or a
+    // stale matching disposition) is still present from the review this
+    // revision superseded -- both checks below are un-reachable for either
+    // marker.
+    if (
+      isCodeRabbitReviewInProgressSummary(body) ||
+      CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(body)
+    ) {
+      return null;
+    }
     if (/No actionable comments were generated/i.test(body)) {
       return {
         classifier: 'RESOLVED',
@@ -2637,6 +2845,10 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
   // CODERABBIT_SKIP_REVIEW_MARKER above) -- carries no review content even
   // though the outer wrapper alone cannot tell it apart from a real summary.
   CODERABBIT_SKIP_REVIEW_MARKER_RE,
+  // #3260: CodeRabbit's paused-review marker ("Reviews paused") -- like the
+  // skip-review notice above, it will not review new commits until someone
+  // resumes it, so it is a terminal decline rather than a completed review.
+  CODERABBIT_REVIEW_PAUSED_MARKER_RE,
 ];
 
 // #2641: CodeRabbit's own courtesy-acknowledgment reply shape, mirroring
@@ -3714,7 +3926,12 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // review content despite starting with the CodeRabbit summary marker, so it
 // is excluded here too -- never a summary walkthrough, always a non-review
 // notice (see isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
-// No other configured bot currently has an analogous inner exclusion marker.
+// #3260: the paused-review marker (CODERABBIT_REVIEW_PAUSED_MARKER) gets the
+// same exclusion for the same reason -- a paused revision is a terminal
+// decline, never a walkthrough. The in-progress marker
+// (CODERABBIT_REVIEW_IN_PROGRESS_MARKER) is deliberately NOT excluded here --
+// see isCodeRabbitReviewInProgressSummary's own doc comment for why. No other
+// configured bot currently has an analogous inner exclusion marker.
 export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
   for (const [identity, marker] of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY) {
@@ -3723,7 +3940,8 @@ export function isReviewSummaryComment(body: unknown): boolean {
     }
     if (
       identity === 'coderabbitai' &&
-      CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
+      (CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text) ||
+        CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(text))
     ) {
       return false;
     }
@@ -3829,7 +4047,10 @@ export function dispositionNamesAdvisoryBot(
 //   risk `buildSecondaryQuietWindowStatus`'s settled-buffer branch still
 //   protects against.
 // - `declined: true` -- the LATEST matching comment for this HEAD is a
-//   rate-limit / skip-review notice (`isAdvisoryNonReviewNotice`). #2547's
+//   rate-limit / skip-review notice (`isAdvisoryNonReviewNotice`), which
+//   since #3260 also covers CodeRabbit's paused-review marker ("Reviews
+//   paused"): the bot will not review new commits until someone resumes
+//   it, so it is exactly as terminal as a rate-limit decline. #2547's
 //   live investigation (`gh api .../commits/{sha}/statuses` across several
 //   PRs' head commits, corroborated by hours of subsequent silence on the
 //   oldest sampled PR) found every sampled rate-limit decline reaches its
@@ -3841,8 +4062,13 @@ export function dispositionNamesAdvisoryBot(
 //   with no separately-fetched corroborating commit status still reports
 //   `declined: true` here, not the ambiguous/pending case.)
 // - Neither `settled` nor `declined` -- still pending: no comment from the
-//   bot at or after `headCommittedAt` at all, or an unparseable
-//   `headCommittedAt`/unconfigured `secondaryBotLogin`. #2335's original
+//   bot at or after `headCommittedAt` at all, an unparseable
+//   `headCommittedAt`/unconfigured `secondaryBotLogin`, or (#3260) the
+//   LATEST matching comment is CodeRabbit's own in-progress revision
+//   (`isCodeRabbitReviewInProgressSummary`) -- CodeRabbit edits its summary
+//   comment in place when it starts reviewing new commits, so the outer
+//   `summarize by coderabbit.ai` wrapper alone cannot tell an in-progress
+//   revision apart from a genuine completed walkthrough; #2335's original
 //   full-window protection is unchanged for this case.
 //
 // Only the single latest matching comment is examined -- a notice posted
@@ -3925,6 +4151,22 @@ export function computeSecondaryAdvisoryReviewSettlement(
     // This is a retryable non-review notice, not a completed review. Keep the
     // secondary bot in the ordinary pending path so a later full review or
     // finding cannot arrive after a short settled buffer (#3146).
+    return { settled: false, settledAt: null, declined: false };
+  }
+  if (
+    token === 'coderabbitai' &&
+    isCodeRabbitReviewInProgressSummary(latest.body)
+  ) {
+    // #3260: CodeRabbit is still processing new commits -- the outer summary
+    // wrapper is byte-for-byte identical to a genuine walkthrough, but this
+    // revision carries no review result yet. Keep the secondary bot in the
+    // ordinary pending path (full window) rather than settling on a
+    // revision that will be overwritten once the review actually finishes.
+    // Gated on `token` (Copilot review, PR #3412): this marker predicate is
+    // CodeRabbit-specific, so it must never fire for a differently
+    // configured secondary bot whose own comment happens to contain the
+    // same literal marker text -- `matches`/`latest` are already filtered
+    // to `secondaryBotLogin`'s own comments, not necessarily CodeRabbit's.
     return { settled: false, settledAt: null, declined: false };
   }
   return { settled: true, settledAt: latest.at, declined: false };
@@ -11855,6 +12097,96 @@ export function compareIsoTimestamps(left: unknown, right: unknown): number {
     return -1;
   }
   return String(left ?? '').localeCompare(String(right ?? ''));
+}
+
+// kurone-kito/idd-skill#3259: requires the FULL canonical `review-ack:`
+// marker shape -- a valid trailing ISO-8601 timestamp, end-anchored --
+// matching the `review-ack:` entry in `OPERATIONAL_MARKERS`
+// (marker-helpers.mts) exactly, so a malformed or truncated comment never
+// counts as a valid ack. Moved here verbatim from `advisory-convergence.mts`
+// (originally #2050 / #2056) so a second caller
+// (`merged-pr-feedback-sweep.mts`) can reuse the SAME `review-ack:`
+// validity check the real `idd-advisory-convergence` gate already uses,
+// instead of a second ad-hoc marker-matching implementation that could
+// drift out of sync with it; `advisory-convergence.mts` now delegates to
+// {@link hasTrustedReviewAckAfter} below. Group 1 is the embedded commit
+// SHA (compared against the caller-supplied `commitSha`) and group 2 is
+// the embedded timestamp (validated with `isValidIsoTimestamp` -- the bare
+// digit-shape match alone accepts a syntactically-digit-shaped but
+// semantically invalid calendar date/time, e.g. `2026-99-99T99:99:99Z`).
+const REVIEW_ACK_MARKER_PATTERN =
+  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
+
+/**
+ * kurone-kito/idd-skill#3259 (moved verbatim from `advisory-convergence.mts`,
+ * originally #2050 / #2056): `true` when a trusted `review-ack:` marker
+ * exists among `comments` whose OWN GitHub-assigned `created_at` (never an
+ * embedded, agent-supplied timestamp -- the same "clock anchor is marker
+ * created_at, not embedded text" trust boundary `hasFreshDisposition`
+ * above and `summarizeSameHeadRerollMarkers` (advisory-convergence.mts)
+ * both already apply) is strictly after `reviewSubmittedAt`, AND whose
+ * embedded commit SHA equals `commitSha` (the same same-commit filter
+ * `summarizeSameHeadRerollMarkers` already applies to `advisory-reroll`
+ * markers against the PR's current HEAD -- callers needing that exact
+ * semantics pass the PR's HEAD sha here; a caller acknowledging a
+ * SPECIFIC review's own reviewed commit, such as
+ * `merged-pr-feedback-sweep.mts`, passes that review's own commit sha
+ * instead).
+ *
+ * The `createdAt > reviewSubmittedAt` ordering still invalidates a
+ * pre-existing ack when a later review lands (same commit or not, e.g. an
+ * AW6 same-HEAD reroll). The SHA check closes the delayed-POST race the
+ * ordering check cannot: a marker that embedded commit A can still
+ * receive a GitHub `createdAt` after review B's `submittedAt` if the PR
+ * advanced between render and POST.
+ *
+ * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
+ * invalid, or when `commitSha` is empty, since there is then no anchor to
+ * compare an ack against -- the safe direction for every known caller: an
+ * unresolved anchor means the finding stays reported / the clause stays
+ * unsatisfied, never silently cleared.
+ *
+ * `trustedMarkerLogins` must already be normalized (trimmed, lower-cased)
+ * by the caller, matching every other trusted-login-set consumer in this
+ * file.
+ */
+export function hasTrustedReviewAckAfter(
+  comments: CommentLike[],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+  commitSha: string,
+): boolean {
+  if (!isValidIsoTimestamp(reviewSubmittedAt) || !commitSha) {
+    return false;
+  }
+  const trusted = new Set(trustedMarkerLogins);
+  return comments.some((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
+    // Group 1 = embedded commit SHA, group 2 = embedded timestamp. The
+    // timestamp is otherwise never trusted for the createdAt-vs-
+    // reviewSubmittedAt comparison below, but a marker whose OWN
+    // digit-shaped field is not a real calendar date/time is malformed --
+    // reject it here the same way `detectMalformedOperationalMarker`
+    // (marker-helpers.mts) rejects other structurally-invalid markers.
+    if (!match || match[1] !== commitSha || !isValidIsoTimestamp(match[2])) {
+      return false;
+    }
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trusted.has(login)) {
+      return false;
+    }
+    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
+    // embedded (agent-supplied) timestamp field, same anchor rule AW2
+    // already states for `advisory-wait:`.
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
+    );
+  });
 }
 
 function threadActivityAt(thread: ThreadLike): string | null | undefined {

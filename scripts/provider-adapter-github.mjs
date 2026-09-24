@@ -93,6 +93,95 @@ function assertNoGraphqlErrors(payload, context) {
   }
 }
 /**
+ * #3246: map a raw GraphQL `lastEditedAt` field value onto
+ * {@link ProviderComment.lastEditedAt}'s three-state contract. Used by
+ * every ALREADY-GraphQL comment query (review threads,
+ * `listChangeRequestGraphqlComments`) that selects this field
+ * unconditionally -- `undefined` here means the field came back missing,
+ * empty, or unparseable on an otherwise-successful response, never a
+ * transport failure (a failed call throws before this runs).
+ */
+function mapLastEditedAt(raw) {
+  if (raw === null) {
+    return null;
+  }
+  if (
+    typeof raw === 'string' &&
+    raw.trim() !== '' &&
+    !Number.isNaN(Date.parse(raw))
+  ) {
+    return raw;
+  }
+  return undefined;
+}
+/**
+ * #3246: batch-resolve GraphQL `IssueComment.lastEditedAt` for the given
+ * comment node ids via `nodes(ids:)`, chunked to 100 ids per request
+ * (matching this file's own `first:100` page-size convention). Backs
+ * {@link ProviderPort.listWorkItemComments}'s and
+ * {@link ProviderPort.listWorkItemCommentsWithRetryAsync}'s opt-in
+ * `includeEditState` -- both read REST `issues/{n}/comments`, which has
+ * no edit-timestamp field, so resolving it needs this separate GraphQL
+ * round trip. Exported so `external-check-waiver.mts` -- which predates
+ * the #2266 provider-port migration and still calls `gh` directly for its
+ * own REST comment read (needing `html_url`/`url`, fields
+ * {@link ProviderComment} does not carry) -- can share this one
+ * resolution instead of forking a second copy.
+ *
+ * Every requested id must resolve to a well-formed `IssueComment` node
+ * with a three-state-contract-valid `lastEditedAt`
+ * (`null`/parseable-timestamp): a missing, mismatched, or malformed node
+ * throws rather than silently reporting 'unknown' for a caller that
+ * explicitly opted in and needs a definitive answer -- mirrors this
+ * file's other GraphQL methods' fail-fast-on-malformed-page contract.
+ */
+export function fetchLastEditedAtByNodeId(ghTextFn, nodeIds) {
+  const result = new Map();
+  if (nodeIds.length === 0) {
+    return result;
+  }
+  const query = `query($ids:[ID!]!){
+  nodes(ids:$ids) { id ... on IssueComment { lastEditedAt } }
+}`;
+  const chunkSize = 100;
+  for (let start = 0; start < nodeIds.length; start += chunkSize) {
+    const chunk = nodeIds.slice(start, start + chunkSize);
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      ...chunk.flatMap((id) => ['-f', `ids[]=${id}`]),
+    ];
+    const parsed = JSON.parse(ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'fetchLastEditedAtByNodeId');
+    const nodes = parsed?.data?.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      throw new Error(
+        `fetchLastEditedAtByNodeId: expected ${chunk.length} node(s), got ${Array.isArray(nodes) ? nodes.length : 'none'}`,
+      );
+    }
+    nodes.forEach((node, index) => {
+      const expectedId = chunk[index];
+      const typed = node;
+      if (typed == null || String(typed.id ?? '') !== expectedId) {
+        throw new Error(
+          `fetchLastEditedAtByNodeId: node ${expectedId} missing or mismatched in response`,
+        );
+      }
+      const mapped = mapLastEditedAt(typed.lastEditedAt);
+      if (mapped === undefined) {
+        throw new Error(
+          `fetchLastEditedAtByNodeId: node ${expectedId} has a missing/unparseable lastEditedAt`,
+        );
+      }
+      result.set(expectedId, mapped);
+    });
+  }
+  return result;
+}
+/**
  * Backs {@link ProviderPort.getWorkItemUserContentEdits} (via
  * {@link fetchWorkItemUserContentEdits}'s full backward-pagination loop
  * over this single-page fetch) and, directly (one call, no pagination --
@@ -1583,7 +1672,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           ? { timeout: options.timeoutMs }
           : {}),
       });
-      return rows.map((row) => ({
+      const mapped = rows.map((row) => ({
         id: Number(row.id),
         nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
@@ -1591,6 +1680,34 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
         authorLogin: String(row.user?.login ?? ''),
       }));
+      if (!options?.includeEditState) {
+        return mapped;
+      }
+      // #3246: REST has no edit-timestamp field -- resolve it via one
+      // follow-up GraphQL batch read, keyed by each comment's own
+      // `node_id`. A comment missing `node_id` cannot be resolved at all;
+      // fail closed rather than silently reporting it 'unknown'.
+      const nodeIds = mapped.map((comment) => comment.nodeId);
+      if (nodeIds.some((id) => id === '')) {
+        throw new Error(
+          `listWorkItemComments: includeEditState requires every comment on #${number} to carry a node_id`,
+        );
+      }
+      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
+        deps.ghText,
+        nodeIds,
+      );
+      return mapped.map((comment) => {
+        if (!lastEditedAtByNodeId.has(comment.nodeId)) {
+          throw new Error(
+            `listWorkItemComments: missing edit-state resolution for comment #${comment.id}`,
+          );
+        }
+        return {
+          ...comment,
+          lastEditedAt: lastEditedAtByNodeId.get(comment.nodeId) ?? null,
+        };
+      });
     },
     postWorkItemComment(number, body) {
       return postWorkItemCommentWithRetry(deps, repoPath, number, body);
@@ -1910,7 +2027,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }
       return nodes;
     },
-    async listWorkItemCommentsWithRetryAsync(number) {
+    async listWorkItemCommentsWithRetryAsync(number, options) {
       const comments = [];
       const pageSize = 100;
       for (let page = 1; ; page += 1) {
@@ -1936,7 +2053,35 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           break;
         }
       }
-      return comments;
+      if (!options?.includeEditState) {
+        return comments;
+      }
+      // #3246: same edit-state resolution as `listWorkItemComments`, but
+      // merged onto each raw REST row as snake_case `last_edited_at` --
+      // this method's return type is a raw passthrough, not
+      // `ProviderComment`.
+      const nodeIds = comments.map((row) => String(row?.node_id ?? ''));
+      if (nodeIds.some((id) => id === '')) {
+        throw new Error(
+          `listWorkItemCommentsWithRetryAsync: includeEditState requires every comment on #${number} to carry a node_id`,
+        );
+      }
+      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
+        deps.ghText,
+        nodeIds,
+      );
+      return comments.map((row, index) => {
+        const nodeId = nodeIds[index];
+        if (!lastEditedAtByNodeId.has(nodeId)) {
+          throw new Error(
+            `listWorkItemCommentsWithRetryAsync: missing edit-state resolution for node ${nodeId}`,
+          );
+        }
+        return {
+          ...row,
+          last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+        };
+      });
     },
     searchOpenWorkItems(query) {
       const args = [
@@ -2299,7 +2444,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         owner,
         repo,
         number,
-        'body createdAt updatedAt author { login } pullRequestReview { id }',
+        'body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
@@ -2313,6 +2458,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             comment.pullRequestReview?.id == null
               ? null
               : String(comment.pullRequestReview.id),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },
@@ -2322,7 +2468,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         owner,
         repo,
         number,
-        'body url createdAt updatedAt author { login }',
+        'body url createdAt updatedAt lastEditedAt author { login }',
       );
       return nodes.map((node) => ({
         isResolved: node.isResolved,
@@ -2333,6 +2479,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),
           authorLogin: String(comment.author?.login ?? ''),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },
@@ -2357,7 +2504,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       comments(first:100,after:$cursor){
-        nodes { body url createdAt updatedAt author { login } }
+        nodes { body url createdAt updatedAt lastEditedAt author { login } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2411,6 +2558,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             createdAt: String(node.createdAt ?? ''),
             updatedAt: String(node.updatedAt ?? ''),
             authorLogin: String(node.author?.login ?? ''),
+            lastEditedAt: mapLastEditedAt(node.lastEditedAt),
           });
         }
         const pageInfo = connection.pageInfo;
@@ -2431,7 +2579,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       reviews(first:100,after:$cursor){
-        nodes { body url state submittedAt author { login } }
+        nodes { body url state submittedAt author { login } commit { oid } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2485,6 +2633,8 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             submittedAt:
               node.submittedAt == null ? null : String(node.submittedAt),
             authorLogin: String(node.author?.login ?? ''),
+            commitOid:
+              node.commit?.oid == null ? null : String(node.commit.oid),
           });
         }
         const pageInfo = connection.pageInfo;
@@ -2711,7 +2861,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         owner,
         repo,
         number,
-        'body createdAt updatedAt author { login __typename } pullRequestReview { id }',
+        'body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
@@ -2729,6 +2879,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             comment.pullRequestReview?.id == null
               ? null
               : String(comment.pullRequestReview.id),
+          lastEditedAt: mapLastEditedAt(comment.lastEditedAt),
         })),
       }));
     },

@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildActivitySnapshotSummary,
+  classifyCommentEditState,
   classifyThreadAckOnlyPostDisposition,
   compareClaimEventOrder,
   compareClaimIds,
   EDITED_AFTER_DISPOSITION_HINT,
+  isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
@@ -4052,4 +4054,187 @@ test('compareClaimIds is transitive for every generated triple', () => {
     '',
   ];
   assertTransitiveForEveryTriple(compareClaimIds, items, 'compareClaimIds');
+});
+
+// --- #3246: classifyCommentEditState / isTrustEvidenceComment --------------
+
+test('classifyCommentEditState: explicit null lastEditedAt is unedited', () => {
+  assert.equal(classifyCommentEditState({ lastEditedAt: null }), 'unedited');
+});
+
+test('classifyCommentEditState: a parseable timestamp is edited', () => {
+  assert.equal(
+    classifyCommentEditState({ lastEditedAt: '2026-05-17T00:10:00Z' }),
+    'edited',
+  );
+});
+
+test('classifyCommentEditState: an absent lastEditedAt is unknown', () => {
+  assert.equal(classifyCommentEditState({}), 'unknown');
+});
+
+test('classifyCommentEditState: an empty-string lastEditedAt is unknown, not coerced to edited or unedited', () => {
+  assert.equal(classifyCommentEditState({ lastEditedAt: '' }), 'unknown');
+});
+
+test('classifyCommentEditState: an unparseable lastEditedAt is unknown', () => {
+  assert.equal(
+    classifyCommentEditState({ lastEditedAt: 'not-a-date' }),
+    'unknown',
+  );
+});
+
+test('classifyCommentEditState: falls back to the snake_case last_edited_at when lastEditedAt is absent', () => {
+  assert.equal(classifyCommentEditState({ last_edited_at: null }), 'unedited');
+  assert.equal(
+    classifyCommentEditState({ last_edited_at: '2026-05-17T00:10:00Z' }),
+    'edited',
+  );
+});
+
+test('classifyCommentEditState: lastEditedAt wins over last_edited_at when both are present', () => {
+  assert.equal(
+    classifyCommentEditState({
+      lastEditedAt: null,
+      last_edited_at: '2026-05-17T00:10:00Z',
+    }),
+    'unedited',
+  );
+});
+
+test('classifyCommentEditState: never derives edit state from updatedAt/updated_at (kurone-kito/idd-skill#3173)', () => {
+  // The minimizeComment shape: updatedAt moves, lastEditedAt stays null.
+  assert.equal(
+    classifyCommentEditState({
+      lastEditedAt: null,
+      updatedAt: '2026-05-17T05:00:00Z',
+      createdAt: '2026-05-17T00:00:00Z',
+    }),
+    'unedited',
+  );
+});
+
+test('classifyCommentEditState: a null/undefined comment is unknown', () => {
+  assert.equal(classifyCommentEditState(null), 'unknown');
+  assert.equal(classifyCommentEditState(undefined), 'unknown');
+});
+
+test('isTrustEvidenceComment: true only for a trusted author with an unedited comment', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'kurone-kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: normalizes a mixed-case author login before checking trust (C1 review)', () => {
+  // isTrustedAuthor typically checks a lowercased trusted-login set --
+  // an unnormalized mixed-case GitHub login must not silently read as
+  // untrusted.
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'Kurone-Kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: '  Kurone-Kito  ' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: false for a trusted author whose comment was edited', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      {
+        author: { login: 'kurone-kito' },
+        lastEditedAt: '2026-05-17T00:10:00Z',
+      },
+      isTrusted,
+    ),
+    false,
+  );
+});
+
+test('isTrustEvidenceComment: false for an untrusted author even with an unedited comment', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'stranger' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    false,
+  );
+});
+
+test('isTrustEvidenceComment: reads user.login when author.login is absent', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { user: { login: 'kurone-kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: false for a null/undefined comment', () => {
+  const isTrusted = () => true;
+  assert.equal(isTrustEvidenceComment(null, isTrusted), false);
+  assert.equal(isTrustEvidenceComment(undefined, isTrusted), false);
+});
+
+// kurone-kito/idd-skill#3246 (Copilot review, PR #3403, round 3): the
+// nested author.login/user.login shapes above are the REST/GraphQL comment
+// shapes; provider-port.mts's own ProviderComment (and its review-thread
+// comment siblings) instead carry a flat `authorLogin` field. Before this
+// fix, a genuine provider-port comment object supplied neither nested
+// shape, so the computed login was always '' and this predicate failed
+// closed even for a trusted, unedited marker -- exactly the failure mode
+// this predicate exists to avoid for its sibling consumers (the
+// claim-marker and review/merge-evidence/disposition tracks).
+test('isTrustEvidenceComment: reads the flat authorLogin field when neither author.login nor user.login is present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'kurone-kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: prefers nested author.login over the flat authorLogin field when both are present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      {
+        author: { login: 'kurone-kito' },
+        authorLogin: 'untrusted-actor',
+        lastEditedAt: null,
+      },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field before checking trust', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'Kurone-Kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
 });
