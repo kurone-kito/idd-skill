@@ -77,6 +77,7 @@ export function runDoctor({
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
+  checkThreadResolutionPolicy(root, report);
   checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
@@ -1311,6 +1312,78 @@ export function checkMergePolicyAcknowledgement(root, report) {
     return;
   }
   const finding = classifyMergePolicyAcknowledgement(config, file);
+  if (finding) {
+    report.warnings.push(finding.message);
+  }
+}
+/**
+ * `threadResolutionPolicy` phase files that must carry matching edits
+ * before a non-default profile (`hybrid-reviewer-ack` or
+ * `strict-reviewer-resolve`) actually takes effect, per
+ * `docs/idd-review-policy-profiles.md`'s "Review Thread Resolution
+ * Profiles" section (idd-skill#3295). Exported so the message-building
+ * code below reads from one source of truth for the five basenames,
+ * and so a unit test can pin this list against literals pulled
+ * straight from that doc section -- a wrong or missing basename here
+ * then fails that test instead of passing silently (the test
+ * deliberately does not derive its own expectations from this same
+ * array, which would let a defect in the array itself go undetected).
+ */
+export const THREAD_RESOLUTION_POLICY_PHASE_FILES = [
+  'idd-review-snapshot.instructions.md',
+  'idd-review-triage.instructions.md',
+  'idd-review-fix.instructions.md',
+  'idd-pre-merge.instructions.md',
+  'idd-merge.instructions.md',
+];
+/**
+ * `threadResolutionPolicy` is a required schema key that nothing in
+ * `src/` or `.github/instructions/` currently reads (idd-skill#3295):
+ * the distributed phase files encode the `fast-agent-resolve` behavior
+ * directly, and a non-default profile takes effect only through the
+ * manual phase-file edits `docs/idd-review-policy-profiles.md`
+ * documents. An adopter who selects `hybrid-reviewer-ack` or
+ * `strict-reviewer-resolve` during onboarding therefore gets a
+ * schema-valid config with no effect, and no diagnostic said so before
+ * this check.
+ *
+ * Returns null (no finding, stay silent) for `fast-agent-resolve`
+ * (the enforced default, nothing to warn about), for a missing/absent
+ * `threadResolutionPolicy` key, and for a non-enum string --
+ * {@link checkLiveConfigSchema} already reports an absent required key
+ * or an invalid enum value as its own finding, so this check must not
+ * double-report either case.
+ */
+export function classifyThreadResolutionPolicy(config) {
+  const value = config?.threadResolutionPolicy;
+  if (value !== 'hybrid-reviewer-ack' && value !== 'strict-reviewer-resolve') {
+    return null;
+  }
+  const phaseFiles = THREAD_RESOLUTION_POLICY_PHASE_FILES.map(
+    (file) => `.github/instructions/${file}`,
+  ).join(', ');
+  return {
+    level: 'warning',
+    message:
+      `threadResolutionPolicy is "${value}", a non-default profile -- no ` +
+      'helper or gate reads this key. It takes effect only through ' +
+      `matching edits to these phase files: ${phaseFiles}. See ` +
+      'docs/idd-review-policy-profiles.md.',
+  };
+}
+/**
+ * Checks the resolved live-config candidate ({@link resolveLiveConfigDocument})
+ * for the threadResolutionPolicy enforcement-gap finding above. Never
+ * errors: an unreadable or malformed config is already surfaced by
+ * {@link checkLiveConfigSchema} / {@link checkHelperRuntimeConfig}, so
+ * this silently skips instead of double-reporting.
+ */
+export function checkThreadResolutionPolicy(root, report) {
+  const { config } = resolveLiveConfigDocument(root);
+  if (config === null) {
+    return;
+  }
+  const finding = classifyThreadResolutionPolicy(config);
   if (finding) {
     report.warnings.push(finding.message);
   }
