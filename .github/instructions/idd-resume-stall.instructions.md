@@ -237,8 +237,9 @@ routing before continuing to Step 2/Step 3.
 
 In this non-owned-claim path, do not post hold notes on the issue/PR.
 Record evidence in session logs only and stop; when the hold traces to
-a `local_worktree_occupied` stop, that evidence is the §LWR
-wake-condition record (`docs/idd-resume-detail.md`). Posting hold
+a `local_worktree_occupied` stop (S3's gate or S4's re-check), that
+evidence is the §LWR wake-condition record
+(`docs/idd-resume-detail.md`). Posting hold
 notes here would violate the shared claim revalidation gate and can
 reset quiet-window evidence.
 

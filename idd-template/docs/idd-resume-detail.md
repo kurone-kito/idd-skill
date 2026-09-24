@@ -265,8 +265,9 @@ advisory wait, or CI gates.
 
 A local worktree matching a stale or released claim's branch counts as occupied
 (observed 2026-09-19, `kurone-kito/idd-skill#3141`): a matching live worktree
-could still hold a same-host session's uncommitted work, so Resume, Discover,
-and Claim all stop rather than assume the claim is abandoned. In a shared-clone
+could still hold a same-host session's uncommitted work, so Resume and Claim
+stop, and Discover marks the candidate ineligible, rather than assume the
+claim is abandoned. In a shared-clone
 setup this stop has no defined recovery when the worktree's own session
 actually crashed, so its issue can never reach the normal stale takeover. This
 section defines that recovery. It is operator-run, never automated, and checks
@@ -276,17 +277,29 @@ process invoking this CLI is a one-shot child that exits the moment the call
 returns, so a recorded PID would be a tombstone before any competing session
 could ever observe it as 'alive'".
 
-1. **Confirm the block.** Run `resume-claim-routing.mjs --issue <n>`; a
+1. **Confirm the block.** Run the profile-selected `resume-claim-routing`
+   helper (`docs/idd-helper-scripts.md`; source-repo/vendored-node: `node
+   scripts/resume-claim-routing.mjs --issue <n>`); a
    `local_worktree_occupied` result reports
    `evidence.local_worktree.paths` and a `reason` starting
-   `stale-claim-...` or `released-claim-...`. Run `claim-lock.mjs
-   --check --worktree <path>` to read which claim-id holds the lock.
-   If that claim-id is the issue's active **non-stale** claim, stop —
-   a live session may still own it.
+   `stale-claim-...` or `released-claim-...`. If `<path>` no longer
+   exists on disk (a prunable record), skip to `git worktree prune` —
+   nothing to preserve or remove. Otherwise run the profile-selected
+   `claim-lock` helper's check form (source-repo/vendored-node: `node
+   scripts/claim-lock.mjs --check --worktree <path>`) to read which
+   claim-id holds the lock. Proceed only when that claim-id matches the
+   stale or released claim being recovered, or the lock is absent (a
+   legacy pre-claim-id release). Stop for every other outcome — a
+   different claim-id (a live session may still own it), or a malformed
+   or unreadable lock — unless a separately authorized owner-resume or
+   forced-handoff path applies.
 2. **Rule out a live session.** Outside the helpers, independently
    confirm no session is still working in the worktree — the helpers
    never check process liveness (see the citation above).
-3. **Preserve.** Inspect `git -C <path> status --porcelain --ignored`,
+3. **Preserve.** Check for an in-progress rebase, merge, cherry-pick, or
+   bisect first (see §W2); if found, back up the pre-operation branch
+   ref, not the detached HEAD. Inspect
+   `git -C <path> status --porcelain --ignored`,
    unpushed commits (`git -C <path> log @{u}..HEAD`, or all commits
    when there is no upstream), and `git -C <path> stash list`. Save
    uncommitted working-tree changes with `git -C <path> stash push
