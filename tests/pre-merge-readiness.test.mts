@@ -9818,6 +9818,32 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
     });
   });
 
+  // Copilot review (PR #3412): the in-progress marker predicate is
+  // CodeRabbit-specific, so it must not fire for a DIFFERENTLY configured
+  // secondary bot whose own comment happens to contain the same literal
+  // marker text -- `computeSecondaryAdvisoryReviewSettlement` filters
+  // `comments` by whichever login `secondaryBotLogin` names, not
+  // necessarily CodeRabbit, before these body-shape checks ever run.
+  test('#3260: computeSecondaryAdvisoryReviewSettlement settles a non-CodeRabbit secondary bot even if its body coincidentally contains the in-progress marker text', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'some-other-bot[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:13:25Z',
+          body: PR3196_IN_PROGRESS_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'some-other-bot[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.equal(result.settled, true);
+    assert.equal(result.settledAt, '2026-09-23T07:13:25Z');
+    assert.equal(result.declined, false);
+  });
+
   test('#3260: computeSecondaryAdvisoryReviewSettlement settles once the same comment is edited into the completed revision', () => {
     const result = computeSecondaryAdvisoryReviewSettlement(
       [

@@ -2976,12 +2976,20 @@ export function computeSecondaryAdvisoryReviewSettlement(
     // finding cannot arrive after a short settled buffer (#3146).
     return { settled: false, settledAt: null, declined: false };
   }
-  if (isCodeRabbitReviewInProgressSummary(latest.body)) {
+  if (
+    token === 'coderabbitai' &&
+    isCodeRabbitReviewInProgressSummary(latest.body)
+  ) {
     // #3260: CodeRabbit is still processing new commits -- the outer summary
     // wrapper is byte-for-byte identical to a genuine walkthrough, but this
     // revision carries no review result yet. Keep the secondary bot in the
     // ordinary pending path (full window) rather than settling on a
     // revision that will be overwritten once the review actually finishes.
+    // Gated on `token` (Copilot review, PR #3412): this marker predicate is
+    // CodeRabbit-specific, so it must never fire for a differently
+    // configured secondary bot whose own comment happens to contain the
+    // same literal marker text -- `matches`/`latest` are already filtered
+    // to `secondaryBotLogin`'s own comments, not necessarily CodeRabbit's.
     return { settled: false, settledAt: null, declined: false };
   }
   return { settled: true, settledAt: latest.at, declined: false };
