@@ -4192,3 +4192,49 @@ test('isTrustEvidenceComment: false for a null/undefined comment', () => {
   assert.equal(isTrustEvidenceComment(null, isTrusted), false);
   assert.equal(isTrustEvidenceComment(undefined, isTrusted), false);
 });
+
+// kurone-kito/idd-skill#3246 (Copilot review, PR #3403, round 3): the
+// nested author.login/user.login shapes above are the REST/GraphQL comment
+// shapes; provider-port.mts's own ProviderComment (and its review-thread
+// comment siblings) instead carry a flat `authorLogin` field. Before this
+// fix, a genuine provider-port comment object supplied neither nested
+// shape, so the computed login was always '' and this predicate failed
+// closed even for a trusted, unedited marker -- exactly the failure mode
+// this predicate exists to avoid for its sibling consumers (the
+// claim-marker and review/merge-evidence/disposition tracks).
+test('isTrustEvidenceComment: reads the flat authorLogin field when neither author.login nor user.login is present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'kurone-kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: prefers nested author.login over the flat authorLogin field when both are present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      {
+        author: { login: 'kurone-kito' },
+        authorLogin: 'untrusted-actor',
+        lastEditedAt: null,
+      },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field before checking trust', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'Kurone-Kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});

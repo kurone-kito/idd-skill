@@ -95,6 +95,16 @@ interface CommentLike {
    * comment for the three-state contract this reads. */
   lastEditedAt?: string | null;
   last_edited_at?: string | null;
+  /** #3246 (Copilot review, PR #3403, round 3): the flat author-login shape
+   * `provider-port.mts`'s `ProviderComment` and its review-thread comment
+   * types actually carry -- distinct from this interface's own nested
+   * `author.login`/`user.login` REST/GraphQL shapes. `isTrustEvidenceComment`
+   * below reads this as a third fallback so a genuine provider-port comment
+   * object (as the sibling claim-marker and review/merge-evidence/
+   * disposition tracks this predicate exists for will pass it) doesn't
+   * silently compute an empty login and fail closed for every trusted
+   * caller. */
+  authorLogin?: string | null;
 }
 
 /** Review-thread reply node (GraphQL `reviewThreads` comment). */
@@ -920,8 +930,13 @@ export function isTrustEvidenceComment(
   // authorLogin computation is (#3246 C1 review): a caller-supplied
   // isTrustedAuthor typically checks a lowercased trusted-login set, so
   // an unnormalized mixed-case GitHub login would silently read as
-  // untrusted.
-  const authorLogin = String(comment.author?.login ?? comment.user?.login ?? '')
+  // untrusted. #3246 (Copilot review, PR #3403, round 3): also falls back
+  // to the flat `authorLogin` field -- the shape `ProviderComment` and its
+  // review-thread comment siblings actually carry -- so a genuine
+  // provider-port comment object never computes an empty login here.
+  const authorLogin = String(
+    comment.author?.login ?? comment.user?.login ?? comment.authorLogin ?? '',
+  )
     .trim()
     .toLowerCase();
   return (
