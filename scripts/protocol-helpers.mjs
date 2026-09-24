@@ -21,6 +21,16 @@ import {
 // from the same module instead of reaching into advisory-wait-policy.mts
 // directly.
 export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mjs';
+// Façade re-export (kurone-kito/idd-skill#3258): `isCopilotErrorReviewBody`
+// now lives in the leaf `copilot-review-body.mts` module (alongside the new
+// review-body shape classifier `review-clause.mts` also imports), so that
+// module can be imported here -- rather than the reverse -- with no cycle.
+// Re-exporting it keeps every existing call site importing it from
+// protocol-helpers.mts (e.g. tests/pre-merge-readiness.test.mts) unchanged;
+// the separate named import below is this module's own internal use in
+// `findLastCopilotReviewCommit`, mirroring the `marker-helpers.mts` pattern
+// immediately above.
+export { isCopilotErrorReviewBody } from './copilot-review-body.mjs';
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
 // marker render/parse primitive now lives in the marker-helpers module.
 // Re-exporting it here keeps every existing call site importing from
@@ -29,6 +39,7 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mjs';
 // rule (it must never import back from this file).
 export * from './marker-helpers.mjs';
 
+import { isCopilotErrorReviewBody } from './copilot-review-body.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryWaitFamilyMarkerStart,
@@ -3404,52 +3415,12 @@ export function isCopilotReviewerLogin(
   }
   return normalized === configured;
 }
-/**
- * #3015: GitHub Copilot's "encountered an error" review body, observed live
- * on PR `#3013` (issue `#2986`, commit `46bfb73b`,
- * <https://github.com/kurone-kito/idd-skill/pull/3013#pullrequestreview-5212307067>,
- * `copilot-pull-request-reviewer[bot]`, `COMMENTED`, submitted
- * 2026-09-15T15:44:53Z): Copilot failed to review the PR at all, yet the
- * review still carries `comments.totalCount` (`itemCount`) `0`, the same
- * shape a genuine "no findings" empty review has. Without this check, that
- * false-empty review both satisfies `resolveLatestCopilotReviewClause`'s
- * Clause 1 (review-clause.mts) and wins `findLastCopilotReviewCommit`'s
- * `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit below, even though
- * Copilot never actually looked at the diff -- the same `itemCount === 0`
- * false-empty class `parseSuppressedCommentCount` (review-clause.mts,
- * #1880) already closed for the sibling "Suppressed comments (N)" shape.
- *
- * Matched by whole-body equality (after trimming and collapsing internal
- * whitespace, case-insensitively) against the exact observed template,
- * never a broad "error" substring search: this keeps the classifier
- * fail-closed toward under-matching, in the same spirit as
- * `isAdvisoryNonReviewNotice`, and -- unlike that function's substring/
- * heading search -- whole-body equality alone already excludes an advisory
- * bot quoting this exact sentence back in a larger review body (the
- * prose-quoting false-positive class `#1614` first found), with no need
- * for `parseSuppressedCommentCount`'s separate code-region-stripping step:
- * any additional content in the body (the bot's own commentary around the
- * quote) already breaks the equality match.
- */
-const COPILOT_ERROR_REVIEW_BODY =
-  'copilot encountered an error and was unable to review this pull ' +
-  'request. you can try again by re-requesting a review.';
-/**
- * `true` when `body` is GitHub Copilot's exact "encountered an error"
- * review-body template (#3015) -- see {@link COPILOT_ERROR_REVIEW_BODY}'s
- * doc comment for the observed incident and matching rationale. Reused by
- * `findLastCopilotReviewCommit` below and by
- * `resolveLatestCopilotReviewClause` (review-clause.mts) so both "latest
- * covering review" selectors skip this review the same way, mirroring how
- * both already share {@link isCopilotReviewerLogin}.
- */
-export function isCopilotErrorReviewBody(body) {
-  const normalized = String(body ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  return normalized === COPILOT_ERROR_REVIEW_BODY;
-}
+// `isCopilotErrorReviewBody` (kurone-kito/idd-skill#3258) now lives in
+// `copilot-review-body.mts` -- a leaf module `review-clause.mts` also
+// imports -- and is re-exported/imported above (see the façade re-export
+// beside `export * from './marker-helpers.mts'` near the top of this
+// file) so this module's own `findLastCopilotReviewCommit` below and every
+// existing external importer keep working unchanged.
 export function findLastCopilotReviewCommit(
   reviews,
   primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -8609,7 +8580,15 @@ export function readClaimStaleAgeMs(config) {
     DEFAULT_STALE_AGE_MS
   );
 }
-function compareClaimIds(left, right) {
+/**
+ * Ascending, case-sensitive ASCII compare of two claim-ids -- the
+ * lexicographic tie-break `idd-claim.instructions.md` documents for
+ * same-second competing claims. A plain string comparator over a single
+ * key, so it is trivially transitive for every triple. Exported so
+ * `orderClaimEvents` below and its tests share and can directly assert
+ * against the identical primitive.
+ */
+export function compareClaimIds(left, right) {
   if (left === right) {
     return 0;
   }
@@ -8642,56 +8621,108 @@ function isStrictlyBeforeIso(left, right) {
   return leftTime < rightTime;
 }
 /**
- * Chronological ordering `resolveActiveClaim` and
- * `resolveActiveClaimWithForcedHandoffTrace` both reduce over: by GitHub
- * `created_at` second, tie-broken by claim-id (same-second contenders),
- * then by sub-second time, then by original array index.
+ * Base chronological comparator: by GitHub `created_at` second (`null`
+ * sorts last), then by sub-second time (`null` sorts last), then by
+ * original array index. Deliberately excludes any claim-id comparison --
+ * a single comparator that conditionally switched to comparing claim-id
+ * only when both sides happened to parse as a claim (the pre-#3266
+ * `sortClaimEvents`) is not transitive: a claim/non-claim/claim triple in
+ * the same second can cycle (`kurone-kito/idd-skill#3266`). This
+ * comparator alone is a plain lexicographic order over a 3-tuple and is
+ * transitive for every triple; {@link orderClaimEvents} applies the
+ * claim-id tie-break as a separate, second pass instead of folding it in
+ * here. Exported so a test can assert this comparator's own transitivity
+ * directly.
  */
-function sortClaimEvents(events) {
-  return events
-    .map((event, index) => {
-      const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
-      return {
-        event,
-        index,
-        claimId: claim?.claimId ?? null,
-        time: createdAtToTime(event.createdAt),
-        second: createdAtToSecond(event.createdAt),
-      };
-    })
-    .sort((left, right) => {
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.second !== right.second
-      ) {
-        return left.second - right.second;
+export function compareClaimEventOrder(left, right) {
+  if (
+    left.second !== null &&
+    right.second !== null &&
+    left.second !== right.second
+  ) {
+    return left.second - right.second;
+  }
+  if (left.second !== null && right.second === null) {
+    return -1;
+  }
+  if (left.second === null && right.second !== null) {
+    return 1;
+  }
+  if (left.time !== null && right.time !== null && left.time !== right.time) {
+    return left.time - right.time;
+  }
+  return left.index - right.index;
+}
+/**
+ * Total, deterministic ordering over an ALREADY trust-filtered set of
+ * claim-lifecycle comment events -- the single ordering primitive
+ * `resolveActiveClaimWithForcedHandoffTrace` (which performs the trust
+ * filtering, once, before calling this) and `resume-claim-routing.mts`'s
+ * legacy-only path both use, replacing the former `sortClaimEvents`
+ * (renamed/exported here) and the near-duplicate `compareEvents` that
+ * used to live in `resume-claim-routing.mts` (kurone-kito/idd-skill#3266).
+ *
+ * Two-step algorithm, chosen specifically to keep every comparator it
+ * uses transitive (see {@link compareClaimEventOrder}'s own doc comment
+ * for why a single mixed comparator is not):
+ *
+ * 1. A stable base sort by {@link compareClaimEventOrder} --
+ *    `(second, sub-second time, original index)`.
+ * 2. Within each maximal run of equal, non-null `second`, the *positions*
+ *    (not the events) that parsed as a `claimed-by` marker are collected
+ *    and their occupants re-sorted, ascending, by
+ *    {@link compareClaimIds} -- the lexicographic tie-break
+ *    `idd-claim.instructions.md` documents for same-second competing
+ *    claims. Every other position in that run (an activation-nonce, an
+ *    `unclaimed-by`, a forced-handoff marker, or a plain comment) keeps
+ *    exactly the slot the base sort gave it -- its "fetch order" within
+ *    the second is never disturbed by which claim-ids happen to be
+ *    interleaved with it.
+ *
+ * A run with a null `second` (an unparseable `createdAt`) never groups
+ * with any other event for step 2 -- each such event is its own
+ * single-element run, so no claim-id reordering applies to it; it simply
+ * keeps its step-1 position, same as `sortClaimEvents` before it.
+ */
+export function orderClaimEvents(events) {
+  const decorated = events.map((event, index) => {
+    const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
+    return {
+      event,
+      index,
+      claimId: claim?.claimId ?? null,
+      time: createdAtToTime(event.createdAt),
+      second: createdAtToSecond(event.createdAt),
+    };
+  });
+  const base = [...decorated].sort(compareClaimEventOrder);
+  let i = 0;
+  while (i < base.length) {
+    const second = base[i].second;
+    let j = i + 1;
+    if (second !== null) {
+      while (j < base.length && base[j].second === second) {
+        j += 1;
       }
-      if (left.second !== null && right.second === null) {
-        return -1;
+    }
+    const slots = [];
+    for (let k = i; k < j; k += 1) {
+      if (base[k].claimId !== null) {
+        slots.push(k);
       }
-      if (left.second === null && right.second !== null) {
-        return 1;
+    }
+    if (slots.length > 1) {
+      const claimants = slots.map((slot) => base[slot]);
+      claimants.sort((left, right) =>
+        compareClaimIds(left.claimId, right.claimId),
+      );
+      for (let m = 0; m < slots.length; m += 1) {
+        base[slots[m]] = claimants[m];
       }
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.claimId &&
-        right.claimId &&
-        left.claimId !== right.claimId
-      ) {
-        return compareClaimIds(left.claimId, right.claimId);
-      }
-      if (
-        left.time !== null &&
-        right.time !== null &&
-        left.time !== right.time
-      ) {
-        return left.time - right.time;
-      }
-      return left.index - right.index;
-    })
-    .map(({ event }) => event);
+    }
+    i = j;
+  }
+  return base.map(({ event }) => event);
 }
 /**
  * Same reduction as {@link resolveActiveClaim}, but also tracks which
@@ -8715,7 +8746,27 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   isTrustedAuthor = () => true,
 ) {
   const options = normalizeClaimResolutionOptions(isTrustedAuthor);
-  const orderedEvents = sortClaimEvents(events);
+  // kurone-kito/idd-skill#3266: filter to trusted authors ONCE, here,
+  // before ordering -- not only inside applyClaimEvent's later per-event
+  // check. Before this fix, an untrusted comment (claim-shaped or not)
+  // still occupied a slot `sortClaimEvents` itself reasoned about (its
+  // claim-id, if any, still participated in the same-second tie-break),
+  // which could shift the relative order of two genuinely trusted
+  // same-second claims around it -- part of the reported non-transitive
+  // same-second cycle, and the reason `resolveActiveClaimForWriteGate` /
+  // `summarizeClaimValidation` (both feed this function the full,
+  // unfiltered stream) could disagree with `evaluateResumeClaimRouting`
+  // (which already filtered before calling this). Filtering first means
+  // every caller -- resume routing, the write-gate, and any direct
+  // caller such as `discover-roadmap-graph.mts` /
+  // `discover-shared-file-overlap.mts` -- orders and reduces over the
+  // identical trusted event set. `applyClaimEvent`'s own per-event
+  // trust check below stays as defense in depth (always true in
+  // practice now, since every event it sees already passed this filter).
+  const trustedEvents = events.filter((event) =>
+    options.isTrustedAuthor(event.author?.login ?? ''),
+  );
+  const orderedEvents = orderClaimEvents(trustedEvents);
   let active = null;
   let releasedClaim = null;
   let appliedForcedHandoff = null;
