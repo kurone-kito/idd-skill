@@ -1371,6 +1371,28 @@ test('prose-dependency does not warn when the reference already has a Blocked by
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not warn when a Blocked by encoding is preceded by inline code on the same line, right after a blank line (#3281 review, CodeRabbit)', () => {
+  // maskMarkdownForScan replaces an inline code span (backticks and
+  // content) with spaces, preserving position -- masking the SAME
+  // already-masked text a second time can then read those replacement
+  // spaces as a fresh top-level indented code block, since a >=4-space
+  // run right after a blank line is indistinguishable from real
+  // indentation. Before #3281's fix, checkProseOnlyDependency passed the
+  // already-masked `text` into extractBlockedByIssueNumbers (which masks
+  // its own input again), so the whole "Blocked by #1391" line was
+  // silently dropped from the encoded set and wrongly flagged as an
+  // unencoded coordination reference.
+  const body = childBody({
+    extraMarkers: '`x` Blocked by #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 test('prose-dependency does not warn when the reference already has a Depends on encoding', () => {
   const body = childBody({
     extraMarkers: 'Depends on #1391\n\nOnce #1391 merges, this can start.',

@@ -711,7 +711,15 @@ export function auditAuthoredIssue(
     String(label).trim().toLowerCase(),
   );
 
-  const suitability = parseAutopilotSuitabilityMarker(text, markerPrefix);
+  // #3281 review (CodeRabbit): parseAutopilotSuitabilityMarker masks its
+  // own input (maskMarkdownForScan), so passing the already-masked
+  // `text` here would mask it a SECOND time -- a masked inline code
+  // span's replacement spaces can read as a fresh top-level indented
+  // code block to a second pass, swallowing real content that follows
+  // it on the same line. Pass rawText to every downstream helper that
+  // masks its own input; only helpers that scan already-masked text
+  // directly (countMarkerOccurrences and friends) still take `text`.
+  const suitability = parseAutopilotSuitabilityMarker(rawText, markerPrefix);
   const suitabilityCount = countMarkerOccurrences(
     text,
     markerPrefix,
@@ -749,7 +757,7 @@ export function auditAuthoredIssue(
       isBucketAudit,
       normalizeCurrentRepo(options.currentRepo),
     ),
-    checkDependencyMarkerRule(text, markerPrefix, shape),
+    checkDependencyMarkerRule(text, rawText, markerPrefix, shape),
     checkCandidateFilesNotEmpty(
       rawText,
       shape,
@@ -758,8 +766,12 @@ export function auditAuthoredIssue(
       suitability,
     ),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
-    checkEffortVisibleLineAgreement(text, markerPrefix),
-    checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
+    checkEffortVisibleLineAgreement(text, rawText, markerPrefix),
+    checkProseOnlyDependency(
+      text,
+      rawText,
+      normalizeCurrentRepo(options.currentRepo),
+    ),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
     checkAuthoringMarkerMinimizationBacklog(markerPrefix, options),
     checkUpstreamCandidateMarkerLabel(
@@ -1438,6 +1450,7 @@ function checkRoadmapTracksParse(
 
 function checkDependencyMarkerRule(
   text: string,
+  rawText: string,
   markerPrefix: string,
   shape: IssueShape,
 ): AuditFinding {
@@ -1460,8 +1473,15 @@ function checkDependencyMarkerRule(
   // second hand-rolled value-requiring regex) to require at least one
   // well-formed value whenever a blocked-by marker is present at all,
   // wherever the shape permits the marker (roadmap, child).
+  //
+  // #3281 review (CodeRabbit): extractBlockedByRoadmapMarkers masks its
+  // own input, so it takes rawText, never the already-masked `text` --
+  // masking twice can turn a masked inline code span's replacement
+  // spaces into a spurious top-level indented code block on a second
+  // pass, swallowing real content on the same line. countMarkerOccurrences
+  // above has no such self-masking and still needs pre-masked `text`.
   const wellFormedBlockedByCount = extractBlockedByRoadmapMarkers(
-    text,
+    rawText,
     markerPrefix,
   ).length;
 
@@ -1477,7 +1497,9 @@ function checkDependencyMarkerRule(
     // `: <roadmap-id>` value) and the loose shape-only count above would
     // not catch it. extractRoadmapMarkerId requires the value, matching
     // the same strict form Discover relies on to resolve the marker.
-    if (!extractRoadmapMarkerId(text, markerPrefix)) {
+    // Self-masking (see the wellFormedBlockedByCount comment above), so
+    // rawText here too.
+    if (!extractRoadmapMarkerId(rawText, markerPrefix)) {
       return fail(
         id,
         name,
@@ -1640,6 +1662,7 @@ function checkSuitabilityVisibleLineAgreement(
 
 function checkEffortVisibleLineAgreement(
   text: string,
+  rawText: string,
   markerPrefix: string,
 ): AuditFinding {
   const id = 'effort-visible-line-agreement';
@@ -1670,7 +1693,15 @@ function checkEffortVisibleLineAgreement(
       `expected at most one effort marker, found ${rawCount}`,
     );
   }
-  const effort: EffortMarkerDetection = parseEffortMarker(text, markerPrefix);
+  // #3281 review (CodeRabbit): parseEffortMarker masks its own input, so
+  // it takes rawText, never the already-masked `text` (see
+  // checkDependencyMarkerRule's identical comment for why double-masking
+  // is unsafe). countMarkerOccurrences above still needs pre-masked
+  // `text`.
+  const effort: EffortMarkerDetection = parseEffortMarker(
+    rawText,
+    markerPrefix,
+  );
   if (!effort.present || effort.malformed || effort.value === null) {
     return fail(
       id,
@@ -2149,6 +2180,7 @@ function normalizeCurrentRepo(
 
 function checkProseOnlyDependency(
   text: string,
+  rawText: string,
   currentRepo: string | undefined,
 ): AuditFinding {
   const id = 'prose-dependency';
@@ -2158,10 +2190,19 @@ function checkProseOnlyDependency(
   // (Blocked by / Depends on / task-list / the non-blocking Refs form,
   // #2236) are never flagged, regardless of nearby prose — the whole point
   // of this check is to catch references that carry *no* such encoding.
+  //
+  // #3281 review (CodeRabbit): all three extractors mask their own
+  // input, so they take rawText, never the already-masked `text` below
+  // -- a masked inline code span's replacement spaces can read as a
+  // fresh top-level indented code block to a second masking pass,
+  // silently dropping a real `Refs #N (non-blocking)` reference (or any
+  // other encoding) that follows it on the same line. `text` stays the
+  // input for the sentence-proximity scan below, which needs
+  // already-masked prose, not a self-masking extractor.
   const encoded = new Set([
-    ...extractBlockedByIssueNumbers(text),
-    ...extractDependencyIssueNumbers(text),
-    ...extractNonBlockingReferenceIssueNumbers(text),
+    ...extractBlockedByIssueNumbers(rawText),
+    ...extractDependencyIssueNumbers(rawText),
+    ...extractNonBlockingReferenceIssueNumbers(rawText),
   ]);
   const keywordPattern = new RegExp(
     `\\b(?:${PROSE_DEPENDENCY_KEYWORDS.map(escapeRegex).join('|')})\\b`,
