@@ -221,6 +221,23 @@ const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS = {
   style: /<\/style[ \t]*>/iu,
   textarea: /<\/textarea[ \t]*>/iu,
 };
+// The four raw-text names' CLOSING form is NOT itself paragraph-interrupting
+// (C1 critique round 3, kurone-kito/idd-skill#3283): CommonMark's type-6
+// block-tag list (folded into MARKDOWN_HTML_BLOCK_START_PATTERN above) does
+// not separately list script/pre/style/textarea -- only their OPENING tag is
+// type 1 (which does interrupt a paragraph). A bare CLOSING tag of one of
+// these four names is therefore neither type 1 nor type 6; it falls through
+// to type 7 (a lone custom tag), which per spec can never interrupt a
+// paragraph. MARKDOWN_HTML_BLOCK_START_PATTERN's shared `<\/?` alternation
+// does not distinguish open from close for these four names, so a caller
+// that needs the paragraph-interruption-correct answer must additionally
+// exclude this shape -- see isUnconditionalBlockStart's own use below.
+// Deliberately not folded into MARKDOWN_HTML_BLOCK_START_PATTERN itself:
+// that pattern also backs findHtmlBlockRanges and
+// isLazinessInterruptingBlockStart, whose own correctness for this same
+// pre-existing gap is out of this issue's scope.
+const MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN =
+  /^ {0,3}<\/(?:script|pre|style|textarea)(?:[ \t]|\/?>|$)/iu;
 /**
  * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
  * four members), lower-cased for use as a
@@ -289,27 +306,36 @@ function isLazinessInterruptingBlockStart(content, fencedLine) {
  * interrupts an in-progress paragraph, regardless of surrounding
  * context. Deliberately narrower than
  * {@link isLazinessInterruptingBlockStart}: drops its lone-custom-HTML-tag
- * branch entirely (CommonMark type 7 can never interrupt a paragraph)
- * and drops the genuinely ambiguous dash/equals-only shapes
+ * branch entirely (CommonMark type 7 can never interrupt a paragraph),
+ * drops the genuinely ambiguous dash/equals-only shapes
  * ({@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN}) from its
  * `isMarkdownBlockStart` coverage (those only resolve as a
  * paragraph-ending Setext underline when a real, non-lazy paragraph
  * already precedes them -- context this function's callers do not
- * carry). A genuine ATX heading, list-item marker, unambiguous
- * (3-or-more-character) thematic break, HTML block type 1-6 opener, or
- * valid fence opener is unaffected -- none of those depend on whether a
- * paragraph happens to be open. C1 critique round 2 on
- * kurone-kito/idd-skill#3283 found that reusing
+ * carry), and excludes a CLOSING tag of one of the four raw-text names
+ * ({@link MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN}; C1 critique round
+ * 3, kurone-kito/idd-skill#3283) -- `</script>`/`</pre>`/`</style>`/
+ * `</textarea>` is neither type 1 (opening-only) nor type 6 (those four
+ * names are not on that list either), so it falls to type 7, which can
+ * never interrupt a paragraph, even though
+ * {@link MARKDOWN_HTML_BLOCK_START_PATTERN}'s shared `<\/?` alternation
+ * does not distinguish open from close for them. A genuine ATX heading,
+ * list-item marker, unambiguous (3-or-more-character) thematic break,
+ * true HTML block type 1-6 opener, or valid fence opener is unaffected --
+ * none of those depend on whether a paragraph happens to be open. C1
+ * critique round 2 found that reusing
  * {@link isLazinessInterruptingBlockStart} unconditionally for
  * {@link findIndentedCodeRanges}'s laziness guard over-masked real
  * content (a custom tag or an ambiguous dash/equals run right after
- * ordinary paragraph text was wrongly read as ending that paragraph).
+ * ordinary paragraph text was wrongly read as ending that paragraph);
+ * round 3 found the same over-masking for a raw-text closing tag.
  */
 function isUnconditionalBlockStart(content, fencedLine) {
   return (
     (isMarkdownBlockStart(content) &&
       !MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN.test(content)) ||
-    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+    (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) &&
+      !MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN.test(content)) ||
     (fencedLine !== null && isValidFenceOpener(fencedLine))
   );
 }

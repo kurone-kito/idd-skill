@@ -1507,6 +1507,55 @@ test('maskMarkdownForScan keeps a lazy continuation open across an ambiguous Set
   assert.equal(maskMarkdownForScan(body), body);
 });
 
+test('maskMarkdownForScan keeps a lazy continuation open across a bare raw-text closing tag (C1 critique, round 4)', () => {
+  // A fourth gap in the same guard: MARKDOWN_HTML_BLOCK_START_PATTERN's
+  // shared <\/? alternation does not distinguish open from close for
+  // script/pre/style/textarea, but only their OPENING tag is CommonMark
+  // type 1 (which does interrupt a paragraph) -- a bare CLOSING tag of
+  // one of those four names is neither type 1 nor type 6 (those names
+  // are not on the type-6 list either), so it falls through to type 7,
+  // which per spec can never interrupt a paragraph. Verified against
+  // commonmark.js for all four names; `</script>` shown here.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '</script>',
+    '',
+    '    - [real link #3](https://example.com/should-stay-real-3)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan still masks a nested list item as code once a real HTML block genuinely closes the list (control for round 4)', () => {
+  // Control for the test above: an OPENING raw-text tag (real type 1)
+  // and a real type-6 closing tag (not one of the four raw-text names)
+  // must still unconditionally interrupt the paragraph and close the
+  // list, unaffected by the round-4 exclusion.
+  const openTag = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '<script>',
+    '',
+    '    - [not-a-link #4](https://example.com/should-be-code-4)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(openTag).includes('not-a-link'), false);
+
+  const closeDiv = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '</div>',
+    '',
+    '    - [not-a-link #5](https://example.com/should-be-code-5)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(closeDiv).includes('not-a-link'), false);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);
