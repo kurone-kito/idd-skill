@@ -1,11 +1,13 @@
 // Runs the imported/substituted/verified helper bundle in adopter-shaped
 // trees (idd-skill#3241): the closest existing coverage
-// (`tests/idd-onboard.test.mts`'s single vendored-node fixture, and
-// `tests/cli-entry-smoke.test.mts`'s source-tree `--help` smokes) never
-// spawns a cataloged helper *from inside an imported target*, so a helper
-// whose import closure or `EXTRA_RUNTIME_FILES` entry misses a runtime file
-// -- or a template workflow invocation naming a helper that was never
-// vended -- can reach `main` unnoticed. This file spawns only `node`
+// (`tests/idd-onboard.test.mts`'s single vendored-node fixture, which
+// probes only a few selected helpers rather than sweeping the catalog,
+// and `tests/cli-entry-smoke.test.mts`'s source-tree `--help` smokes)
+// never sweeps the *whole* cataloged helper set from inside an imported
+// target, so a helper whose import closure or `EXTRA_RUNTIME_FILES`
+// entry misses a runtime file -- or a template workflow invocation
+// naming a helper that was never vended -- can reach `main` unnoticed.
+// This file spawns only `node`
 // (never `gh`, `npx`, or a package manager), so it runs in the bare-node
 // `lint` job with no `node_modules` installed.
 //
@@ -272,17 +274,22 @@ test('interactive-only exception list: the validator reports a violation when it
 // ---------------------------------------------------------------------------
 
 let shape1PassedEntryPaths: Set<string> | undefined;
+// Set only on the ancestor-package.json skip path below, so the
+// static-scan test (which depends on shape1PassedEntryPaths) can skip
+// itself too, instead of hard-failing on a missing prerequisite that was
+// never a defect -- the same cascade applies to shape 3's own skip guard
+// below (PR #3361 review, CodeRabbit + Copilot).
+let shape1SkipReason: string | undefined;
 
 test('shape 1 (vendored-node, no ancestor package.json): import+substitute+verify pass, and every helper --help loads independently', (t) => {
   let probeDir = resolve(tmpdir());
   for (;;) {
     if (existsSync(join(probeDir, 'package.json'))) {
-      t.skip(
-        `ancestor package.json found at ${join(
-          probeDir,
-          'package.json',
-        )}; shape 1 requires a package.json-less ancestry from the OS temp directory`,
-      );
+      shape1SkipReason = `ancestor package.json found at ${join(
+        probeDir,
+        'package.json',
+      )}; shape 1 requires a package.json-less ancestry from the OS temp directory`;
+      t.skip(shape1SkipReason);
       return;
     }
     const parent = dirname(probeDir);
@@ -662,7 +669,13 @@ function resolveWorkflowInvocationViolations(
   return violations;
 }
 
-test('static workflow resolution: every template workflow helper invocation resolves against the imported/verified bundle', () => {
+test('static workflow resolution: every template workflow helper invocation resolves against the imported/verified bundle', (t) => {
+  if (shape1SkipReason !== undefined) {
+    // Honor shape 1's own legitimate skip instead of hard-failing on a
+    // prerequisite that was never a defect (PR #3361 review).
+    t.skip(`shape 1 was skipped: ${shape1SkipReason}`);
+    return;
+  }
   assert.ok(
     shape1PassedEntryPaths,
     'expected shape 1 to have populated shape1PassedEntryPaths first',
