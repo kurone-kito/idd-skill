@@ -27,7 +27,7 @@ import {
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   renderForcedHandoffComment,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mts';
 
@@ -73,9 +73,16 @@ interface PlanHandoffOptions {
   /** Configured `claimTiming.staleAge` window (#3270), e.g. via
    * {@link readClaimStaleAgeMs}. Threaded into {@link resolveHelperActiveClaim}
    * so a takeover claim inside that window resolves as active instead of
-   * being silently evaluated against the hardcoded 24h default. Omitted
-   * keeps `summarizeClaimValidation`'s own 24h fallback. */
-  staleAgeMs?: number;
+   * being silently evaluated against the hardcoded 24h default. REQUIRED
+   * (Copilot review, PR #3370): `resolveHelperActiveClaim` is a
+   * claim-owning write-gate resolver, so every caller -- including
+   * `force-handoff.mts`'s interactive facade and `external-check-waiver.mts`,
+   * not just this file's own CLI -- must resolve and pass it explicitly, the
+   * same requirement `resolveActiveClaimForWriteGate` /
+   * `summarizeClaimValidationForWriteGate` already enforce for the other
+   * seven write-gate callers. A caller that deliberately wants the
+   * distributed 24h default passes {@link DEFAULT_STALE_AGE_MS} explicitly. */
+  staleAgeMs: number;
 }
 
 /** Successor identifiers generated for a forced handoff. */
@@ -120,7 +127,7 @@ export function generateSuccessorIds(baseAgentId: unknown): SuccessorIds {
 export function planHandoff(
   issueComments: IssueCommentPayload[],
   linkedPrs: LinkedPrPayload[] | null | undefined,
-  options: PlanHandoffOptions = {},
+  options: PlanHandoffOptions,
 ): HandoffPlan {
   const {
     newAgentId,
@@ -509,11 +516,16 @@ export function resolveHelperActiveClaim(
   options: {
     expectedLinkedPrs?: string[];
     isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
-    /** Configured `claimTiming.staleAge` window (#3270). Omitted keeps
-     * `summarizeClaimValidation`'s own hardcoded-24h fallback -- unchanged
-     * for `external-check-waiver.mts`'s call, which does not pass it. */
-    staleAgeMs?: number;
-  } = {},
+    /** Configured `claimTiming.staleAge` window (#3270), e.g. via
+     * {@link readClaimStaleAgeMs}. REQUIRED (Copilot review, PR #3370):
+     * this is a claim-owning write-gate resolver, so every caller --
+     * `force-handoff.mts`'s interactive facade and
+     * `external-check-waiver.mts` included -- must resolve and pass it
+     * explicitly, the same requirement the other seven write-gate callers
+     * already meet. A caller that deliberately wants the distributed 24h
+     * default passes {@link DEFAULT_STALE_AGE_MS} explicitly. */
+    staleAgeMs: number;
+  },
 ): ActiveClaim | null {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
@@ -529,7 +541,7 @@ export function resolveHelperActiveClaim(
       )
       .filter(Boolean),
   );
-  const summary = summarizeClaimValidation(
+  const summary = summarizeClaimValidationForWriteGate(
     issueComments.map(normalizeIssueComment),
     {
       trustedMarkerLogins: [...trustedLogins],

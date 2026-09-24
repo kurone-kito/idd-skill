@@ -18,6 +18,7 @@ import {
 } from '../src/scripts/forced-handoff-marker.mts';
 import {
   applyClaimEvent,
+  DEFAULT_STALE_AGE_MS,
   normalizeForcedHandoffPayload,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
@@ -244,6 +245,7 @@ test('forced handoff helper replays prior handoffs when resolving the active cla
     trustedLogins,
     {
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
 
@@ -342,6 +344,7 @@ test('forced handoff helper keeps PR-scoped active claim when issue-only handoff
         'https://github.com/kurone-kito/idd-skill/pull/359',
       ],
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
     },
   );
 
@@ -746,6 +749,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: authorizeKuroneKito,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(resultIssueOnly.contextScope, 'issue-only');
@@ -776,6 +780,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: authorizeKuroneKito,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(resultWithPr.contextScope, 'issue-plus-pr');
@@ -797,6 +802,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
         forcedBy: 'kurone-kito',
         reason: 'operator-approved-recovery',
         isAuthorizedForcedHandoff: authorizeKuroneKito,
+        staleAgeMs: DEFAULT_STALE_AGE_MS,
       }),
     /PR #999 does not match any open PR on claim branch issue\/496-feat-force-handoff-derive-live-pr/,
   );
@@ -835,6 +841,7 @@ test('planHandoff omits markerBody when forcedBy actor is not authorized', () =>
     forcedBy: 'unauthorized-actor',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(
@@ -868,6 +875,7 @@ test('planHandoff fails closed for the marker preview when no authorizer callbac
     trustedMarkerLogins: ['kurone-kito', 'github-copilot-cli-old'],
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   };
 
   // Missing callback must be treated as unauthorized for the preview,
@@ -930,6 +938,7 @@ test('planHandoff rejects prior issue-only handoff when PR is present (PR-scoped
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
   });
 
   assert.equal(result.contextScope, 'issue-plus-pr');

@@ -24,7 +24,7 @@ import {
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   renderForcedHandoffComment,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mjs';
 export function generateSuccessorIds(baseAgentId) {
@@ -33,7 +33,7 @@ export function generateSuccessorIds(baseAgentId) {
     newClaimId: `claim-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
   };
 }
-export function planHandoff(issueComments, linkedPrs, options = {}) {
+export function planHandoff(issueComments, linkedPrs, options) {
   const {
     newAgentId,
     newClaimId,
@@ -393,7 +393,7 @@ export function main(argv = process.argv.slice(2)) {
 export function resolveHelperActiveClaim(
   issueComments,
   trustedMarkerLogins,
-  options = {},
+  options,
 ) {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
@@ -409,7 +409,7 @@ export function resolveHelperActiveClaim(
       )
       .filter(Boolean),
   );
-  const summary = summarizeClaimValidation(
+  const summary = summarizeClaimValidationForWriteGate(
     issueComments.map(normalizeIssueComment),
     {
       trustedMarkerLogins: [...trustedLogins],
