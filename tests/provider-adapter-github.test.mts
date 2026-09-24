@@ -3047,3 +3047,40 @@ test('listChangeRequestRenamedFromPaths returns empty for a PR with no renames',
 
   assert.deepEqual(port.listChangeRequestRenamedFromPaths(42), []);
 });
+
+// #3336: `gh pr list --limit 100` silently capped listOpenChangeRequests at
+// 100 rows, so findIssueRelatedOpenPrs (resume-route-selection.mts) could
+// miss an issue's own open PR in a repository with more than 100 open pull
+// requests. Verifies the paginated REST replacement returns every row and
+// maps `url` from the REST `html_url` field (the web URL `gh pr list --json
+// url` returned before this change), not the REST API `url` field.
+test('listOpenChangeRequests returns all 101 rows via the paginated REST endpoint, mapping url from html_url (#3336)', () => {
+  const calls: { path: string; options?: unknown }[] = [];
+  const rows = Array.from({ length: 101 }, (_, index) => ({
+    number: index + 1,
+    title: `pr ${index + 1}`,
+    body: `references #${index + 1}`,
+    html_url: `https://github.com/o/r/pull/${index + 1}`,
+    url: `https://api.github.com/repos/o/r/pulls/${index + 1}`,
+  }));
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: (path: string, options?: unknown) => {
+        calls.push({ path, options });
+        return rows;
+      },
+    }),
+  );
+
+  const result = port.listOpenChangeRequests();
+
+  assert.equal(result.length, 101);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'repos/o/r/pulls?state=open&per_page=100');
+  assert.deepEqual(calls[0].options, { paginate: true });
+  assert.equal(result[0].url, 'https://github.com/o/r/pull/1');
+  assert.equal(result[100].url, 'https://github.com/o/r/pull/101');
+  assert.ok(result.every((pr, index) => pr.url === rows[index].html_url));
+});

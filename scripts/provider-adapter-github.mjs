@@ -1429,28 +1429,23 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         paginate: true,
       });
     },
+    // #3336: `gh pr list --limit 100` silently capped this at 100 rows, so
+    // a repository with more than 100 open pull requests could miss an
+    // issue's own open PR (findIssueRelatedOpenPrs in
+    // resume-route-selection.mts filters this result by body reference).
+    // Page through every open PR via the paginated REST endpoint instead,
+    // matching listOpenWorkItems's own `issues?state=open` pagination
+    // pattern above. `html_url` (not the REST API `url` field) is the web
+    // URL `gh pr list --json url` returned before this change.
     listOpenChangeRequests() {
-      const raw = deps.ghText(
-        [
-          'pr',
-          'list',
-          '--repo',
-          `${owner}/${repo}`,
-          '--state',
-          'open',
-          '--limit',
-          '100',
-          '--json',
-          'number,title,body,url',
-        ],
-        GH_TEXT_LOOP_OPTIONS,
-      );
-      const rows = JSON.parse(raw || '[]');
+      const rows = deps.ghApiJson(`${repoPath}/pulls?state=open&per_page=100`, {
+        paginate: true,
+      });
       return rows.map((row) => ({
         number: Number(row.number),
         title: String(row.title ?? ''),
         body: String(row.body ?? ''),
-        url: String(row.url ?? ''),
+        url: String(row.html_url ?? ''),
       }));
     },
     listChangeRequestReviewThreads(number) {
