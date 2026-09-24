@@ -1,0 +1,268 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import {
+  consumeDependencyContinuationRefLines,
+  consumeDependencyReferenceList,
+  extractDependencyReferences,
+  normalizeDependencyRepoRef,
+} from '../src/scripts/dependency-grammar.mts';
+import { extractBlockedByReferences } from '../src/scripts/discover-orphan-filter.mts';
+import { extractBlockedByIssueNumbers } from '../src/scripts/discover-readiness-check.mts';
+import { extractKeywordReferences } from '../src/scripts/discover-roadmap-graph.mts';
+
+const CURRENT_REPO = 'kurone-kito/idd-skill';
+
+test('normalizeDependencyRepoRef lowercases and requires both halves', () => {
+  assert.equal(
+    normalizeDependencyRepoRef('Kurone-Kito', 'Idd-Skill'),
+    'kurone-kito/idd-skill',
+  );
+  assert.equal(normalizeDependencyRepoRef('owner', ''), '');
+  assert.equal(normalizeDependencyRepoRef('', 'repo'), '');
+  assert.equal(normalizeDependencyRepoRef(undefined, undefined), '');
+});
+
+// Background-table rows (issue #3284), post-fix outcomes.
+
+test('extractDependencyReferences: ordinal-list "Blocked by" resolves (row 1)', () => {
+  assert.deepEqual(
+    extractDependencyReferences('1. Blocked by #12', 'Blocked by'),
+    { numbers: [12], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: mid-sentence "Blocked by" is never a dependency (row 2)', () => {
+  assert.deepEqual(
+    extractDependencyReferences(
+      'This work is Blocked by #12 until it lands.',
+      'Blocked by',
+    ),
+    { numbers: [], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: same-repo qualified token resolves to local (row 3)', () => {
+  assert.deepEqual(
+    extractDependencyReferences(
+      'Blocked by kurone-kito/idd-skill#12',
+      'Blocked by',
+      { currentRepo: CURRENT_REPO },
+    ),
+    { numbers: [12], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: cross-repo token is unresolvable, parsing continues past it (row 4)', () => {
+  assert.deepEqual(
+    extractDependencyReferences('Blocked by other/repo#5, #13', 'Blocked by', {
+      currentRepo: CURRENT_REPO,
+    }),
+    {
+      numbers: [13],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+    },
+  );
+});
+
+test('extractDependencyReferences: local refs on both sides of a cross-repo token (row 5)', () => {
+  assert.deepEqual(
+    extractDependencyReferences(
+      'Blocked by #12, other/repo#5, #13',
+      'Blocked by',
+      { currentRepo: CURRENT_REPO },
+    ),
+    {
+      numbers: [12, 13],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+    },
+  );
+});
+
+test('extractDependencyReferences: a single-line HTML comment is never a dependency (row 6)', () => {
+  assert.deepEqual(
+    extractDependencyReferences('<!-- Blocked by #12 -->', 'Blocked by'),
+    { numbers: [], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: a multi-line HTML comment is never a dependency (row 7)', () => {
+  const body = ['<!--', 'Blocked by #12', '-->'].join('\n');
+  assert.deepEqual(extractDependencyReferences(body, 'Blocked by'), {
+    numbers: [],
+    unresolvable: [],
+  });
+});
+
+// Extra pinned cases from the issue's acceptance criteria.
+
+test('extractDependencyReferences: bullet-list prefix', () => {
+  assert.deepEqual(
+    extractDependencyReferences('- Blocked by #12', 'Blocked by'),
+    {
+      numbers: [12],
+      unresolvable: [],
+    },
+  );
+});
+
+test('extractDependencyReferences: blockquote prefix with colon', () => {
+  assert.deepEqual(
+    extractDependencyReferences('> Blocked by: #12', 'Blocked by'),
+    { numbers: [12], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: "and"-joined list', () => {
+  assert.deepEqual(
+    extractDependencyReferences('Blocked by #12 and #13', 'Blocked by'),
+    { numbers: [12, 13], unresolvable: [] },
+  );
+});
+
+test('extractDependencyReferences: a two-line wrapped list (#2441)', () => {
+  const body = 'Blocked by #12, #13,\n#14, #15';
+  assert.deepEqual(extractDependencyReferences(body, 'Blocked by'), {
+    numbers: [12, 13, 14, 15],
+    unresolvable: [],
+  });
+});
+
+test('extractDependencyReferences: a CRLF body', () => {
+  const body = 'Intro line\r\nBlocked by #12, #13\r\nOutro line';
+  assert.deepEqual(extractDependencyReferences(body, 'Blocked by'), {
+    numbers: [12, 13],
+    unresolvable: [],
+  });
+});
+
+test('extractDependencyReferences: a line inside a fenced block is never a dependency', () => {
+  const body = ['Intro', '```', 'Blocked by #12, #13', '```', 'Outro'].join(
+    '\n',
+  );
+  assert.deepEqual(extractDependencyReferences(body, 'Blocked by'), {
+    numbers: [],
+    unresolvable: [],
+  });
+});
+
+// Depends on keyword parity (same grammar, different keyword).
+
+test('extractDependencyReferences: "Depends on" uses the same grammar', () => {
+  assert.deepEqual(
+    extractDependencyReferences(
+      'Depends on #20, other/repo#21, #22',
+      'Depends on',
+      {
+        currentRepo: CURRENT_REPO,
+      },
+    ),
+    {
+      numbers: [20, 22],
+      unresolvable: [
+        { token: 'other/repo#21', reason: 'cross_repository_reference' },
+      ],
+    },
+  );
+});
+
+// Lower-level helpers, exercised directly.
+
+test('consumeDependencyReferenceList stops at the first non-token, non-separator text', () => {
+  assert.deepEqual(consumeDependencyReferenceList('#10 (see other/repo#20)'), {
+    numbers: [10],
+    unresolvable: [],
+    remaining: '(see other/repo#20)',
+  });
+});
+
+test('consumeDependencyReferenceList reports a qualified token unresolvable when the current repo is unknown', () => {
+  assert.deepEqual(consumeDependencyReferenceList('kurone-kito/idd-skill#12'), {
+    numbers: [],
+    unresolvable: [
+      {
+        token: 'kurone-kito/idd-skill#12',
+        reason: 'cross_repository_reference',
+      },
+    ],
+    remaining: '',
+  });
+});
+
+test('consumeDependencyReferenceList resolves a full GitHub issue URL for the current repo', () => {
+  assert.deepEqual(
+    consumeDependencyReferenceList(
+      'https://github.com/kurone-kito/idd-skill/issues/42',
+      { currentRepo: CURRENT_REPO },
+    ),
+    { numbers: [42], unresolvable: [], remaining: '' },
+  );
+});
+
+test('consumeDependencyContinuationRefLines stops at a blank line', () => {
+  const lines = ['Blocked by #1', '#2, #3', '', '#4 is unrelated'];
+  assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
+    numbers: [2, 3],
+    unresolvable: [],
+  });
+});
+
+// Parity: `extractBlockedByIssueNumbers` (discover-readiness-check.mts),
+// the orphan filter's `extractBlockedByReferences`, and
+// `extractKeywordReferences` (discover-roadmap-graph.mts, filtered to
+// `relationship === 'dependency'`) must agree on the resolved local
+// numbers for every pinned "Blocked by" body above -- all three now share
+// `dependency-grammar.mts`'s ref-list grammar.
+//
+// One Background-table body is deliberately excluded here: a
+// non-parenthetical mid-sentence mention ("This work is Blocked by #12
+// until it lands.") is never a dependency for the readiness/orphan pair
+// (both are line-anchored), but `discover-roadmap-graph.mts` intentionally
+// keeps matching a dependency keyword anywhere on the line -- preserving
+// the pre-existing, still-pinned "collapses same-body Blocked-by prose and
+// standalone line to one dependency" test (#2799), which requires a
+// parenthetical mid-sentence mention (`(Blocked by #332)`) to still
+// produce a real edge. That is a deliberate, documented divergence for an
+// edge case #2799 already covers on its own terms, not a parity gap this
+// test needs to close.
+const PARITY_BODIES = [
+  '1. Blocked by #12',
+  'Blocked by kurone-kito/idd-skill#12',
+  'Blocked by other/repo#5, #13',
+  'Blocked by #12, other/repo#5, #13',
+  '<!-- Blocked by #12 -->',
+  ['<!--', 'Blocked by #12', '-->'].join('\n'),
+  '- Blocked by #12',
+  '> Blocked by: #12',
+  'Blocked by #12 and #13',
+  'Blocked by #12, #13,\n#14, #15',
+  'Intro line\r\nBlocked by #12, #13\r\nOutro line',
+  ['Intro', '```', 'Blocked by #12, #13', '```', 'Outro'].join('\n'),
+];
+
+test('#3284 parity: extractBlockedByIssueNumbers, the orphan filter, and extractKeywordReferences agree on local numbers', () => {
+  for (const body of PARITY_BODIES) {
+    const readinessNumbers = extractBlockedByIssueNumbers(body, CURRENT_REPO);
+    const orphanNumbers = extractBlockedByReferences(body, CURRENT_REPO);
+    const graphNumbers = extractKeywordReferences(body, {
+      currentRepoRef: CURRENT_REPO,
+    })
+      .filter((reference) => reference.relationship === 'dependency')
+      .map((reference) => reference.target);
+
+    assert.deepEqual(
+      orphanNumbers,
+      readinessNumbers,
+      `orphan filter mismatch for: ${JSON.stringify(body)}`,
+    );
+    assert.deepEqual(
+      graphNumbers,
+      readinessNumbers,
+      `graph mismatch for: ${JSON.stringify(body)}`,
+    );
+  }
+});

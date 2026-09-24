@@ -1354,6 +1354,40 @@ test('reports inaccessible and unresolved references fail-safe', async () => {
   ]);
 });
 
+test('#3284: a task-list link naming another repository is neither a node nor a candidate', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      420,
+      roadmapIssue(
+        420,
+        '- [ ] [Upstream fix](https://github.com/other/repo/issues/12)',
+        'root-roadmap',
+      ),
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(420, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+
+  assert.deepEqual(
+    graph.nodes.map((node) => node.number),
+    [420],
+  );
+  assert.deepEqual(graph.executionCandidates, []);
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, [
+    {
+      source: 420,
+      target: 12,
+      relationship: 'unresolvable-reference',
+      evidence: '- [ ] [Upstream fix](https://github.com/other/repo/issues/12)',
+      reason: 'cross_repository_reference',
+    },
+  ]);
+});
+
 test('treats pull request references as unresolved issue targets', async () => {
   const issues = new Map<number, unknown>([
     [410, roadmapIssue(410, '- [ ] #411', 'root-roadmap')],

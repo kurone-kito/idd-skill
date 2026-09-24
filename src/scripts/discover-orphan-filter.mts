@@ -264,6 +264,11 @@ interface ClassifyIssueOptions {
    * only to decide whether a `runtime_observation_precondition` hit
    * demotes to a warned orphan instead of a hard filter. */
   structuralEvidence?: StructuralEvidence;
+  /** #3284: the current repository as `"owner/repo"`, threaded to
+   * `extractBlockedByReferences`/`extractDependencyIssueNumbers` so a
+   * qualified `owner/repo#N`/URL token naming this repository resolves to
+   * a local number instead of being silently excluded. */
+  currentRepo?: string;
 }
 
 interface FilterOrphanIssuesOptions {
@@ -281,6 +286,8 @@ interface FilterOrphanIssuesOptions {
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
   autopilot?: boolean;
+  /** See {@link ClassifyIssueOptions.currentRepo}. */
+  currentRepo?: string;
   now?: Date | string;
   /**
    * Opt-in active-claim annotation (`--with-claim-state`, #1395). Gated the
@@ -420,11 +427,21 @@ if (import.meta.main) {
  * readiness composer's `extractBlockedByIssueNumbers` (#1311) instead of a
  * second inline "Blocked by" regex, so this filter and the readiness gate
  * share one dependency-line primitive — including its colon tolerance
- * (`Blocked by: #123`), blockquote/list-bullet prefix tolerance, and
- * code-region stripping.
+ * (`Blocked by: #123`), blockquote/list-bullet/ordered-list prefix
+ * tolerance, and code-region stripping (`dependency-grammar.mts`, #3284).
+ * `currentRepo` (`"owner/repo"`) resolves a qualified `owner/repo#N`/URL
+ * token naming this repository to a local number; a token naming another
+ * repository (or a qualified token when `currentRepo` is unset) is
+ * excluded here, the same fail-safe way an unrecognized token always has
+ * been — this filter does not itself surface the richer
+ * `unresolvable`/`cross_repository_reference` detail
+ * `evaluateDiscoverReadiness` reports for the identical case.
  */
-export function extractBlockedByReferences(body: unknown): number[] {
-  return extractBlockedByIssueNumbers(String(body ?? ''));
+export function extractBlockedByReferences(
+  body: unknown,
+  currentRepo?: string,
+): number[] {
+  return extractBlockedByIssueNumbers(String(body ?? ''), currentRepo);
 }
 
 // A negation ("does not need to be confirmed in production") within the
@@ -766,8 +783,11 @@ export function classifyIssue(
   // the original single-list order) so an issue that carries both kinds
   // reports the same `blocked_by_open_reference` / `unresolvable_reference`
   // reason it always has when that reference alone already blocks.
-  const blockedRefs = extractBlockedByReferences(body);
-  const dependencyRefs = extractDependencyIssueNumbers(body);
+  const blockedRefs = extractBlockedByReferences(body, options.currentRepo);
+  const dependencyRefs = extractDependencyIssueNumbers(
+    body,
+    options.currentRepo,
+  );
   if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
     return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
@@ -948,6 +968,7 @@ export async function filterOrphanIssues(
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
+      currentRepo: options.currentRepo,
     };
     let result = classifyIssue(issue, classifyOptions);
     // #2767: only a `runtime_observation_precondition` filter can ever be
@@ -1290,6 +1311,7 @@ async function runCli() {
   const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 
   const result = await filterOrphanIssues(openIssues, {
+    currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
       fetchIssueState(port, issueNumber),
