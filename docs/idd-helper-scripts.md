@@ -3919,6 +3919,57 @@ same-HEAD reroll recovery path available for it, since `suppressedCount`
 is read from the same static per-submission review snapshot `itemCount`
 is.
 
+**Review-body shape classification (kurone-kito/idd-skill#3258).** GitHub
+Copilot has changed the review-body shape that carries thread-less
+findings twice since the `#1880` fix above shipped, and the original
+`SUPPRESSED_COMMENTS_HEADING_PATTERN` regex only ever matched the
+first (August) form -- every review generated from 2026-09-04 onward
+parsed as `suppressedCount: 0` regardless of its real content.
+`classifyCopilotReviewBody` (a leaf module, `copilot-review-body.mts`,
+importing only `markdown-code.mts`'s code-region stripper)
+recognizes four shapes, reported as the new `review.bodyShape` field
+alongside `suppressedCount`:
+
+- `overview-v2`: the body carries the `<!-- ccr-overview-v2 -->` marker
+  at its own start. `suppressedCount` comes from a
+  `<summary><strong>Previously missed (N)</strong></summary>` section
+  (the `<strong>` wrapper is optional); the `**Findings:**` header and
+  the `Open` / `Resolved since last review` sections are never counted,
+  since those items already link an existing review-thread Clause 2
+  already covers.
+- `overview-legacy`: the pre-2026-09-19 overview (opens with
+  `## Pull request overview`, or carries a `<details>` block summarized
+  `Review details` or `Pull request overview`), or the original,
+  even-older bare August `<summary>Suppressed comments (N)</summary>`
+  form -- either signal independently qualifies, so the `#1880`/`#1884`
+  regression fixtures (the bare August form, with no overview wrapper at
+  all) keep working unmodified. `suppressedCount` comes from a
+  `### Suppressed comments (N)` heading when present, else the bare
+  August `<summary>` form; a `**Previously missed (N)**` bold line
+  nested under that heading is already part of the same count and is
+  never separately added.
+- `error`: Copilot's exact "encountered an error" template (`#3015`,
+  `isCopilotErrorReviewBody`, now itself defined in
+  `copilot-review-body.mts` and re-exported from `protocol-helpers.mts`
+  for its existing importers). Unreachable through
+  `resolveLatestCopilotReviewClause`'s own output in practice, since that
+  function already excludes an error-bodied review before selecting the
+  absolute-latest one (unchanged, `#3015`).
+- `unrecognized`: none of the above, including an absent/empty body.
+
+**Fail-closed on an unrecognized shape (kurone-kito/idd-skill#3258,
+Groom-hearing maintainer decision).** For the Copilot default
+`primaryBotLogin` only, Clause 1's disposition-aware `satisfied`
+override (below) additionally requires `review.bodyShape` to be
+anything other than `unrecognized`, unless a trusted `review-ack`
+already covers the review -- so a review body this gate cannot parse at
+all no longer silently converges. The verdict's `reasons` entry and the
+review-ack next action both name `bodyShape: unrecognized` explicitly.
+A configured non-Copilot `primaryBotLogin` (the `external-bot` review
+policy, `#2137`) has no known body shapes at all -- a reply-only review
+from such a bot can legitimately have an empty body -- so this rule
+never applies outside the Copilot default.
+
 **`suppressedCount` reroll reliability caveat (kurone-kito/idd-skill#1934).**
 The mechanism-sharing argument above is a statement about how the two
 counts are read (same static per-submission snapshot), not a claim
@@ -3956,6 +4007,8 @@ matchesHead
   && (itemCount === 0 || (itemCount is known AND >= itemCount thread(s)
       THIS review opened cover it AND all of them are resolved/dispositioned))
   && (suppressedCount === 0 || hasValidReviewAck)
+  && (primaryBotLogin is not the Copilot default
+      || bodyShape !== 'unrecognized' || hasValidReviewAck)
 ```
 
 The `itemCount` half is bound to the LATEST review specifically
