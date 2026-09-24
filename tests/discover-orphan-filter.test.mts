@@ -13,6 +13,7 @@ import {
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
+import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -102,6 +103,31 @@ test('classifyIssue rejects roadmap and blocked marker issues', () => {
     },
   );
   assert.equal(blocked.reason, 'blocked_by_marker');
+});
+
+test('classifyIssue agrees with discover-roadmap-graph.mts that a label-only issue is not a roadmap (#3286)', () => {
+  const labelOnlyIssue = {
+    number: 6,
+    title: 'label-only, no marker',
+    state: 'OPEN',
+    labels: [{ name: 'roadmap' }],
+    body: 'No roadmap-id marker here.',
+  };
+
+  // The orphan filter's own marker-only rule already treats this as an
+  // ordinary orphan candidate, not a roadmap...
+  const orphanResult = classifyIssue(labelOnlyIssue, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.equal(orphanResult.orphan, true);
+  assert.equal(orphanResult.reason, 'orphan');
+
+  // ...and discover-roadmap-graph.mts's classifyIssue agrees: no marker
+  // means execution, never roadmap, even though the label is present
+  // (#3286 Groom-hearing maintainer decision -- the marker is the sole
+  // roadmap identity).
+  assert.equal(classifyGraphIssue(labelOnlyIssue).kind, 'execution');
 });
 
 test('classifyIssue excludes the configured providerOutage.declarationTarget by number (#2800)', () => {

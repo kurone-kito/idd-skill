@@ -1691,7 +1691,6 @@ function createProductionDeps(
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {
         markerPrefix,
-        roadmapLabelName: labelsPolicy.roadmapLabelName,
         owner,
         repo,
         loadIssue,

@@ -117,33 +117,31 @@ Resolve #107
   );
 });
 
-test('classifyIssue resolves a configured roadmap label name (#1273)', () => {
-  // A custom `labels.roadmapLabelName` (e.g. 'epic') classifies as roadmap...
+test('classifyIssue never classifies by the roadmap label alone (#3286)', () => {
+  // A label-only issue (no marker) is an execution node regardless of the
+  // label name carried -- the roadmap-id marker is the only roadmap
+  // identity now (#3286 Groom-hearing maintainer decision).
   assert.equal(
-    classifyIssue({ body: '', labels: [{ name: 'epic' }] }, 'idd-skill', 'epic')
-      .kind,
-    'roadmap',
-  );
-  // ...and the stock 'roadmap' label alone no longer matches once a custom
-  // label name is configured (the override replaces, not adds to, the
-  // default).
-  assert.equal(
-    classifyIssue(
-      { body: '', labels: [{ name: 'roadmap' }] },
-      'idd-skill',
-      'epic',
-    ).kind,
+    classifyIssue({ body: '', labels: [{ name: 'roadmap' }] }).kind,
     'execution',
   );
-});
-
-test('classifyIssue falls back to the default roadmap label on an empty-string override (#1273 review fix)', () => {
-  // An empty string is a parameter-default-bypassing value (not
-  // `undefined`): it must still resolve to the POLICY_DEFAULTS fallback
-  // ('roadmap'), not silently disable the roadmap-label check.
   assert.equal(
-    classifyIssue({ body: '', labels: [{ name: 'roadmap' }] }, 'idd-skill', '')
-      .kind,
+    classifyIssue({ body: '', labels: [{ name: 'epic' }] }).kind,
+    'execution',
+  );
+  // The marker alone is sufficient, with or without any label.
+  assert.equal(
+    classifyIssue({
+      body: '<!-- idd-skill-roadmap-id: root -->',
+      labels: [],
+    }).kind,
+    'roadmap',
+  );
+  assert.equal(
+    classifyIssue({
+      body: '<!-- idd-skill-roadmap-id: root -->',
+      labels: [{ name: 'roadmap' }],
+    }).kind,
     'roadmap',
   );
 });
@@ -2351,32 +2349,27 @@ process.exit(1);
 // ---------------------------------------------------------------------------
 // Search-narrowed open-roadmap-root discovery (#1017).
 //
-// The live loader narrows root discovery to two cheap server-side searches
-// (a `--label roadmap` search and a body-marker `--match body` search) and
-// re-confirms marker candidates against the body the search already returned,
-// instead of fetching every open issue's body. These tests inject a stubbed
-// `searchIssues` runner at that seam to pin: both root kinds are discovered,
-// a non-marker body hit is dropped, and no full open-issue scan happens.
+// The live loader narrows root discovery to one cheap server-side search (a
+// body-marker `--match body` search) and re-confirms marker candidates
+// against the body the search already returned, instead of fetching every
+// open issue's body. These tests inject a stubbed `searchIssues` runner at
+// that seam to pin: marker roots are discovered, a non-marker body hit is
+// dropped, no `--label` search is ever issued (#3286 -- the roadmap label
+// no longer identifies a root), and no full open-issue scan happens.
 // ---------------------------------------------------------------------------
 
-test('open-roadmap-roots loader unions label roots and re-confirmed marker roots', async () => {
+test('open-roadmap-roots loader discovers roots only via the marker search (#3286)', async () => {
   const queries: SearchIssuesQuery[] = [];
   const searchIssues = (query: SearchIssuesQuery) => {
     queries.push(query);
-    if (query.label === 'roadmap') {
-      // Labeled roots returned out of insertion order on purpose: 702 before
-      // 701 so the loader cannot rely on search/Set order for its ascending
-      // contract.
-      return [{ number: 702 }, { number: 701 }];
-    }
     if (query.matchBody) {
       // Body-marker candidates: 703 carries a real marker (kept on
-      // re-confirm); 704 is a non-marker token hit (dropped); 701 also
-      // surfaces here and must dedupe against the label root.
+      // re-confirm); 704 is a non-marker token hit (dropped). A label-only
+      // issue such as the old 701/702 fixtures never surfaces here at all
+      // -- the label search no longer runs.
       return [
         { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
         { number: 704, body: 'mentions roadmap-id in prose but no marker' },
-        { number: 701, body: '<!-- idd-skill-roadmap-id: also-labeled -->' },
       ];
     }
     return [];
@@ -2390,24 +2383,17 @@ test('open-roadmap-roots loader unions label roots and re-confirmed marker roots
   );
   const roots = await loadRoots();
 
-  // 701 + 702 (label roots) ∪ 703 (re-confirmed marker root); 704 dropped
-  // because its body carries no marker, 701 deduped across both searches.
-  // The loader's documented contract is deduped + ASCENDING, so the raw
-  // return must already be sorted even though the stub yielded 702 before 701
-  // and surfaced 703 only via the marker search (no caller-side sort here).
-  assert.deepEqual(roots, [701, 702, 703]);
+  // Only the re-confirmed marker root; 704 dropped because its body
+  // carries no marker.
+  assert.deepEqual(roots, [703]);
 
-  // Exactly two server-side searches: one exact `--label roadmap` (no body
-  // requested) and one body-marker `--match body` carrying the prefixed
-  // marker token. No full open-issue body scan is performed.
-  assert.equal(queries.length, 2);
-  const labelQuery = queries.find((query) => query.label === 'roadmap');
-  assert.deepEqual(labelQuery?.fields, ['number']);
-  assert.equal(labelQuery?.matchBody, undefined);
-  const markerQuery = queries.find((query) => query.matchBody);
-  assert.equal(markerQuery?.matchBody, 'idd-skill-roadmap-id');
-  assert.deepEqual(markerQuery?.fields, ['number', 'body']);
-  assert.equal(markerQuery?.label, undefined);
+  // Exactly one server-side search: the body-marker `--match body` query.
+  // No `--label` search is ever issued.
+  assert.equal(queries.length, 1);
+  assert.ok(queries.every((query) => query.label === undefined));
+  const markerQuery = queries[0];
+  assert.equal(markerQuery.matchBody, 'idd-skill-roadmap-id');
+  assert.deepEqual(markerQuery.fields, ['number', 'body']);
 });
 
 test('open-roadmap-roots loader honors a custom marker prefix in the body search', async () => {
@@ -2436,32 +2422,8 @@ test('open-roadmap-roots loader honors a custom marker prefix in the body search
   );
 });
 
-test('open-roadmap-roots loader honors a configured roadmap label name (#1273)', async () => {
-  const queries: SearchIssuesQuery[] = [];
+test('open-roadmap-roots loader unions configured legacyRoots and dedupes against marker roots (#1315, #3286)', async () => {
   const searchIssues = (query: SearchIssuesQuery) => {
-    queries.push(query);
-    return [];
-  };
-
-  await buildOpenRoadmapRootsLoader(
-    'kurone-kito',
-    'idd-skill',
-    'idd-skill',
-    searchIssues,
-    'epic',
-  )();
-
-  // The configured `labels.roadmapLabelName` ('epic') is used for the
-  // `--label` search qualifier instead of the default `'roadmap'`.
-  const labelQuery = queries.find((query) => query.label);
-  assert.equal(labelQuery?.label, 'epic');
-});
-
-test('open-roadmap-roots loader unions configured legacyRoots and dedupes against label/marker roots (#1315)', async () => {
-  const searchIssues = (query: SearchIssuesQuery) => {
-    if (query.label === 'roadmap') {
-      return [{ number: 701 }];
-    }
     if (query.matchBody) {
       return [
         { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
@@ -2470,24 +2432,25 @@ test('open-roadmap-roots loader unions configured legacyRoots and dedupes agains
     return [];
   };
 
-  // 701 overlaps the label root (dedupe), 900 is a genuinely new legacy
-  // root with neither label nor marker.
+  // 703 overlaps the marker root (dedupe), 900 is a genuinely new legacy
+  // root with no marker.
   const roots = await buildOpenRoadmapRootsLoader(
     'kurone-kito',
     'idd-skill',
     'idd-skill',
     searchIssues,
-    undefined,
-    [900, 701],
+    [900, 703],
   )();
 
-  assert.deepEqual(roots, [701, 703, 900]);
+  assert.deepEqual(roots, [703, 900]);
 });
 
 test('open-roadmap-roots loader falls back to no extra roots for an invalid legacyRoots value', async () => {
   const searchIssues = (query: SearchIssuesQuery) => {
-    if (query.label === 'roadmap') {
-      return [{ number: 701 }];
+    if (query.matchBody) {
+      return [
+        { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
+      ];
     }
     return [];
   };
@@ -2497,13 +2460,12 @@ test('open-roadmap-roots loader falls back to no extra roots for an invalid lega
     'idd-skill',
     'idd-skill',
     searchIssues,
-    undefined,
     ['not-a-number'],
   )();
 
   // The malformed legacyRoots value fails safe to no extra roots; the
-  // label/marker search results are unaffected.
-  assert.deepEqual(roots, [701]);
+  // marker search result is unaffected.
+  assert.deepEqual(roots, [703]);
 });
 
 test('open-roadmap-roots loader warns on the 1000-result search cap', () => {
