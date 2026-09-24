@@ -277,8 +277,11 @@ let shape1PassedEntryPaths: Set<string> | undefined;
 // Set only on the ancestor-package.json skip path below, so the
 // static-scan test (which depends on shape1PassedEntryPaths) can skip
 // itself too, instead of hard-failing on a missing prerequisite that was
-// never a defect -- the same cascade applies to shape 3's own skip guard
-// below (PR #3361 review, CodeRabbit + Copilot).
+// never a defect (PR #3361 review, CodeRabbit + Copilot). Shape 3 below
+// has no equivalent skip path -- the package-manager profile has no
+// environment-dependent precondition -- so its own
+// `assert.ok(shape3PassedBinNames, ...)` stays an unconditional hard
+// check, correctly, with no matching shape3SkipReason needed.
 let shape1SkipReason: string | undefined;
 
 test('shape 1 (vendored-node, no ancestor package.json): import+substitute+verify pass, and every helper --help loads independently', (t) => {
@@ -682,7 +685,7 @@ test('static workflow resolution: every template workflow helper invocation reso
   );
   assert.ok(
     shape3PassedBinNames,
-    'expected shape 3 to have populated shape3PassedBinNames first',
+    'expected shape 3 to have populated shape3PassedBinNames before this test runs (shape 3 has no skip path, so an unset value here means it failed, not that it was skipped)',
   );
 
   const workflowFiles = readdirSync(WORKFLOWS_DIR).filter((name) =>
