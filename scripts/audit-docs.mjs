@@ -927,7 +927,7 @@ function containsManifestListMismatch(currentErrors) {
 }
 function containsLinkAuditFailure(currentErrors) {
   return currentErrors.some((error) =>
-    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context/.test(
+    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context|is not in the distributed core file set/.test(
       error,
     ),
   );
