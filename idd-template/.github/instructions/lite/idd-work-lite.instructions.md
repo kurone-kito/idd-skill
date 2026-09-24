@@ -384,11 +384,13 @@ telemetry record.
 
 ### C5 — Fix accepted issues
 
-1. Run `fix-validate`.
+1. Run `fix-validate`, judged by its own exit status (in Bash, check
+   `${PIPESTATUS[0]}` or use `set -o pipefail`) — a `tail`/`head`
+   filter cannot prove success (#3139).
 2. If the floor still has not passed and there are no accepted issues, stop
    and ask.
 3. Fix the accepted issues.
-4. Rerun `fix-validate`.
+4. Rerun `fix-validate`, judged the same way.
 5. If anything changed, commit atomically.
 
 ### C6 — Return to C1
