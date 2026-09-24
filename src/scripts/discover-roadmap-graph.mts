@@ -300,6 +300,15 @@ export interface RoadmapGraphNode {
    * path so the byte-stable output shape is unchanged.
    */
   readiness?: LeafReadiness;
+  /**
+   * REST `state_reason` for a node closed WITHOUT completion (`not_planned`,
+   * `duplicate`, or any other non-null reason other than `completed`).
+   * Present only on a `CLOSED` node carrying such a reason -- an OPEN node
+   * or a node closed as `completed` (or with no reason at all) never gets
+   * this key, so the default graph output stays byte-stable for them
+   * (#3326).
+   */
+  stateReason?: string;
 }
 
 /** Provenance path from the root roadmap to one discovered node. */
@@ -478,6 +487,11 @@ interface NormalizedIssue {
   // treats it as absent, so a candidate never keeps sorting ahead of its
   // score band after its release ships.
   openMilestoneTitle: string | null;
+  // Raw REST `state_reason`, or null when absent/non-string/empty. Carried
+  // through regardless of `state` -- the CLOSED-and-non-`completed` filter
+  // that decides whether a report node actually exposes `stateReason` is
+  // applied once, at report-node construction (#3326).
+  stateReason: string | null;
 }
 
 interface RoadmapNodeRecord {
@@ -491,6 +505,7 @@ interface RoadmapNodeRecord {
   effort: EffortHint | null;
   milestone: string | null;
   depth: number;
+  stateReason: string | null;
 }
 
 /**
@@ -844,18 +859,34 @@ export async function enumerateRoadmapGraph(
   await visitIssue(rootIssue.number, [rootIssue.number]);
 
   const nodes = [...nodeRecords.values()]
-    .map((node) => ({
-      number: node.number,
-      title: node.title,
-      state: node.state,
-      labels: [...node.labels].sort(),
-      classification: node.classification,
-      roadmapMarkerId: node.roadmapMarkerId,
-      autopilotSuitability: node.autopilotSuitability ?? null,
-      effort: node.effort ?? null,
-      milestone: node.milestone ?? null,
-      depth: node.depth,
-    }))
+    .map((node) => {
+      // Expose `stateReason` only for a CLOSED node whose reason is a
+      // non-null value other than `completed` -- an OPEN node, a node closed
+      // as `completed`, or a node with no reason at all keeps today's exact
+      // shape, so the default graph output stays byte-stable for them
+      // (#3326).
+      const closedWithoutCompletion =
+        node.state === 'CLOSED' &&
+        node.stateReason != null &&
+        node.stateReason !== 'completed'
+          ? node.stateReason
+          : null;
+      return {
+        number: node.number,
+        title: node.title,
+        state: node.state,
+        labels: [...node.labels].sort(),
+        classification: node.classification,
+        roadmapMarkerId: node.roadmapMarkerId,
+        autopilotSuitability: node.autopilotSuitability ?? null,
+        effort: node.effort ?? null,
+        milestone: node.milestone ?? null,
+        depth: node.depth,
+        ...(closedWithoutCompletion !== null
+          ? { stateReason: closedWithoutCompletion }
+          : {}),
+      };
+    })
     .sort(compareByNumber);
   const sortedEdges = [...edges].sort(compareEdges);
   const sortedProvenancePaths = [...provenancePaths].sort(comparePaths);
@@ -1186,6 +1217,7 @@ export async function enumerateRoadmapGraph(
       effort: parseEffort(issue.body, markerPrefix),
       milestone: issue.openMilestoneTitle,
       depth,
+      stateReason: issue.stateReason,
     });
     recordProvenancePath(issue.number, path);
   }
@@ -2918,6 +2950,7 @@ function normalizeIssue(issue: {
   pull_request?: unknown;
   sub_issues_summary?: unknown;
   milestone?: unknown;
+  state_reason?: unknown;
 }): NormalizedIssue {
   return {
     number: Number.parseInt(String(issue.number ?? issue.id ?? 0), 10),
@@ -2928,7 +2961,20 @@ function normalizeIssue(issue: {
     isPullRequest: Boolean(issue.pull_request),
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
     openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
+    stateReason: extractStateReason(issue.state_reason),
   };
+}
+
+/**
+ * Read the REST `state_reason` field verbatim. Returns null for a
+ * missing/non-string/empty value -- the caller decides, once, at report-node
+ * construction, whether a `CLOSED` node with a non-`completed` reason
+ * actually exposes it (#3326).
+ */
+function extractStateReason(stateReason: unknown): string | null {
+  return typeof stateReason === 'string' && stateReason.length > 0
+    ? stateReason
+    : null;
 }
 
 /**
