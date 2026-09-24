@@ -134,10 +134,10 @@ authoritative replacement:
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: local_worktree_occupied` + `action: stop` → a stale or released
-  claim's matching local worktree is occupied, unreadable, or unknown; stop
-  for operator recovery. Verify owner resume with the exact claim-id, or
-  retry a valid forced-handoff successor with its new claim-id, before
-  proceeding.
+  claim's matching local worktree is occupied, unreadable, or unknown;
+  stop; see §LWR (`docs/idd-resume-detail.md`). Verify owner resume with
+  the exact claim-id, or retry a valid forced-handoff successor with its
+  new claim-id, before proceeding.
 - `state: non_inheritable` + `action: stop` → active non-stale claim
   stop route.
 - `state: disputed` + `action: stop` → contested-claim stop route
@@ -168,13 +168,13 @@ stop before re-claim or takeover; never treat failure as no match.
 | Active claim = this session's verified `{claim-id}`                                             | Continue with same `{claim-id}`; ignore stale FH evidence citing a different displaced `{claim-id}`; → Step 2                 |
 | FH evidence names this session's already-verified `{claim-id}`                                  | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge                               |
 | Forced-handoff recovery confirmed (§FH)                                                         | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2                           |
-| No active claim after release + matching local worktree is occupied or unreadable               | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                                  |
+| No active claim after release + matching local worktree is occupied or unreadable               | STOP — recover the local worktree (§LWR) or verify owner-resume / forced-handoff successor claim-id                           |
 | No new-format claims + legacy `claimed-by` + later trusted `unclaimed-by` (same agent)          | Treat as unclaimed → fresh A5 claim → Step 2                                                                                  |
 | No new-format claims + legacy `claimed-by`, age < 24 h                                          | STOP — not inheritable even if agent-id matches                                                                               |
 | No new-format claims + legacy `claimed-by`, age ≥ 24 h                                          | Migrate via A5 with `supersedes: none`; → Step 2                                                                              |
 | No active claim                                                                                 | Re-claim via A5; → Step 2                                                                                                     |
 | Active non-stale claim (< 24 h, other session)                                                  | STOP — not inheritable even if agent-id matches                                                                               |
-| Active stale claim (≥ 24 h, other session) + matching local worktree is occupied or unreadable  | STOP — recover the local worktree or verify owner-resume / forced-handoff successor claim-id                                  |
+| Active stale claim (≥ 24 h, other session) + matching local worktree is occupied or unreadable  | STOP — recover the local worktree (§LWR) or verify owner-resume / forced-handoff successor claim-id                           |
 | Active stale claim (≥ 24 h, other session) + branch field starts with `roadmap-audit/`          | Takeover via A5 with `supersedes: <prior-id>`; then re-run A1.5; STOP after roadmap-side effects                              |
 | Active stale claim (≥ 24 h, other session)                                                      | Takeover via A5 with `supersedes: <prior-id>`; → Step 2                                                                       |
 

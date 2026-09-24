@@ -260,3 +260,71 @@ Refresh the digest only after the successor's verified claim is active and
 a same-claim watermark has been posted. Live status digests are UI-only
 handoff context and do not satisfy review currency, claim ownership,
 advisory wait, or CI gates.
+
+## §LWR — Local Worktree Recovery
+
+A local worktree matching a stale or released claim's branch counts as occupied
+(observed 2026-09-19, `kurone-kito/idd-skill#3141`): a matching live worktree
+could still hold a same-host session's uncommitted work, so Resume, Discover,
+and Claim all stop rather than assume the claim is abandoned. In a shared-clone
+setup this stop has no defined recovery when the worktree's own session
+actually crashed, so its issue can never reach the normal stale takeover. This
+section defines that recovery. It is operator-run, never automated, and checks
+no process-liveness signal — `src/scripts/claim-lock.mts`'s header records why:
+this "deliberately excludes any local liveness signal (e.g. process PID)... the
+process invoking this CLI is a one-shot child that exits the moment the call
+returns, so a recorded PID would be a tombstone before any competing session
+could ever observe it as 'alive'".
+
+1. **Confirm the block.** Run `resume-claim-routing.mjs --issue <n>`; a
+   `local_worktree_occupied` result reports
+   `evidence.local_worktree.paths` and a `reason` starting
+   `stale-claim-...` or `released-claim-...`. Run `claim-lock.mjs
+   --check --worktree <path>` to read which claim-id holds the lock.
+   If that claim-id is the issue's active **non-stale** claim, stop —
+   a live session may still own it.
+2. **Rule out a live session.** Outside the helpers, independently
+   confirm no session is still working in the worktree — the helpers
+   never check process liveness (see the citation above).
+3. **Preserve.** Inspect `git -C <path> status --porcelain --ignored`,
+   unpushed commits (`git -C <path> log @{u}..HEAD`, or all commits
+   when there is no upstream), and `git -C <path> stash list`. Save
+   uncommitted working-tree changes with `git -C <path> stash push
+   --include-untracked` — stash entries live in the shared repository,
+   not the worktree's own private admin directory, so they survive
+   step 4's removal — and preserve unpushed commits on a backup ref or
+   bundle instead of pushing them to the issue branch. `--include-untracked`
+   does not stash ignored files, so copy those out separately: secrets
+   (e.g. `.env`) — never commit or push them — and any other
+   non-reproducible ignored data, mirroring `idd-merge.instructions.md`
+   F4's same worktree-removal rule.
+4. **Remove.** Confirm each step 3 action actually succeeded — the
+   stash entry appears in `git -C <path> stash list`, unpushed commits
+   are visible on the backup ref or in the bundle, and any copied-out
+   ignored files landed outside the worktree — before removing
+   anything. Stop and do not run `git worktree remove`, `--force`
+   included, if any of them failed. Then run `git worktree remove
+   <path>`, then `git worktree prune`. This also deletes that
+   worktree's claim lock and generated-tokens record, since both live
+   in its own private git-admin directory.
+5. **Re-enter.** Re-run Resume from Step 0. A now-`absent` worktree
+   lets a stale claim take the normal stale-takeover path through A5,
+   and a released claim take a fresh A5 claim. Route any preserved
+   commits through §CSA.
+
+**Wake condition.** Every stop on `local_worktree_occupied` (Resume
+Step 1, `idd-resume-stall.instructions.md` S3/S4, the lite equivalents,
+and Claim pre-check (e)) records this in the session's own stop report
+or log — never as an issue/PR comment on a non-owned claim:
+
+- the branch;
+- the worktree path(s);
+- the probe status (`occupied`/`unreadable`/`unknown`);
+- the blocking claim-id and its latest valid `claimed-by` time, or
+  `none` for a legacy pre-claim-id release (`docs/idd-helper-scripts.md`);
+- the checkable invariant: `resume-claim-routing` reports
+  `evidence.local_worktree.status: absent` for this branch (after this
+  section's steps), or a newer valid heartbeat for the blocking
+  claim-id appears. Either observation only means re-enter Resume
+  Step 0 (step 5); a fresh heartbeat lands on the active non-stale
+  claim stop there, never on a takeover.
