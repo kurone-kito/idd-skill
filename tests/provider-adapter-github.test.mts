@@ -1,10 +1,30 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   createGithubProviderAdapter,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
+
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and discover-readiness-check.test.mts.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixture(id: string): Error & { stderr?: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture, `missing gh-errors.json fixture: ${id}`);
+  // No `.status`/`.code` field: a real gh child-process error always exits
+  // `1` regardless of HTTP status, so a test-only `.status` would pin a
+  // classification path gh never actually exercises (#3335).
+  return Object.assign(new Error(`gh failed (fixture: ${id})`), {
+    stderr: fixture.stderr,
+  });
+}
 
 function fakeDeps(
   overrides: Partial<GithubProviderAdapterDeps>,
@@ -926,10 +946,7 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 404') as Error & { stderr?: string };
-        error.stderr =
-          'HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)';
-        throw error;
+        throw ghErrorFixture('notFoundWithUrl404');
       },
     }),
   );
@@ -938,7 +955,12 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
   assert.equal(calls, 1);
 });
 
-test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, without retry', async () => {
+// #3335: previously set `error.status = 403` directly, a shape a real gh
+// child-process error never produces (its exit status is always `1`
+// regardless of HTTP status) -- the dead exit-code-based branch this
+// test exercised passed only because of that fabricated shape. Rewritten
+// onto a realistic stderr-text fixture instead.
+test('getWorkItemForTraversalAsync resolves inaccessible on a SAML-enforcement 403 immediately, without retry', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
     'o',
@@ -946,15 +968,52 @@ test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, w
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 403') as Error & { status?: number };
-        error.status = 403;
-        throw error;
+        throw ghErrorFixture('samlEnforcement403');
       },
     }),
   );
   const result = await port.getWorkItemForTraversalAsync(900);
   assert.deepEqual(result, { outcome: 'inaccessible' });
   assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync resolves inaccessible on a deleted-issue 410 immediately, without retry', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('deletedIssue410');
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, { outcome: 'inaccessible' });
+  assert.equal(calls, 1);
+});
+
+// A 403 secondary-rate-limit must keep retrying then rethrowing, never
+// downgrade to 'inaccessible' -- the shared classifier's wording check
+// deliberately excludes it (#3335).
+test('getWorkItemForTraversalAsync rethrows a secondary-rate-limit 403 after exhausting retries', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('secondaryRateLimit403');
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
 });
 
 // ---------------------------------------------------------------------------

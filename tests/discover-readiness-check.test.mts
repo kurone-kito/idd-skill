@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -93,6 +93,20 @@ const ghError = (stderr: string) =>
     status: 1,
     stderr,
   });
+
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and provider-adapter-github.test.mts.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
 
 test('extractors parse blocked-by references, roadmap markers, and dependencies', () => {
   const body = `
@@ -1134,17 +1148,16 @@ test('bubbles non-recoverable loader failures', async () => {
   );
 });
 
-test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', () => {
-  // Visibility / integration-permission 403, 410, 451 -> inaccessible
+// #3335: previously fed 'Resource not accessible by integration (HTTP
+// 410)' for the 410 case -- integration wording, not GitHub's actual
+// deleted-issue message -- so it never proved 410 downgrades
+// unconditionally (regardless of wording), only that this particular
+// wording happened to match. Rewritten onto the shared realistic
+// fixtures (tests/fixtures/gh-errors.json).
+test('isInaccessibleIssueLookupError downgrades 410/451 unconditionally and 403 only on visibility/integration/SAML wording', () => {
   assert.equal(
     isInaccessibleIssueLookupError(
-      ghError('Resource not accessible by integration (HTTP 403)'),
-    ),
-    true,
-  );
-  assert.equal(
-    isInaccessibleIssueLookupError(
-      ghError('Resource not accessible by integration (HTTP 410)'),
+      ghError(ghErrorFixtureStderr('deletedIssue410')),
     ),
     true,
   );
@@ -1154,13 +1167,25 @@ test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', ()
     ),
     true,
   );
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError(ghErrorFixtureStderr('integration403')),
+    ),
+    true,
+  );
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError(ghErrorFixtureStderr('samlEnforcement403')),
+    ),
+    true,
+  );
 });
 
 test('isInaccessibleIssueLookupError fails closed on auth, rate-limit, and 404', () => {
   // 403 secondary-rate-limit must abort, not downgrade.
   assert.equal(
     isInaccessibleIssueLookupError(
-      ghError('You have exceeded a secondary rate limit (HTTP 403)'),
+      ghError(ghErrorFixtureStderr('secondaryRateLimit403')),
     ),
     false,
   );
