@@ -74,11 +74,11 @@ routing:
    check runs first and applies whether the target turns out to be an
    execution leaf or a roadmap node in step 2 below, so an
    authoring-held roadmap is never routed into step 2's traversal.
-2. If the target issue carries the configured roadmap label or an
+2. If the target issue carries an
    `idd-skill-roadmap-id` marker — the same test
    **A2**'s roadmap-node/execution-leaf classification rule uses (an
-   unmarked legacy umbrella isn't recognized here — retro-label it
-   first, per A1's Legacy roots) — do not continue to steps 3-5.
+   unmarked legacy umbrella isn't recognized here, per A1's Legacy
+   roots) — do not continue to steps 3-5.
    Instead:
    - Apply **A3**'s dependency bullet to the target itself (both
      visible `Blocked by #NNN` lines and hidden
@@ -229,8 +229,7 @@ accepts `--with-claim-state` (plus `--current-claim-id`), mirroring
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues, identified
-by the configured roadmap label (project field) from
-`labels.roadmapLabelName` (default: `roadmap`) or by recognizing it as
+by its `idd-skill-roadmap-id` marker or by recognizing it as
 an umbrella issue. Under `roadmap` or `orphan-first` scope, report and
 abort if no roadmap issue exists. Under `roadmap-first` scope, this is
 **trigger (c)**: fall back to **A0-O** instead.
@@ -246,10 +245,10 @@ still applies only to true orphans, since cross-roadmap leaves are
 reached via a parent roadmap's task list and never carry their own
 `idd-skill-roadmap-id` marker.
 
-**Legacy roots**: `--all-roadmaps` finds roots only by label or
-`idd-skill-roadmap-id` marker. Retro-label a legacy
+**Legacy roots**: `--all-roadmaps` finds roots only by
+`idd-skill-roadmap-id` marker. Add the marker to a legacy
 umbrella, or configure **`discover.legacyRoots`** (issue numbers,
-deduped against label/marker roots; invalid fails safe to none). See
+deduped against marker roots; invalid fails safe to none). See
 `docs/idd-helper-scripts.md`.
 
 ## A1.5 — Audit completed roadmaps
@@ -281,10 +280,10 @@ referenced issues. Collect only **open** issues.
 - Incidental narrative mentions (e.g., "Similar to #NNN") lacking an
   explicit task, sub-issue, or dependency relationship
 
-Traverse referenced issues regardless of open/closed state. Issues
-carrying the configured roadmap label or an
-`<!-- idd-skill-roadmap-id: ... -->` marker are
-**roadmap nodes**; any other issue is an **execution leaf**. Include
+Traverse referenced issues regardless of open/closed state. An issue
+carrying an `<!-- idd-skill-roadmap-id: ... -->` marker
+is a **roadmap node**; any other issue — including one carrying only
+the configured roadmap label — is an **execution leaf**. Include
 only open execution leaves in the candidate set; never advance roadmap
 nodes to A3/A4/A4.5/A5, but traverse closed nodes too (so descendants
 aren't hidden). The A1 root roadmap starts the traversal and is
@@ -690,8 +689,9 @@ Two hidden HTML comment markers are used in issue bodies to support the
 discover phase:
 
 - **Roadmap identity** (`idd-skill-roadmap-id`): in the
-  roadmap issue body; A3 uses it for `blocked-by` lookups. A1 finds the
-  roadmap by its label or umbrella structure, not this marker.
+  roadmap issue body; A3 uses it for `blocked-by` lookups, and it is
+  the only marker that identifies a roadmap — the configured roadmap
+  label is informational only.
 - **Sequential dependency** (`idd-skill-blocked-by`): in an
   issue body — this issue **cannot start until** the roadmap with the
   matching `roadmap-id` is closed.

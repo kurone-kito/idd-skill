@@ -87,11 +87,12 @@ results only to link existing gap work or avoid creating a duplicate,
 not to widen A2 candidates.
 
 When the selected roadmap graph includes descendant issues that are
-themselves roadmap nodes, such as descendants carrying the configured
-roadmap label from `labels.roadmapLabelName` (default: `roadmap`) or a
-`idd-skill-roadmap-id` marker, treat those
-descendants as **nested roadmaps** rather than as normal execution
-leaves. A nested roadmap is a coordination/audit node in the recursive
+themselves roadmap nodes — descendants carrying an
+`idd-skill-roadmap-id` marker (the configured roadmap
+label from `labels.roadmapLabelName`, default `roadmap`, is
+informational only) — treat those descendants as **nested roadmaps**
+rather than as normal execution leaves. A nested roadmap is a
+coordination/audit node in the recursive
 hierarchy: it may remain open while its own leaf descendants are still
 executing, and its presence does not by itself widen A2 candidates
 outside the selected roadmap graph.
