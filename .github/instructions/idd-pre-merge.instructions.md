@@ -90,7 +90,7 @@ non-Copilot finding still returns to E1.
 (directly, or via the documented merge-gate helper reference), pass
 `--nonce {nonce}` — this session's own locally-recorded activation-nonce
 from claim time (`idd-claim.instructions.md`'s activation-nonce format) —
-alongside `--claim-id`, extending Claim-verification-step-5's nonce
+alongside `--claim-id`, extending Claim-verification-step-4's nonce
 collision check to this merge-time write-gate (Resume-phase cold
 recovery stays a distinct, not-yet-wired case — see
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred),
