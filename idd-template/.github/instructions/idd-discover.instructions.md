@@ -545,8 +545,8 @@ Before selecting from the surviving viable issues, eliminate candidates
 with a concurrent active non-stale claim or an unsafe stale takeover, in
 ascending issue-number order:
 
-- **Parked-issue check (once per pass).** Run
-  `provider-outage-park.mjs --parked-issues`; a candidate in its
+- **Parked-issue check (once per pass).** Per
+  `provider-outage-park.mjs --parked-issues`, a candidate in its
   `parkedIssues` is **ineligible**, as a live claim is. A failed or
   malformed read is Step 1.5 exhaustion (report it; last bullet's
   routing). `parkedIssuesComplete: false` still skips listed issues —
