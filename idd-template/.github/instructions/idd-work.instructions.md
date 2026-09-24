@@ -381,10 +381,8 @@ Implement the plan, running **fix-validate** before each atomic commit
 the [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
 instead.
 
-**Validate.** Run it without a pipe; if shortening output, rerun
-through `tail`/`head`. A filter cannot prove success (see
-kurone-kito/idd-skill#3139). In Bash, use
-`status=${PIPESTATUS[0]}; ((status == 0))` or `set -o pipefail`.
+**Validate.** Judge the run by its own exit status — see
+[Project commands](idd-overview-core.instructions.md#project-commands).
 
 **Verify a commit actually landed before trusting a subsequent push.**
 A `commit-msg` hook (e.g. commitlint's body-max-line-length) can

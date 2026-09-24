@@ -18,7 +18,9 @@ session already claimed and implemented. If the repository is
 - **Command sets**: `fix-validate` and `pre-push-validate` (named below)
   are read from `.github/idd/config.json`'s `commands` mapping. If that
   file is missing or the command set cannot be read, stop and ask rather
-  than guessing a command.
+  than guessing a command. Judge each run by exit status (Bash
+  `${PIPESTATUS[0]}`/`set -o pipefail`); a `tail`/`head` filter can't
+  prove success (#3139).
 - `instructions-only`: do not use this lite file; use
   `idd-pr-submit.instructions.md` instead.
 - Any mismatch between this file and the standard PR-submit phase is a
@@ -36,10 +38,11 @@ session already claimed and implemented. If the repository is
   (after the `recheck` retry budget in D1 step 1, if applicable) — this
   lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
-  (A pushed branch with **no** open PR yet is not this case: push any
-  unpushed local commits, then skip straight to D3. An open PR with
-  `syncRecommendation: none` is not this case either: run D3.5's check,
-  then skip straight to D4.)
+  (A pushed branch with **no** open PR yet is not this case: skip
+  straight to D2 (claim re-read, **pre-push-validate**, then a normal
+  push — never force), then D3. An open PR with
+  `syncRecommendation: none` is not this case either: run D3.5's
+  check, then skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
@@ -104,12 +107,9 @@ This section's rebase only applies **before the branch's first push**.
    '.[0].number // empty'` (`// empty` avoids misreading an empty
    list's literal `null` as a real PR number).
    - No output (empty): D2's push already happened in an earlier,
-     interrupted session. `git fetch origin {branch-name}`, then check
-     `git log --oneline origin/{branch-name}..HEAD` — if it lists any
-     commit, this or an earlier session committed more work after that
-     push without pushing it; push those commits now (a normal push,
-     not force) before continuing. Either way, skip the rest of D1
-     (nothing to rebase) and go straight to D3 (create the PR).
+     interrupted session. Skip the rest of D1 (nothing to rebase) and
+     continue at D2 (claim re-read, **pre-push-validate**, then a
+     normal push — never force), then D3.
    - An open PR exists: read its `syncRecommendation` with the
      profile-selected branch-conflict-state helper —
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
@@ -187,12 +187,13 @@ loop instead of returning to this D1 rebase path.
    (even under the same agent id), the claim was lost — stop.
 2. Run **pre-push-validate**. (E2E tests are verified by CI; do not run
    them locally.)
-3. Push the branch: `git push -u origin {branch-name}` on first
-   publication. Use `--force-with-lease` only when every one of these
-   holds: the branch is already published, a repository policy
-   explicitly permits a force-push exception here, and this exact
-   exception already required a rebase. If any of those does not hold,
-   stop per the condition above — do not push with `--force-with-lease`
+3. Push the branch: `git push -u origin {branch-name}` — plain on
+   first publication or a no-open-PR resume (D1 step 1). Use
+   `--force-with-lease` only when every one of these holds: the
+   branch is already published, a repository policy explicitly
+   permits a force-push exception here, and this exact exception
+   already required a rebase. If any of those does not hold, stop
+   per the condition above — do not push with `--force-with-lease`
    and do not continue in this lite flow; the merge-based resync path
    is out of this file's scope.
 4. New CI job: land it `workflow_dispatch`-only first (if its workflow
