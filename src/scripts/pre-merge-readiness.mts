@@ -118,8 +118,11 @@ interface ReviewPayload {
   /** #3015: threaded through `normalizeReview` so
    * `findLastCopilotReviewCommit` (protocol-helpers.mts, reached via
    * `buildPreMergeReadinessSummary`'s call into `buildAdvisoryWaitSummary`)
-   * can exclude a Copilot "encountered an error" review from the
-   * latest-review selection. */
+   * can decide whether this review counts as covering its `commit_id`.
+   * For a configured non-Copilot primary bot, only the exact #3015
+   * "encountered an error" template is excluded; as of #3265, for the
+   * DEFAULT Copilot bot, only a body `classifyCopilotReviewBody`
+   * recognizes as `overview-v2` or `overview-legacy` counts at all. */
   body?: string | null;
 }
 

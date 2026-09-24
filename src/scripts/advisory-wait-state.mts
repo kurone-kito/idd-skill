@@ -124,8 +124,12 @@ interface ReviewPayload {
   submitted_at?: string | null;
   commit_id?: string | null;
   /** #3015: consumed by `findLastCopilotReviewCommit`
-   * (protocol-helpers.mts) to exclude a Copilot "encountered an error"
-   * review from the latest-review selection. */
+   * (protocol-helpers.mts) to decide whether this review counts as
+   * covering its `commit_id`. For a configured non-Copilot primary bot,
+   * only the exact #3015 "encountered an error" template is excluded;
+   * as of #3265, for the DEFAULT Copilot bot, only a body
+   * `classifyCopilotReviewBody` recognizes as `overview-v2` or
+   * `overview-legacy` counts at all. */
   body?: string | null;
 }
 
