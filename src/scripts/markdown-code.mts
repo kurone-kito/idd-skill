@@ -243,23 +243,6 @@ const HTML_RAW_TEXT_TAG_CLOSE_PATTERNS: Readonly<
   style: /<\/style[ \t]*>/iu,
   textarea: /<\/textarea[ \t]*>/iu,
 };
-// The four raw-text names' CLOSING form is NOT itself paragraph-interrupting
-// (C1 critique round 3, kurone-kito/idd-skill#3283): CommonMark's type-6
-// block-tag list (folded into MARKDOWN_HTML_BLOCK_START_PATTERN above) does
-// not separately list script/pre/style/textarea -- only their OPENING tag is
-// type 1 (which does interrupt a paragraph). A bare CLOSING tag of one of
-// these four names is therefore neither type 1 nor type 6; it falls through
-// to type 7 (a lone custom tag), which per spec can never interrupt a
-// paragraph. MARKDOWN_HTML_BLOCK_START_PATTERN's shared `<\/?` alternation
-// does not distinguish open from close for these four names, so a caller
-// that needs the paragraph-interruption-correct answer must additionally
-// exclude this shape -- see isUnconditionalBlockStart's own use below.
-// Deliberately not folded into MARKDOWN_HTML_BLOCK_START_PATTERN itself:
-// that pattern also backs findHtmlBlockRanges and
-// isLazinessInterruptingBlockStart, whose own correctness for this same
-// pre-existing gap is out of this issue's scope.
-const MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN =
-  /^ {0,3}<\/(?:script|pre|style|textarea)(?:[ \t]|\/?>|$)/iu;
 
 /**
  * The raw-text tag that `content` opens (one of {@link HtmlRawTextTag}'s
@@ -300,7 +283,7 @@ function isMarkdownBlockStart(content: string): boolean {
  * tag, or a valid fence opener -- shared so a caller does not need its
  * own partial copy of this shape test.
  *
- * Not context-complete: two of its sub-checks are only CONDITIONALLY
+ * Not context-complete: some of its sub-checks are only CONDITIONALLY
  * paragraph-interrupting per CommonMark, and this function has no
  * paragraph-openness context to resolve them (C1 critique round 2,
  * kurone-kito/idd-skill#3283). A lone custom HTML tag (the
@@ -310,9 +293,13 @@ function isMarkdownBlockStart(content: string): boolean {
  * into {@link isMarkdownBlockStart} here) only ends one when a
  * genuinely open, non-lazy paragraph already precedes it -- see
  * {@link findHtmlBlockRanges}'s own `noOpenParagraph`-gated handling of
- * both for a context-complete example. A caller that has no such
- * context available and needs a conservative, always-safe answer
- * should use {@link isUnconditionalBlockStart} instead.
+ * both for a context-complete example. `findIndentedCodeRanges`
+ * (round 5, same issue) does not use this predicate at all for its own
+ * list-content-indent tracking -- a stack of open levels replaces the
+ * laziness heuristic entirely there, since a flat pattern-matching
+ * predicate like this one kept having a *different* CommonMark
+ * paragraph-interruption exception someone had not yet enumerated
+ * (rounds 1-4 each found one).
  *
  * `fencedLine` is the caller's own {@link parseFencedLine} result,
  * since the `activeListContentIndent` it threads through differs per
@@ -326,48 +313,6 @@ function isLazinessInterruptingBlockStart(
     isMarkdownBlockStart(content) ||
     MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
     MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content) ||
-    (fencedLine !== null && isValidFenceOpener(fencedLine))
-  );
-}
-
-/**
- * True when `content` UNCONDITIONALLY starts a new Markdown block that
- * interrupts an in-progress paragraph, regardless of surrounding
- * context. Deliberately narrower than
- * {@link isLazinessInterruptingBlockStart}: drops its lone-custom-HTML-tag
- * branch entirely (CommonMark type 7 can never interrupt a paragraph),
- * drops the genuinely ambiguous dash/equals-only shapes
- * ({@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN}) from its
- * `isMarkdownBlockStart` coverage (those only resolve as a
- * paragraph-ending Setext underline when a real, non-lazy paragraph
- * already precedes them -- context this function's callers do not
- * carry), and excludes a CLOSING tag of one of the four raw-text names
- * ({@link MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN}; C1 critique round
- * 3, kurone-kito/idd-skill#3283) -- `</script>`/`</pre>`/`</style>`/
- * `</textarea>` is neither type 1 (opening-only) nor type 6 (those four
- * names are not on that list either), so it falls to type 7, which can
- * never interrupt a paragraph, even though
- * {@link MARKDOWN_HTML_BLOCK_START_PATTERN}'s shared `<\/?` alternation
- * does not distinguish open from close for them. A genuine ATX heading,
- * list-item marker, unambiguous (3-or-more-character) thematic break,
- * true HTML block type 1-6 opener, or valid fence opener is unaffected --
- * none of those depend on whether a paragraph happens to be open. C1
- * critique round 2 found that reusing
- * {@link isLazinessInterruptingBlockStart} unconditionally for
- * {@link findIndentedCodeRanges}'s laziness guard over-masked real
- * content (a custom tag or an ambiguous dash/equals run right after
- * ordinary paragraph text was wrongly read as ending that paragraph);
- * round 3 found the same over-masking for a raw-text closing tag.
- */
-function isUnconditionalBlockStart(
-  content: string,
-  fencedLine: FencedLine | null,
-): boolean {
-  return (
-    (isMarkdownBlockStart(content) &&
-      !MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN.test(content)) ||
-    (MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) &&
-      !MARKDOWN_RAW_TEXT_CLOSING_TAG_START_PATTERN.test(content)) ||
     (fencedLine !== null && isValidFenceOpener(fencedLine))
   );
 }
@@ -1949,8 +1894,27 @@ export function findIndentedCodeRanges(
   let previousLineBlank = true;
   let previousLineBlockBoundary = true;
   let previousContainerDepth = 0;
-  let activeListContentIndent: number | null = null;
-  let activeListContainerDepth: number | null = null;
+  // Stack of open list levels' content indent + container depth, outermost
+  // first -- mirrors the deleted idd-doctor.mts bespoke
+  // stripIndentedCodeBlocksPreservingLines's own listContentIndents stack /
+  // popDeeperThan (kurone-kito/idd-skill#3283, round 5 -- C1 critique rounds
+  // 1-4 each patched a different gap in a "does the preceding/current line
+  // look like an open paragraph to lazily continue" heuristic built on top
+  // of a single scalar, and each patch left another gap: CommonMark's real
+  // laziness answer needs full block-parser context -- "is a *paragraph*
+  // genuinely open" -- that a single forward line-scan cannot reconstruct
+  // from indentation and line shape alone. The stack sidesteps the
+  // heuristic entirely: an under-indented dedent pops only the levels
+  // deeper than the current line's own indent, keeping any outer level the
+  // line still structurally satisfies, rather than collapsing to "no list
+  // open" on ANY under-indent (what a single scalar -- and every guard
+  // layered on top of it -- did). This is provably no worse than a scalar
+  // reset by construction: the scalar's "clear everything" is exactly the
+  // stack's own most extreme case, reached when the current line's indent
+  // is shallower than every open level, so the stack can only keep a level
+  // open where CommonMark's container-continuation rule (not a laziness
+  // guess) says it should.
+  const listStack: { contentIndent: number; containerDepth: number }[] = [];
   let activeListBlankLines = 0;
   let lineStart = 0;
   let fencedRangeIndex = 0;
@@ -1979,62 +1943,33 @@ export function findIndentedCodeRanges(
     const parsed = parseContainerLine(rawLine);
     const listItem = parseListItemMatch(parsed.content);
     const isBlank = parsed.content.trim() === '';
-    if (
-      activeListContentIndent !== null &&
-      parsed.containerDepth !== activeListContainerDepth
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
+    const openTop =
+      listStack.length > 0 ? listStack[listStack.length - 1] : null;
+    if (openTop !== null && parsed.containerDepth !== openTop.containerDepth) {
+      listStack.length = 0;
       activeListBlankLines = 0;
     }
-    if (
-      !isBlank &&
-      listItem === null &&
-      activeListContentIndent !== null &&
-      indentationColumns(parsed.content) < activeListContentIndent &&
-      // CommonMark laziness: an under-indented, non-blank, non-list-item
-      // line right after an ordinary (non-boundary) paragraph line lazily
-      // continues that paragraph and must NOT close the enclosing list's
-      // content zone. A genuine dedent is a line that follows a blank (no
-      // open paragraph to continue), follows a block-boundary-shaped line
-      // (not an ongoing paragraph either), OR -- C1 critique round 2 on
-      // kurone-kito/idd-skill#3283: the first version of this guard
-      // checked only the *preceding* line's shape, missing that laziness
-      // also requires the *current* line to not itself be a
-      // paragraph-interrupting construct -- unconditionally
-      // block-start-shaped itself (a heading, list marker, unambiguous
-      // thematic break, HTML block type 1-6 opener, or valid fence
-      // opener; see {@link isUnconditionalBlockStart} for why a lone
-      // custom HTML tag and an ambiguous Setext-only dash/equals run are
-      // deliberately excluded -- round 2 also found those two produce
-      // false positives here). Without the first half of this guard, a
-      // lazy continuation line at a shallow indent incorrectly dropped
-      // `activeListContentIndent` to null, so a later, blank-separated,
-      // still-nested list item (relative to the *outer* list, indented
-      // enough to satisfy it but not the reset 4-column top-level
-      // default) was misread as a fresh top-level indented code block.
-      // Without the second half, a block-start-shaped current line at
-      // that same shallow indent was wrongly read as a lazy continuation
-      // instead of the genuine dedent it is, leaving a *later* indented
-      // line unmasked even though CommonMark renders it as real code
-      // once the list has actually closed.
-      (previousLineBlank ||
-        previousLineBlockBoundary ||
-        isUnconditionalBlockStart(
-          parsed.content,
-          parseFencedLine(rawLine, activeListContentIndent),
-        ))
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
-      activeListBlankLines = 0;
+    if (!isBlank && listItem === null) {
+      // A non-list-item, non-blank line closes (pops) every open level
+      // deeper than its own indent, but leaves any shallower level open --
+      // that outer level's own content zone still structurally contains
+      // this line.
+      const indent = indentationColumns(parsed.content);
+      while (
+        listStack.length > 0 &&
+        indent < listStack[listStack.length - 1].contentIndent
+      ) {
+        listStack.pop();
+      }
     }
+    const activeTop =
+      listStack.length > 0 ? listStack[listStack.length - 1] : null;
     const isNonInterruptingListItem: boolean =
       listItem !== null &&
       !previousLineBlank &&
       !previousLineBlockBoundary &&
       parsed.containerDepth === previousContainerDepth &&
-      activeListContentIndent === null &&
+      listStack.length === 0 &&
       (listItem.content.trim() === '' ||
         (/^\d{1,9}[.)]$/u.test(listItem.marker) &&
           !/^1[.)]$/u.test(listItem.marker)));
@@ -2043,13 +1978,12 @@ export function findIndentedCodeRanges(
       : parsed.listContentIndent;
     const isIndented =
       indentationColumns(parsed.content) >=
-      (activeListContentIndent === null ? 4 : activeListContentIndent + 4);
-    if (rangeStart === null && activeListContentIndent !== null) {
+      (activeTop === null ? 4 : activeTop.contentIndent + 4);
+    if (rangeStart === null && listStack.length > 0) {
       if (isBlank) {
         activeListBlankLines += 1;
         if (activeListBlankLines >= 2) {
-          activeListContentIndent = null;
-          activeListContainerDepth = null;
+          listStack.length = 0;
         }
       } else {
         activeListBlankLines = 0;
@@ -2079,13 +2013,32 @@ export function findIndentedCodeRanges(
     previousLineBlockBoundary =
       MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       (() => {
-        const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
+        const fencedLine = parseFencedLine(
+          rawLine,
+          listStack.length > 0
+            ? listStack[listStack.length - 1].contentIndent
+            : null,
+        );
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;
     if (rangeStart === null && listContentIndent !== null) {
-      activeListContentIndent = listContentIndent;
-      activeListContainerDepth = parsed.containerDepth;
+      // A fresh list-item marker pops any sibling-or-deeper level at or
+      // below its own indent (the same popDeeperThan the dedent branch
+      // above applies, using the marker's own leading indent rather than
+      // the dedent case's already-established indentationColumns value)
+      // before pushing its own content indent as the new innermost level.
+      const markerIndent = indentationColumns(parsed.content);
+      while (
+        listStack.length > 0 &&
+        markerIndent < listStack[listStack.length - 1].contentIndent
+      ) {
+        listStack.pop();
+      }
+      listStack.push({
+        contentIndent: listContentIndent,
+        containerDepth: parsed.containerDepth,
+      });
       activeListBlankLines = 0;
     }
 
