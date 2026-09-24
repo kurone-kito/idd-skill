@@ -2836,6 +2836,40 @@ test('review-body shape (#3258): a v2 body with NO "Previously missed" section s
   assert.equal(verdict.ready, true);
 });
 
+test('review-body shape (#3258): a bare "### Suppressed comments (N)" heading with NO overview/details wrapper does NOT count (prose-quoting class, PR #3390 review finding)', () => {
+  // A review body that merely discusses this exact heading in ordinary
+  // Markdown prose -- no <!-- ccr-overview-v2 -->, no "## Pull request
+  // overview" opening, no <details><summary>Review details|Pull request
+  // overview</summary> wrapper, and no code span/fence around the
+  // heading -- must not be treated as a real legacy suppressed-finding
+  // report merely because the bare ATX heading itself matches. Found by
+  // Copilot's own review of this PR's HEAD 58f15d8977fbaf3f3cd1ffa00a781c05018a2781
+  // ("Require overview markers before classifying legacy reports").
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: [
+            'nit: consider how the parser handles a line like',
+            '',
+            '### Suppressed comments (5)',
+            '',
+            'when quoted directly in review prose without any wrapping context.',
+          ].join('\n'),
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.match(verdict.reasons.join('\n'), /bodyShape: unrecognized/);
+});
+
 // A plausible but non-template Copilot error sentence -- differs from the
 // exact #3015 `COPILOT_ERROR_REVIEW_BODY` template, so `isCopilotErrorReviewBody`
 // does not match it either; it carries no v2/legacy signal, so it classifies

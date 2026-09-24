@@ -142,7 +142,16 @@ const LEGACY_DETAILS_SUMMARY_PATTERN =
  * spaces/tabs before `###`), multiline since it appears mid-body. A
  * `**Previously missed (N)**` bold line nested under this heading (PR
  * #3108's real body) is deliberately never separately matched/added --
- * it is already part of this heading's own count. */
+ * it is already part of this heading's own count.
+ *
+ * #3390 review (this PR's own Copilot review): deliberately NOT used as
+ * an independent `overview-legacy` shape signal (see the `isLegacyOverview`
+ * check below) -- ordinary Markdown text, unlike the `<details>`/
+ * `<summary>` tag pairs the other legacy signals anchor to, so a review
+ * merely discussing this exact heading in prose (with no code span) could
+ * otherwise self-misclassify as a real legacy finding. Only used to
+ * extract the count once one of the other signals already confirms the
+ * shape. */
 const LEGACY_SUPPRESSED_HEADING_PATTERN =
   /^[ \t]{0,3}###\s*suppressed comments \((\d+)\)/im;
 
@@ -201,10 +210,20 @@ export function classifyCopilotReviewBody(
       suppressedCount: match ? toCount(match[1]) : 0,
     };
   }
+  // #3390 review (this PR's own Copilot review, Medium finding): the bare
+  // `### Suppressed comments (N)` heading is deliberately NOT an
+  // independent shape-detection signal here, unlike the other three --
+  // unlike a `<details>`/`<summary>` tag pair (real GitHub-rendered HTML,
+  // #1614's own established anchor-safety rationale), a bare ATX heading
+  // is ordinary Markdown text a review could legitimately quote in prose
+  // (for example, discussing this exact detection logic) with no code
+  // span at all, which would otherwise self-misclassify as a real legacy
+  // finding and false-block the gate. It still contributes to the COUNT
+  // below once one of the three safe anchor signals already confirms the
+  // shape.
   const isLegacyOverview =
     LEGACY_OVERVIEW_OPEN_PATTERN.test(trimmedStart) ||
     LEGACY_DETAILS_SUMMARY_PATTERN.test(stripped) ||
-    LEGACY_SUPPRESSED_HEADING_PATTERN.test(stripped) ||
     AUGUST_SUPPRESSED_SUMMARY_PATTERN.test(stripped);
   if (isLegacyOverview) {
     // `###` heading takes precedence -- when present, a nested
