@@ -1383,11 +1383,14 @@ than the latest substantive issue title/body edit and any generated-plan
 update. Label freshness is configured separately through
 `approvalSignals.labelFreshnessMode`:
 
-- `presence-only` (default): label presence is sufficient after the
-  label name matches `approvalSignals.readyLabelName`
+- `presence-only` (default): skips the freshness comparison, but the
+  actor of the label's latest `labeled` timeline event must still
+  satisfy `maintainerApprovalActorPolicy` -- label presence from an
+  untrusted labeler is never sufficient on its own
 - `event-freshness`: the latest matching `labeled` timeline event for
-  the configured ready label must be newer than the latest substantive
-  issue title/body edit and any generated-plan update
+  the configured ready label must also be newer than the latest
+  substantive issue title/body edit and any generated-plan update,
+  on top of the same actor check
 
 When `.github/idd/config.json` is present, repositories can record the
 approval-signal and issue-authoring knobs directly:
