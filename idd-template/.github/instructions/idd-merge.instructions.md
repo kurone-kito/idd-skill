@@ -484,8 +484,8 @@ Before any mutating action in F3, apply the
    [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
    From the **primary worktree** (the issue worktree is still on its
    branch, so running elsewhere would fast-forward the wrong branch),
-   switch to `{development-branch}` (the PR's validated target; see B1
-   [Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch))
+   switch to `{development-branch}` (the PR's validated target; see
+   [B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch))
    and fast-forward it:
 
    ```sh
@@ -510,8 +510,8 @@ Before any mutating action in F3, apply the
    Doing this before deletion lets WorkTrunk's merge-status check,
    which reads the local `{development-branch}`, see the branch as
    merged instead of reporting `branch_outcome: retained_unmerged`
-   (`#2331`). This plain git operation is unrelated to B1 Step 1's
-   trusted-checkout concern — if `{development-branch}` is not the
+   (`#2331`). This plain git operation is unrelated to B1 item 1's
+   trusted-checkout contract — if `{development-branch}` is not the
    repository's default branch, run `git switch <default-branch>`
    once F4 completes or holds so the next B1 finds it on the trusted
    checkout.
