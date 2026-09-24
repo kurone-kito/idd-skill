@@ -1590,26 +1590,37 @@ export function createGithubProviderAdapter(
       };
       const connection = parsed.data?.repository?.issue?.timelineItems;
       // #3276 (Copilot review, PR #3386): a present `timelineItems`
-      // connection with a missing `nodes` or `pageInfo` field is malformed
-      // GraphQL data (a partial/truncated response), not a legitimately
-      // empty terminal page -- validate both explicitly instead of
-      // defaulting each to `[]`/`false`/`null`, which would otherwise let
-      // fetchOpenLinkedPrReferences (resume-claim-routing.mts) read a
-      // malformed page as `lookupFailed: false` and still honor an
-      // issue-only forced handoff the lookup never actually resolved.
+      // connection with a missing/malformed `nodes` or `pageInfo` field is
+      // malformed GraphQL data (a partial/truncated response), not a
+      // legitimately empty terminal page -- validate explicitly instead of
+      // defaulting each field independently to `[]`/`false`/`null`, which
+      // would otherwise let fetchOpenLinkedPrReferences
+      // (resume-claim-routing.mts) read a malformed page as
+      // `lookupFailed: false` and still honor an issue-only forced handoff
+      // the lookup never actually resolved. `hasNextPage` specifically must
+      // be checked as a boolean, not merely that `pageInfo` exists -- a
+      // `pageInfo: {}` shape would otherwise pass a bare truthiness check
+      // and `hasNextPage ?? false` would silently read unknown pagination
+      // state as terminal. Mirrors the established fail-closed pattern in
+      // authoring-owner-provenance.mts's page validation.
       if (
         !connection ||
         !Array.isArray(connection.nodes) ||
-        !connection.pageInfo
+        connection.pageInfo == null ||
+        typeof connection.pageInfo !== 'object' ||
+        typeof connection.pageInfo.hasNextPage !== 'boolean'
       ) {
         throw new Error(
-          'timelineItems: connection is null/absent or malformed (missing nodes/pageInfo)',
+          'timelineItems: connection is null/absent or malformed (missing nodes/pageInfo/hasNextPage)',
         );
       }
       return {
         events: connection.nodes as ProviderConnectedPrEvent[],
-        hasNextPage: connection.pageInfo.hasNextPage ?? false,
-        endCursor: connection.pageInfo.endCursor ?? null,
+        hasNextPage: connection.pageInfo.hasNextPage,
+        endCursor:
+          typeof connection.pageInfo.endCursor === 'string'
+            ? connection.pageInfo.endCursor
+            : null,
       };
     },
 

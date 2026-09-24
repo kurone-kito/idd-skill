@@ -890,7 +890,7 @@ test('getConnectedPullRequestEventsPage throws when the connection is present bu
   );
   assert.throws(
     () => port.getConnectedPullRequestEventsPage(1048, null),
-    /malformed \(missing nodes\/pageInfo\)/,
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
   );
 });
 
@@ -915,8 +915,69 @@ test('getConnectedPullRequestEventsPage throws when the connection is present bu
   );
   assert.throws(
     () => port.getConnectedPullRequestEventsPage(1048, null),
-    /malformed \(missing nodes\/pageInfo\)/,
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
   );
+});
+
+// #3276 round 2 (Copilot review, PR #3386): `pageInfo` being present is not
+// enough -- a `pageInfo: {}` shape (missing `hasNextPage`) previously passed
+// the bare-truthiness check above and `hasNextPage ?? false` silently read
+// unknown pagination state as a terminal page. Validate `hasNextPage` as an
+// actual boolean.
+test('getConnectedPullRequestEventsPage throws when pageInfo is present but hasNextPage is not a boolean', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                  pageInfo: { endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+// A non-string endCursor (e.g. a stray number) must not be trusted verbatim
+// as the pagination cursor either -- normalize to null rather than passing
+// through a malformed value.
+test('getConnectedPullRequestEventsPage normalizes a non-string endCursor to null', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: 12345 },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getConnectedPullRequestEventsPage(1048, null), {
+    events: [],
+    hasNextPage: false,
+    endCursor: null,
+  });
 });
 
 // ---------------------------------------------------------------------------
