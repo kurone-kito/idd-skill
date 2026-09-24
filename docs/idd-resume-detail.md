@@ -312,7 +312,12 @@ could ever observe it as 'alive'".
    (bisect) — `rev-parse --git-path` alone only prints the path, the
    same reason the rebase check above already wraps its own
    `--git-path` result in `test -d` (PR `#3354` review, Copilot). Any
-   match means back up the pre-operation branch tip before continuing.
+   match means back up the pre-operation branch tip before continuing
+   — this recovery abandons the interrupted operation itself rather
+   than resuming it, so the stash step below can fail on unmerged
+   paths that operation left behind; that failure is expected and not
+   a blocker, since the backed-up tip already discards them (PR
+   `#3354` review, Copilot).
    Inspect
    `git -C <path> status --porcelain --ignored`,
    unpushed commits (`git -C <path> log @{u}..HEAD`, or all commits
@@ -334,7 +339,16 @@ could ever observe it as 'alive'".
    untracked change has nothing to stash: `stash push` reports no
    local changes to save and creates no new entry, so step 4 skips the
    stash check for it (PR `#3354` review, Copilot).
-4. **Remove.** Confirm each step 3 action actually succeeded — a new
+4. **Remove.** Immediately before removing anything — not step 1's
+   earlier read — re-run its confirm-the-block check
+   (`resume-claim-routing.mjs --issue <n>` and the `claim-lock` check
+   form). Stop if the result no longer matches: a live session
+   resumed the claim, a different claim-id now holds the lock, or the
+   branch no longer reports `local_worktree_occupied` — the situation
+   changed since step 1, and `idd-merge.instructions.md`'s own F4
+   worktree-removal step revalidates the claim and lock before every
+   removal for the same reason (PR `#3354` review, Copilot). Then
+   confirm each step 3 action actually succeeded — a new
    entry beyond the pre-step baseline appears in `git -C <path> stash
    list` only when step 3 found a change to stash, unpushed commits
    are visible on the backup ref or in the bundle, and any copied-out
