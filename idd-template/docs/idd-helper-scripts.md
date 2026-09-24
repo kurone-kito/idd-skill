@@ -1097,11 +1097,13 @@ The adopted helper boundaries are intentionally narrow:
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
-  enforces has also opened — a 24h deadline anchored on the current HEAD
-  commit's own `committedDate`, or proven terminal Copilot
+  enforces has also opened — a 24h deadline anchored on when GitHub
+  first recorded the current HEAD (its earliest check suite,
+  `#3253`), or proven terminal Copilot
   unavailability. The output's `advisoryConvergenceWaiverPrecondition`
   field always reports this evaluation (`deadlineMinutes`,
-  `headCommittedAt`, `elapsedMinutes`, `deadlinePassed`,
+  `headCommittedAt` (informational only), `headObservedAt` (the actual
+  clock), `elapsedMinutes`, `deadlinePassed`,
   `terminalUnavailable`, `open`), so an agent never has to re-derive the
   remaining time-to-deadline by hand when a `ci` blocker cites a posted
   but not-yet-active waiver
