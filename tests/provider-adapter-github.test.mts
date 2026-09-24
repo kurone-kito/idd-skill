@@ -3135,6 +3135,39 @@ test('getChangeRequestHeadObservedAt aborts with empty on a HEAD move detected m
   assert.equal(call, 2);
 });
 
+test('getChangeRequestHeadObservedAt aborts with empty when the HEAD moves and both oids advance together (kurone-kito/idd-skill#3253, Copilot review, PR #3404)', () => {
+  // Page 1 is internally consistent (sha1/sha1), and so is page 2
+  // (sha2/sha2, since a push landed between fetches and each fetch
+  // re-reads the PR's now-current headRefOid) -- the per-page equality
+  // check alone cannot catch this; only pinning the first page's
+  // headRefOid and rejecting a later page that disagrees with it does.
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              headRefOid: 'sha1',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              headRefOid: 'sha2',
+              commitOid: 'sha2',
+              createdAts: ['2026-09-22T01:00:00Z'],
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+  assert.equal(call, 2);
+});
+
 test('getChangeRequestHeadObservedAt returns empty when the commit has no check suites', () => {
   const port = createGithubProviderAdapter(
     'o',

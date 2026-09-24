@@ -1082,8 +1082,22 @@ export async function runExternalCheckWaiver(
   // the issue: an earlier anchor there only shortens that waiver's
   // validity window, the safe direction). Fails closed to `''` on any
   // failure and never throws, so no try/catch is needed here.
+  //
+  // kurone-kito/idd-skill#3253 (Copilot review, PR #3404): only fetch for
+  // the exact `idd-advisory-convergence` selector this precondition
+  // actually gates (mirroring `planExternalCheckWaiver`'s own
+  // `preconditionGatedSelector` test) -- every other selector never reads
+  // `advisoryConvergenceWaiverPrecondition`, so paying for a GraphQL
+  // check-suite read (and its Checks API rate-limit budget) on every
+  // invocation regardless of selector was wasted for them. The injected
+  // test override (`options.headObservedAt`) is still honored regardless
+  // of selector, so a test can supply it without also setting
+  // `--check-selector`.
   const resolvedHeadObservedAt =
-    options.headObservedAt ?? fetchHeadObservedAt(owner, name, args.prNumber);
+    options.headObservedAt ??
+    (args.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? fetchHeadObservedAt(owner, name, args.prNumber)
+      : '');
 
   // kurone-kito/idd-skill#2657: the fixed, bounded validity window
   // computed from the PR's own HEAD commit timestamp -- independent of

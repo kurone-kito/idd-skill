@@ -539,6 +539,15 @@ function fetchChangeRequestHeadObservedAt(deps, owner, repo, number) {
   try {
     let earliest = '';
     let after = null;
+    // kurone-kito/idd-skill#3253 (Copilot review, PR #3404): a per-page
+    // headRefOid === commitOid check alone cannot detect a HEAD move
+    // between pages when both values advance together -- page 1 can
+    // report sha1/sha1 (internally consistent), then a push lands, and
+    // page 2 reports sha2/sha2 (also internally consistent, since each
+    // fetch re-reads the PR's now-current headRefOid). Pin the FIRST
+    // page's headRefOid and reject any later page whose headRefOid
+    // differs from it, in addition to each page's own internal check.
+    let firstHeadRefOid = null;
     for (let page = 0; page < HEAD_OBSERVED_AT_MAX_PAGES; page += 1) {
       const result = fetchChangeRequestHeadObservedAtPage(
         deps,
@@ -548,6 +557,11 @@ function fetchChangeRequestHeadObservedAt(deps, owner, repo, number) {
         after,
       );
       if (!result.headRefOid || result.commitOid !== result.headRefOid) {
+        return '';
+      }
+      if (firstHeadRefOid === null) {
+        firstHeadRefOid = result.headRefOid;
+      } else if (result.headRefOid !== firstHeadRefOid) {
         return '';
       }
       for (const createdAt of result.createdAts) {
