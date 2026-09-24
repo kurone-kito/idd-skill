@@ -631,15 +631,15 @@ carries items — **AW6** (#1511) handles that residual from F2 instead.
 
 ## Advisory courtesy-ack convergence
 
-**Rule**: a trusted advisory bot's post-disposition courtesy reply
-bumps the PR's `updatedAt`, but once every `ReviewItems_snapshot` item
-has an `**Accepted**`/`**Rejected**` disposition at the **current HEAD
-SHA**, that later **ack-only** comment does not reopen the loop — bind
-the merge to current HEAD and proceed. An **ack-only** comment opens
-no thread, carries no `CHANGES_REQUESTED`, and raises no new finding;
+**Rule**: a trusted advisory bot's courtesy reply bumps the PR's
+`updatedAt`, but once every `ReviewItems_snapshot` item has an
+`**Accepted**`/`**Rejected**` disposition at the **current HEAD SHA**,
+that later **ack-only** comment does not reopen the loop — bind the
+merge to current HEAD and proceed. An **ack-only** comment opens no
+thread, carries no `CHANGES_REQUESTED`, and raises no new finding;
 anything else re-opens the loop.
 
-**Helper evidence**: with advisory-bot identity configured,
+**Helper evidence**: with advisory-bot identity set,
 `pre-merge-readiness`'s `reviewCurrency.live.ackOnly.items` /
 `reviewCurrency.comparisonReason: ack-only-post-disposition` supply
 this; the agent confirms no new finding, never weakening the
@@ -656,7 +656,7 @@ F2). Any non-ack blocking cause keeps it `false`, so the backstop holds
 otherwise. (`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a
 stricter subset — not an override path of its own.) A
 verify-then-confirm reply (analysis before the confirmation verb)
-isn't recognized, so #2125's override — unaffected once recognized —
-doesn't fire. A repeating `missingThreads` entry that's a
-no-new-content advisory-bot reply needs a hold comment, not another
-post (#3324).
+isn't recognized, so #2125's override doesn't fire (recognized
+replies are unaffected). A repeating `missingThreads` entry that's a
+no-new-content advisory-bot reply needs a hold comment; stop instead
+of re-posting the disposition (#3324).
