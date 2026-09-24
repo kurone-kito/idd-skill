@@ -379,11 +379,12 @@ on the selected candidate.
 
 ## A3 — Filter to ready-to-start
 
-Under concurrency, check a candidate's **active-claim eligibility** (the
-non-stale claim filter below) **first**, before investing in its
-viability or scope analysis: a parallel agent may already hold the
-issue, and scope work that displaces the claim check produces redundant
-PRs. The claim check is cheap — run it first per candidate.
+Active-claim eligibility is evaluated by A4 Step 1.5's pre-scan
+(after Step 1's viability gate, before Step 2 selection, A4.5,
+and B-phase scope work) — not an A3 filter. An all-claimed
+candidate set exits through Step 1's exhaustion-exit routing,
+which Step 1.5 invokes, never A3's zero-survivor decision tree
+below.
 
 From A2, keep only issues that satisfy **all** of the following:
 
