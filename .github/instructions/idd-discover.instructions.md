@@ -552,12 +552,12 @@ ascending issue-number order:
 
 - **Parked-issue check (once per pass).** Run
   `provider-outage-park.mjs --parked-issues`; a candidate in its
-  `parkedIssues` is **ineligible**, like a live claim. A failed or
-  malformed read counts as Step 1.5 exhaustion (last bullet's
+  `parkedIssues` is **ineligible**, as a live claim is. A failed or
+  malformed read is Step 1.5 exhaustion (report it; last bullet's
   routing). `parkedIssuesComplete: false` still skips listed issues —
   name the gap in the run report; an unlisted parked issue may be
-  picked. Under `instructions-only`, no park helper runs and this
-  rule does not apply.
+  picked. Under `instructions-only` (no park helper), this rule does
+  not apply.
 - Scan the **top N** survivors (ordered by ascending issue number),
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
