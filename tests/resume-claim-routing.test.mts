@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
 import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   buildForcedHandoffEnabledGate,
   evaluateFreshClaimGate,
   evaluateResumeClaimRouting,
+  fetchOpenLinkedPrReferences,
   loadPolicy,
 } from '../src/scripts/resume-claim-routing.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -1358,6 +1359,14 @@ function forcedHandoffEvents(scope: {
 const route = (
   events: ReturnType<typeof forcedHandoffEvents>,
   gate: ReturnType<typeof buildForcedHandoffEnabledGate>,
+  // #3276: real callers (runCli) always pass linkedPrLookupFailed to BOTH
+  // the gate builder and evaluateResumeClaimRouting's own options -- the
+  // latter drives resolveClaimState's warning-text discrimination and
+  // linkedPrLookupFailureRejections bookkeeping the --claim-id override
+  // reads. Passing it only to the gate builder (the default, for every
+  // caller here that isn't testing #3276 itself) would silently produce
+  // the misleading generic "mode is not enabled" warning instead.
+  linkedPrLookupFailed?: boolean,
 ) =>
   evaluateResumeClaimRouting(
     { claimId: 'claim-new', now: '2026-05-12T11:00:00Z', events },
@@ -1365,6 +1374,7 @@ const route = (
       isTrustedAuthor: trusted(['maintainer']),
       isForcedHandoffEnabled: gate,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      linkedPrLookupFailed,
     },
   );
 
@@ -1429,6 +1439,314 @@ test('gate never honors a forced handoff when forced-handoff mode is disabled', 
     gate,
   );
   assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+// #3276: a failed linked-PR lookup (PR state unknown, not "no PR") must
+// reject an issue-only handoff instead of falling into the empty-set
+// shortcut, while leaving an issue-plus-pr handoff exactly as today.
+test('gate rejects an issue-only handoff when the linked-PR lookup itself failed', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(),
+    linkedPrLookupFailed: true,
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    gate,
+    true,
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked-PR lookup failed'),
+    ),
+    'expected the dedicated lookup-failure warning, not the generic one',
+  );
+  assert.ok(
+    !result.warnings.some((message) =>
+      message.includes('forced-handoff mode is not enabled'),
+    ),
+    'must not emit the misleading generic warning -- mode is actually enabled',
+  );
+});
+
+test('gate still honors an issue-plus-pr handoff when the linked-PR lookup failed (unchanged, out of scope for #3276)', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(),
+    linkedPrLookupFailed: true,
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+    gate,
+    true,
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+// #3276: neither side of a forced handoff blocked solely by a failed
+// linked-PR lookup may read as an ordinary claim-state outcome for a
+// --claim-id check.
+function routeWithLinkedPrLookupFailure(claimId: string) {
+  return evaluateResumeClaimRouting(
+    {
+      claimId,
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+        forcedHandoffEnabled: true,
+        expectedLinkedPrReferences: new Set(),
+        linkedPrLookupFailed: true,
+      }),
+      isAuthorizedForcedHandoff: (forcedBy: string) =>
+        forcedBy === 'maintainer',
+      linkedPrLookupFailed: true,
+    },
+  );
+}
+
+test('#3276: the displaced original owner (oldClaimId) never reads already_owned when the handoff was blocked by a failed linked-PR lookup', () => {
+  const result = routeWithLinkedPrLookupFailure('claim-old');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'forced-handoff-linked-pr-lookup-failed');
+  assert.notEqual(result.state, 'already_owned');
+  assert.equal(result.evidence.forced_handoff, null);
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked-PR lookup failed'),
+    ),
+    'expected a warning naming the lookup failure',
+  );
+  assert.ok(
+    !result.warnings.some((message) =>
+      message.includes('forced-handoff mode is not enabled'),
+    ),
+    'must not also claim forced-handoff mode is disabled -- it is enabled',
+  );
+});
+
+test('#3276: the would-be successor (newClaimId) also stops with the lookup-failure reason, never a generic non_inheritable stop', () => {
+  const result = routeWithLinkedPrLookupFailure('claim-new');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'forced-handoff-linked-pr-lookup-failed');
+  assert.equal(result.evidence.forced_handoff, null);
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked-PR lookup failed'),
+    ),
+    'expected a warning naming the lookup failure',
+  );
+});
+
+// #3276 (CodeRabbit review, PR #3386): applyClaimEvent checks
+// isForcedHandoffEnabled BEFORE the author/forcedBy match and authorization
+// checks, so a forged or unauthorized issue-only marker must not be swept
+// into linkedPrLookupFailureRejections (and thus the --claim-id override)
+// under a failed lookup -- it would be rejected as forged/unauthorized
+// regardless of the lookup outcome, and the override must not misfire for
+// its oldClaimId/newClaimId.
+function routeWithLinkedPrLookupFailureAndOptions(
+  claimId: string,
+  events: ReturnType<typeof forcedHandoffEvents>,
+  isAuthorizedForcedHandoff: (forcedBy: string) => boolean,
+) {
+  return evaluateResumeClaimRouting(
+    { claimId, now: '2026-05-12T11:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+        forcedHandoffEnabled: true,
+        expectedLinkedPrReferences: new Set(),
+        linkedPrLookupFailed: true,
+      }),
+      isAuthorizedForcedHandoff,
+      linkedPrLookupFailed: true,
+    },
+  );
+}
+
+test('#3276: a forged issue-only marker (author does not match forcedBy) under a failed lookup does not trigger the override', () => {
+  // forcedHandoffEvents() posts the marker as author 'maintainer' with
+  // forcedBy 'maintainer' by default (a match); override forcedBy to a
+  // different name so the author no longer matches it.
+  const events = [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+    },
+    {
+      createdAt: '2026-05-12T10:01:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- forced-handoff: {"oldAgentId":"copilot","oldClaimId":"claim-old","newAgentId":"copilot","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"someone-else","reason":"forged","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    },
+  ];
+  const oldResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-old',
+    events,
+    () => true,
+  );
+  assert.equal(oldResult.state, 'already_owned');
+  assert.notEqual(oldResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+
+  const newResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-new',
+    events,
+    () => true,
+  );
+  assert.notEqual(newResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+});
+
+test('#3276: an unauthorized issue-only marker under a failed lookup does not trigger the override', () => {
+  const oldResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-old',
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    () => false,
+  );
+  assert.equal(oldResult.state, 'already_owned');
+  assert.notEqual(oldResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+
+  const newResult = routeWithLinkedPrLookupFailureAndOptions(
+    'claim-new',
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    () => false,
+  );
+  assert.notEqual(newResult.reason, 'forced-handoff-linked-pr-lookup-failed');
+});
+
+test('#3276: a failed linked-PR lookup with no forced-handoff marker present routes identically to a successful empty lookup', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+    },
+  ];
+  const optionsFor = (linkedPrLookupFailed: boolean) => ({
+    isTrustedAuthor: trusted(['maintainer']),
+    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: new Set(),
+      linkedPrLookupFailed,
+    }),
+    isAuthorizedForcedHandoff: () => true,
+    linkedPrLookupFailed,
+  });
+  const failedLookup = evaluateResumeClaimRouting(
+    { claimId: 'claim-old', now: '2026-05-12T11:00:00Z', events },
+    optionsFor(true),
+  );
+  const successfulLookup = evaluateResumeClaimRouting(
+    { claimId: 'claim-old', now: '2026-05-12T11:00:00Z', events },
+    optionsFor(false),
+  );
+  // "Same routing" (the AC's own wording) means state/action/reason/
+  // active_claim/warnings, not the whole object -- evidence.linked_pr_lookup
+  // legitimately differs, since it reports the real lookup outcome
+  // regardless of whether a forced-handoff marker exists to act on it.
+  assert.equal(failedLookup.state, successfulLookup.state);
+  assert.equal(failedLookup.action, successfulLookup.action);
+  assert.equal(failedLookup.reason, successfulLookup.reason);
+  assert.deepEqual(failedLookup.active_claim, successfulLookup.active_claim);
+  assert.deepEqual(failedLookup.warnings, successfulLookup.warnings);
+  assert.equal(failedLookup.evidence.linked_pr_lookup, 'failed');
+  assert.equal(successfulLookup.evidence.linked_pr_lookup, 'ok');
+  assert.equal(failedLookup.state, 'already_owned');
+});
+
+// #3276: fetchOpenLinkedPrReferences itself -- pagination and
+// failure-vs-empty distinction, via a fake ProviderPort (no live `gh`).
+test('fetchOpenLinkedPrReferences walks every page and reconciles CONNECTED/DISCONNECTED across pages', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 77, state: 'OPEN' },
+            },
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88, state: 'OPEN' },
+            },
+          ],
+          hasNextPage: true,
+          endCursor: 'cursor-1',
+        },
+        {
+          events: [
+            {
+              __typename: 'DisconnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88 },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], ['77']);
+});
+
+test('fetchOpenLinkedPrReferences reports lookupFailed: true (not an empty successful result) when a page throws', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPageErrors: { 11: 'simulated gh failure' },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
+});
+
+test('fetchOpenLinkedPrReferences reports lookupFailed: true on an incomplete page (hasNextPage with no endCursor)', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [{ events: [], hasNextPage: true, endCursor: null }],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
+});
+
+// #3276 round 4 (CodeRabbit review, PR #3386): a repeated non-progressing
+// cursor must not spin the pagination loop forever. `connectedPrEventPages`
+// already lets a test hand back the identical `endCursor` across
+// successive pages, so no new fixture field is needed to simulate this.
+test('fetchOpenLinkedPrReferences reports lookupFailed: true on an immediate repeated cursor (non-progressing pagination)', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        { events: [], hasNextPage: true, endCursor: 'cursor-1' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-1' },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
+});
+
+test('fetchOpenLinkedPrReferences reports lookupFailed: true on a multi-cursor cycle (A -> B -> A)', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        { events: [], hasNextPage: true, endCursor: 'cursor-a' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-b' },
+        { events: [], hasNextPage: true, endCursor: 'cursor-a' },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11);
+  assert.equal(result.lookupFailed, true);
+  assert.equal(result.references.size, 0);
 });
 
 // #1687: a lost different-second claim race must not livelock the issue
@@ -2038,6 +2356,174 @@ test('--format rejects every value other than json (#3188)', () => {
       assert.match(result.stderr, /--format must be json/);
       assert.doesNotMatch(result.stderr, /unknown argument: --format/);
     }
+  } finally {
+    fixture.restore();
+  }
+});
+
+// #3276: end-to-end CLI wiring check via a fake `gh` -- runCli itself must
+// collect the linked-PR-lookup failure from a real (stubbed) `gh api
+// graphql` failure and thread it through to the routing override, not only
+// the pure functions exercised by the tests above.
+function linkedPrLookupFailureCliFixture() {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-claim-routing-linked-pr-failure-'),
+  );
+  const policyPath = join(tempRoot, 'config.json');
+  writeFileSync(
+    policyPath,
+    `${JSON.stringify({
+      trustedMarkerActors: ['maintainer'],
+      forcedHandoff: {
+        mode: 'human-gated',
+        authorityPolicy: 'owners-and-maintainers-only',
+      },
+    })}\n`,
+  );
+  const comments = [
+    {
+      id: 1,
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+      created_at: '2026-05-12T10:00:00Z',
+      user: { login: 'maintainer' },
+    },
+    {
+      id: 2,
+      body: '<!-- forced-handoff: {"oldAgentId":"copilot","oldClaimId":"claim-old","newAgentId":"copilot","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"maintainer","reason":"handoff","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\\n\\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+      created_at: '2026-05-12T10:01:00Z',
+      user: { login: 'maintainer' },
+    },
+  ];
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('maintainer\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  process.stderr.write('simulated connected-PR lookup failure\\n');
+  process.exit(1);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/collaborators\\/maintainer\\/permission/.test(arg))) {
+  process.stdout.write(JSON.stringify({ permission: 'admin', role_name: 'admin' }));
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/11\\/comments/.test(arg))) {
+  process.stdout.write(${JSON.stringify(JSON.stringify(comments))});
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/11$/.test(arg))) {
+  process.stdout.write(JSON.stringify({
+    number: 11,
+    title: 'linked-pr lookup failure fixture',
+    state: 'open',
+    html_url: 'https://github.com/o/r/issues/11',
+  }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh call: ' + JSON.stringify(args) + '\\n');
+process.exit(1);
+`,
+  );
+  return {
+    policyPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function runLinkedPrLookupFailureCli(policyPath: string, claimId: string) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '11',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--claim-id',
+      claimId,
+      '--now',
+      '2026-05-12T11:00:00Z',
+      '--policy',
+      policyPath,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+}
+
+test('#3276 end-to-end: runCli routes both the old and new claim-id to the lookup-failure stop when the real gh graphql call fails', () => {
+  const fixture = linkedPrLookupFailureCliFixture();
+  try {
+    for (const claimId of ['claim-old', 'claim-new']) {
+      const result = runLinkedPrLookupFailureCli(fixture.policyPath, claimId);
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.action, 'stop');
+      assert.equal(output.reason, 'forced-handoff-linked-pr-lookup-failed');
+      assert.notEqual(output.state, 'already_owned');
+      assert.equal(output.evidence.forced_handoff, null);
+      assert.equal(output.evidence.linked_pr_lookup, 'failed');
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+function runFreshClaimGateLinkedPrLookupFailureCli(
+  policyPath: string,
+  now: string,
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '11',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--fresh-claim-gate',
+      '--now',
+      now,
+      '--policy',
+      policyPath,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+}
+
+// #3276 acceptance criterion: "--fresh-claim-gate returns already-claimed
+// (displaced claim still active) until the claim is past claimTiming.staleAge,
+// then stale-reclaimable." --fresh-claim-gate always ignores --claim-id, so
+// this exercises the non-owner path the override above must never touch:
+// the blocked issue-only handoff leaves claim-old as the active claim, and
+// ordinary staleness (default claimTiming.staleAge: 24h) still governs it.
+test('#3276 end-to-end: --fresh-claim-gate keeps the displaced claim active (already-claimed) until stale, then stale-reclaimable, unaffected by the blocked handoff', () => {
+  const fixture = linkedPrLookupFailureCliFixture();
+  try {
+    const withinStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
+      fixture.policyPath,
+      '2026-05-12T11:00:00Z', // 1h after claim-old's created_at
+    );
+    assert.equal(withinStaleWindow.status, 0, withinStaleWindow.stderr);
+    const withinOutput = JSON.parse(withinStaleWindow.stdout);
+    assert.equal(withinOutput.fresh_claim_gate.verdict, 'already-claimed');
+    assert.equal(withinOutput.fresh_claim_gate.winning_claim_id, 'claim-old');
+
+    const pastStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
+      fixture.policyPath,
+      '2026-05-13T11:00:00Z', // 25h after claim-old's created_at
+    );
+    assert.equal(pastStaleWindow.status, 0, pastStaleWindow.stderr);
+    const pastOutput = JSON.parse(pastStaleWindow.stdout);
+    assert.equal(pastOutput.fresh_claim_gate.verdict, 'stale-reclaimable');
   } finally {
     fixture.restore();
   }
