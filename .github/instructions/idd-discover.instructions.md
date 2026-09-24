@@ -564,10 +564,10 @@ ascending issue-number order:
   resume or authorized handoff (#3141, Round 21 report). Otherwise it
   **remains eligible**.
 - **Own-claim check:** before ruling non-stale foreign, run
-  `claim-lock.mjs --read-tokens` on the primary/sibling worktree;
-  `present: true` is local evidence -- route to
-  `idd-resume.instructions.md` to adjudicate it, not
-  ineligible outright.
+  `claim-lock.mjs --read-tokens --worktree <path> --claim-id
+  <id>` (primary, then sibling); `present: true` (not
+  malformed) routes it to `idd-resume.instructions.md`, not
+  ineligible.
 
 After scanning the current batch:
 

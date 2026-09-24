@@ -184,6 +184,25 @@ two-different-sessions case it exists for, while replacing today's
 silent skip with a real, GitHub-authoritative investigation for the
 same-machine-recovery case.
 
+**Why checking a candidate's worktree from Discover is a deliberate,
+narrow exception, not a violation, of the "own current cwd" guidance
+(#3420 review, Copilot).** `docs/idd-helper-scripts.md`'s own
+`--read-tokens` scope note says every caller must resolve it "against
+the caller's own current cwd, never an explicit different worktree's
+path." That guidance was written for the existing mutation-gating
+callers (B2, B3, C5, D, E, F2/F3), which use a `present: true` hit to
+authorize a **mutation** from inside the worktree it names — there,
+checking a different path would misattribute someone else's mutation
+authority. Step 1.5 is a different kind of caller: it runs from the
+primary worktree by construction (Discover has no "own" implementation
+worktree to compare against yet) and never authorizes a mutation from
+`present: true` alone — it only feeds a **soft investigative signal**
+into a separate GitHub-authoritative check, exactly as `claim-lock.mts`'s
+own comment describes this record's job as "narrower and complementary
+... not adjudicating between two sessions." No existing caller's
+mutation-authority guarantee is weakened by adding this second,
+lower-trust use.
+
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to
 `resume-claim-routing.mjs`) and `#3274` (operator recovery for a
