@@ -219,6 +219,11 @@ function buildStubGhScript(
   threadResolved: boolean,
   options: {
     closingIssuesReferences?: unknown[];
+    // #3298: the PR's own `pulls/{pr}/commits` listing -- collectPreMergeReadiness
+    // now always fetches this (previously only under forcedHandoffEnabled),
+    // so every scenario needs a route for it; empty (the default) means "no
+    // stray commit-message closes."
+    commits?: unknown[];
     failOnClaimComments?: boolean;
     configJson?: string;
   } = {},
@@ -363,6 +368,7 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
+if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/commits`}') out(${JSON.stringify(ndjson(options.commits ?? []))});
 ${
   options.configJson !== undefined
     ? `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/contents/.github/idd/config.json`}') out(${JSON.stringify(Buffer.from(options.configJson, 'utf8').toString('base64'))});`
@@ -376,7 +382,10 @@ process.exit(1);
 
 function runPreMergeReadinessSmoke(
   threadResolved: boolean,
-  options: { configJson?: string } = {},
+  options: {
+    configJson?: string;
+    closingIssuesReferences?: unknown[];
+  } = {},
 ): Record<string, unknown> {
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
   // #2373: `configJson` is served from the stub's own
@@ -386,7 +395,10 @@ function runPreMergeReadinessSmoke(
   // PR worktree's own copy.
   const restore = stubExecutable(
     'gh',
-    buildStubGhScript(threadResolved, { configJson: options.configJson }),
+    buildStubGhScript(threadResolved, {
+      configJson: options.configJson,
+      closingIssuesReferences: options.closingIssuesReferences,
+    }),
   );
   try {
     const output = execFileSync(
@@ -434,7 +446,14 @@ function runPreMergeReadinessSmoke(
 // normalizeThread changes a concrete assertion below (verified manually
 // against a mutated build; see the PR description).
 test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh payloads end-to-end', () => {
-  const report = runPreMergeReadinessSmoke(true);
+  // #3298: closingIssuesReferences matches the claimed issue so this truly
+  // "clean" scenario does not pick up a spurious closing-set mismatch (the
+  // stub's own default closingIssuesReferences is empty, which would
+  // otherwise read as the claimed issue's closing keyword never having
+  // registered).
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+  });
 
   // normalizeComment: id/author.login/createdAt/body flow into
   // unrepliedComments.
@@ -506,8 +525,13 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
 // `providerHealth` value -- and asserts the parsed reports are byte-
 // identical, since `pre-merge-readiness.mts` never reads this key.
 test('pre-merge-readiness.mjs CLI: a configured providerHealth policy changes no existing output field (#2319 isolation)', () => {
-  const baseline = runPreMergeReadinessSmoke(true);
+  // #3298: same closing-set fix as the clean-scenario test above, applied
+  // identically to both calls so the byte-identical assertion below still
+  // isolates providerHealth alone.
+  const closingIssuesReferences = [{ number: CLAIM_ISSUE }];
+  const baseline = runPreMergeReadinessSmoke(true, { closingIssuesReferences });
   const withProviderHealth = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences,
     configJson: JSON.stringify({
       iddVersion: '1.0.0',
       markerPrefix: 'idd-skill',
@@ -683,7 +707,13 @@ test('pre-merge-readiness.mjs CLI: neither --claim-issue nor --claimless names -
 });
 
 test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review thread) surfaces it end-to-end', () => {
-  const report = runPreMergeReadinessSmoke(false);
+  // #3298: same closing-set fix as the clean-scenario test above, so the
+  // only NEW blocker this scenario's flipped field adds is
+  // "unresolved-threads" -- not an incidental closing-set mismatch from the
+  // stub's own default empty closingIssuesReferences.
+  const report = runPreMergeReadinessSmoke(false, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+  });
 
   const threads = report.threads as { unresolvedCount: number };
   assert.equal(threads.unresolvedCount, 1);

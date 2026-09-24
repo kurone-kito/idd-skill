@@ -73,6 +73,14 @@ import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
+// #3298: this file's only consumer of supersession-detection.mts --
+// protocol-helpers.mts must never import from it (supersession-detection.mts
+// already transitively depends on protocol-helpers.mts via
+// discover-shared-file-overlap.mts, so the reverse edge would cycle), so the
+// closing-set evidence computation itself stays here rather than moving into
+// protocol-helpers.mts's computePreMergeReadinessBlockers, which only reads
+// the already-computed record.
+import { computeClosingSetEvidence } from './supersession-detection.mjs';
 
 // GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
 // has not completed yet (and a `StatusContext`, which has no completedAt
@@ -182,6 +190,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 /**
@@ -657,6 +666,29 @@ export function collectPreMergeReadiness(
   const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
   const forcedHandoffAuthorityPolicy = forcedHandoffPolicy.authorityPolicy;
   const forcedHandoffEnabled = forcedHandoffPolicy.mode === 'human-gated';
+  // #3298: fetched unconditionally now (previously only under
+  // forcedHandoffEnabled below) -- the closing-set gate's stray-commit-close
+  // scan needs this same `pulls/{pr}/commits` listing on every call, not
+  // only when forced handoffs are enabled, so this one read backs both
+  // prFirstCommitAt and closingSet.strayCommitCloses instead of each
+  // resolving its own copy. `null` means the read failed; both downstream
+  // consumers already have their own fail-closed handling for that.
+  let prCommits = null;
+  try {
+    const rawCommits = port.listChangeRequestCommits(args.prNumber);
+    // Copilot review, PR #3353: `listChangeRequestCommits` is declared
+    // `unknown[]` on the provider port, but nothing enforces that at
+    // runtime -- a malformed/non-array successful response would silently
+    // pass the `as PrCommitPayload[]` cast (a compile-time-only promise),
+    // then crash `computeClosingSetEvidence`'s own `.length`/iteration
+    // (uncaught, outside this try/catch) instead of producing the
+    // documented `closingSet.status: "unavailable"`. Validate the shape
+    // here so any non-array response fails closed the same way a thrown
+    // read already does.
+    prCommits = Array.isArray(rawCommits) ? rawCommits : null;
+  } catch {
+    prCommits = null;
+  }
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
   // against a PR-backed claim. This allowance is applied on the merge side
@@ -664,18 +696,54 @@ export function collectPreMergeReadiness(
   // (an issue-only handoff against a PR-backed claim stays rejected there) —
   // the merge-only half of the documented strict-resume vs. lenient-relay-merge
   // split (see docs/idd-design-rationale.md, "Claim resolution"). Resolve it
-  // only when forced handoffs are enabled, and fail closed to `null` (reject)
-  // on any lookup/parse error so a transient commits-API failure never aborts
-  // the readiness gate.
-  let prFirstCommitAt = null;
-  if (forcedHandoffEnabled) {
+  // only when forced handoffs are enabled and the commit list actually read,
+  // and fail closed to `null` (reject) otherwise so a transient commits-API
+  // failure never aborts the readiness gate.
+  const prFirstCommitAt =
+    forcedHandoffEnabled && prCommits
+      ? resolvePrFirstCommitAt(prCommits)
+      : null;
+  // #3298: the *live* repository default branch, matching D3.5's own
+  // non-default-branch exemption -- distinct from developmentBranchTarget's
+  // *configured* development-branch value above (a configured
+  // developmentBranch implies nothing about GitHub's own default branch,
+  // which is what closingIssuesReferences actually keys its population on).
+  // Reuses `liveDefaultBranch` when it already resolved this exact call
+  // (developmentBranchInspection status 'absent'); otherwise a fresh,
+  // fail-closed-to-null read (unlike developmentBranchTarget's own
+  // uncaught-throw contract) since closingSet needs an 'unavailable' status
+  // here instead of crashing the whole collector.
+  let closingSetLiveDefaultBranch = liveDefaultBranch;
+  if (closingSetLiveDefaultBranch === null) {
     try {
-      const prCommits = port.listChangeRequestCommits(args.prNumber);
-      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+      const rawDefaultBranch = port.getRepositoryDefaultBranch(owner, repo);
+      // Copilot review, PR #3353: the port's declared `string | null`
+      // return type is a compile-time promise only -- validate it here too
+      // (same rationale as the commits-array guard above), so a
+      // non-conforming provider implementation fails closed instead of
+      // handing a non-string value to the `baseRefName !==
+      // liveDefaultBranch` comparison below.
+      closingSetLiveDefaultBranch =
+        typeof rawDefaultBranch === 'string' ? rawDefaultBranch : null;
     } catch {
-      prFirstCommitAt = null;
+      closingSetLiveDefaultBranch = null;
     }
   }
+  // #3298: the deliberate closing set -- --closing-issues when given
+  // (parseArgs already validated it includes the claimed issue and does
+  // not combine with --claimless), else the single claimed issue, else
+  // empty under --claimless.
+  const expectedClosingIssues =
+    args.closingIssueNumbers ?? (args.claimless ? [] : [args.claimIssueNumber]);
+  const closingSetEvidence = computeClosingSetEvidence({
+    expected: expectedClosingIssues,
+    closingIssuesReferences: snapshot.closingIssuesReferences,
+    owner,
+    repo,
+    baseRefName,
+    liveDefaultBranch: closingSetLiveDefaultBranch,
+    commits: prCommits,
+  });
   const forcedHandoffPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors(iddConfig);
   const externalCheckWaiverMaxValidity =
@@ -1065,6 +1133,7 @@ export function collectPreMergeReadiness(
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       developmentBranchTarget,
+      closingSet: closingSetEvidence,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
@@ -1249,6 +1318,39 @@ export function parseArgs(argv) {
   if (claimless && claimId) {
     throw new Error('--claimless cannot be combined with --claim-id');
   }
+  // #3298: --closing-issues declares the deliberate multi-issue closing set
+  // (idd-pr-submit.instructions.md's "Multiple closing issues" case) for
+  // the closing-set merge gate. A usage error here (not a fail-closed
+  // blocker) since it is a call-time contract violation, matching the
+  // --claimless combination checks immediately above.
+  const closingIssuesToken = values['closing-issues'];
+  let closingIssueNumbers = null;
+  if (closingIssuesToken !== undefined) {
+    if (claimless) {
+      throw new Error('--closing-issues cannot be combined with --claimless');
+    }
+    closingIssueNumbers = closingIssuesToken.split(',').map((token) => {
+      const trimmed = token.trim();
+      if (!/^[1-9]\d*$/.test(trimmed)) {
+        throw new Error(
+          `invalid --closing-issues value: ${closingIssuesToken}`,
+        );
+      }
+      return Number(trimmed);
+    });
+    const claimIssueNumber = requirePositiveInteger(
+      values['claim-issue'],
+      '--claim-issue',
+    );
+    if (
+      claimIssueNumber !== null &&
+      !closingIssueNumbers.includes(claimIssueNumber)
+    ) {
+      throw new Error(
+        `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+      );
+    }
+  }
   return {
     prNumber: requirePositiveInteger(values.pr, '--pr'),
     claimIssueNumber: requirePositiveInteger(
@@ -1266,6 +1368,7 @@ export function parseArgs(argv) {
     now: values.now ?? '',
     help,
     claimless: Boolean(values.claimless),
+    closingIssueNumbers,
   };
 }
 function printHelp() {
@@ -1285,6 +1388,11 @@ function printHelp() {
                     whose closingIssuesReferences is empty; cannot combine
                     with --claim-issue or --claim-id. Claim-ownership in
                     the report is the not-applicable / unclaimed shape.
+  --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing
+                    set for the closing-set merge gate; must include
+                    --claim-issue's own number. Cannot combine with
+                    --claimless. Omit to use the single claimed issue (or
+                    the empty set under --claimless) as the deliberate set.
 `);
 }
 /**

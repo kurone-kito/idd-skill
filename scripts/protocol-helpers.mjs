@@ -7334,6 +7334,70 @@ export function computePreMergeReadinessBlockers(report) {
       });
     }
   }
+  // #3298: fail-closed closing-set / stray-commit-close invariant, mirroring
+  // #2272's developmentBranchTarget precedent immediately above -- absent
+  // entirely (unmigrated caller / unit fixture) adds no blocker, while
+  // `collectPreMergeReadiness` always emits a `closingSet` section. Whitelist
+  // of recognized non-blocking statuses, not a denylist, matching
+  // developmentBranchTarget's own convention: an unrecognized status must
+  // fail closed rather than silently pass. Tested with `!== undefined`, not
+  // truthiness (Copilot review, PR #3353): since the schema requires this
+  // section, only a genuinely absent key (the unmigrated-caller case above)
+  // skips the gate -- a present `closingSet: null` (or any other falsy,
+  // non-object value) is malformed evidence and must still reach
+  // `preMergeAsRecord`'s own `{}` fallback below, which resolves to
+  // `status: "unavailable"` and blocks, rather than silently passing.
+  if (report.closingSet !== undefined) {
+    const closingSet = preMergeAsRecord(report.closingSet);
+    const status = String(closingSet.status || 'unavailable');
+    if (status === 'skipped-non-default-branch' || status === 'match') {
+      // D3.5's own non-default-branch exemption, or a clean comparison --
+      // neither blocks.
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          'closing-set evidence unavailable: the live default branch or the PR commit list could not be read, or the commit list hit the REST API’s 250-commit pagination cap',
+      });
+    } else if (status === 'mismatch') {
+      const extra = Array.isArray(closingSet.extra) ? closingSet.extra : [];
+      const missing = Array.isArray(closingSet.missing)
+        ? closingSet.missing
+        : [];
+      const strayCommitCloses = Array.isArray(closingSet.strayCommitCloses)
+        ? closingSet.strayCommitCloses
+        : [];
+      const detailParts = [];
+      if (extra.length > 0) {
+        detailParts.push(
+          `extra closing reference(s) ${extra.join(', ')} outside the deliberate closing set (pass --closing-issues to declare a deliberate multi-issue close)`,
+        );
+      }
+      if (missing.length > 0) {
+        detailParts.push(
+          `deliberate closing reference(s) ${missing.join(', ')} missing from closingIssuesReferences`,
+        );
+      }
+      for (const entry of strayCommitCloses) {
+        const strayEntry = preMergeAsRecord(entry);
+        detailParts.push(
+          `commit ${String(strayEntry.sha ?? 'unknown')} carries a stray closing keyword for #${String(strayEntry.issue ?? '?')}`,
+        );
+      }
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          detailParts.length > 0
+            ? detailParts.join('; ')
+            : 'closingSet.status is "mismatch" with no further detail available',
+      });
+    } else {
+      blockers.push({
+        gate: 'closing-set',
+        detail: `unrecognized closingSet.status "${status}" (expected "match", "mismatch", "skipped-non-default-branch", or "unavailable")`,
+      });
+    }
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -8345,6 +8409,15 @@ export function buildPreMergeReadinessSummary(
   // "no gate" from "gate present" -- see the option's doc comment above.
   if (options.developmentBranchTarget) {
     summary.developmentBranchTarget = options.developmentBranchTarget;
+  }
+  // #3298: omitted entirely (not even `null`) when the caller does not pass
+  // it, mirroring developmentBranchTarget's own omission contract
+  // immediately above -- see that option's doc comment for why
+  // `computePreMergeReadinessBlockers` treats an absent section as "no
+  // gate" (unmigrated caller / unit fixture) while the real collector
+  // always emits one.
+  if (options.closingSet) {
+    summary.closingSet = options.closingSet;
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).

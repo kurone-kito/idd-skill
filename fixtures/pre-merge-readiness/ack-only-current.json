@@ -140,7 +140,19 @@
     "viewerLogin": "kurone-kito",
     "configuredTrustedActors": [],
     "collaboratorTrustEnabled": false,
-    "advisoryBotLoginsSource": "config"
+    "advisoryBotLoginsSource": "config",
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
+    }
   },
   "expected": {
     "protocolVersion": "1",
@@ -374,6 +386,18 @@
       "mergeable": "",
       "requiresUpToDateHead": false,
       "requiresUpToDateHeadSource": "none"
+    },
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
     },
     "ready": false,
     "blockers": [
