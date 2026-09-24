@@ -413,6 +413,14 @@ settlement independently first -- any login still pending keeps the full
 window; once every login has declined, the wait completes immediately;
 otherwise the short settled buffer anchors on the _latest_ timestamp among
 the settled logins, and a declined login never extends that wait.
+**#3260**: CodeRabbit edits its summary comment in place while it starts (or
+pauses) a review, so the LATEST matching comment can be an in-progress or
+paused revision rather than genuine settlement evidence. An in-progress
+revision stays on `#2335`'s ordinary pending path (the full configured
+window, never the short confirmation buffer) instead of being mistaken for
+a genuine review; a paused revision reaches `#2547`'s zero-wait decline the
+same way a rate-limit / skip-review notice does, since the bot will not
+review new commits until someone resumes it.
 
 `advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
 default `phase-specific` behavior keeps the current E14 skip / F2-F3

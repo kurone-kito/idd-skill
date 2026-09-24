@@ -33,10 +33,13 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
+  CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
+  CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
   classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
+  computeSecondaryAdvisoryReviewSettlement,
   DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
@@ -45,6 +48,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
+  isReviewSummaryComment,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
@@ -9946,6 +9950,194 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
 
   assert.equal(result, null);
 });
+
+// #3260: CodeRabbit edits its summary comment IN PLACE when it starts (or
+// pauses) a review, so an in-progress or paused revision is byte-for-byte
+// indistinguishable from a genuine walkthrough at the outer
+// `summarize by coderabbit.ai` wrapper level. Fixtures below are trimmed
+// (exact marker HTML comments + minimal surrounding structure) from the
+// live comments the issue cites, verified against their GraphQL
+// `userContentEdits` revision history on 2026-09-24:
+// - PR #3196 comment `5789875341`: HEAD `a5a56e57` committed at
+//   2026-09-23T07:12:24Z (confirmed via `gh api
+//   repos/kurone-kito/idd-skill/commits/a5a56e57...`). The 07:13:25Z
+//   revision is the in-progress state (no "No actionable comments"
+//   text); the 07:20:35Z revision is the completed review (with that
+//   sentence); the 06:10:19Z revision is a genuine completed walkthrough
+//   without that sentence.
+// - PR #3154 comment `5743189569`: one of 23 (of 48 total) paused
+//   revisions, still trailing the "No actionable comments were
+//   generated" sentence retained from the prior completed review.
+{
+  const PR3196_IN_PROGRESS_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+    '> [!NOTE]\n' +
+    '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+    '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->';
+  const PR3196_COMPLETED_NO_ACTIONABLE_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+  const PR3154_PAUSED_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_PAUSED_MARKER}\n\n` +
+    '> [!NOTE]\n> ## Reviews paused\n> \n' +
+    '> It looks like this branch is under active development. To avoid ' +
+    'overwhelming you with review comments due to an influx of new ' +
+    'commits, CodeRabbit has automatically paused this review.\n\n' +
+    '<!-- end of auto-generated comment: review paused by coderabbit.ai -->\n' +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+  const PR3160_IN_PROGRESS_STALE_SENTENCE_BODY =
+    `${CODERABBIT_SUMMARY_MARKER}\n` +
+    `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+    '> [!NOTE]\n' +
+    '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+    '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->\n\n' +
+    '<!-- recent_review_start -->\n\n' +
+    'No actionable comments were generated in the recent review. 🎉';
+
+  test('#3260: computeSecondaryAdvisoryReviewSettlement reports pending (neither settled nor declined) for the PR #3196 in-progress revision', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:13:25Z',
+          body: PR3196_IN_PROGRESS_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.deepEqual(result, {
+      settled: false,
+      settledAt: null,
+      declined: false,
+    });
+  });
+
+  // Copilot review (PR #3412): the in-progress marker predicate is
+  // CodeRabbit-specific, so it must not fire for a DIFFERENTLY configured
+  // secondary bot whose own comment happens to contain the same literal
+  // marker text -- `computeSecondaryAdvisoryReviewSettlement` filters
+  // `comments` by whichever login `secondaryBotLogin` names, not
+  // necessarily CodeRabbit, before these body-shape checks ever run.
+  test('#3260: computeSecondaryAdvisoryReviewSettlement settles a non-CodeRabbit secondary bot even if its body coincidentally contains the in-progress marker text', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'some-other-bot[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:13:25Z',
+          body: PR3196_IN_PROGRESS_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'some-other-bot[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.equal(result.settled, true);
+    assert.equal(result.settledAt, '2026-09-23T07:13:25Z');
+    assert.equal(result.declined, false);
+  });
+
+  test('#3260: computeSecondaryAdvisoryReviewSettlement settles once the same comment is edited into the completed revision', () => {
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-23T05:59:10Z',
+          updatedAt: '2026-09-23T07:20:35Z',
+          body: PR3196_COMPLETED_NO_ACTIONABLE_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-23T07:12:24Z',
+      },
+    );
+    assert.equal(result.settled, true);
+    assert.equal(result.settledAt, '2026-09-23T07:20:35Z');
+    assert.equal(result.declined, false);
+  });
+
+  test('#3260: a paused CodeRabbit revision is a non-review notice, not a summary, and settles as declined', () => {
+    assert.equal(isAdvisoryNonReviewNotice(PR3154_PAUSED_BODY), true);
+    assert.equal(isReviewSummaryComment(PR3154_PAUSED_BODY), false);
+    const result = computeSecondaryAdvisoryReviewSettlement(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-09-19T15:44:25Z',
+          updatedAt: '2026-09-20T11:16:35Z',
+          body: PR3154_PAUSED_BODY,
+        },
+      ],
+      {
+        secondaryBotLogin: 'coderabbitai[bot]',
+        headCommittedAt: '2026-09-19T00:00:00Z',
+      },
+    );
+    assert.equal(result.declined, true);
+    assert.equal(result.settled, false);
+  });
+
+  // #1191-style positive control: `threads: []` and the real
+  // `coderabbitai[bot]` author, asserting `=== null` explicitly (not merely
+  // "not RESOLVED") so the fixture is proven to actually reach the new
+  // early return rather than passing for an unrelated reason
+  // (`classifyRegularBotComment` also returns `null` for a non-CodeRabbit
+  // author, an unresolved known-bot thread, or a body that never starts
+  // with `CODERABBIT_SUMMARY_MARKER`).
+  test('#3260: classifyRegularBotComment never resolves the PR #3160 in-progress revision, even with a stale "No actionable comments" sentence', () => {
+    const comment = {
+      id: 1,
+      createdAt: '2026-09-20T11:13:47Z',
+      body: PR3160_IN_PROGRESS_STALE_SENTENCE_BODY,
+      author: { login: 'coderabbitai[bot]' },
+    };
+    const result = classifyRegularBotComment(comment, [comment], []);
+    assert.equal(result, null);
+    // Positive control: the same trailing "No actionable comments"
+    // sentence, minus the in-progress marker block, resolves via the
+    // pre-existing branch -- proving the marker (not some other property
+    // of the fixture) is what gates the null above.
+    const withoutMarker = {
+      ...comment,
+      body: PR3196_COMPLETED_NO_ACTIONABLE_BODY,
+    };
+    assert.equal(
+      classifyRegularBotComment(withoutMarker, [withoutMarker], [])?.classifier,
+      'RESOLVED',
+    );
+  });
+
+  test('#3260: classifyRegularBotComment never resolves the PR #3154 paused revision', () => {
+    const comment = {
+      id: 2,
+      createdAt: '2026-09-20T11:16:35Z',
+      body: PR3154_PAUSED_BODY,
+      author: { login: 'coderabbitai[bot]' },
+    };
+    const result = classifyRegularBotComment(comment, [comment], []);
+    assert.equal(result, null);
+    // Positive control: the same body minus the paused marker block still
+    // resolves via the "No actionable comments" sentence it retains.
+    const withoutMarker = {
+      ...comment,
+      body: `${CODERABBIT_SUMMARY_MARKER}\n<!-- recent_review_start -->\n\nNo actionable comments were generated in the recent review. 🎉`,
+    };
+    assert.equal(
+      classifyRegularBotComment(withoutMarker, [withoutMarker], [])?.classifier,
+      'RESOLVED',
+    );
+  });
+}
 
 // #2335: buildPreMergeReadinessSummary/computePreMergeReadinessBlockers --
 // advisoryWait.secondaryQuietWindow.
