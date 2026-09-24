@@ -58,6 +58,12 @@ import {
   summarizeReviewerStates,
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
+import {
+  computeClosingSetEvidence,
+  findStrayCommitCloses,
+} from '../src/scripts/supersession-detection.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { readJson } from './test-utils.mts';
 
@@ -10057,6 +10063,397 @@ test('#2272: an unrecognized developmentBranchTarget.status fails closed even wh
   );
   assert.ok(blocker);
   assert.match(blocker.detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// #3298: closing-set / stray-commit-close merge gate.
+//
+// computeClosingSetEvidence (supersession-detection.mts) is the pure
+// evidence computation collectPreMergeReadiness calls; these tests drive it
+// directly with hand-built inputs, mirroring this file's own
+// developmentBranchTarget tests immediately above. computePreMergeReadinessBlockers
+// then rolls the resulting evidence into a `closing-set` blocker.
+// ---------------------------------------------------------------------------
+
+const CLOSING_SET_OWNER = 'kurone-kito';
+const CLOSING_SET_REPO = 'idd-skill';
+const CLOSING_SET_BASE_REF = 'main';
+
+/** Minimal `computeClosingSetEvidence` options shared by every test below;
+ * each test overrides only the fields its scenario cares about. */
+function baseClosingSetOptions(): Parameters<
+  typeof computeClosingSetEvidence
+>[0] {
+  return {
+    expected: [7],
+    closingIssuesReferences: [{ number: 7 }],
+    owner: CLOSING_SET_OWNER,
+    repo: CLOSING_SET_REPO,
+    baseRefName: CLOSING_SET_BASE_REF,
+    liveDefaultBranch: CLOSING_SET_BASE_REF,
+    commits: [],
+  };
+}
+
+/** A `pulls/{pr}/commits` REST-shaped entry, matching `PrCommitPayload`. */
+function commitPayload(sha: string, message: string) {
+  return { sha, commit: { message } };
+}
+
+/** Build the smallest report shape `computePreMergeReadinessBlockers` needs
+ * to evaluate the `closing-set` gate alone, without every other gate's own
+ * fail-closed defaults also adding unrelated blockers to the returned list
+ * -- callers filter for `gate === 'closing-set'` rather than asserting the
+ * full list. The parameter is intentionally looser than
+ * `ReturnType<typeof computeClosingSetEvidence>` (a plain `status: string`
+ * rather than the real enum) so the "unrecognized status" test below can
+ * pass a value the real evidence function would never produce. */
+function closingSetBlockers(
+  closingSet:
+    | (Omit<ReturnType<typeof computeClosingSetEvidence>, 'status'> & {
+        status: string;
+      })
+    | undefined,
+) {
+  const report: Record<string, unknown> =
+    closingSet === undefined ? {} : { closingSet };
+  return computePreMergeReadinessBlockers(report).filter(
+    (blocker) => blocker.gate === 'closing-set',
+  );
+}
+
+test('closingSet: closingIssuesReferences equal to [claim-issue] and a clean commit message -> match, no blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: [commitPayload('a'.repeat(40), 'Closes #7')],
+  });
+  assert.equal(evidence.status, 'match');
+  assert.deepEqual(evidence.extra, []);
+  assert.deepEqual(evidence.missing, []);
+  assert.deepEqual(evidence.strayCommitCloses, []);
+  assert.deepEqual(closingSetBlockers(evidence), []);
+});
+
+test('closingSet: an extra closingIssuesReferences entry outside the deliberate set -> mismatch, blocker names the number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.extra, [8]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /extra/);
+  assert.match(blockers[0].detail, /\b8\b/);
+  assert.match(blockers[0].detail, /--closing-issues/);
+});
+
+test('closingSet: the claimed issue missing from closingIssuesReferences -> mismatch, blocker names the number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.missing, [7]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /missing/);
+  assert.match(blockers[0].detail, /\b7\b/);
+});
+
+test('closingSet: a stray "Fixes #M" commit message outside the set -> mismatch, blocker names the sha and M; "Closes #N" for the claimed N is not a stray', () => {
+  const strayCommit = commitPayload('deadbeef'.repeat(5), 'Fixes #99');
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: [commitPayload('a'.repeat(40), 'Closes #7'), strayCommit],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.strayCommitCloses, [
+    { sha: strayCommit.sha, issue: 99 },
+  ]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, new RegExp(strayCommit.sha));
+  assert.match(blockers[0].detail, /#99/);
+});
+
+test('closingSet: findStrayCommitCloses ignores a match against the expected set and reports each distinct stray number once per commit', () => {
+  const strays = findStrayCommitCloses(
+    [
+      commitPayload('c1', 'Closes #7, and also fixes #10 and resolves #10'),
+      commitPayload('c2', 'this also fixes #11'),
+    ],
+    [7],
+  );
+  assert.deepEqual(strays, [
+    { sha: 'c1', issue: 10 },
+    { sha: 'c2', issue: 11 },
+  ]);
+});
+
+test('closingSet: --closing-issues N,M with matching references -> match; the same references without the flag -> mismatch naming --closing-issues', () => {
+  const withFlag = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [7, 8],
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(withFlag.status, 'match');
+
+  const withoutFlag = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [7],
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+  });
+  assert.equal(withoutFlag.status, 'mismatch');
+  const blockers = closingSetBlockers(withoutFlag);
+  assert.match(blockers[0].detail, /--closing-issues/);
+});
+
+test('closingSet: --closing-issues omitting the claimed issue, or combined with --claimless, is a parseArgs usage error', () => {
+  assert.throws(
+    () =>
+      parseArgs(['--pr', '1', '--claim-issue', '7', '--closing-issues', '8,9']),
+    /--closing-issues must include the claimed issue number 7/,
+  );
+  assert.throws(
+    () => parseArgs(['--pr', '1', '--claimless', '--closing-issues', '7']),
+    /--closing-issues cannot be combined with --claimless/,
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--closing-issues',
+        '7,abc',
+      ]),
+    /invalid --closing-issues value/,
+  );
+  const parsed = parseArgs([
+    '--pr',
+    '1',
+    '--claim-issue',
+    '7',
+    '--closing-issues',
+    '7,8',
+  ]);
+  assert.deepEqual(parsed.closingIssueNumbers, [7, 8]);
+});
+
+test('closingSet: --claimless with a closing keyword in a commit message -> blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [],
+    closingIssuesReferences: [],
+    commits: [commitPayload('a'.repeat(40), 'Closes #50')],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.strayCommitCloses, [
+    { sha: 'a'.repeat(40), issue: 50 },
+  ]);
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a base branch different from the live default branch -> skipped-non-default-branch, no blocker even with a genuine mismatch present', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    baseRefName: 'feature-branch',
+    liveDefaultBranch: 'main',
+    closingIssuesReferences: [{ number: 999 }],
+    commits: [commitPayload('a'.repeat(40), 'Fixes #999')],
+  });
+  assert.equal(evidence.status, 'skipped-non-default-branch');
+  assert.deepEqual(closingSetBlockers(evidence), []);
+});
+
+test('closingSet: an unreadable live default branch -> unavailable, blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    liveDefaultBranch: null,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
+});
+
+test('closingSet: a failed commit-list read (null) -> unavailable, blocker', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits: null,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a commit list hitting the REST 250-entry pagination cap -> unavailable, blocker', () => {
+  const commits = Array.from({ length: 250 }, (_, index) =>
+    commitPayload(String(index).padStart(40, '0'), 'Closes #7'),
+  );
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    commits,
+  });
+  assert.equal(evidence.status, 'unavailable');
+  assert.equal(closingSetBlockers(evidence).length, 1);
+});
+
+test('closingSet: a closingIssuesReferences entry for the same number in another repository counts as extra, not a match', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [
+      {
+        number: 7,
+        repository: {
+          name: 'other-repo',
+          owner: { login: 'other-owner' },
+        },
+      },
+    ],
+  });
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.extra, [7]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /extra/);
+});
+
+test('closingSet: a same-repository entry (repository field present, matching owner/repo) still matches normally', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    closingIssuesReferences: [
+      {
+        number: 7,
+        repository: {
+          name: CLOSING_SET_REPO,
+          owner: { login: CLOSING_SET_OWNER },
+        },
+      },
+    ],
+  });
+  assert.equal(evidence.status, 'match');
+});
+
+test('computePreMergeReadinessBlockers: an absent closingSet adds no closing-set blocker (unmigrated caller / unit fixture)', () => {
+  assert.deepEqual(closingSetBlockers(undefined), []);
+});
+
+test('computePreMergeReadinessBlockers: an unrecognized closingSet.status fails closed with a blocker', () => {
+  const blockers = closingSetBlockers({
+    status: 'bogus',
+    expected: [7],
+    actual: [],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
+  });
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unrecognized/);
+});
+
+// ---------------------------------------------------------------------------
+// #3298: collectPreMergeReadiness wiring -- proves the hoisted, unconditional
+// `listChangeRequestCommits` fetch (previously gated behind
+// forcedHandoffEnabled) is actually caught and turned into `closingSet`
+// evidence, not just that the pure evidence function handles a `null` input
+// correctly (already covered directly above).
+// ---------------------------------------------------------------------------
+
+function closingSetSmokeFakePort(
+  overrides: {
+    closingIssuesReferences?: unknown[];
+    throwOnCommits?: boolean;
+  } = {},
+): ProviderPort {
+  const port = createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: overrides.closingIssuesReferences ?? [
+          { number: 7 },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  });
+  if (!overrides.throwOnCommits) {
+    return port;
+  }
+  return {
+    ...port,
+    listChangeRequestCommits() {
+      throw new Error('simulated commits-API failure');
+    },
+  };
+}
+
+test('collectPreMergeReadiness: a throwing listChangeRequestCommits read fails closed to closingSet.status "unavailable" (not an uncaught crash)', () => {
+  const port = closingSetSmokeFakePort({ throwOnCommits: true });
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'unavailable');
+  assert.ok(
+    (report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: a clean commit list and matching closingIssuesReferences collect to closingSet.status "match"', () => {
+  const port = closingSetSmokeFakePort();
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'match');
+  assert.ok(
+    !(report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
 });
 
 // ---------------------------------------------------------------------------

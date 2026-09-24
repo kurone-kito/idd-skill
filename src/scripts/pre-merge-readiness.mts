@@ -85,6 +85,14 @@ import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mts';
+// #3298: this file's only consumer of supersession-detection.mts --
+// protocol-helpers.mts must never import from it (supersession-detection.mts
+// already transitively depends on protocol-helpers.mts via
+// discover-shared-file-overlap.mts, so the reverse edge would cycle), so the
+// closing-set evidence computation itself stays here rather than moving into
+// protocol-helpers.mts's computePreMergeReadinessBlockers, which only reads
+// the already-computed record.
+import { computeClosingSetEvidence } from './supersession-detection.mts';
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
@@ -354,6 +362,10 @@ interface PreMergeReadinessArgs {
   help: boolean;
   /** #2017: skip claim fetch/revalidation on a PR with no closing issues. */
   claimless: boolean;
+  /** #3298: the deliberate multi-issue closing set (`--closing-issues
+   * <n>[,<n>...]`), when given. `null` means "not given" -- the caller
+   * falls back to `[claimIssueNumber]`, or `[]` under `--claimless`. */
+  closingIssueNumbers: number[] | null;
 }
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -379,6 +391,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -892,6 +905,21 @@ export function collectPreMergeReadiness(
   const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
   const forcedHandoffAuthorityPolicy = forcedHandoffPolicy.authorityPolicy;
   const forcedHandoffEnabled = forcedHandoffPolicy.mode === 'human-gated';
+  // #3298: fetched unconditionally now (previously only under
+  // forcedHandoffEnabled below) -- the closing-set gate's stray-commit-close
+  // scan needs this same `pulls/{pr}/commits` listing on every call, not
+  // only when forced handoffs are enabled, so this one read backs both
+  // prFirstCommitAt and closingSet.strayCommitCloses instead of each
+  // resolving its own copy. `null` means the read failed; both downstream
+  // consumers already have their own fail-closed handling for that.
+  let prCommits: PrCommitPayload[] | null = null;
+  try {
+    prCommits = port.listChangeRequestCommits(
+      args.prNumber,
+    ) as PrCommitPayload[];
+  } catch {
+    prCommits = null;
+  }
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
   // against a PR-backed claim. This allowance is applied on the merge side
@@ -899,20 +927,50 @@ export function collectPreMergeReadiness(
   // (an issue-only handoff against a PR-backed claim stays rejected there) —
   // the merge-only half of the documented strict-resume vs. lenient-relay-merge
   // split (see docs/idd-design-rationale.md, "Claim resolution"). Resolve it
-  // only when forced handoffs are enabled, and fail closed to `null` (reject)
-  // on any lookup/parse error so a transient commits-API failure never aborts
-  // the readiness gate.
-  let prFirstCommitAt: string | null = null;
-  if (forcedHandoffEnabled) {
+  // only when forced handoffs are enabled and the commit list actually read,
+  // and fail closed to `null` (reject) otherwise so a transient commits-API
+  // failure never aborts the readiness gate.
+  const prFirstCommitAt: string | null =
+    forcedHandoffEnabled && prCommits
+      ? resolvePrFirstCommitAt(prCommits)
+      : null;
+  // #3298: the *live* repository default branch, matching D3.5's own
+  // non-default-branch exemption -- distinct from developmentBranchTarget's
+  // *configured* development-branch value above (a configured
+  // developmentBranch implies nothing about GitHub's own default branch,
+  // which is what closingIssuesReferences actually keys its population on).
+  // Reuses `liveDefaultBranch` when it already resolved this exact call
+  // (developmentBranchInspection status 'absent'); otherwise a fresh,
+  // fail-closed-to-null read (unlike developmentBranchTarget's own
+  // uncaught-throw contract) since closingSet needs an 'unavailable' status
+  // here instead of crashing the whole collector.
+  let closingSetLiveDefaultBranch: string | null = liveDefaultBranch;
+  if (closingSetLiveDefaultBranch === null) {
     try {
-      const prCommits = port.listChangeRequestCommits(
-        args.prNumber,
-      ) as PrCommitPayload[];
-      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+      closingSetLiveDefaultBranch = port.getRepositoryDefaultBranch(
+        owner,
+        repo,
+      );
     } catch {
-      prFirstCommitAt = null;
+      closingSetLiveDefaultBranch = null;
     }
   }
+  // #3298: the deliberate closing set -- --closing-issues when given
+  // (parseArgs already validated it includes the claimed issue and does
+  // not combine with --claimless), else the single claimed issue, else
+  // empty under --claimless.
+  const expectedClosingIssues =
+    args.closingIssueNumbers ??
+    (args.claimless ? [] : [args.claimIssueNumber as number]);
+  const closingSetEvidence = computeClosingSetEvidence({
+    expected: expectedClosingIssues,
+    closingIssuesReferences: snapshot.closingIssuesReferences,
+    owner,
+    repo,
+    baseRefName,
+    liveDefaultBranch: closingSetLiveDefaultBranch,
+    commits: prCommits,
+  });
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors(iddConfig);
   const externalCheckWaiverMaxValidity =
@@ -1314,6 +1372,7 @@ export function collectPreMergeReadiness(
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       developmentBranchTarget,
+      closingSet: closingSetEvidence,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
@@ -1522,6 +1581,40 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
     throw new Error('--claimless cannot be combined with --claim-id');
   }
 
+  // #3298: --closing-issues declares the deliberate multi-issue closing set
+  // (idd-pr-submit.instructions.md's "Multiple closing issues" case) for
+  // the closing-set merge gate. A usage error here (not a fail-closed
+  // blocker) since it is a call-time contract violation, matching the
+  // --claimless combination checks immediately above.
+  const closingIssuesToken = values['closing-issues'] as string | undefined;
+  let closingIssueNumbers: number[] | null = null;
+  if (closingIssuesToken !== undefined) {
+    if (claimless) {
+      throw new Error('--closing-issues cannot be combined with --claimless');
+    }
+    closingIssueNumbers = closingIssuesToken.split(',').map((token) => {
+      const trimmed = token.trim();
+      if (!/^[1-9]\d*$/.test(trimmed)) {
+        throw new Error(
+          `invalid --closing-issues value: ${closingIssuesToken}`,
+        );
+      }
+      return Number(trimmed);
+    });
+    const claimIssueNumber = requirePositiveInteger(
+      values['claim-issue'] as string | undefined,
+      '--claim-issue',
+    );
+    if (
+      claimIssueNumber !== null &&
+      !closingIssueNumbers.includes(claimIssueNumber)
+    ) {
+      throw new Error(
+        `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+      );
+    }
+  }
+
   return {
     prNumber: requirePositiveInteger(values.pr as string | undefined, '--pr'),
     claimIssueNumber: requirePositiveInteger(
@@ -1541,6 +1634,7 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
     now: (values.now as string | undefined) ?? '',
     help,
     claimless: Boolean(values.claimless),
+    closingIssueNumbers,
   };
 }
 
@@ -1561,6 +1655,11 @@ function printHelp(): void {
                     whose closingIssuesReferences is empty; cannot combine
                     with --claim-issue or --claim-id. Claim-ownership in
                     the report is the not-applicable / unclaimed shape.
+  --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing
+                    set for the closing-set merge gate; must include
+                    --claim-issue's own number. Cannot combine with
+                    --claimless. Omit to use the single claimed issue (or
+                    the empty set under --claimless) as the deliberate set.
 `);
 }
 

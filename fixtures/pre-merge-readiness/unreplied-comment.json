@@ -103,7 +103,19 @@
     "expectedAgentId": "github-copilot-cli",
     "viewerLogin": "kurone-kito",
     "configuredTrustedActors": [],
-    "collaboratorTrustEnabled": false
+    "collaboratorTrustEnabled": false,
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
+    }
   },
   "expected": {
     "protocolVersion": "1",
@@ -322,6 +334,18 @@
       "mergeable": "",
       "requiresUpToDateHead": false,
       "requiresUpToDateHeadSource": "none"
+    },
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
     },
     "ready": false,
     "blockers": [

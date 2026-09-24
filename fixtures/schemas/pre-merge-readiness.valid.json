@@ -222,5 +222,17 @@
       "gate": "ci",
       "detail": "CI is not all-passing (example)"
     }
-  ]
+  ],
+  "closingSet": {
+    "status": "match",
+    "expected": [
+      1
+    ],
+    "actual": [
+      1
+    ],
+    "extra": [],
+    "missing": [],
+    "strayCommitCloses": []
+  }
 }

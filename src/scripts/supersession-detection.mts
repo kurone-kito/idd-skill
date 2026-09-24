@@ -197,6 +197,19 @@ export function findCandidateFileOverlap(
 }
 
 /**
+ * Closing-keyword alternation (`close(s|d)?`, `fix(es|ed)?`, `resolve(s|d)?`,
+ * case-insensitive) shared by every closing-keyword-adjacent `#<n>` scanner
+ * in this file, matching the grammar `idd-pr-submit.instructions.md`'s D3.5
+ * steps 3/6/7 already document
+ * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b`). Exported so
+ * `pre-merge-readiness.mts`'s commit-message stray-close scan (#3298) reuses
+ * this exact alternation instead of a second hand-written copy that could
+ * drift out of sync with it.
+ */
+export const CLOSING_KEYWORD_ALTERNATION =
+  'close[sd]?|fix(?:e[sd])?|resolve[sd]?';
+
+/**
  * Closing-keyword-adjacent `#<issueNumber>` cross-reference test (#1878;
  * narrowed by #1888), matched against a merged PR's
  * `closingIssuesReferences` connection first, falling back to a regex scan
@@ -274,12 +287,224 @@ export function prReferencesIssue(
   // `issueNumber: 1862`). Case-insensitive so `Closes`, `closes`, `CLOSES`,
   // etc. all match.
   const pattern = new RegExp(
-    `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issueNumber}\\b`,
+    `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+#${issueNumber}\\b`,
     'i',
   );
   const title = typeof pr.title === 'string' ? pr.title : '';
   const body = typeof pr.body === 'string' ? pr.body : '';
   return pattern.test(title) || pattern.test(body);
+}
+
+/** GitHub `pulls/{pr}/commits` REST entry fields {@link findStrayCommitCloses}
+ * needs -- a narrower view of `protocol-helpers.mts`'s own `PrCommitPayload`
+ * (adds `sha` and the commit message, neither of which
+ * `resolvePrFirstCommitAt` reads). */
+export interface ClosingKeywordCommitPayload {
+  sha?: string | null;
+  commit?: { message?: string | null } | null;
+}
+
+/** One stray commit-message closing-keyword match outside the deliberate
+ * closing set (#3298): `sha` identifies the offending commit, `issue` is
+ * the captured issue number. */
+export interface StrayCommitClose {
+  sha: string;
+  issue: number;
+}
+
+/**
+ * Scan every commit's full message for `idd-pr-submit.instructions.md`'s
+ * D3.5 step 7 pattern
+ * (`(?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)\b`), generalized
+ * to any issue number instead of {@link prReferencesIssue}'s fixed `<N>`,
+ * and return every match whose captured number falls **outside**
+ * `expectedIssueNumbers` -- a stray commit-message close
+ * (`pre-merge-readiness.mts`'s `closingSet.strayCommitCloses` evidence,
+ * #3298). A commit with no message, or a message with only expected-set
+ * matches, contributes nothing. Multiple distinct stray numbers in the same
+ * commit each produce their own entry; a repeated mention of the same stray
+ * number in one commit is reported once (matching D3.5 step 7's own
+ * "post a hold note" framing, which treats one stray number as one problem
+ * to fix, not once per mention).
+ */
+export function findStrayCommitCloses(
+  commits: readonly ClosingKeywordCommitPayload[],
+  expectedIssueNumbers: Iterable<number>,
+): StrayCommitClose[] {
+  const expected = new Set(expectedIssueNumbers);
+  const pattern = new RegExp(
+    `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+#(\\d+)\\b`,
+    'gi',
+  );
+  const strays: StrayCommitClose[] = [];
+  for (const commit of commits) {
+    const sha = String(commit?.sha ?? '');
+    const message = String(commit?.commit?.message ?? '');
+    if (!message) {
+      continue;
+    }
+    const seen = new Set<number>();
+    for (const match of message.matchAll(pattern)) {
+      const issue = Number(match[1]);
+      if (
+        !Number.isInteger(issue) ||
+        issue <= 0 ||
+        expected.has(issue) ||
+        seen.has(issue)
+      ) {
+        continue;
+      }
+      seen.add(issue);
+      strays.push({ sha, issue });
+    }
+  }
+  return strays;
+}
+
+/** `closingSet` merge-gate evidence embedded in a pre-merge-readiness
+ * report (`schemas/pre-merge-readiness.schema.json`), computed once by
+ * `collectPreMergeReadiness` via {@link computeClosingSetEvidence} and
+ * rolled into a `closing-set` blocker by
+ * `computePreMergeReadinessBlockers` (`protocol-helpers.mts`) whenever
+ * `status` is anything but `"match"` or `"skipped-non-default-branch"`
+ * (#3298). */
+export interface ClosingSetEvidence {
+  status: 'match' | 'mismatch' | 'skipped-non-default-branch' | 'unavailable';
+  expected: number[];
+  actual: number[];
+  extra: number[];
+  missing: number[];
+  strayCommitCloses: StrayCommitClose[];
+}
+
+/**
+ * Compute the `closingSet` merge-gate evidence: whether the PR's live
+ * `closingIssuesReferences` (GitHub's own merge-time closing-keyword
+ * resolution) and its branch commit messages agree with the deliberate
+ * closing set, mirroring `idd-pr-submit.instructions.md`'s D3.5 steps 6-7
+ * so both the lite and standard profiles get this safety check from the
+ * helper verdict itself (#3298).
+ *
+ * - `expected`: the deliberate closing set, already resolved by the caller
+ *   (`--closing-issues`, else `[claimIssueNumber]`, else `[]` under
+ *   `--claimless`).
+ * - `liveDefaultBranch === null` means the repository's live default
+ *   branch could not be read -- fails closed to `"unavailable"` before even
+ *   comparing `baseRefName` (D3.5's own non-default-branch exemption cannot
+ *   be evaluated without it).
+ * - `baseRefName !== liveDefaultBranch` reproduces D3.5's own exemption:
+ *   `closingIssuesReferences` never populates against a non-default base
+ *   branch, so `"skipped-non-default-branch"` short-circuits before any
+ *   commit-list read -- D3.5 skips both step 6 (the reference compare) and
+ *   step 7 (the commit-message scan) together under this same condition, so
+ *   this status covers both.
+ * - `commits === null` (the caller's own `pulls/{pr}/commits` read threw)
+ *   or `commits.length >= 250` (the endpoint's documented cap, which
+ *   pagination cannot get past) fails closed to `"unavailable"` --
+ *   completeness cannot be shown.
+ * - Each `closingIssuesReferences` entry is compared by repository as well
+ *   as number when it carries a `repository` field (the real
+ *   `gh pr view --json closingIssuesReferences` shape, confirmed
+ *   empirically: `{ number, repository: { name, owner: { login } }, ... }`):
+ *   an entry for a different owner/repo never satisfies an `expected`
+ *   number, even when the bare numbers coincide, and always counts as
+ *   `extra` -- computed here (not re-derived from plain `expected`/`actual`
+ *   number sets downstream) so a coincidental cross-repo number collision
+ *   still surfaces as `extra`, not a false "match".
+ */
+export function computeClosingSetEvidence(options: {
+  expected: readonly number[];
+  closingIssuesReferences: unknown;
+  owner: string;
+  repo: string;
+  baseRefName: string;
+  liveDefaultBranch: string | null;
+  commits: readonly ClosingKeywordCommitPayload[] | null;
+}): ClosingSetEvidence {
+  const expected = [...new Set(options.expected)].sort((a, b) => a - b);
+  if (!options.liveDefaultBranch) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  if (options.baseRefName !== options.liveDefaultBranch) {
+    return {
+      status: 'skipped-non-default-branch',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  if (options.commits === null || options.commits.length >= 250) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+
+  const ownerLower = options.owner.toLowerCase();
+  const repoLower = options.repo.toLowerCase();
+  const rawRefs = Array.isArray(options.closingIssuesReferences)
+    ? options.closingIssuesReferences
+    : [];
+  const expectedSet = new Set(expected);
+  const actual: number[] = [];
+  const sameRepoNumbers = new Set<number>();
+  // Cross-repo numbers stay a separate bucket (not folded into
+  // `sameRepoNumbers`) precisely so a coincidental number collision with an
+  // `expected` entry still surfaces as `extra` below, rather than a plain
+  // `expected`/`actual` number-set diff silently canceling the two out.
+  const crossRepoNumbers: number[] = [];
+  for (const entry of rawRefs) {
+    const record =
+      entry !== null && typeof entry === 'object'
+        ? (entry as Record<string, unknown>)
+        : null;
+    const rawNumber = record && 'number' in record ? record.number : entry;
+    const number = Number(rawNumber);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    actual.push(number);
+    const repository = record?.repository;
+    if (repository !== null && typeof repository === 'object') {
+      const repoRecord = repository as {
+        name?: unknown;
+        owner?: { login?: unknown } | null;
+      };
+      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
+      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
+      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
+        crossRepoNumbers.push(number);
+        continue;
+      }
+    }
+    sameRepoNumbers.add(number);
+  }
+
+  const strayCommitCloses = findStrayCommitCloses(options.commits, expectedSet);
+  const missing = expected.filter((n) => !sameRepoNumbers.has(n));
+  const extra = [
+    ...[...sameRepoNumbers].filter((n) => !expectedSet.has(n)),
+    ...crossRepoNumbers,
+  ].sort((a, b) => a - b);
+  const status: ClosingSetEvidence['status'] =
+    missing.length > 0 || extra.length > 0 || strayCommitCloses.length > 0
+      ? 'mismatch'
+      : 'match';
+
+  return { status, expected, actual, extra, missing, strayCommitCloses };
 }
 
 /** Literal prefix a trusted-actor "A4.5 suitability gate rejection" comment
