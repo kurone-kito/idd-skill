@@ -82,7 +82,8 @@ export interface ReviewPayload {
    * Also consumed (#3015) to detect Copilot's "encountered an error"
    * review, the sibling `itemCount === 0` false-empty shape where Copilot
    * never reviewed the diff at all -- see
-   * `isCopilotErrorReviewBody` (protocol-helpers.mts). */
+   * `isCopilotErrorReviewBody` (copilot-review-body.mts, re-exported from
+   * protocol-helpers.mts, #3258). */
   body?: string | null;
 }
 
@@ -184,7 +185,8 @@ export function isVerifiedCopilotAuthor(
  * ordered review win by comparator accident.
  *
  * #3015: a review whose body is Copilot's exact "encountered an error"
- * template (`isCopilotErrorReviewBody`, protocol-helpers.mts) is excluded
+ * template (`isCopilotErrorReviewBody`, copilot-review-body.mts,
+ * re-exported from protocol-helpers.mts, #3258) is excluded
  * entirely before taking the absolute-latest -- treated as if it did not
  * exist, not merely as an off-HEAD review -- so it can neither win this
  * "latest" selection itself nor mask an earlier genuine review of the same
