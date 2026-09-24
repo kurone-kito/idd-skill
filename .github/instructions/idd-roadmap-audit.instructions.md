@@ -204,7 +204,12 @@ Treat `stale` and `non-stale` in this section using the
   `roadmap-audit/<number>-<slug>` branch field. This is a logical
   coordination name, not a work branch, and it does not require
   creating a branch or worktree unless the audit also needs git
-  changes.
+  changes. Either case — a fresh claim on an unclaimed roadmap or a
+  takeover of a stale one — is a claim activation, so also post and
+  verify an
+  [activation-nonce marker](idd-claim.instructions.md#activation-nonce-format)
+  for the same `{claim-id}`, the same way an ordinary execution claim
+  does.
 - In recursive hierarchies, do not reuse one roadmap-audit claim across
   parent, child, or sibling roadmap mutations. Each roadmap comment,
   follow-up issue link, body edit, label change, or close action must
