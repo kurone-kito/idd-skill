@@ -1465,12 +1465,12 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
       { timeoutMs: 1_000, spawnFn },
     );
     assert.ok(hookPid, 'expected the relay to have a real pid');
-    // Poll instead of a single fixed-delay sample (kurone-kito/idd-
-    // skill#3217): under this repository's documented heavy
-    // concurrent-session scheduling load, a cold `powershell.exe` spawn
-    // plus its `taskkill` call can take longer than a single fixed wait
-    // accounts for, even when the watchdog works correctly. The 20s poll
-    // deadline is well inside this job's 15-minute `timeout-minutes`.
+    // Poll instead of a single fixed-delay sample (issue #3217): under
+    // this repository's documented heavy concurrent-session scheduling
+    // load, a cold `powershell.exe` spawn plus its `taskkill` call can
+    // take longer than a single fixed wait accounts for, even when the
+    // watchdog works correctly. The 20s poll deadline is well inside this
+    // job's 15-minute `timeout-minutes`.
     const gone = await waitUntilProcessGone(hookPid as number, 20_000);
     const elapsedMs = Date.now() - startedAt;
     if (gone) {
