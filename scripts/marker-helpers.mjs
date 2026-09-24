@@ -1695,7 +1695,16 @@ function resolveAuthoringMarkerIdentity(body, markerPrefix, family) {
     return parseAuthoringOwnerComment(body, markerPrefix)?.target ?? null;
   }
   const parsed = parseAuthoringPublicationIntentComment(body, markerPrefix);
-  return parsed ? `${parsed.target}\0${parsed.token}` : null;
+  // #3374: a raw NUL join is not injective -- a field value containing an
+  // embedded NUL byte (parseSemicolonFieldMarker trims but does not reject
+  // one) can make two DIFFERENT (target, token) pairs join to the same
+  // string, e.g. target="A\0X",token="Y" and target="A",token="X\0Y" both
+  // join to "A\0X\0Y". JSON.stringify of a fixed 2-element string array is
+  // injective for this pair: target/token are always non-empty strings
+  // here (parseAuthoringPublicationIntentComment already rejects a falsy
+  // target/token), and JSON's quote/backslash escaping keeps the encoding
+  // unambiguous regardless of field content.
+  return parsed ? JSON.stringify([parsed.target, parsed.token]) : null;
 }
 /**
  * Classify `comments` for exactly one authoring marker `family` (#2935;
@@ -1749,6 +1758,14 @@ export function classifyAuthoringMarkerFamily(
   // fail-closed synthetic per-index key stands in for an unresolvable
   // identity, so such a candidate is never compared against -- and never
   // treated as superseding or superseded by -- any other candidate.
+  // #3374: the fallback key is a per-index Symbol() rather than a
+  // NUL-prefixed string -- a Symbol can never collide with a real
+  // resolved identity string (or with another index's own Symbol), so
+  // this stays exactly as unique as the prior per-index string while
+  // dropping the same class of NUL-collision risk resolveAuthoringMarker
+  // Identity's own join had. `groups` never escapes this function (only
+  // `.values()` is read below), so widening its key type has no
+  // consumer to update.
   const groups = new Map();
   for (const index of trustedMatchIndexes) {
     const identity = resolveAuthoringMarkerIdentity(
@@ -1756,7 +1773,7 @@ export function classifyAuthoringMarkerFamily(
       markerPrefix,
       family,
     );
-    const key = identity ?? `\0unresolved-${index}`;
+    const key = identity ?? Symbol(`unresolved-${index}`);
     const group = groups.get(key);
     if (group) {
       group.push(index);

@@ -1643,7 +1643,16 @@ only approval boundary.
   -- intentional, since the journal read path is the same paginated scan and
   is unaffected either way) and minimize (classifier `OUTDATED`) every prior
   comment from a trusted marker actor whose body is a byte-exact match of the
-  canonical rendered template for the same marker family.
+  canonical rendered template for the same marker family AND shares the
+  just-posted record's own continuity-chain identity (`target=` alone for
+  `authoring-owner`; `target=`+`token=` together for
+  `authoring-publication-intent`) -- on the journal-hosted
+  `authoring-publication-intent` family this excludes a different target's
+  record on the same shared journal, and a same-target record under a
+  different token, even though both byte-exact-match the family template;
+  this matches the mandatory Stage 2 sweep's own fixed classifier
+  (`classifyAuthoringMarkerFamily` in `marker-helpers.mts`) so the two
+  procedures never disagree about which prior record is eligible.
   `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
   `protocol-helpers.mts`) implements that check: it parses the candidate,
   re-renders the parsed fields with `renderAuthoringOwnerMarker` /
@@ -1857,7 +1866,8 @@ only approval boundary.
   -- covering the anchor's own owner-marker log and the journal's
   publication-intent log -- idempotent with every earlier target's own
   sweep above, since a comment either was already minimized or was not
-  yet the newest for its own target within the family either way. Then
+  yet the newest for its own continuity-chain identity within the family
+  either way. Then
   reuse the earliest
   valid current-owner/set/session `mode=release-complete`
   marker on the anchor, or append one and record its returned comment ID.

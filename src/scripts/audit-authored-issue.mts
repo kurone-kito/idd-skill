@@ -1794,10 +1794,13 @@ function checkAuthoringOwnerMarkerTrail(
 /**
  * Counts how many entries in `comments` are byte-exact canonical
  * renderings of `family` (#2896) and are not the single newest such match
- * -- mirroring the "skip the just-posted comment itself" rule the
- * hide-on-supersede sweep (`skills/issue-authoring/references/
- * contract.md`'s "Authoring hold and release" section) already applies.
- * "Newest" is the last matching entry in array order: callers are
+ * within its own continuity-chain identity group (#3167: `target=` alone
+ * for `authoring-owner`; `target=`+`token=` together for
+ * `authoring-publication-intent`) -- mirroring the "skip the just-posted
+ * comment itself" rule the hide-on-supersede sweep
+ * (`skills/issue-authoring/references/contract.md`'s "Authoring hold and
+ * release" section) already applies. "Newest" is the last matching entry
+ * in array order, within that same identity group: callers are
  * expected to supply comments in GitHub's deterministic
  * `created_at`-then-id order. This is the first **order-dependent**
  * comment-aware check in this file -- unlike
@@ -1847,10 +1850,11 @@ function checkAuthoringOwnerMarkerTrail(
  *
  * Delegates the actual classification to {@link classifyAuthoringMarkerFamily}
  * (`marker-helpers.mts`, extracted in #2935 alongside `sweep-authoring-
- * markers.mts`'s fetch-driven sweep, which needs the same newest-per-
- * family/trust/already-minimized rule but returns the eligible comments
- * themselves, not just a count) -- kept as a thin count-only wrapper here
- * so this module's public surface and every existing caller are
+ * markers.mts`'s fetch-driven sweep, which needs the same
+ * newest-per-(family, identity)-group/trust/already-minimized rule but
+ * returns the eligible comments themselves, not just a count) -- kept as
+ * a thin count-only wrapper here so this module's public surface and
+ * every existing caller are
  * unaffected.
  */
 function countEligibleSupersededMarkers(
