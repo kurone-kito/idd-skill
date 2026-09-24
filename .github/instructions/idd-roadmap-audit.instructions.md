@@ -206,7 +206,8 @@ Treat `stale` and `non-stale` in this section using the
   previously recorded and verified `{claim-id}`, continue with that same
   claim and do not post a new claim.
 - Re-validate that roadmap claim before every roadmap comment,
-  follow-up issue creation, body edit, label change, or close action.
+  follow-up issue creation or sub-issue link, body edit, label change,
+  or close action.
 - If the roadmap remains open and no PR branch will continue from the
   audit, release the roadmap-audit claim before returning to A2,
   stopping, or invoking A0-O (trigger (d)).
@@ -230,17 +231,52 @@ Apply one outcome:
   `idd-discover.instructions.md` (A1) so the parent roadmap can be
   re-evaluated from fresh state. No child task issue is claimed.
 - **Autonomous gaps found**: create or link follow-up issues using the
-  repository's issue-authoring rules, update the roadmap task list with
-  those links, and continue to A2 so the new work can be discovered.
-  Before creating a new issue, run the narrow A1.5 duplicate/reuse
-  check for that gap and link a matching existing issue instead. New
-  follow-up issue bodies must reference the roadmap (for example
-  `Refs #NNN`) so a later audit can rediscover them. After creating a
-  follow-up issue, update the roadmap task list with that link before
-  creating another. If the roadmap update fails or the roadmap claim is
-  lost after issue creation, create no more issues; report the created
-  issue link so the next audit can link it before considering
-  duplicates.
+  repository's issue-authoring rules, then continue to A2 so the new
+  work can be discovered. Before creating a new issue, run the narrow
+  A1.5 duplicate/reuse check for that gap and link a matching existing
+  issue instead.
+  1. First among the linking steps, once the duplicate/reuse check
+     above has decided create vs. reuse, link the follow-up as a
+     native GitHub sub-issue of the roadmap being mutated. Re-validate
+     the roadmap-audit claim immediately before this link call — the
+     duplicate check, and any issue-authoring creation step above, may
+     have taken long enough for the claim to have been lost. Create a
+     new follow-up only through the repository's issue-authoring
+     rules — never a bare `gh issue create` outside that flow
+     (`idd-pr-submit.instructions.md`'s D3 direct-creation rule). When
+     that flow's own creation call is `gh issue create`, pass
+     `--parent <number>` so the follow-up lands already linked. For a
+     reused existing follow-up, or when `--parent` was not applied to
+     a new one, run `gh issue edit <number> --add-sub-issue <n>`.
+     Only on an older `gh` without either flag, fall back to:
+
+     ```sh
+     gh api --method POST \
+       repos/{owner}/{repo}/issues/<number>/sub_issues \
+       -F sub_issue_id=<id>
+     ```
+
+     Here `<id>` is the integer REST id from
+     `gh api repos/{owner}/{repo}/issues/<n> --jq .id` — not the
+     GraphQL node id `gh issue view --json id` returns, which the
+     endpoint rejects with 422.
+  2. Then update the roadmap task list with that link before creating
+     another follow-up, as today.
+  3. If **both** the sub-issue link and the task-list edit fail,
+     create no more issues and report the follow-up issue link — the
+     newly created issue, or the reused existing one when the
+     duplicate/reuse check selected it. While the roadmap-audit claim
+     is still this session's, also route the gap through the existing
+     "Non-autonomous gaps found" outcome — comment with the decision,
+     naming the unlinked follow-up issue, apply the configured
+     needs-decision label, and stop before A2 for this roadmap exactly
+     as that outcome already does; if the claim was lost, skip that
+     outcome and only report. If just one of the two links fails,
+     report it and continue.
+  4. New follow-up issue bodies must still reference the roadmap (for
+     example `Refs #NNN`) as reader provenance (#1278); a later audit
+     now rediscovers the follow-up through the sub-issue link or the
+     task-list entry, not through this back-edge.
 - **Non-autonomous gaps found**: comment with the decision or human
   blocker, apply the configured needs-decision or blocked-by-human
   label when those labels exist, and do not close the roadmap. Stop
