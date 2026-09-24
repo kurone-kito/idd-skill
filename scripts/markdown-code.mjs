@@ -900,11 +900,12 @@ function indentationColumns(text, initialColumns = 0) {
   return columns;
 }
 /**
- * `true` iff `line` opens a genuine, CommonMark paragraph-interrupting
- * list-item marker (`-`, `+`, `*`, or an ordered `N.`/`N)` marker) at 0-3
- * leading columns, followed by required separating whitespace and item
- * content -- the same shape this module's own container/list-depth
- * tracking already relies on internally. Exported for
+ * Non-`null` iff `content` opens a genuine, CommonMark
+ * paragraph-interrupting list-item marker (`-`, `+`, `*`, or an ordered
+ * `N.`/`N)` marker) at 0-3 leading columns, followed by required
+ * separating whitespace and item content -- the same shape this module's
+ * own container/list-depth tracking already relies on internally.
+ * Exported for
  * `verify-import-mirror.mts`'s rule 3 (issue #3233): a list-item boundary
  * is significant Markdown block structure, not the kind of incidental
  * whitespace rule 3's prose-reflow tolerance already collapses -- reusing

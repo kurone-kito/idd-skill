@@ -638,6 +638,31 @@ test('normalizeProseWhitespace distinguishes a nested child item from a sibling 
   );
 });
 
+test('normalizeProseWhitespace does not yet distinguish a third-level nested item from being flattened into its parent (disclosed limitation: a marker nested 4+ raw columns is not recognized)', () => {
+  // A marker indented 4+ raw columns falls outside parseListItemMatch's
+  // 0-3-column recognition window (see its own doc comment in
+  // markdown-code.mts), so a grandchild item still normalizes the same
+  // whether it sits on its own line or is flattened onto its parent's
+  // line -- no worse than before this change, just not yet covered by
+  // it. Pinned here so a future change cannot silently regress this
+  // disclosed limitation further without a test noticing.
+  const nested = '- parent\n  - child\n    - grandchild\n';
+  const flattenedGrandchild = '- parent\n  - child - grandchild\n';
+  assert.equal(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattenedGrandchild),
+  );
+});
+
+test('normalizeProseWhitespace still separates a list from immediately preceding prose with no blank line between them, tolerating reflow on each side', () => {
+  const wrapped = 'Intro text.\n- item one\n- item two\n';
+  const rewrapped = 'Intro\ntext.\n- item one\n- item two\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
 test('rule 3 fail (issue #3233): flattening nested list-item structure into one line is a genuine mismatch, not a tolerated reflow', () => {
   const upstream = Buffer.from('- parent\n  - child\n');
   const target = Buffer.from('- parent - child\n');
