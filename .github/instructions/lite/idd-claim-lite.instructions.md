@@ -433,19 +433,17 @@ require `present: true` with no `malformed`; otherwise recover per
 `reacquired: true` both ends), else stop.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
-first, then `--fresh-claim-gate` if not `already_owned`):
+`{claim-id}` is always a collision — run `--fresh-claim-gate` directly
+(not pre-check (c)):
 
-- `already_owned` naming **your own** id: only the local lock drifted
-  (crash / worktree recreation) — you still own the GitHub claim.
-  Retry the lock with `--takeover` directly.
-- `claimable` / `stale-reclaimable`, or `already_owned` naming a
-  **different** id: the claim itself was lost. Post and verify a
-  fresh/takeover claim (pre-check (c) → Claim execution → Claim
-  verification), then retry the lock with `--takeover` — the local
-  lock's recorded id is now stale relative to the newly verified one.
-- `already-claimed` naming a **different** id: a live competitor holds
-  it — stop, the claim was lost.
+- `already-claimed` naming **your own** verified `{claim-id}`, with a
+  top-level `reason` that is not `released-claim-*`: only the local lock
+  drifted (crash / worktree recreation) — you still own the GitHub
+  claim. Retry the lock with `--takeover` directly.
+- Every other result — a `released-claim-*` reason, `already-claimed`
+  naming a different id, or `claimable`/`stale-reclaimable`: the claim
+  itself was lost. **STOP** and report; post no new claim from this
+  check. Re-entry is only through a fresh Resume or Discover pass.
 
 No release step (F4 `git worktree remove` deletes it).
 

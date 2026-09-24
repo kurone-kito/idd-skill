@@ -421,9 +421,13 @@ function toForcedHandoffEvidence(applied) {
  * when no active/released claim id exists. GitHub issue comments have no
  * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
  * closing it; the 24 h stale-takeover and same-second tie-break remain the
- * race-recovery backstop. A verified owner may use a retained released id
- * with the worktree-local lock takeover protocol; legacy releases remain
- * claim-id-less and require operator recovery before reuse.
+ * race-recovery backstop. A retained released claim's id is exposed here
+ * only for the A5(c) owner release-then-fresh retry -- by itself it never
+ * authorizes a worktree-local lock `--takeover`: the caller must also see
+ * a top-level `reason` that is not a `released-claim-*` reason
+ * (`idd-claim.instructions.md`'s Worktree-local lock file section).
+ * Legacy releases remain claim-id-less and require operator recovery
+ * before reuse.
  */
 export function evaluateFreshClaimGate(input, options = {}) {
   const routing = evaluateResumeClaimRouting(
@@ -440,9 +444,11 @@ export function evaluateFreshClaimGate(input, options = {}) {
   // caller would actually be taking over -- an `unreadable` result
   // (occupancy could not be inspected either way) must not expose either
   // the stale active claim's or the released claim's id as a trustworthy
-  // takeover target, since the claim instructions treat a matching
-  // winningClaimId as sufficient authorization for `claim-lock --takeover`
-  // without separately re-checking local_worktree.status (#3154 review).
+  // takeover target, since the claim instructions authorize
+  // `claim-lock --takeover` on a matching winningClaimId plus a
+  // top-level reason outside released-claim-*, without separately
+  // re-checking local_worktree.status (#3154 review; reason carve-out
+  // added by #3280).
   // This applies to `active_claim` too, not only the released-claim
   // fallback: a stale (not released) claim whose worktree probe comes back
   // unreadable still reaches `local_worktree_occupied` with `active_claim`

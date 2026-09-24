@@ -2245,18 +2245,21 @@ close.
   `--takeover` override — disambiguated by the optional `reacquired` /
   `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
   already holds the lock, or the existing path is malformed/unreadable —
-  retry with `--takeover` only after
-  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it: a
-  `claimable` verdict, a `stale-reclaimable` verdict, or an
+  retry with `--takeover` only when
+  `resume-claim-routing.mjs --fresh-claim-gate` returns an
   `already-claimed` verdict whose `winning_claim_id` matches a
-  `claim-id` the caller has already independently verified as its own).
-  A released new-format claim with a matching local worktree retains
-  `winning_claim_id` for owner release-then-fresh; unrelated sessions cannot
-  take over. Legacy releases have no claim id and require the §LWR
-  procedure (`docs/idd-resume-detail.md`).
-  A `holder`
-  snapshot of the previous occupant is reported on **both** a plain
-  `collision` and an authorized takeover, not only on takeover.
+  `claim-id` the caller has already independently verified as its own
+  **and** whose top-level `reason` is not a `released-claim-*` reason; a
+  `claimable` verdict, a `stale-reclaimable` verdict, or any
+  `released-claim-*` reason means the claim was lost instead). A
+  released new-format claim with a matching local worktree retains
+  `winning_claim_id` for owner release-then-fresh in pre-check (c), but
+  that retained, `released-claim-*`-tagged id never by itself authorizes
+  a lock takeover; unrelated sessions cannot take over. Legacy releases
+  have no claim id and require the §LWR procedure
+  (`docs/idd-resume-detail.md`). A `holder` snapshot of the previous
+  occupant is reported on **both** a plain `collision` and an authorized
+  takeover, not only on takeover.
 - `reacquired: true` also carries an optional `racedCreate: true` flag
   (#2917 review, Codex): set when this exact
   invocation's own first read found the lock absent and its own
