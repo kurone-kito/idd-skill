@@ -17,6 +17,7 @@ import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import {
   consumeDependencyContinuationRefLines,
   consumeDependencyReferenceList,
+  hasDependencyReferenceListStart,
 } from './dependency-grammar.mjs';
 import {
   buildRoadmapMarkerResolver,
@@ -644,7 +645,12 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   // would still fetch (and transitively expand) a target `visitIssue` itself
   // never visits, needlessly spending GitHub requests and rate-limit budget
   // on a subgraph the real traversal was designed to skip entirely
-  // (CodeRabbit, PR #2381).
+  // (CodeRabbit, PR #2381). #3284 (Copilot review, PR #3415): an
+  // `unresolvable-reference` sentinel is excluded the same way --
+  // `visitIssue` filters it into a diagnostic before it ever becomes a real
+  // edge, so its `target` (a digit parsed from a cross-repository token
+  // purely for the diagnostic, never a real local issue number) must not
+  // schedule an unrelated local issue for prefetch either.
   async function expandForPrefetch(issueNumber) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue) || issue.isPullRequest) {
@@ -652,7 +658,9 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     }
     return (await getReferences(issue))
       .filter(
-        (reference) => reference.relationship !== 'non-blocking-reference',
+        (reference) =>
+          reference.relationship !== 'non-blocking-reference' &&
+          reference.relationship !== 'unresolvable-reference',
       )
       .map((reference) => reference.target);
   }
@@ -2004,15 +2012,32 @@ export function extractKeywordReferences(body, options = {}) {
           // the same as a negated match.
           continue;
         }
-        // #3284 (Copilot review, PR #3415, round 2): the shared grammar's
-        // line pattern requires horizontal whitespace after the keyword
-        // (optionally after a colon) before it will even try to parse a
-        // ref-list -- `Blocked by#12`/`Blocked by:#12` (no gap) is not a
-        // dependency declaration there. Enforce the same gap here instead
-        // of trusting whatever `trimStart()`/`replace()` below would
-        // otherwise happily consume, so a near-miss spelling doesn't
-        // become a real edge here while the other two consumers reject it.
-        if (!/^:?[ \t]+/u.test(dependencyMaskedLine.slice(segmentStart))) {
+        // #3284 (Copilot review, PR #3415, rounds 2-3): the shared
+        // grammar's line pattern requires horizontal whitespace after the
+        // keyword (optionally after a colon immediately adjacent to the
+        // keyword, never after leading whitespace of its own) before it
+        // will even try to parse a ref-list -- `Blocked by#12`,
+        // `Blocked by:#12`, and `Blocked by : #12` (colon separated from
+        // the keyword by whitespace) are none of them a dependency
+        // declaration there. A hand-approximated gap check drifted from
+        // this twice already (round 2 required no gap at all; a
+        // same-round fix then accepted a bare `/^:?[ \t]+/` match, which
+        // says nothing about what follows the gap and so still let
+        // `Blocked by : #12` through), so this reuses
+        // `hasDependencyReferenceListStart` -- the exact token-start test
+        // the shared line pattern itself applies -- instead of
+        // hand-approximating a fourth time.
+        const dependencyGapMatch = dependencyMaskedLine
+          .slice(segmentStart)
+          .match(/^:?[ \t]+/u);
+        if (
+          !dependencyGapMatch ||
+          !hasDependencyReferenceListStart(
+            dependencyMaskedLine.slice(
+              segmentStart + dependencyGapMatch[0].length,
+            ),
+          )
+        ) {
           continue;
         }
         // The ordinary `segmentEnd` computed above is bounded by the next

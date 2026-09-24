@@ -399,6 +399,51 @@ test('#3284 review fix (round 2): a comment-only keyword later on the line must 
   ]);
 });
 
+test('#3284 review fix (round 3): a colon separated from the keyword by whitespace is not a valid gap', () => {
+  // The shared grammar's line pattern only tolerates a colon immediately
+  // adjacent to the keyword (`Blocked by:`), never one separated from it
+  // by whitespace of its own (`Blocked by :`) -- a bare `/^:?[ \t]+/`
+  // check on the post-keyword text can't tell these apart (it happily
+  // matches just the leading space and stops, having said nothing about
+  // what follows), so the graph now reuses
+  // `hasDependencyReferenceListStart` -- the exact token-start test the
+  // shared grammar itself applies -- immediately after the gap.
+  assert.deepEqual(extractKeywordReferences('Blocked by : #12'), []);
+});
+
+test('#3284 review fix (round 3): a cross-repository sentinel is excluded from the prefetch crawl', async () => {
+  // `expandForPrefetch` mapped every cached reference's `target` without
+  // filtering `unresolvable-reference` the way it already filters
+  // `non-blocking-reference` -- since an `unresolvable-reference`
+  // sentinel's `target` is a digit parsed from a cross-repository token
+  // purely for the diagnostic (never a real local issue number), the
+  // prefetch crawl would otherwise fetch and transitively expand an
+  // unrelated local issue that happens to share that digit.
+  const fetchedNumbers: number[] = [];
+  const issues = new Map<number, unknown>([
+    [
+      950,
+      roadmapIssue(
+        950,
+        '- [ ] [Upstream fix](https://github.com/other/repo/issues/951)',
+        'prefetch-cross-repo-roadmap',
+      ),
+    ],
+    [951, executionIssue(951, 'unrelated local issue sharing the digit')],
+  ]);
+
+  await enumerateRoadmapGraph(950, {
+    loadIssue: async (issueNumber) => {
+      fetchedNumbers.push(issueNumber);
+      return issues.get(issueNumber) ?? null;
+    },
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+
+  assert.deepEqual(fetchedNumbers, [950]);
+});
+
 test('extractKeywordReferences stops before incidental narrative mentions', () => {
   const body = `
 Refs #401; similar to #402

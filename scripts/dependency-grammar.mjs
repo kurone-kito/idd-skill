@@ -176,6 +176,26 @@ const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[
 // dependency declaration at all (e.g. a bare "Blocked by" with nothing
 // following it, or one whose only following text is unparseable prose).
 const TOKEN_START = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+)`;
+const TOKEN_START_RE = new RegExp(`^${TOKEN_START}`, 'u');
+/**
+ * `true` when `text` begins with a recognized reference token (`#N`,
+ * `owner/repo#N`, or a full GitHub issue URL) -- the same test
+ * {@link extractDependencyReferences}'s own line pattern applies via
+ * `TOKEN_START` to decide whether a keyword match opens a genuine
+ * dependency declaration at all. Exported so a caller with its own
+ * keyword-matching mechanism (`discover-roadmap-graph.mts`'s
+ * "anywhere on the line" search, unlike this module's line-anchored one)
+ * can apply the identical keyword-to-token-gap validity check instead of
+ * hand-approximating it -- a hand-approximated check drifted from this
+ * one three separate times (`#3284` review rounds 1-3: no required gap,
+ * `Blocked by#12`; a `discover-roadmap-graph.mts`-only bug that briefly
+ * fixed the missing-gap case with a check that itself accepted a stray
+ * `Blocked by : #12`, since a bare `/^:?[ \t]+/` match says nothing about
+ * what follows the gap).
+ */
+export function hasDependencyReferenceListStart(text) {
+  return TOKEN_START_RE.test(text);
+}
 /**
  * Extract every `keyword` (`Blocked by` / `Depends on`) dependency
  * reference from `body`, line-anchored: the keyword must open the line
