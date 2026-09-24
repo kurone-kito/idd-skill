@@ -336,6 +336,12 @@ export interface ProviderGraphqlReview {
   state: string;
   submittedAt: string | null;
   authorLogin: string;
+  /** kurone-kito/idd-skill#3259: the reviewed commit's oid (GraphQL
+   * `commit { oid }`), `null` when the connection omits it. Lets a caller
+   * (`merged-pr-feedback-sweep.mts`) bind a `review-ack:` marker to THIS
+   * specific review's own reviewed commit, mirroring
+   * `ProviderReviewClauseNode.commitId` below. */
+  commitOid: string | null;
 }
 
 /** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
