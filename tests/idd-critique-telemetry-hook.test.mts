@@ -1412,7 +1412,7 @@ test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog through a shell
 
 test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hung process, not just spawns with correct arguments (#2897 CI follow-up)', {
   skip: process.platform !== 'win32',
-}, async () => {
+}, async (t) => {
   // Complements the command-shape test above (critique finding on PR
   // #2897): that test can pass even when the watchdog silently no-ops,
   // since it only asserts what was spawned, never whether the target
@@ -1458,29 +1458,28 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
       }
       return child;
     }) as typeof spawn;
+    const startedAt = Date.now();
     await invokeCritiqueTelemetryHook(
       stayAliveCommand('idd-telemetry-hook-watchdog-real-kill'),
       samplePayload(),
       { timeoutMs: 1_000, spawnFn },
     );
     assert.ok(hookPid, 'expected the relay to have a real pid');
-    // Give the watchdog's own 1-second sleep plus its taskkill call room
-    // to complete -- generous but bounded, matching this file's other
-    // real-timing assertions.
-    await delay(4_000);
-    let stillAlive: boolean;
-    try {
-      const listing = execFileSync('tasklist', ['/FI', `PID eq ${hookPid}`], {
-        encoding: 'utf8',
-      });
-      stillAlive = listing.includes(String(hookPid));
-    } catch {
-      stillAlive = false;
+    // Poll instead of a single fixed-delay sample (kurone-kito/idd-
+    // skill#3217): under this repository's documented heavy
+    // concurrent-session scheduling load, a cold `powershell.exe` spawn
+    // plus its `taskkill` call can take longer than a single fixed wait
+    // accounts for, even when the watchdog works correctly. The 20s poll
+    // deadline is well inside this job's 15-minute `timeout-minutes`.
+    const gone = await waitUntilProcessGone(hookPid as number, 20_000);
+    const elapsedMs = Date.now() - startedAt;
+    if (gone) {
+      t.diagnostic(`win32 watchdog killed pid ${hookPid} after ${elapsedMs}ms`);
     }
-    assert.equal(
-      stillAlive,
-      false,
-      `expected the win32 watchdog to have killed pid ${hookPid}, but it is still running`,
+    assert.ok(
+      gone,
+      `expected the win32 watchdog to have killed pid ${hookPid} ` +
+        `(elapsed ${elapsedMs}ms since invocation), but it is still running`,
     );
   } finally {
     restore();
