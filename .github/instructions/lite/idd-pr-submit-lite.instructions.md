@@ -39,9 +39,10 @@ session already claimed and implemented. If the repository is
   lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
   (A pushed branch with **no** open PR yet is not this case: skip
-  straight to D2 (claim re-read, **pre-push-validate**, a normal push),
-  then D3. An open PR with `syncRecommendation: none` is not this case
-  either: run D3.5's check, then skip straight to D4.)
+  straight to D2 (claim re-read, **pre-push-validate**, then a normal
+  push — never force), then D3. An open PR with
+  `syncRecommendation: none` is not this case either: run D3.5's
+  check, then skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one

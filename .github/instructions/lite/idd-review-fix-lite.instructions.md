@@ -239,9 +239,9 @@ other GitHub side effect, confirm all of the following:
 9. This never delays/holds/interrupts an in-flight CI wait, or changes
    PATH A/B routing/triage timing — only push timing changes. A
    folded-in comment gets **no** disposition reply this round; it
-   keeps its PATH classification for the next E1/E4-E7 pass. E14
-   still requests a fresh primary-bot re-review after every push;
-   `review-watermark` still invalidates on this push.
+   keeps its PATH classification and individual E6 reply for
+   E1/E4-E7. E14 still requests a fresh primary-bot re-review each
+   push; `review-watermark` still invalidates too.
 10. Apply the pre-mutation guard immediately before this push.
 11. Re-apply the pre-mutation guard immediately before this edit —
     it is a separate mutation after the already-guarded push. If this

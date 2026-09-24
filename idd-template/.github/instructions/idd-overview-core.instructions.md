@@ -207,9 +207,9 @@ When in scope, run:
    sequence (each step must succeed before the next; `reacquired:
    true` required at both ends) -- else fails closed.
 
-**Wrong-branch commit recovery.** Cherry-pick onto the correct
-branch and restore it — never `git reset --hard` + force-push a
-shared branch. See
+**Wrong-branch recovery.** Cherry-pick onto the right branch and
+restore the contaminated one — never `git reset --hard` +
+force-push a pushed/shared branch;
 [full procedure](../../docs/idd-design-rationale.md#wrong-branch-commit-recovery-cherry-pick-never-force-push).
 
 Out of scope and explicitly **not** blocked:
@@ -283,8 +283,8 @@ commit before any push, rebase, or step needing a clean tree.
 recreated worktrees must not need manual cleanup or leave unexpected
 tracked changes.
 
-Judge a command-set run by its own exit status: run it without a
-pipe, or in Bash check `${PIPESTATUS[0]}` or `set -o pipefail` — a
+Judge a command-set run by exit status: run without a pipe, or in
+Bash check `${PIPESTATUS[0]}` or `set -o pipefail` — a
 `tail`/`head` filter can't prove success (#3139).
 
 **Tool availability**: run commands only when tools exist. For Node.js:
