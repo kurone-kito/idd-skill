@@ -4130,6 +4130,27 @@ test('isTrustEvidenceComment: true only for a trusted author with an unedited co
   );
 });
 
+test('isTrustEvidenceComment: normalizes a mixed-case author login before checking trust (C1 review)', () => {
+  // isTrustedAuthor typically checks a lowercased trusted-login set --
+  // an unnormalized mixed-case GitHub login must not silently read as
+  // untrusted.
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'Kurone-Kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: '  Kurone-Kito  ' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
 test('isTrustEvidenceComment: false for a trusted author whose comment was edited', () => {
   const isTrusted = (login: string) => login === 'kurone-kito';
   assert.equal(

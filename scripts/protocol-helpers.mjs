@@ -236,9 +236,14 @@ export function isTrustEvidenceComment(comment, isTrustedAuthor) {
   if (comment == null) {
     return false;
   }
-  const authorLogin = String(
-    comment.author?.login ?? comment.user?.login ?? '',
-  );
+  // Normalized the same way summarizeExternalCheckWaivers' own inline
+  // authorLogin computation is (#3246 C1 review): a caller-supplied
+  // isTrustedAuthor typically checks a lowercased trusted-login set, so
+  // an unnormalized mixed-case GitHub login would silently read as
+  // untrusted.
+  const authorLogin = String(comment.author?.login ?? comment.user?.login ?? '')
+    .trim()
+    .toLowerCase();
   return (
     isTrustedAuthor(authorLogin) &&
     classifyCommentEditState(comment) === 'unedited'

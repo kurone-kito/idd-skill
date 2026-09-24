@@ -26,6 +26,7 @@ import {
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -1483,6 +1484,125 @@ test('runExternalCheckWaiver never reuses an existing waiver whose comment was b
   );
   assert.equal(report?.applied, true);
   assert.equal(report?.reusedWaiver, undefined);
+});
+
+// --- #3246 (C1 review): fetchPrComments' own REST+GraphQL edit-state -------
+// --- merge, exercised through a real `gh` stub instead of the -------------
+// --- `options.prComments` injection every other test in this file uses ---
+
+test("runExternalCheckWaiver reuses an existing unedited waiver via fetchPrComments' real REST+GraphQL read, with no options.prComments override (kurone-kito/idd-skill#3246)", async () => {
+  const commentId = 5471539677;
+  const nodeId = 'IC_kwDOexample3246a';
+  const waiverBody = renderExternalCheckWaiverComment({
+    actor: 'kurone-kito',
+    agentId: 'claude-6043e89f',
+    claimId: 'claim-20260830T222316Z-2328',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'rate limit',
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const restComment = {
+    id: commentId,
+    node_id: nodeId,
+    html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${commentId}`,
+    body: waiverBody,
+    created_at: '2026-08-30T22:05:01Z',
+    user: { login: 'kurone-kito' },
+  };
+  const stubGhScript = `
+const args = process.argv.slice(2);
+function out(text) { process.stdout.write(text); process.exit(0); }
+if (args.includes('graphql')) {
+  const ids = [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === '-f' && args[i + 1].startsWith('ids[]=')) {
+      ids.push(args[i + 1].slice('ids[]='.length));
+    }
+  }
+  const nodes = ids.map((id) => ({ id, lastEditedAt: null }));
+  out(JSON.stringify({ data: { nodes } }));
+}
+if (args.includes('repos/kurone-kito/idd-skill/issues/2325/comments')) {
+  out(${JSON.stringify(JSON.stringify(restComment))} + '\\n');
+}
+if (args[0] === 'api' && args[1] === 'user') out(${JSON.stringify(JSON.stringify({ login: 'kurone-kito' }))});
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+  const restore = stubExecutable('gh', stubGhScript);
+  let postCalls = 0;
+  try {
+    const { report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          'rate limit',
+          '--expires-in',
+          'PT8H',
+          '--apply',
+          '--yes',
+          '--allow-closed-precondition',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+        issueNumber: 2328,
+      },
+      actor: 'kurone-kito',
+      authority: { known: true, permission: 'admin', roleName: 'admin' },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      // Deliberately no prComments override -- this is the point of the
+      // test: it exercises fetchPrComments' own real REST read plus its
+      // fetchLastEditedAtByNodeId GraphQL merge, not the injection seam.
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T22:30:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'should-not-be-reached' };
+      },
+    });
+
+    assert.equal(
+      postCalls,
+      0,
+      'a genuinely unedited existing waiver must be reused, not duplicated',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(report?.reusedWaiver?.commentId, String(commentId));
+  } finally {
+    restore();
+  }
 });
 
 test('the deadline reader rejects a schema-invalid advisoryWait section (#2328 review)', () => {

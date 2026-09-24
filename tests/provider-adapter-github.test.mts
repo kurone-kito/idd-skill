@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   createGithubProviderAdapter,
+  fetchLastEditedAtByNodeId,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
 
@@ -1570,6 +1571,55 @@ test('listWorkItemCommentsWithRetryAsync: includeEditState merges last_edited_at
     includeEditState: true,
   })) as Record<string, unknown>[];
   assert.equal(result[0].last_edited_at, null);
+});
+
+test('fetchLastEditedAtByNodeId: chunks a 101-id batch into two requests of 100 and 1 (C1 review)', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `IC_${i}`);
+  const calls: string[][] = [];
+  const ghTextStub = (args: string[]): string => {
+    calls.push(args);
+    const idArgs = args.filter((arg) => arg.startsWith('ids[]='));
+    return graphqlNodesLastEditedAtBody(
+      idArgs.map((arg) => ({
+        id: arg.slice('ids[]='.length),
+        lastEditedAt: null,
+      })),
+    );
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    nodeIds,
+  );
+  assert.equal(calls.length, 2, 'expected exactly two chunked requests');
+  assert.equal(
+    calls[0].filter((arg) => arg.startsWith('ids[]=')).length,
+    100,
+    'first request carries 100 ids',
+  );
+  assert.equal(
+    calls[1].filter((arg) => arg.startsWith('ids[]=')).length,
+    1,
+    'second request carries the remaining 1 id',
+  );
+  assert.equal(result.size, 101);
+  for (const id of nodeIds) {
+    assert.equal(
+      result.get(id),
+      null,
+      `missing/incorrect resolution for ${id}`,
+    );
+  }
+});
+
+test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
+  const ghTextStub = (): string => {
+    throw new Error('ghText must not be called for an empty id list');
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    [],
+  );
+  assert.equal(result.size, 0);
 });
 
 // ---------------------------------------------------------------------------
