@@ -72,14 +72,21 @@ on absence of candidates.
 
 Fetch the selected roadmap, its explicit child references, transitive
 descendants, GitHub sub-issue children, and linked or closing PR
-evidence for those child issues. Use the same outbound traversal
-sources as A2, including closed umbrella children, so open descendants
-cannot be hidden behind a closed direct child. This step must not use
-repo-wide search to add unrelated work to the roadmap. The only
-repo-wide search allowed in A1.5 is a narrow duplicate/reuse check for
-a specific autonomous gap before creating a follow-up issue; use those
-results only to link existing gap work or avoid creating a duplicate,
-not to widen A2 candidates.
+evidence for those child issues. For each closed child or descendant,
+also fetch its REST close reason, for example
+`gh api repos/<owner>/<repo>/issues/<n> --jq .state_reason` (lowercase
+`not_planned` / `duplicate` / `completed` — prefer this REST form over
+`gh issue view --json stateReason`, which returns the same value
+SCREAMING_SNAKE_CASE), so the completion-audit evidence below can name
+a child closed as not planned or a duplicate instead of reporting it
+as completed. Use the same outbound traversal sources as A2, including
+closed umbrella children, so open descendants cannot be hidden behind
+a closed direct child. This step must not use repo-wide search to add
+unrelated work to the roadmap. The only repo-wide search allowed in
+A1.5 is a narrow duplicate/reuse check for a specific autonomous gap
+before creating a follow-up issue; use those results only to link
+existing gap work or avoid creating a duplicate, not to widen A2
+candidates.
 
 When the selected roadmap graph includes descendant issues that are
 themselves roadmap nodes — descendants carrying an
@@ -226,7 +233,7 @@ Apply one outcome:
   into an undifferentiated "closed or otherwise complete" count. In
   recursive hierarchies, this outcome applies only when the selected
   roadmap is the deepest remaining open roadmap on its path whose
-  descendants are all complete. After closing a nested roadmap,
+  descendants are all closed. After closing a nested roadmap,
   release that roadmap-audit claim, re-fetch the ancestor graph, and
   return to `idd-discover.instructions.md` (A1) so the parent roadmap
   can be re-evaluated from fresh state. No child task issue is

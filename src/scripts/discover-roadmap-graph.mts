@@ -2966,7 +2966,13 @@ function normalizeIssue(issue: {
 }
 
 /**
- * Read the REST `state_reason` field verbatim. Returns null for a
+ * Read the REST `state_reason` field verbatim -- kept lowercase (unlike
+ * `state`, which is upper-cased), matching every REST issue loader this
+ * module actually uses (`provider-adapter-github.mts`'s REST fetch; the
+ * lowercase `'completed'` literal this file compares it against). A future
+ * GraphQL-sourced loader would need its own SCREAMING_SNAKE_CASE
+ * normalization before reaching this function -- GraphQL's `stateReason`
+ * enum is upper-cased, unlike REST's. Returns null for a
  * missing/non-string/empty value -- the caller decides, once, at report-node
  * construction, whether a `CLOSED` node with a non-`completed` reason
  * actually exposes it (#3326).
