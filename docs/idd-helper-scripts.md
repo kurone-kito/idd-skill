@@ -4593,7 +4593,10 @@ same as `AW4`/`AW5`.
 
 Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
 (issue #3327), which quote only the message fragment each acceptance
-check greps for and point here for the rest.
+check greps for and point here for the rest. Step 4 fast-forwards
+`{development-branch}` before step 5 removes the issue worktree so
+WorkTrunk's merge-status check sees the branch as merged instead of
+reporting `branch_outcome: retained_unmerged` (issue #2331).
 
 - **`development-branch-in-use`** (step 4): the switch fails because
   `{development-branch}` is checked out in a sibling worktree —
@@ -4620,11 +4623,14 @@ check greps for and point here for the rest.
   `human_merge`), since the squash commit is not an ancestor-of match
   for the branch's own commits even though nothing is lost. Compare
   `git rev-parse <branch-name>` against the merged PR's own head via
-  `gh pr view {pr-number} --json state,headRefOid`; `git branch -vv`
-  showing `[origin/<branch-name>: gone]` is the same signal. Equal
-  tips with a `MERGED` PR mean the branch holds nothing beyond what
-  already merged, so F4 keeps it (never `-D`) and tells the operator
-  they may delete it by hand; unequal tips mean genuinely unmerged
+  `gh pr view {pr-number} --json state,headRefOid` — the only check
+  that actually proves this; `git branch -vv` showing
+  `[origin/<branch-name>: gone]` is a corroborating symptom (the
+  upstream ref was deleted), never a substitute, since an unmerged or
+  closed PR can show the same marker. Equal tips with a `MERGED` PR
+  mean the branch holds nothing beyond what already merged, so F4
+  keeps it (never `-D`) and tells the operator they may delete it by
+  hand; unequal tips mean genuinely unmerged
   local work, so F4 holds instead of discarding it.
 
 The two step 4 holds reuse the `primary-worktree-dirty` resume rule
@@ -4633,7 +4639,10 @@ The two step 4 holds reuse the `primary-worktree-dirty` resume rule
 bullet already succeeded, so its resume is narrower: once resolved,
 redo only the `git branch -d` bullet and continue through step 7 —
 re-running step 4 or the worktree-removal bullet is unnecessary and
-the latter would fail against the already-removed path.
+the latter would fail against the already-removed path. If step 6
+(remote branch delete) already ran before this hold fired, redoing it
+on resume is a harmless no-op (or a "ref does not exist" error), never
+a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 

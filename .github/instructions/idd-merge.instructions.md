@@ -514,9 +514,9 @@ Before any mutating action in F3, apply the
    Two more failures (stop before step 5; see
    [detail](../../docs/idd-helper-scripts.md#f4-branch-failure-routes)):
 
-   - `already used by worktree` → `development-branch-in-use`; name
-     the path, don't touch it.
-   - `Not possible to fast-forward, aborting.` →
+   - `already used by worktree` → hold as `development-branch-in-use`;
+     name the path, don't touch it.
+   - `Not possible to fast-forward, aborting.` → hold as
      `development-branch-diverged`; don't reset/rebase.
 
    Off-default `{development-branch}`: `git switch <default-branch>`
