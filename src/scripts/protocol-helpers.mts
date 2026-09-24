@@ -2444,7 +2444,6 @@ export function hasFreshDisposition(
   thread: ThreadLike,
   options: {
     isDispositionAuthor?: (login: string) => boolean;
-    isIddOriginatedBody?: (body: string) => boolean;
   } = {},
 ): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
@@ -2453,18 +2452,20 @@ export function hasFreshDisposition(
   // Callers that require IDD-only dispositions (e.g., audit-pr-cleanup) should pass:
   //   { isDispositionAuthor: (login) => iddAgentLogins.has(login) }
   // This design trades stricter default behavior for backward compatibility with utility functions.
-  // `isIddOriginatedBody` (#2139) additionally accepts a stamped disposition
-  // regardless of author login: the #2135 review-reply stamp is utterance
-  // identity, so a stamped `**Accepted**` still clears an advisory thread
-  // even when the same trusted account also posts unmarked human prose.
+  // #2135's own design intent is that a spoofed/copied review-reply stamp
+  // "only makes the gate stricter for that comment" -- the stamp is
+  // utterance identity among already-trusted accounts (#2139), never an
+  // independent trust signal on its own. Honoring it regardless of author
+  // login (as an earlier revision of #2139 did) let an untrusted account's
+  // stamped `**Accepted**`/`**Rejected**` reply satisfy this gate (#3244).
+  // The stamp therefore only ever narrows who counts as an IDD disposition
+  // author -- it can never widen `dispositionAuthorPredicate` -- so honoring
+  // it is folded into that same predicate check below rather than kept as a
+  // separate, author-blind fallback.
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
-  const originatedBodyPredicate =
-    typeof options.isIddOriginatedBody === 'function'
-      ? options.isIddOriginatedBody
-      : null;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -2484,10 +2485,7 @@ export function hasFreshDisposition(
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (dispositionAuthorPredicate(authorLogin)) {
-      return true;
-    }
-    return Boolean(originatedBodyPredicate?.(String(comment.body ?? '')));
+    return dispositionAuthorPredicate(authorLogin);
   };
   const latestFeedbackAt = maxIsoTimestamp(
     comments
@@ -6476,8 +6474,6 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
-          isIddOriginatedBody: (body) =>
-            isIddOriginatedReply(body, markerPrefix),
         })
       ) {
         return null;
