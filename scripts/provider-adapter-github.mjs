@@ -1239,6 +1239,13 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         apiArgs.push('-f', `after=${after}`);
       }
       const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      // #3276 (Copilot review, PR #3386): a top-level GraphQL `errors` entry
+      // can accompany a partial `data` object that still looks like a valid
+      // (even if empty) timelineItems connection -- check errors first, the
+      // same choke point every other GraphQL-backed method in this file
+      // uses, so a failed lookup never falls through to the connection
+      // validation below as though it had succeeded.
+      assertNoGraphqlErrors(parsed, 'getConnectedPullRequestEventsPage');
       const connection = parsed.data?.repository?.issue?.timelineItems;
       // #3276 (Copilot review, PR #3386): a present `timelineItems`
       // connection with a missing/malformed `nodes` or `pageInfo` field is

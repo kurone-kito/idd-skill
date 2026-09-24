@@ -980,6 +980,39 @@ test('getConnectedPullRequestEventsPage normalizes a non-string endCursor to nul
   });
 });
 
+// #3276 round 3 (Copilot review, PR #3386, High severity): a top-level
+// GraphQL `errors` entry can accompany a partial `data` object that still
+// looks like a valid connection -- this method must check `errors` first,
+// the same choke point every other GraphQL-backed method in this file uses
+// (`assertNoGraphqlErrors`), so a failed lookup never falls through to the
+// connection validation as though it had succeeded.
+test('getConnectedPullRequestEventsPage throws on a top-level GraphQL errors entry even with a valid-looking connection', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+          errors: [{ message: 'simulated partial-failure GraphQL error' }],
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /getConnectedPullRequestEventsPage failed: simulated partial-failure GraphQL error/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
 // no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's
