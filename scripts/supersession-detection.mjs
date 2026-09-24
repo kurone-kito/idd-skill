@@ -253,6 +253,11 @@ export function findStrayCommitCloses(commits, expectedIssueNumbers) {
  *   or `commits.length >= 250` (the endpoint's documented cap, which
  *   pagination cannot get past) fails closed to `"unavailable"` --
  *   completeness cannot be shown.
+ * - `closingIssuesReferences` must itself be an array to count as verified
+ *   evidence -- a missing, `null`, or otherwise malformed value also fails
+ *   closed to `"unavailable"` rather than silently coercing to `[]` (Copilot
+ *   review, PR #3353: the coerced-empty shape let a `--claimless` run,
+ *   whose `expected` is itself `[]`, report `"match"` on an unread field).
  * - Each `closingIssuesReferences` entry is compared by repository as well
  *   as number when it carries a `repository` field (the real
  *   `gh pr view --json closingIssuesReferences` shape, confirmed
@@ -295,11 +300,26 @@ export function computeClosingSetEvidence(options) {
       strayCommitCloses: [],
     };
   }
+  // Copilot review, PR #3353: a non-array closingIssuesReferences (missing,
+  // null, or otherwise malformed) previously coerced to `[]` here, silently
+  // treating "not verified" as "verified empty" -- under `--claimless`
+  // (`expected: []`), that let a genuinely unread closing-reference field
+  // report `status: "match"` instead of failing closed. `[]` is only ever
+  // treated as real evidence once it has actually been confirmed to be an
+  // array.
+  if (!Array.isArray(options.closingIssuesReferences)) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
   const ownerLower = options.owner.toLowerCase();
   const repoLower = options.repo.toLowerCase();
-  const rawRefs = Array.isArray(options.closingIssuesReferences)
-    ? options.closingIssuesReferences
-    : [];
+  const rawRefs = options.closingIssuesReferences;
   const expectedSet = new Set(expected);
   const actual = [];
   const sameRepoNumbers = new Set();

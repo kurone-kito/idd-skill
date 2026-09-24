@@ -10297,6 +10297,27 @@ test('closingSet: an empty/missing baseRefName fails closed to unavailable, neve
   assert.match(blockers[0].detail, /unavailable/);
 });
 
+// Copilot review, PR #3353: a missing/non-array closingIssuesReferences
+// previously coerced to `[]`, silently treating "not verified" as "verified
+// empty" -- under --claimless (expected: []), that let a genuinely unread
+// closing-reference field report "match" instead of failing closed. Each
+// case below pairs a non-array value with an empty `expected` (the
+// --claimless shape) specifically because that is the one combination a
+// naive `[]` coercion cannot be told apart from real, confirmed evidence.
+for (const malformed of [null, undefined, 'not-an-array', 42, { number: 7 }]) {
+  test(`closingSet: closingIssuesReferences ${JSON.stringify(malformed)} fails closed to unavailable, never a false "match" on unread evidence`, () => {
+    const evidence = computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      expected: [],
+      closingIssuesReferences: malformed,
+    });
+    assert.equal(evidence.status, 'unavailable');
+    const blockers = closingSetBlockers(evidence);
+    assert.equal(blockers.length, 1);
+    assert.match(blockers[0].detail, /unavailable/);
+  });
+}
+
 test('closingSet: a failed commit-list read (null) -> unavailable, blocker', () => {
   const evidence = computeClosingSetEvidence({
     ...baseClosingSetOptions(),
