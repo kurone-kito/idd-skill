@@ -1305,8 +1305,10 @@ The adopted helper boundaries are intentionally narrow:
   (dry-run); add `--body "<disposition>" --apply --claim-issue <n>
   --claim-id <id>` to post the reply and resolve the thread. Optional
   `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`. For a
-  claimless PR (`closingIssuesReferences` empty), pass `--claimless`
-  instead of `--claim-issue`/`--claim-id` (#2616, mirrors
+  claimless PR (`closingIssuesReferences` empty), or one carrying a
+  valid out-of-loop marker (kurone-kito/idd-skill#3328 -- see the
+  [Out-of-loop marker contract](#out-of-loop-marker-contract)), pass
+  `--claimless` instead of `--claim-issue`/`--claim-id` (#2616, mirrors
   `pre-merge-readiness.mjs`'s `--claimless`, #2017).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
@@ -1334,7 +1336,8 @@ The adopted helper boundaries are intentionally narrow:
   resolve (scoped to trusted marker authors, aborting on a targeting
   `forced-handoff`), and binds the mutation to the claimed PR by requiring
   the active claim's branch to equal the PR's head branch. `--claimless`
-  itself fails closed against a non-empty `closingIssuesReferences`.
+  itself fails closed against a non-empty `closingIssuesReferences`
+  unless a valid out-of-loop marker applies (kurone-kito/idd-skill#3328).
   GraphQL `errors` fail fast rather than masquerading as a missing thread,
   and a partial apply (reply posted, resolve not confirmed) still reports
   the posted `replyId`.
@@ -1860,6 +1863,109 @@ described above. For the residual case, the
 this repository already configures is the documented human off-ramp
 for precisely this situation, not a gap this mechanism itself needs to
 close.
+
+### Out-of-loop marker contract
+
+kurone-kito/idd-skill#3328 unifies the two definitions of "does this PR
+run outside the IDD claim loop" that `pre-merge-readiness.mjs`'s
+`--claimless` (#2017) and `resolve-review-thread.mjs`'s
+`isClaimlessEligible` (#2616) each used to answer independently: a PR
+with a closing issue reference, but no resolvable active claim on it,
+was refused outright by both, wrongly blocking the documented
+issue-mediated bootstrap PR
+(`idd-template/docs/onboarding/issue-mediated-bootstrap.md`), which
+closes its bootstrap issue but is never claimed. A Groom-hearing
+ruling recorded a maintainer decision: recognize the bootstrap PR as
+out-of-loop-authorized only with explicit, dedicated marker evidence,
+never merely an absent claim.
+
+`classifyPrLoopMembership()` (`protocol-helpers.mts`) is the single
+shared classifier both consumers now call. It returns one of three
+verdicts:
+
+- `in-loop` -- an ordinary claimed-loop PR (or a fail-closed default:
+  unreadable closing references, or an unresolvable/active claim on any
+  closing issue).
+- `out-of-loop-claimless` -- the PR has no closing issue references at
+  all (#2017, unchanged).
+- `out-of-loop-authorized` -- the PR has closing references, none of
+  them carries a resolvable active claim, and the PR's own comments
+  include a valid marker (below).
+
+The marker itself, posted as a PR conversation comment:
+
+```md
+<!-- idd-out-of-loop: {agent-id} pr:{pr-number} reason:bootstrap at:{iso8601} -->
+
+_{agent-id}: this PR runs outside the IDD claim loop -- IDD automation marker. Do not edit._
+```
+
+A marker is **valid** only when **all** of the following hold -- any
+other case leaves the PR `in-loop`:
+
+- Its first line matches the grammar exactly, **including
+  `reason:bootstrap`** -- the grammar accepts no other `reason:` token;
+  the ruling authorizes this marker only for the documented bootstrap
+  PR, not as a general-purpose claim-loop opt-out.
+- It is a comment on **that PR's own** conversation (`pr:` equals the
+  PR number the classifier is evaluating).
+- Its GitHub author login is in the caller's already-resolved trusted
+  marker login set -- never the embedded `{agent-id}` text, which is
+  untrusted marker-body content like any other field.
+- It passes `isTrustEvidenceComment` (`protocol-helpers.mts`,
+  kurone-kito/idd-skill#3246): trusted author **and** edit state
+  `unedited`. An edited comment, or one whose edit state is unknown
+  because the caller never resolved it (`lastEditedAt` absent), is
+  invalid -- fail closed, the same rule
+  `idd-external-check-waiver` evidence above already applies.
+
+Post it with `post-idd-marker --type out-of-loop --target pr <n>
+--agent-id <id> --timestamp <iso8601> --apply`. `pr:` is derived from
+`--target pr <n>`'s own positional number, never a separately typed
+flag -- letting the operator type it twice would risk it silently
+disagreeing with the actual posting destination -- and `reason` is
+always the literal `bootstrap` the renderer hardcodes, never
+user-supplied.
+
+`MARKER_HIDE_POLICY` (`marker-helpers.mts`) classifies
+`<!-- idd-out-of-loop:` `excluded` -- it is live authorization
+evidence re-read on every `--claimless` call, like the
+`idd-external-check-waiver` marker above, so F4's generic
+hide-at-post-time sweep must never minimize it as `OUTDATED`. It is
+deliberately absent from `IDD_AGENT_DERIVED_MARKERS` for the same
+reason `idd-external-check-waiver` is: this is authorization evidence,
+not necessarily an IDD-agent-authored operational comment.
+
+**Widened `--claimless` eligibility.** Both consumers accept
+`out-of-loop-claimless` and `out-of-loop-authorized`; only `in-loop`
+still fails closed:
+
+- `pre-merge-readiness.mjs --claimless`, when the PR has closing
+  references, now reads each closing issue's comments to resolve its
+  claim state (`present`, `none`, or `unknown` on any read failure --
+  `unknown` fails closed the same way `present` does), resolves the
+  trusted marker login set the same way its claimed path does, and
+  reads the PR's own comments with edit state
+  (`listWorkItemComments(..., { includeEditState: true })`) before
+  classifying. An `out-of-loop-authorized` PR carries no claim-derived
+  deliberate closing set, so the `closingSet` gate's expected set
+  becomes the PR's own live `closingIssuesReferences` (same-repo
+  numbers only) instead of empty for that one path --
+  `extractSameRepoClosingIssueNumbers()` (`protocol-helpers.mts`)
+  shares the repository-matching rule `computeClosingSetEvidence`
+  (`supersession-detection.mts`) already implements, so neither
+  consumer re-derives it. `missing` is then structurally empty on that
+  path: the marker authorizes exactly the PR's own declared closes.
+- `resolve-review-thread.mjs`'s `isClaimlessEligible` keeps its
+  zero-closing-refs fast path exactly as `#2616` designed it -- no
+  viewer or trust resolution at all, preserving the guarantee for a
+  credential that cannot resolve a viewer identity. A non-empty
+  closing-reference set resolves trusted logins the same way its
+  claimed path does (falling back to this session's own viewer login)
+  before classifying; any failure on that branch -- an unresolvable
+  viewer identity, a closing-issue or PR-comment read failure -- fails
+  closed to "not eligible" rather than a partial read manufacturing a
+  false accept.
 
 ### Provider health helper
 
@@ -3386,9 +3492,12 @@ reflexively as any other CLI option.
   compatible), and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
   `--claimless` (#2017) is the no-issue alternative: it cannot combine
-  with `--claim-issue` or `--claim-id`, and it is honored only when the
-  PR's `closingIssuesReferences` is empty (otherwise fail closed and
-  pass `--claim-issue`). It skips claim fetch/revalidation and emits
+  with `--claim-issue` or `--claim-id`, and it is honored when the PR's
+  `closingIssuesReferences` is empty, or (kurone-kito/idd-skill#3328)
+  when the PR carries a valid, trusted, unedited out-of-loop marker --
+  see the [Out-of-loop marker contract](#out-of-loop-marker-contract)
+  above (otherwise fail closed and pass `--claim-issue`). It skips
+  claim fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
   `idd-merge-execute` also requires `--claim-id` (or the deprecated
