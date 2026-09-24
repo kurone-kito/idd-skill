@@ -229,10 +229,10 @@ accepts `--with-claim-state` (plus `--current-claim-id`), mirroring
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues, identified
-by its `idd-skill-roadmap-id` marker or by recognizing it as
-an umbrella issue. Under `roadmap` or `orphan-first` scope, report and
-abort if no roadmap issue exists. Under `roadmap-first` scope, this is
-**trigger (c)**: fall back to **A0-O** instead.
+by its `idd-skill-roadmap-id` marker. Under `roadmap` or
+`orphan-first` scope, report and abort if no roadmap issue exists. Under
+`roadmap-first` scope, this is **trigger (c)**: fall back to **A0-O**
+instead.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
