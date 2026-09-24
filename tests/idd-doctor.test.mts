@@ -346,6 +346,31 @@ test('roadmap-identity consistency: honors a non-default roadmapLabelName', () =
   assert.deepEqual(stockNoLongerMatches.warnings, []);
 });
 
+test('roadmap-identity consistency: matches the configured label name case-insensitively (Copilot review, PR #3362)', () => {
+  // GitHub label names are case-insensitive; a differently-cased label on
+  // the issue still counts as the configured roadmap label.
+  const differentIssueCase = evaluateRoadmapIdentityConsistency([
+    { number: 38, body: 'no marker', labels: [{ name: 'Roadmap' }] },
+  ]);
+  assert.equal(differentIssueCase.warnings.length, 1);
+  assert.match(
+    differentIssueCase.warnings[0],
+    /issue #38 carries the roadmap label/,
+  );
+
+  // A differently-cased configured roadmapLabelName also still matches.
+  const differentConfigCase = evaluateRoadmapIdentityConsistency(
+    [{ number: 39, body: 'no marker', labels: [{ name: 'epic' }] }],
+    { roadmapLabelName: 'Epic' },
+  );
+  assert.equal(differentConfigCase.warnings.length, 1);
+  // The warning text echoes the configured (un-normalized) spelling.
+  assert.match(
+    differentConfigCase.warnings[0],
+    /issue #39 carries the Epic label/,
+  );
+});
+
 test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName from the canonical config (idd-skill#2028)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-suitability-policy-'));
   try {

@@ -263,14 +263,21 @@ export function evaluateRoadmapIdentityConsistency(issues, options = {}) {
     options.roadmapLabelName.length > 0
       ? options.roadmapLabelName
       : POLICY_DEFAULTS.labels.roadmapLabelName;
+  // GitHub label names are case-insensitive, so compare folded copies
+  // (trimmed + lowercased) -- matching discover-roadmap-graph.mts's own
+  // normalizeLabels/normalizeLabelName treatment of the same label. The
+  // un-normalized roadmapLabelName is still used in the warning text
+  // below, so the message echoes the configured spelling.
+  const normalizedRoadmapLabelName = roadmapLabelName.trim().toLowerCase();
   const warnings = [];
   for (const issue of Array.isArray(issues) ? issues : []) {
     const labelNames = new Set(
-      (issue?.labels ?? []).map((label) =>
-        typeof label === 'string' ? label : (label?.name ?? ''),
-      ),
+      (issue?.labels ?? []).map((label) => {
+        const name = typeof label === 'string' ? label : (label?.name ?? '');
+        return String(name).trim().toLowerCase();
+      }),
     );
-    if (!labelNames.has(roadmapLabelName)) {
+    if (!labelNames.has(normalizedRoadmapLabelName)) {
       continue;
     }
     if (extractRoadmapMarkerId(issue?.body, prefix)) {
