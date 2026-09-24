@@ -185,6 +185,7 @@ import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   findMarkdownCodeRanges,
+  indentationColumns,
   isInterruptingListMarker,
   parseListItemMatch,
 } from './markdown-code.mjs';
@@ -444,20 +445,32 @@ function normalizeProseSegment(content) {
  *
  * Reuses `markdown-code.mts`'s own already-reviewed per-line list-item
  * detector ({@link parseListItemMatch}) rather than hand-rolling a
- * second, narrower block parser here. A line matching it only counts as a
- * genuine boundary when either nothing is currently open (the start of
- * this paragraph) or the current chunk is ALREADY a list item -- in both
- * cases any marker (any ordered number, any bullet char) genuinely opens
- * or continues a list; when the current chunk is instead still plain
- * paragraph text, only a {@link isInterruptingListMarker} hit counts,
- * exactly mirroring CommonMark's own paragraph-interruption rule (only a
- * bullet, or an ordered marker numbered exactly `1`, can interrupt an
- * open paragraph -- `2.`/`5)`/etc. mid-paragraph is ordinary continuation
- * text, not a new list item). Without this gate, a line like `5. more
- * text` appearing after ordinary prose with no blank line before it would
- * be misread as a list-item boundary even though CommonMark reads it as
- * plain paragraph continuation, turning a legitimate reflow (moving `5.`
- * across a line-wrap) into a false `content-mismatch`.
+ * second, narrower block parser here. A line matching it only counts as
+ * a genuine boundary in one of three cases: (1) nothing is currently
+ * open (the start of this paragraph) -- any marker (any ordered number,
+ * any bullet char) genuinely opens a list here; (2) the current chunk is
+ * a list item AND the new marker's own indent is SHALLOWER than that
+ * item's content indent -- the new line falls outside that item's
+ * content zone entirely, so the item (and the list it belongs to) has
+ * already ended, and unrestricted parsing resumes where, again, any
+ * marker opens a fresh list; or (3) the marker itself satisfies
+ * {@link isInterruptingListMarker}, CommonMark's own restriction on which
+ * markers may interrupt an ALREADY-OPEN paragraph (only a bullet, or an
+ * ordered marker numbered exactly `1`) -- this is the only route left
+ * once case (2) doesn't apply, whether the currently open paragraph is
+ * plain prose or is itself INSIDE a list item's own content zone: a
+ * marker at or past that item's own content indent is still trying to
+ * interrupt that item's own open paragraph, and CommonMark's
+ * interruption restriction applies there exactly as it does at the top
+ * level (verified against `gh api /markdown`: `- costs about\n  5. that
+ * is fine\n` renders as ONE list item with `5. that is fine` as literal
+ * continuation text, not a nested ordered list -- Copilot review, PR
+ * #3417). Without case (3)'s gate, a line like `5. more text` appearing
+ * after ordinary prose (case 3 with no list open at all) OR nested
+ * inside a still-open list item's own content (case 3 applying
+ * recursively) would be misread as a list-item boundary even though
+ * CommonMark reads it as continuation text, turning a legitimate reflow
+ * into a false `content-mismatch`.
  *
  * A boundary line starts a fresh chunk carrying that item's raw
  * `markerIndent` + `marker` verbatim; the marker's own trailing
@@ -468,16 +481,20 @@ function normalizeProseSegment(content) {
  * reflow -- rewrapping a list item's own continuation lines, or plain
  * prose with no list items at all -- still collapses exactly as before.
  *
- * `markerIndent` is compared verbatim (raw column count), not
- * canonicalized to a CommonMark nesting LEVEL: a 2-space- and a
- * 3-space-indented child under the same `- ` parent both render as the
- * same single nesting level, but this rule deliberately still treats
- * their differing raw indent as a genuine difference rather than folding
- * them together. That is a conservative choice, not a logical necessity
- * of correctness -- consistent with rule 3's existing default of failing
- * toward `content-mismatch` (a false rejection, the safe direction for a
- * fidelity check like this one) whenever tolerance is not clearly
- * warranted, rather than risking a false pass.
+ * `markerIndent` is compared verbatim (raw column count) only when
+ * deciding whether a line is a genuine boundary at all (case 2 above);
+ * once a boundary IS established, its own indent is then kept verbatim
+ * in the emitted prefix rather than canonicalized to a CommonMark
+ * nesting LEVEL -- a 2-space- and a 3-space-indented child under the
+ * same `- ` parent both render as the same single nesting level, but
+ * this rule deliberately still treats their differing raw indent as a
+ * genuine difference once each is already recognized as its own item,
+ * rather than folding them together. That is a conservative choice, not
+ * a logical necessity of correctness -- consistent with rule 3's
+ * existing default of failing toward `content-mismatch` (a false
+ * rejection, the safe direction for a fidelity check like this one)
+ * whenever tolerance is not clearly warranted, rather than risking a
+ * false pass.
  *
  * Deliberately narrower than full CommonMark list-content-zone tracking
  * (`markdown-code.mts`'s own `findEnclosingListContentZone`, built for a
@@ -496,6 +513,7 @@ function normalizeParagraphPreservingListStructure(paragraph) {
   const chunks = [];
   let currentPrefix = '';
   let currentContentLines = [];
+  let currentChunkContentIndent = null;
   let hasCurrentChunk = false;
   const flushCurrentChunk = () => {
     if (!hasCurrentChunk) {
@@ -511,21 +529,27 @@ function normalizeParagraphPreservingListStructure(paragraph) {
   };
   for (const line of lines) {
     const listItem = parseListItemMatch(line);
-    const isCurrentChunkAList = hasCurrentChunk && currentPrefix !== '';
+    const exitsCurrentListZone =
+      listItem !== null &&
+      currentChunkContentIndent !== null &&
+      indentationColumns(listItem.markerIndent) < currentChunkContentIndent;
     const isGenuineListBoundary =
       listItem !== null &&
       (!hasCurrentChunk ||
-        isCurrentChunkAList ||
+        exitsCurrentListZone ||
         isInterruptingListMarker(listItem.marker));
     if (isGenuineListBoundary && listItem !== null) {
       flushCurrentChunk();
       currentPrefix = `${listItem.markerIndent}${listItem.marker} `;
+      currentChunkContentIndent =
+        indentationColumns(listItem.markerIndent) + listItem.marker.length + 1;
       currentContentLines = [listItem.content];
       hasCurrentChunk = true;
     } else if (hasCurrentChunk) {
       currentContentLines.push(line);
     } else {
       currentPrefix = '';
+      currentChunkContentIndent = null;
       currentContentLines = [line];
       hasCurrentChunk = true;
     }

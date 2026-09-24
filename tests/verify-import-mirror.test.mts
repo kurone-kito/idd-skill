@@ -624,6 +624,43 @@ test('rule 3 pass (issue #3233): a non-"1" ordered marker reflowed mid-paragraph
   assert.equal(result.contentClass, 'prose-reflow-match');
 });
 
+test('normalizeProseWhitespace tolerates a non-"1" ordered marker reflowed WITHIN an enclosing list item\'s own content zone, not only at the top level (Copilot review, PR #3417)', () => {
+  // Regression: an earlier version treated ANY marker as a genuine
+  // boundary once the CURRENT chunk was already a list item, regardless
+  // of whether the new marker's own indent still falls inside that
+  // item's content zone. CommonMark's paragraph-interruption rule
+  // (only a bullet, or "1.", can interrupt an open paragraph) applies
+  // recursively inside a list item's own content too -- verified via
+  // `gh api /markdown`: "- costs about\n  5. that is fine\n" renders as
+  // ONE list item with "5. that is fine" as literal continuation text,
+  // not a nested ordered list. So this must normalize identically to
+  // the fully flattened single-line form.
+  const nestedInZone = '- costs about\n  5. that is fine\n';
+  const flattened = '- costs about 5. that is fine\n';
+  assert.equal(
+    normalizeProseWhitespace(nestedInZone),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test("normalizeProseWhitespace still treats a marker that EXITS the enclosing item's content zone as a genuine boundary, even when non-interrupting (Copilot review, PR #3417)", () => {
+  // The counterpart to the previous test: at column 0 (shallower than
+  // "- "'s own content indent of 2), "5." no longer falls inside the
+  // bullet item's content zone at all -- the item (and its list) have
+  // already ended, so unrestricted parsing resumes and ANY marker,
+  // interrupting or not, opens a fresh block. Verified via `gh api
+  // /markdown`: "- costs about\n5. That is fine\n" renders as TWO
+  // separate lists (a bullet list, then a start=5 ordered list) --
+  // genuinely different from the single-item flattened form, so these
+  // must NOT normalize the same way.
+  const exitsZone = '- costs about\n5. That is fine\n';
+  const flattened = '- costs about 5. That is fine\n';
+  assert.notEqual(
+    normalizeProseWhitespace(exitsZone),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
 test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
   // "- child" indented under "- parent" (a genuine nested item) versus
   // "- child" at column 0 (a sibling of "- parent", not nested under it)
