@@ -129,3 +129,60 @@ test('collectGeneratedSourceBannerViolations: a banner past the byte window read
   assert.equal(violations.length, 1);
   assert.match(violations[0], new RegExp(`^${SOURCE}: missing`));
 });
+
+// Review findings on #3294's own PR (kurone-kito/idd-skill#3333): the
+// separator regex accepted a banner split across two lines, and the byte
+// window was measured in UTF-16 code units rather than UTF-8 bytes.
+
+test('collectGeneratedSourceBannerViolations: a banner split across two lines reads as missing', () => {
+  // The path lands on the line *after* the "idd-generated-from:" opener --
+  // not a well-formed single-line banner, even though a permissive `\s*`
+  // separator would previously have matched across the line break.
+  const splitAcrossLines = `// idd-generated-from:\n${SOURCE}\n`;
+  const violations = collectGeneratedSourceBannerViolations(
+    SOURCE,
+    splitAcrossLines,
+    EMITTED,
+    wellFormedBanner(SOURCE),
+    SCAN_BYTES,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], new RegExp(`^${SOURCE}: missing`));
+});
+
+test('collectGeneratedSourceBannerViolations: a multibyte prefix that pushes the banner past the true byte window reads as missing', () => {
+  // 150 'é' characters are 150 UTF-16 code units but 300 UTF-8 bytes, so a
+  // naive `text.slice(0, 200)` (code-unit based) would still include the
+  // banner below even though it starts well past byte 200.
+  const multibytePrefix = 'é'.repeat(150);
+  const pushedOutByBytes = `${multibytePrefix}\n${wellFormedBanner(SOURCE)}`;
+  assert.ok(
+    Buffer.byteLength(multibytePrefix, 'utf8') > SCAN_BYTES,
+    'test fixture must actually exceed the byte window',
+  );
+  const violations = collectGeneratedSourceBannerViolations(
+    SOURCE,
+    pushedOutByBytes,
+    EMITTED,
+    wellFormedBanner(SOURCE),
+    SCAN_BYTES,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], new RegExp(`^${SOURCE}: missing`));
+});
+
+test('collectGeneratedSourceBannerViolations: a multibyte prefix that still leaves the banner inside the byte window passes', () => {
+  // 10 'é' characters are 10 UTF-16 code units but only 20 UTF-8 bytes --
+  // nowhere near SCAN_BYTES (200) either way, so the banner right after it
+  // must still validate.
+  const shortMultibytePrefix = 'é'.repeat(10);
+  const stillInWindow = `// ${shortMultibytePrefix}\n${wellFormedBanner(SOURCE)}`;
+  const violations = collectGeneratedSourceBannerViolations(
+    SOURCE,
+    stillInWindow,
+    EMITTED,
+    wellFormedBanner(SOURCE),
+    SCAN_BYTES,
+  );
+  assert.deepEqual(violations, []);
+});
