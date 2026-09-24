@@ -278,14 +278,15 @@ Restore the worktree from the local branch. Then route:
 
 ## §CSA — Content-Scope Audit for Inherited Commits
 
-Applies wherever §W7, §W8, or §FH resumes work from commit(s) this
-session itself did not just author on `{branch}` — whether recovering
-its own crashed prior turn or taking over from a different,
-possibly-dead session via forced-handoff. Neither case has a live
-author left to confirm what was actually verified, so before any of
-these commits get pushed or bundled into a PR, the resuming session
-must independently audit their content against the target issue's own
-declared scope (observed 2026-09-21, kurone-kito/idd-skill#3166: an
+Applies wherever §W7 or §W8 resumes work from commit(s) this session
+itself did not just author on `{branch}` — including after §FH routes
+there via forced-handoff recovery — whether recovering its own crashed
+prior turn or taking over from a different, possibly-dead session.
+Neither case has a live author left to confirm what was actually
+verified, so before any of these commits get pushed or bundled into a
+PR, the resuming session must independently audit their content
+against the target issue's own declared scope (observed 2026-09-21 on
+an adopter repository, reported via kurone-kito/idd-skill#3166: an
 inherited unpushed commit correctly implemented an issue's declared
 requirements but also silently bundled in a third, undeclared feature,
 justified only by the dead session's own stale, unverifiable
