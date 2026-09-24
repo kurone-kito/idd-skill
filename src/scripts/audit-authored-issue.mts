@@ -26,10 +26,12 @@
 // A4.5 suitability (suitability-triage.mts) evaluators Discover runs
 // later, at claim time, so a body that would fail A4/A4.5 then is caught
 // before it is ever published instead of only after (see
-// buildTriageFindings); the roadmap shape and a missing title each
-// degrade this to a not-applicable/not-evaluated pass rather than a hard
-// failure, and Check 4 (duplicates) always reports "not applicable" since
-// it needs a live repository.
+// buildTriageFindings); the roadmap shape degrades every one of these
+// findings to a not-applicable pass, a missing title fails
+// triage-title-missing itself for a ready orphan/child audit (degrading
+// only the downstream A4.5 findings to "not evaluated"; A4 stays
+// title-independent), and Check 4 (duplicates) always reports "not
+// applicable" since it needs a live repository.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
