@@ -5,6 +5,7 @@ import {
   blankFencedCodeBlocks,
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findHtmlCommentRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -1493,4 +1494,50 @@ test('maskMarkdownForScan excludes an inline-code-quoted "<!--" from htmlComment
     }),
     body,
   );
+});
+
+test('findHtmlCommentRanges does not mask a mid-line unterminated "<!--" inside a Markdown link title (#3282 Copilot review, PR #3413, gap-2767-09)', () => {
+  // GitHub renders this exact shape (confirmed via `gh api markdown`) with
+  // the link title's own "<!--" kept as literal text and the following
+  // "Maintainer decision" line as an ordinary, visible paragraph -- a
+  // mid-line "<!--" is neither a valid inline raw-HTML comment (that
+  // grammar requires a matching "-->") nor a CommonMark HTML-block type-2
+  // opener (which requires the "<!--" to be the first non-whitespace
+  // content of its own line). Before this fix, an unterminated opener
+  // masked through end-of-text regardless of position, swallowing the
+  // decision line.
+  const body =
+    'See [draft notes](https://example.com/doc "<!-- still drafting") for background.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a genuine line-start unterminated "<!--" through end-of-text', () => {
+  // The CommonMark HTML-block type-2 case this file's doc comments
+  // describe (#2662/#2711): an issue-template author's own hidden
+  // scaffolding comment, opened at the very start of a line with no
+  // closing "-->" anywhere later, still extends through EOF exactly as
+  // before -- this fix narrows the unterminated case to non-line-start
+  // openers only, it does not remove the line-start behavior.
+  const body =
+    '<!-- guidance for authors\n\nMaintainer decision: adopt option A.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 0, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a genuine line-start unterminated "<!--" indented up to 3 spaces', () => {
+  const body = '   <!-- guidance for authors\nmore text\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 3, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" indented 4+ spaces (an indented code block, not an HTML block opener)', () => {
+  const body = '    <!-- guidance for authors\nmore text\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a mid-line "<!--" when it is properly terminated with "-->"', () => {
+  const body = 'before <!-- real comment --> after';
+  assert.deepEqual(findHtmlCommentRanges(body), [{ start: 7, end: 28 }]);
 });

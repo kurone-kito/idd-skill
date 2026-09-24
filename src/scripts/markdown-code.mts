@@ -1367,6 +1367,29 @@ function isHtmlBlockContainerEnded(
 // `resolved-decision.mts` re-exports this name so its own callers
 // (`suitability-triage.mts`, `triage-structural-evidence.mts`) compile
 // unchanged.
+// #3282 Copilot review: an unterminated opener (no matching "-->"
+// anywhere later in the text) only extends through end-of-text when it
+// sits at a CommonMark HTML-block type-2 opening position -- the first
+// non-whitespace content of its line, with at most 3 leading spaces
+// (mirrors specialHtmlBlockCloseToken's own `/^ {0,3}<!--/u` check
+// above). A "<!--" appearing mid-line -- e.g. inside a Markdown link
+// title's quoted text, `[x](url "<!-- still drafting")` -- is ordinary
+// prose there: CommonMark's inline raw-HTML grammar for a comment
+// requires BOTH delimiters, and this position never qualifies as an
+// HTML block opener either, so GitHub renders it as literal text with
+// no masking effect (confirmed via `gh api markdown`, #3282, issue
+// #3413 review; reproduces tests/fixtures/issue-body-corpus/
+// gap-2767-09.json's own body). Before this fix, every mid-line
+// unterminated opener was treated the same as a genuine line-start one,
+// masking real content after it -- including, in that exact fixture, a
+// later "Maintainer decision (...)" line that should have stayed
+// visible either as this criterion's own live trigger text or as
+// findInlineResolvedDecisionSpans's exemption for it, depending on
+// which corpus a given caller scans it in.
+function isAtHtmlBlockOpenerPosition(text: string, openIndex: number): boolean {
+  const lineStart = text.lastIndexOf('\n', openIndex - 1) + 1;
+  return /^ {0,3}$/.test(text.slice(lineStart, openIndex));
+}
 export function findHtmlCommentRanges(
   text: string,
   ignoredOpenerRanges: MarkdownCodeRange[] = [],
@@ -1388,6 +1411,11 @@ export function findHtmlCommentRanges(
       continue;
     }
     const closeIndex = text.indexOf('-->', openIndex + 4);
+    if (closeIndex === -1 && !isAtHtmlBlockOpenerPosition(text, openIndex)) {
+      openPattern.lastIndex = openIndex + 4;
+      openMatch = openPattern.exec(text);
+      continue;
+    }
     const end = closeIndex === -1 ? text.length : closeIndex + 3;
     ranges.push({ start: openIndex, end });
     openPattern.lastIndex = end;
