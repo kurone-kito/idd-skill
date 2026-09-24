@@ -426,8 +426,8 @@ failure into a silent stall.
   cause makes it `false`, and the gate still routes to E1/E4. Fails
   closed: an unusable check makes this condition unmet.
 - **Closing-set and impact-checklist re-verification**:
-  `closingSet`/`closing-set` evidences this section's own
-  re-run of steps 6-7 and D3.7 below.
+  `closingSet`/`closing-set` evidences this section's re-run of
+  D3.5 steps 6-7 only; re-derive D3.7 below locally.
   After fetch, the claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain` and

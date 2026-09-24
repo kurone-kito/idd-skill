@@ -179,9 +179,8 @@ Before any mutating action in F3, apply the
    - D3.5 steps 6-7 and D3.7 (`idd-pr-submit.instructions.md`) have
      been re-run against `${PR_HEAD_SHA_F3}` (#2749) — covers commits
      that landed between F2 and this final gate, for example a
-     required `{development-branch}` sync. `closing-set` (readiness
-     verdict) evidences steps 6-7's re-run here; D3.7 stays local.
-     Before running them,
+     required `{development-branch}` sync. `closing-set` (readiness)
+     evidences steps 6-7 here; D3.7 stays local. Before running them,
      confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
      exactly (after fetch, the claim gate must confirm
      `git branch --show-current` is `{branch-name}`; else hold).
