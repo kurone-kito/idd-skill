@@ -497,9 +497,8 @@ After the review loop confirms no PATH A items remain (from E3 or E8),
 check the current branch state before routing to F-phase. This gate uses
 merge-from-`{development-branch}` (never rebase) when synchronization is
 required, preserving review history on the already-published PR branch.
-`{development-branch}` is the value
-[B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch)
-resolves.
+`{development-branch}` is the value resolved by
+[B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch).
 
 When helper runtime is enabled, call:
 `idd-branch-conflict-state --pr {pr-number}`

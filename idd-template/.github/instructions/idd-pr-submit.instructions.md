@@ -6,10 +6,11 @@ pushing, PR creation, and waiting for CI.
 
 Before the D1 sync and D2 push, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
-`{development-branch}` below is the value `idd-work.instructions.md`'s
+`{development-branch}` below is the value resolved by
+`idd-work.instructions.md`'s
 [B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch)
-resolves — re-resolve it here if this file is entered directly (for
-example, on resume) without a fresh B1 pass.
+— re-resolve it here if this file is entered directly (for example,
+on resume) without a fresh B1 pass.
 
 ## D1 — Sync {development-branch} before first push
 
