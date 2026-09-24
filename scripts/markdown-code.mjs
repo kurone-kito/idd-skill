@@ -2231,26 +2231,31 @@ export function maskMarkdownForScan(text, options = {}) {
     ...fencedRanges,
     ...findIndentedCodeRanges(normalized, fencedRanges),
   ]);
-  let ranges;
-  if (inlineCode === 'mask') {
-    // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the
-    // structural ranges already computed above instead of recomputing
-    // them via a second findFencedCodeRanges call.
-    const inlineRanges = [];
-    let cursor = 0;
-    for (const structuralRange of structuralRanges) {
-      inlineRanges.push(
-        ...findInlineCodeRanges(normalized, cursor, structuralRange.start),
-      );
-      cursor = structuralRange.end;
-    }
+  // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the structural
+  // ranges already computed above instead of recomputing them via a
+  // second findFencedCodeRanges call. Computed unconditionally (#3282
+  // review): a `<!--` sitting inside an inline code span must be
+  // excluded from findHtmlCommentRanges's own opener detection below
+  // regardless of whether inline code itself ends up masked in the final
+  // output -- otherwise a quoted `` `<!--` `` example (#2711/PR #2735's
+  // own round-2 case) is wrongly read as a real, unterminated HTML
+  // comment opener whenever `inlineCode: 'keep'` is combined with
+  // `htmlComments: 'mask'`.
+  const inlineRanges = [];
+  let cursor = 0;
+  for (const structuralRange of structuralRanges) {
     inlineRanges.push(
-      ...findInlineCodeRanges(normalized, cursor, normalized.length),
+      ...findInlineCodeRanges(normalized, cursor, structuralRange.start),
     );
-    ranges = mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges]);
-  } else {
-    ranges = structuralRanges;
+    cursor = structuralRange.end;
   }
+  inlineRanges.push(
+    ...findInlineCodeRanges(normalized, cursor, normalized.length),
+  );
+  let ranges =
+    inlineCode === 'mask'
+      ? mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges])
+      : structuralRanges;
   if (htmlBlocks === 'mask') {
     ranges = mergeMarkdownCodeRanges([
       ...ranges,
@@ -2258,9 +2263,17 @@ export function maskMarkdownForScan(text, options = {}) {
     ]);
   }
   if (htmlComments === 'mask') {
+    // ignoredOpenerRanges always includes the inline ranges (see the
+    // comment above), even when inlineCode: 'keep' left them out of
+    // `ranges` itself -- merging them in here again when inlineCode:
+    // 'mask' already included them is a harmless no-op.
+    const ignoredOpenerRanges = mergeMarkdownCodeRanges([
+      ...ranges,
+      ...inlineRanges,
+    ]);
     ranges = mergeMarkdownCodeRanges([
       ...ranges,
-      ...findHtmlCommentRanges(normalized, ranges),
+      ...findHtmlCommentRanges(normalized, ignoredOpenerRanges),
     ]);
   }
   return maskMarkdownCodeRegionsPreservingPositions(normalized, ranges);

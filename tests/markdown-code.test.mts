@@ -1476,3 +1476,21 @@ test('mergeMarkdownCodeRanges coalesces overlapping and touching ranges, sorted 
     ],
   );
 });
+
+test('maskMarkdownForScan excludes an inline-code-quoted "<!--" from htmlComments masking even when inlineCode: "keep" (#3282)', () => {
+  // #2711/PR #2735 round-2 case, now exercised at the entry-point level:
+  // findHtmlCommentRanges's own ignoredOpenerRanges must exclude a `<!--`
+  // sitting inside an inline code span regardless of whether inline code
+  // itself is masked in the final output -- otherwise a quoted `` `<!--` ``
+  // example is wrongly read as a real, unterminated HTML comment opener
+  // and masks through EOF.
+  const body = 'see `<!--` then real text\nmore';
+  assert.equal(
+    maskMarkdownForScan(body, {
+      inlineCode: 'keep',
+      htmlComments: 'mask',
+      htmlBlocks: 'mask',
+    }),
+    body,
+  );
+});

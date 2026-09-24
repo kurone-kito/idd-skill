@@ -1,7 +1,7 @@
 {
   "id": "gap-2767-09",
   "category": "synthetic",
-  "note": "#2767 item 9 (comment-looking text inside a Markdown link title masked as a real HTML comment): findHtmlCommentRanges's ignored-opener-ranges input only ever receives real code ranges (fenced/indented/inline); a link title is ordinary prose, never a code range, so the \"<!--\" opener inside the link title is not ignored. It is also unterminated in this body (no \"-->\" anywhere), so it masks from that point through end-of-body, swallowing the genuine, later \"Maintainer decision (...)\" marker entirely -- this also fails Check 7 verifiability and A4's autonomous_completion for an issue that actually has a valid resolved decision. The gap is present today (MATCH).",
+  "note": "#2767 item 9 (comment-looking text inside a Markdown link title masked as a real HTML comment): findHtmlCommentRanges's ignored-opener-ranges input only ever receives real code ranges (fenced/indented/inline); a link title is ordinary prose, never a code range, so the \"<!--\" opener inside the link title is not ignored. It is also unterminated in this body (no \"-->\" anywhere), so it masks from that point through end-of-body, swallowing the genuine, later \"Maintainer decision (...)\" marker entirely. Before #3282, evaluateAutonomousCompletion scanned the raw (unmasked) corpus, so the \"Maintainer decision\" trigger text itself was still visible and matched EXTERNAL_COORDINATION_PATTERN, while findInlineResolvedDecisionSpans's own internal masking hit this same gap and could not see the marker to exempt that match -- net effect: a false autonomous_completion FAIL. #3282 masks evaluateAutonomousCompletion's corpus through the same maskMarkdownForScan/findHtmlCommentRanges pipeline (per its own Proposed Change #1), so the unterminated opener now also swallows the \"Maintainer decision\" trigger text from the scanned corpus itself -- net effect flips to a false autonomous_completion PASS (no trigger text left to match at all). Check 7 verifiability still fails either way, since it reads the same masked marker text. Same root cause, different symptom -- not a fix, and not in #3282's scope (which never touches link-title awareness in findHtmlCommentRanges). The gap is present today (MATCH), now producing a permissive (false-PASS) rather than conservative (false-FAIL) misverdict.",
   "title": "Adopt option A background",
   "labels": [],
   "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nSee [draft notes](https://example.com/doc \"<!-- still drafting\") for background.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
@@ -9,10 +9,8 @@
   "fetchedAt": "2026-09-24T07:22:41.390Z",
   "expected": {
     "viability": {
-      "passed": false,
-      "failedCriteria": [
-        "autonomous_completion"
-      ]
+      "passed": true,
+      "failedCriteria": []
     },
     "triage": {
       "repository_fit": "pass",

@@ -1371,3 +1371,96 @@ test('computeLiveStructuralEvidence takes a caller-supplied collaboratorCache in
     /const collaboratorCache: CollaboratorPermissionCache = new Map\(\);\s*\n\s*const summary = await evaluateDiscoverViability\(args\.issueNumbers, \{\s*\n\s*loadIssue: buildIssueLoader\(owner, repo\),\s*\n\s*computeStructuralEvidence: \(issue\) =>\s*\n\s*computeLiveStructuralEvidence\(\s*\n\s*port,\s*\n\s*owner,\s*\n\s*repo,\s*\n\s*issue,\s*\n\s*collaboratorCache,\s*\n\s*\),/,
   );
 });
+
+// --- #3282: shared maskMarkdownForScan entry point, replacing the former
+// backtick-only isInsideCodeSpan exclusion --------------------------------
+
+test("limited_scope agrees between LF and CRLF for two fenced blocks with broad-scope prose between them, ending at the second fence with no trailing newline (matches today's LF result: fail)", () => {
+  const bodyLF = [
+    '```',
+    'first fence content',
+    '```',
+    'This redesigns the public interface across multiple subsystems.',
+    '```',
+    'second fence content',
+    '```',
+  ].join('\n');
+  const bodyCRLF = bodyLF.replace(/\n/g, '\r\n');
+
+  for (const body of [bodyLF, bodyCRLF]) {
+    const result = evaluateA4Viability({
+      number: 1,
+      title: 'x',
+      body,
+      state: 'OPEN',
+    });
+    const limitedScope = result.criteria.find((c) => c.id === 'limited_scope');
+    assert.equal(limitedScope?.result, 'fail', body);
+  }
+});
+
+test("limited_scope agrees between LF and CRLF for a broad-scope phrase inside one fence followed by narrow prose (matches today's LF result: pass)", () => {
+  const bodyLF = [
+    '```',
+    'This redesigns the public interface across multiple subsystems.',
+    '```',
+    'Single module change to scripts/example.mts. Verification: run unit tests.',
+  ].join('\n');
+  const bodyCRLF = bodyLF.replace(/\n/g, '\r\n');
+
+  for (const body of [bodyLF, bodyCRLF]) {
+    const result = evaluateA4Viability({
+      number: 1,
+      title: 'x',
+      body,
+      state: 'OPEN',
+    });
+    const limitedScope = result.criteria.find((c) => c.id === 'limited_scope');
+    assert.equal(limitedScope?.result, 'pass', body);
+  }
+});
+
+test('evaluateA4Viability passes when the only trigger phrases sit inside a tilde fence, a 4-space indented block, or an HTML comment, exactly like the backtick-fence control', () => {
+  const trigger =
+    'This redesigns the public interface across multiple subsystems and requires external coordination and maintainer decision before completion.';
+  const narrowTail =
+    'Single module change to scripts/example.mts. Verification: run unit tests.';
+
+  const shapes: Record<string, string> = {
+    'backtick fence (control)': ['```', trigger, '```', narrowTail].join('\n'),
+    'tilde fence': ['~~~', trigger, '~~~', narrowTail].join('\n'),
+    // Top-level, after a blank line -- not a list continuation.
+    'indented block': ['para', '', `    ${trigger}`, narrowTail].join('\n'),
+    'HTML comment': ['<!--', trigger, '-->', narrowTail].join('\n'),
+  };
+
+  for (const [label, body] of Object.entries(shapes)) {
+    const result = evaluateA4Viability({
+      number: 1,
+      title: 'x',
+      body,
+      state: 'OPEN',
+    });
+    assert.equal(result.passed, true, label);
+    assert.deepEqual(result.failedCriteria, [], label);
+  }
+});
+
+test('clear_verification still passes when the only verification command is inside a fenced block', () => {
+  const body = [
+    'Single module change to scripts/example.mts.',
+    '```',
+    'Verification: run unit tests and keep lint green.',
+    '```',
+  ].join('\n');
+  const result = evaluateA4Viability({
+    number: 1,
+    title: 'x',
+    body,
+    state: 'OPEN',
+  });
+  const clearVerification = result.criteria.find(
+    (c) => c.id === 'clear_verification',
+  );
+  assert.equal(clearVerification?.result, 'pass');
+});

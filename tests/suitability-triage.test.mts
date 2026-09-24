@@ -3931,6 +3931,55 @@ test('actionability fails when ## Candidate files is present but parses to zero 
   assert.match(result.evidence, /Candidate files/);
 });
 
+// --- #3282: a fenced example of the child template's own "## Candidate
+// files" section (placeholder or path-like bullets) must not route
+// actionability to needs-decision -- the real, later section's paths must
+// still be read. -----------------------------------------------------------
+
+test('actionability passes when a fenced placeholder "## Candidate files" example precedes the real section', () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+\`\`\`markdown
+## Candidate files
+
+- \`<path>\`
+\`\`\`
+
+## Candidate files
+
+- \`scripts/real.mjs\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test("actionability passes when a fenced example's bullets are path-like (not obviously placeholder), reading only the real section that follows", () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+\`\`\`markdown
+## Candidate files
+
+- \`scripts/fake.mjs\`
+\`\`\`
+
+## Candidate files
+
+- \`scripts/real.mjs\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('actionability is unaffected when ## Candidate files is absent entirely (legitimate orphan omission)', () => {
   const result = checkActionability({
     issue: {
