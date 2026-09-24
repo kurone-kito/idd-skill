@@ -645,8 +645,7 @@ non-vendored profiles); the formula above is the canonical fallback
 when the helper is unavailable. It reorders **only within** a single
 score tie band, never across bands, and never bypasses A4.5/A5. With
 `off`, a single-entry band, or no applicable score, keep the
-deterministic **lowest issue number** pick. See
-[rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync).
+deterministic **lowest issue number** pick.
 
 **Configured milestone-scope preference.** `discover.milestoneScope`
 (`#2340`) prefers a same-score-band candidate whose OPEN milestone
