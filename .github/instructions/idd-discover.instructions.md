@@ -576,16 +576,16 @@ After scanning the current batch:
 
 - **At least one eligible candidate in the batch**: proceed to Step 2
   to rank and select.
-- **All `N` in this batch are claimed but viable survivors remain**:
+- **All `N` in this batch are ineligible but viable survivors remain**:
   continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until
   an eligible candidate is found.
 - **Entire viable candidate set exhausted** (all surviving viable
-  candidates are claimed): if the A3.5 approval-needed bucket is
+  candidates are ineligible): if the A3.5 approval-needed bucket is
   non-empty, apply A3.5's own approval-needed routing, also reporting
-  the claimed-survivor exhaustion (the approval hold takes precedence
-  — not a true zero); otherwise apply Step 1's **exhaustion-exit
-  routing** above, reporting that all viable issues are currently
-  claimed in place of a discard criterion. Retry later.
+  the survivor exhaustion (the approval hold takes precedence — not a
+  true zero); otherwise apply Step 1's **exhaustion-exit routing**
+  above, reporting that all viable issues are currently ineligible in
+  place of a discard criterion. Retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
