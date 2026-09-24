@@ -39,10 +39,9 @@ session already claimed and implemented. If the repository is
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
   re-attach-and-re-rebase attempt still fails.
-- D3.5's closing-keyword self-check still fails after one corrective
-  edit.
-- `closingIssuesReferences` still does not exactly match the deliberate
-  closing set after one corrective edit.
+- D3.5's closing-keyword self-check, or the `closingIssuesReferences`
+  match against the deliberate closing set, still fails after one
+  corrective edit.
 - The required-check set for D4 cannot be determined: `ci-wait-state`'s
   `requiredChecks.status` reports `unreadable` (protection or ruleset
   reads are unreadable), `source-pinned`, or `no-required-checks` with
@@ -238,16 +237,12 @@ loop instead of returning to this D1 rebase path.
    stay in the PR body prose above; if one is important enough to file
    now, invoke the `issue-authoring` skill instead.
 9. **Live-operator-directed immediate-fix carve-out**: a live operator
-   may direct an immediate fix for a blocking bug unrelated to the
-   claimed work instead of routing it through `issue-authoring` first.
-   Cross-reference the originating claimed issue in the side-fix PR
-   body with a non-closing reference (`Refs #N`, never
-   `Closes`/`Fixes`/`Resolves`) — D3.5 below applies only to the
-   side-fix's own linked issue, if any, never to the originating one.
-   How the session obtains a branch/worktree/claim for the side-fix,
-   and how its own completion avoids releasing the originating claim,
-   is not yet defined (see `idd-pr-submit.instructions.md`'s matching
-   carve-out).
+   may direct an unrelated blocking-bug side-fix instead of routing it
+   through `issue-authoring` first. Cross-reference the originating
+   issue with `Refs #N` — never `Closes`/`Fixes`/`Resolves`. D3.5
+   applies only to the side-fix's linked issue, if any. Branch/
+   worktree/claim mechanics: undefined; see
+   `idd-pr-submit.instructions.md`'s carve-out.
 
 ### D3.5 — Verify closing keyword detection
 
@@ -277,6 +272,11 @@ loop instead of returning to this D1 rebase path.
      the same edit-and-recheck path as step 4 for that number.
    - Repeat once after either fix. If it still fails, stop and post a
      hold note citing the PR URL.
+6. A commit message closing keyword counts too: never place one next
+   to an issue outside the closing set. F2's `closing-set` blocker
+   re-checks the set and messages against final HEAD (skipped on a
+   non-default `{development-branch}`), blocking the handoff on a
+   stray match.
 
 ## D4 — Wait for CI
 
