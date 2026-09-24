@@ -1494,6 +1494,14 @@ Interpretation rules:
 - Missing or unparseable body fields, unknown selectors, expired
   comments, wrong HEAD, wrong claim, or untrusted authors must fail
   closed.
+- An edited comment is not waiver evidence (kurone-kito/idd-skill#3246):
+  GitHub GraphQL `lastEditedAt` must be an explicit `null` (never
+  body-edited). A comment whose `lastEditedAt` is a timestamp, or whose
+  edit state cannot be determined, is excluded from `valid` into its own
+  `edited` bucket even when every other check (author, HEAD, claim,
+  expiry) passes -- `updated_at` is not a substitute, since GitHub's
+  `minimizeComment` advances it without touching `lastEditedAt`
+  (kurone-kito/idd-skill#3173).
 - `claim-id` accepts the case-insensitive literal sentinel `none`
   (#1905) alongside an arbitrary claim id, declaring a deliberately
   claimless waiver. It satisfies the claim-binding check only when the
