@@ -5,15 +5,25 @@
 // See docs/typescript-sources.md.
 
 /**
- * Strip Markdown code regions (fenced blocks and inline code spans) from a body
- * before scanning it for machine-readable markers or dependency references. A
- * genuine marker is raw text GitHub renders as intended (an HTML comment it
- * hides, or a `Blocked by #N` line it links), never inside a code span or
- * fence, so an example an issue merely *quotes* in code (e.g. an issue about
- * the marker or dependency syntax) must not be read as real. HTML comments are
- * deliberately NOT stripped here — only code regions are, since some markers
- * are themselves HTML comments. Masked regions keep their line count and
- * surrounding text so a real marker elsewhere in the body still matches.
+ * Strip Markdown code regions (fenced blocks and inline code spans) from a
+ * body before scanning it for machine-readable markers or dependency
+ * references. A genuine marker is raw text GitHub renders as intended (an
+ * HTML comment it hides, or a `Blocked by #N` line it links), never inside a
+ * code span or fence, so an example an issue merely *quotes* in code (e.g.
+ * an issue about the marker or dependency syntax) must not be read as real.
+ * HTML comments are deliberately NOT stripped here — only code regions are,
+ * since some markers are themselves HTML comments. Masked regions keep
+ * their line count and surrounding text so a real marker elsewhere in the
+ * body still matches.
+ *
+ * **Issue-body scanners: use {@link maskMarkdownForScan} instead (#3281).**
+ * This module's original scan (fenced blocks + inline spans only) misses a
+ * top-level indented (4-space) code block entirely, which a naive caller
+ * can misread as real content. `stripMarkdownCodeRegions` remains the
+ * primitive for PR-review and comment-body scanning
+ * (`review-clause.mts`, `supersession-detection.mts`, and
+ * `audit-authored-issue.mts`'s own comment-body checks), where that
+ * narrower scope is still correct today.
  */
 /**
  * Blank fenced code block lines (``` or ~~~), tracking the fence char +
@@ -2270,7 +2280,17 @@ function matchInlineLinkDestTitleEnd(
   return hasBlankLine(text, start, matchEnd) ? null : matchEnd;
 }
 
-function findInlineCodeRanges(
+/**
+ * Inline code span ranges (`` `...` ``, CommonMark-aware: raw-HTML tags,
+ * link destination/title spans, and escaped backticks are excluded from
+ * consideration) within `[start, end)`. Exported (#3281) so
+ * {@link maskMarkdownForScan} can scan the gaps between its own
+ * already-computed fenced/indented ranges directly, the same way
+ * {@link findMarkdownCodeRanges} does internally, instead of calling
+ * {@link findMarkdownCodeRanges} (which would recompute
+ * {@link findFencedCodeRanges} a second time).
+ */
+export function findInlineCodeRanges(
   text: string,
   start: number,
   end: number,
@@ -2453,6 +2473,14 @@ export interface MaskMarkdownForScanOptions {
  * `options.inlineCode`/`options.htmlComments`/`options.htmlBlocks`
  * control the three optional mask categories; see
  * {@link MaskMarkdownForScanOptions} for their defaults and rationale.
+ *
+ * Computes {@link findFencedCodeRanges} exactly once (Copilot review, PR
+ * #3399) and reuses it for every downstream range finder that needs it
+ * ({@link findIndentedCodeRanges}, the inline scan, {@link
+ * findHtmlBlockRanges}) -- calling {@link findMarkdownCodeRanges} here
+ * instead would silently recompute the fence scan a second time on every
+ * call, and this function is now on the hot path of several
+ * Discover/audit issue-body scanners.
  */
 export function maskMarkdownForScan(
   text: string,
@@ -2464,13 +2492,31 @@ export function maskMarkdownForScan(
   const htmlBlocks = options.htmlBlocks ?? 'keep';
 
   const fencedRanges = findFencedCodeRanges(normalized);
-  let ranges: MarkdownCodeRange[] =
-    inlineCode === 'mask'
-      ? findMarkdownCodeRanges(normalized)
-      : mergeMarkdownCodeRanges([
-          ...fencedRanges,
-          ...findIndentedCodeRanges(normalized, fencedRanges),
-        ]);
+  const structuralRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...findIndentedCodeRanges(normalized, fencedRanges),
+  ]);
+
+  let ranges: MarkdownCodeRange[];
+  if (inlineCode === 'mask') {
+    // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the
+    // structural ranges already computed above instead of recomputing
+    // them via a second findFencedCodeRanges call.
+    const inlineRanges: MarkdownCodeRange[] = [];
+    let cursor = 0;
+    for (const structuralRange of structuralRanges) {
+      inlineRanges.push(
+        ...findInlineCodeRanges(normalized, cursor, structuralRange.start),
+      );
+      cursor = structuralRange.end;
+    }
+    inlineRanges.push(
+      ...findInlineCodeRanges(normalized, cursor, normalized.length),
+    );
+    ranges = mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges]);
+  } else {
+    ranges = structuralRanges;
+  }
 
   if (htmlBlocks === 'mask') {
     ranges = mergeMarkdownCodeRanges([
