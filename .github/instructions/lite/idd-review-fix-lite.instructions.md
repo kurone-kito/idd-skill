@@ -97,11 +97,13 @@ other GitHub side effect, confirm all of the following:
 ## E9 — Fix accepted issues
 
 1. PATH A/PATH B (from `idd-review-triage.instructions.md` E4): PATH A
-   is actionable feedback needing a code change or maintainer decision
-   (human reviewer threads, regular comments, `CHANGES_REQUESTED`
-   bodies, critique-pass findings); PATH B is Copilot and CI advisory
-   bot comments included for traceability, even when they do not
-   require a code change.
+   is actionable feedback: human reviewer threads, regular comments,
+   `CHANGES_REQUESTED` bodies, critique-pass findings that require a
+   code change or maintainer decision, and Copilot inline
+   review-thread comments; PATH B is advisory feedback: Copilot's and
+   CI advisory bots' review-summary bodies and regular comments,
+   included for traceability, even when they do not require a code
+   change.
 2. Fix every Accepted PATH A item from the current ReviewItems_snapshot.
 3. Run `fix-validate`.
 4. Commit fixes atomically — one logical change per commit.
