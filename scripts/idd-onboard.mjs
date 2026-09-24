@@ -768,7 +768,11 @@ function isProbablyBinary(content) {
  * binary files and `SCAN_EXCLUDED_PATHS`) and collect every
  * placeholder-shaped `{{...}}` token per file, in ascending path order.
  * Symlinks are deliberately not followed: imported template files are
- * regular files, and following links could escape the target tree.
+ * regular files, and following links could escape the target tree. This
+ * function stays whole-tree and scope-agnostic on purpose (#3291): a
+ * caller that needs to distinguish an imported file from an adopter-owned
+ * one narrows the result afterward via `partitionScansByScope`, so the
+ * walk itself never has to know the manifest.
  */
 export function scanPlaceholderTokens(targetDir) {
   const results = [];
@@ -1174,6 +1178,34 @@ export function applyUntrustedLabelerGuardPlan(targetDir, plan) {
 }
 const CORE_TEMPLATE_BLOCK_ID = 'idd-template-core-files';
 /**
+ * Walk up from `fromDir` looking for the nearest `package.json`, bounded
+ * at 16 levels (matches the same private helper already duplicated in
+ * `check-pnpm-boundary.mts`, `onboarding-hearing.mts`,
+ * `snapshot-issue-body-corpus.mts`, `sync-docs.mts`, and
+ * `update-fixtures.mts` -- no shared export exists yet, so this is a
+ * sixth private copy, not a new one). `--substitute` (#3291) uses this
+ * with `import.meta.dirname` to resolve the running CLI's OWN idd-skill
+ * package root -- never an adopter-supplied `--source`, since
+ * `--substitute` takes none -- as the source of its core-file-set scan
+ * scope. Falls back to the top directory reached (never throws) when no
+ * `package.json` is found in range; the caller's own manifest read then
+ * fails closed with a clear error naming that path.
+ */
+function resolveRepoRoot(fromDir) {
+  let dir = fromDir;
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+/**
  * Resolve the distributed core template file set from the same
  * `audit/sync-manifest.json` canonical source that `sync-docs.mjs` /
  * `audit-docs.mjs` render into `idd-template/ONBOARDING.md`'s Step 2
@@ -1569,21 +1601,76 @@ export function checkManifestCompleteness(sourceRoot, targetRoot, profile) {
   return { missingSource, missingTarget };
 }
 /**
- * Scan the target tree for leftover `{{...}}` tokens after onboarding.
- * Reuses wave 1's `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner
- * rather than a new scan: verify mode has no resolved substitution values to
- * consult (an empty resolution), so `buildSubstitutionPlan` puts every
- * occurrence of one of the seven onboarding placeholder tokens into
- * `residue` — the correct outcome here, since a converged onboarding run
- * should have already replaced them. Other `{{...}}`-shaped tokens land in
- * `unknownTokens`, informational just as they are for `--substitute`.
+ * The set of target-relative paths the placeholder scanner treats as
+ * in-scope (#3291): exactly the imported manifest's own target paths,
+ * minus `SCAN_EXCLUDED_PATHS`. Built from `resolveImportFiles`'s already-
+ * resolved file list -- callers do that I/O and pass `.files` in, so this
+ * stays a pure set-builder with no filesystem access of its own. The
+ * `SCAN_EXCLUDED_PATHS` subtraction lives here (not left to each caller)
+ * because several of its entries -- the `docs/onboarding/*.md` meta-docs
+ * -- ARE part of the core manifest, so omitting the subtraction here
+ * would silently widen scope back to files the scanner must still never
+ * read for substitution purposes.
  */
-export function checkPlaceholderResidue(targetRoot) {
-  const plan = buildSubstitutionPlan(scanPlaceholderTokens(targetRoot), {
+export function resolvePlaceholderScanScope(files) {
+  const scope = new Set();
+  for (const file of files) {
+    if (!SCAN_EXCLUDED_PATHS.has(file.targetPath)) {
+      scope.add(file.targetPath);
+    }
+  }
+  return scope;
+}
+/**
+ * Split `scans` into the files `scope` covers and everything else,
+ * flattening every out-of-scope file's tokens into `outOfScopeTokens`
+ * (#3291). `scanPlaceholderTokens`/`buildSubstitutionPlan` keep scanning
+ * and planning exactly as before -- this is a thin pre-filter in front of
+ * them, not a change to either, so no existing direct caller of either
+ * function is affected.
+ */
+export function partitionScansByScope(scans, scope) {
+  const inScope = [];
+  const outOfScopeTokens = [];
+  for (const scan of scans) {
+    if (scope.has(scan.file)) {
+      inScope.push(scan);
+      continue;
+    }
+    for (const [token, occurrences] of scan.tokens) {
+      outOfScopeTokens.push({ file: scan.file, token, occurrences });
+    }
+  }
+  return { inScope, outOfScopeTokens };
+}
+/**
+ * Scan the target tree for leftover `{{...}}` tokens after onboarding,
+ * scoped to `scope` (#3291: the imported manifest's own target paths --
+ * see `resolvePlaceholderScanScope`). Reuses wave 1's
+ * `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner rather than a
+ * new scan: verify mode has no resolved substitution values to consult
+ * (an empty resolution), so `buildSubstitutionPlan` puts every occurrence
+ * of one of the seven onboarding placeholder tokens found in an IN-SCOPE
+ * file into `residue` -- the correct outcome here, since a converged
+ * onboarding run should have already replaced them. An in-scope file's
+ * other `{{...}}`-shaped tokens land in `unknownTokens`; ANY token found
+ * outside `scope` lands in `outOfScopeTokens` instead, informational only
+ * and never blocking, matching `--substitute`'s own scope contract.
+ */
+export function checkPlaceholderResidue(targetRoot, scope) {
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scanPlaceholderTokens(targetRoot),
+    scope,
+  );
+  const plan = buildSubstitutionPlan(inScope, {
     values: {},
     unresolved: [],
   });
-  return { residue: plan.residue, unknownTokens: plan.unknownTokens };
+  return {
+    residue: plan.residue,
+    unknownTokens: plan.unknownTokens,
+    outOfScopeTokens,
+  };
 }
 /** Per-helper `--help` timeout: generous relative to the ~60ms/helper the
  * full 50-helper sweep took in the issue's own reproduction, so only a
@@ -1849,7 +1936,20 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     targetRoot,
     profile,
   );
-  const placeholderResidue = checkPlaceholderResidue(targetRoot);
+  // #3291: a second `resolveImportFiles` call, deliberately -- keeping
+  // `checkManifestCompleteness`'s own `(sourceRoot, targetRoot, profile?)`
+  // signature untouched (5 tests call it directly) costs one extra
+  // manifest resolution per `--verify` run rather than a signature change
+  // that would ripple through those callers. `--verify` is not a hot
+  // loop, and the vendored-node profile's extra helper-bundle walk this
+  // duplicates is a small, bounded read.
+  const placeholderScanScope = resolvePlaceholderScanScope(
+    resolveImportFiles(sourceRoot, profile).files,
+  );
+  const placeholderResidue = checkPlaceholderResidue(
+    targetRoot,
+    placeholderScanScope,
+  );
   const helperLoad = checkHelperLoad(targetRoot, profile);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
   const packagePinWarning = checkPackagePinWarning(targetRoot);
@@ -3157,10 +3257,38 @@ async function runCli() {
     ...args.overrides,
   };
   const resolution = resolvePlaceholderValues(targetDir, mergedOverrides);
-  const plan = buildSubstitutionPlan(
+  // #3291: --substitute takes no --source, so its scan scope always comes
+  // from the RUNNING CLI's own idd-skill package root -- never an
+  // adopter-supplied tree -- resolved the same way
+  // onboarding-hearing.mts locates the hearing catalog. A tree with no
+  // readable audit/sync-manifest.json (an installed package missing its
+  // own manifest -- effectively unreachable in practice, since the
+  // package always ships it) fails closed here, naming the tried root,
+  // and reaches main()'s exit-2 usage-error handling rather than ever
+  // falling back to scanning the whole --target tree.
+  // #3291 (refined plan item 4): resolveRepoRoot itself never throws --
+  // it walks up looking for package.json and falls back to fromDir -- but
+  // it is called inside this try, alongside the resolveImportFiles call
+  // it feeds, so a hypothetical future failure in either step still
+  // reaches the same fail-closed usage-error message below rather than
+  // skipping it.
+  let scanSourceRoot;
+  let scanScope;
+  try {
+    scanSourceRoot = resolveRepoRoot(import.meta.dirname);
+    scanScope = resolvePlaceholderScanScope(
+      resolveImportFiles(scanSourceRoot).files,
+    );
+  } catch (error) {
+    throw new Error(
+      `--substitute could not resolve its own core file set: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
     scanPlaceholderTokens(targetDir),
-    resolution,
+    scanScope,
   );
+  const plan = buildSubstitutionPlan(inScope, resolution);
   // #2671: planned before any write below (and before the canWrite check),
   // so a malformed `labels.*` value (e.g. a control character rejected by
   // `buildUntrustedLabelerGuardWorkflowContent`) throws and aborts the
@@ -3186,6 +3314,14 @@ async function runCli() {
     plan: plan.entries,
     residue: plan.residue,
     unknownTokens: plan.unknownTokens,
+    // #3291: every `{{...}}`-shaped token found outside the imported
+    // core file set -- informational only, never written, never
+    // blocking (see resolvePlaceholderScanScope/partitionScansByScope).
+    outOfScopeTokens,
+    scope: {
+      sourceRoot: scanSourceRoot,
+      inScopeFileCount: scanScope.size,
+    },
     skippedPaths: listSkippedPlaceholderPaths(targetDir),
     filesChanged,
     // Folds in untrustedLabelerGuardWritten (#2684 review): a caller

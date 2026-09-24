@@ -50,11 +50,13 @@ import {
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
+  partitionScansByScope,
   planUntrustedLabelerGuardWorkflow,
   readExistingCommandsTable,
   resolveConfinedDirectory,
   resolveCoreTemplateFiles,
   resolveImportFiles,
+  resolvePlaceholderScanScope,
   resolvePlaceholderValues,
   restoreExistingCommandsTable,
   runHearWizard,
@@ -77,6 +79,19 @@ const PLACEHOLDERS_DOC = join(
   'placeholders.md',
 );
 const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
+
+/**
+ * The real repo's own core (default-profile) placeholder-scan scope
+ * (#3291) — the same set `--substitute`'s own `resolveRepoRoot(
+ * import.meta.dirname)` resolution lands on when run from this checkout,
+ * and what `importAndSubstitute`'s default-profile import below produces.
+ * Computed once (real filesystem read, not a fixture) and reused by every
+ * `checkPlaceholderResidue` call below built on a `REPO_ROOT`-sourced
+ * import.
+ */
+const CORE_SCAN_SCOPE = resolvePlaceholderScanScope(
+  resolveImportFiles(REPO_ROOT).files,
+);
 
 const createdFixtureDirs: string[] = [];
 
@@ -151,8 +166,15 @@ function writeTemplateFixture(root: string): void {
       '',
     ].join('\n'),
   );
+  // #3291: the real idd-skill repo's own manifest does NOT include a
+  // top-level README.md (only `profiles/*/README.md` -- an adopter's own
+  // pre-existing README is never onboarding-managed), so a fixture file
+  // meant to exercise `--substitute`'s CLI path (which now scopes to the
+  // running CLI's own manifest target-path set) must sit at a REAL
+  // manifest path. `docs/index.md` is one, and reads naturally as prose.
+  mkdirSync(join(root, 'docs'), { recursive: true });
   writeFileSync(
-    join(root, 'README.md'),
+    join(root, 'docs', 'index.md'),
     '# {{REPO_NAME}}\n\nWorktree example: ../{{REPO_NAME}}.issue-1-fix\n',
   );
 }
@@ -1211,10 +1233,12 @@ test('substitution applies exactly the planned edits and keeps config.json valid
   );
   const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
   assert.deepEqual(plan.residue, []);
-  const readme = plan.entries.filter((entry) => entry.file === 'README.md');
-  assert.deepEqual(readme, [
+  const docsIndex = plan.entries.filter(
+    (entry) => entry.file === 'docs/index.md',
+  );
+  assert.deepEqual(docsIndex, [
     {
-      file: 'README.md',
+      file: 'docs/index.md',
       placeholder: 'REPO_NAME',
       occurrences: 2,
       from: '{{REPO_NAME}}',
@@ -1225,7 +1249,7 @@ test('substitution applies exactly the planned edits and keeps config.json valid
   const filesChanged = applySubstitutionPlan(root, plan);
   assert.equal(filesChanged, 2);
   assert.equal(
-    readFileSync(join(root, 'README.md'), 'utf8'),
+    readFileSync(join(root, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
   const config = JSON.parse(
@@ -1253,7 +1277,7 @@ test('unresolved placeholders block as residue; unknown tokens stay informationa
   const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
   assert.deepEqual(
     plan.residue.map((entry) => [entry.file, entry.token]),
-    [['README.md', '{{REPO_NAME}}']],
+    [['docs/index.md', '{{REPO_NAME}}']],
   );
   // An adopter's own {{UPPER_SNAKE}} template token must not make the
   // run permanently non-convergent — wave 1 cannot know the copied set.
@@ -1351,7 +1375,7 @@ test('--substitute leaves the meta-docs byte-identical, including on a second re
   }
   // Every non-excluded site still converges normally in the same run.
   assert.equal(
-    readFileSync(join(root, 'README.md'), 'utf8'),
+    readFileSync(join(root, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
 });
@@ -1383,9 +1407,10 @@ test('applySubstitutionPlan refuses to rewrite a SCAN_EXCLUDED_PATHS entry even 
 test('checkPlaceholderResidue does not report the meta-docs as unresolved residue', () => {
   const root = makeFixtureDir();
   writeExcludedMetaDocs(root);
-  const result = checkPlaceholderResidue(root);
+  const result = checkPlaceholderResidue(root, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
   assert.deepEqual(result.unknownTokens, []);
+  assert.deepEqual(result.outOfScopeTokens, []);
 });
 
 test('listSkippedPlaceholderPaths reports only the meta-docs present in the target, sorted', () => {
@@ -1396,6 +1421,80 @@ test('listSkippedPlaceholderPaths reports only the meta-docs present in the targ
   });
   writeFileSync(join(root, ...firstPath.split('/')), '# ref\n');
   assert.deepEqual(listSkippedPlaceholderPaths(root), [firstPath]);
+});
+
+// ---------------------------------------------------------------------------
+// resolvePlaceholderScanScope / partitionScansByScope (#3291)
+// ---------------------------------------------------------------------------
+
+test('resolvePlaceholderScanScope includes every manifest target path not in SCAN_EXCLUDED_PATHS', () => {
+  const [excludedPath] = SCAN_EXCLUDED_PATHS;
+  const scope = resolvePlaceholderScanScope([
+    { sourcePath: `idd-template/${excludedPath}`, targetPath: excludedPath },
+    { sourcePath: 'idd-template/README.md', targetPath: 'README.md' },
+  ]);
+  assert.equal(scope.has(excludedPath), false);
+  assert.equal(scope.has('README.md'), true);
+  assert.equal(scope.size, 1);
+});
+
+test('resolvePlaceholderScanScope returns an empty scope for an empty file list', () => {
+  assert.equal(resolvePlaceholderScanScope([]).size, 0);
+});
+
+test('partitionScansByScope keeps an in-scope scan unchanged and reports nothing out of scope', () => {
+  const scans = [
+    { file: 'README.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(inScope, scans);
+  assert.deepEqual(outOfScopeTokens, []);
+});
+
+test('partitionScansByScope flattens an out-of-scope scan into outOfScopeTokens, known or unknown token alike', () => {
+  const scans = [
+    {
+      file: 'LEFTOVER.md',
+      tokens: new Map([
+        ['{{REPO_NAME}}', 1],
+        ['{{SOME_ADOPTER_TOKEN}}', 2],
+      ]),
+    },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(inScope, []);
+  assert.deepEqual(
+    outOfScopeTokens.sort((a, b) => a.token.localeCompare(b.token)),
+    [
+      { file: 'LEFTOVER.md', token: '{{REPO_NAME}}', occurrences: 1 },
+      { file: 'LEFTOVER.md', token: '{{SOME_ADOPTER_TOKEN}}', occurrences: 2 },
+    ],
+  );
+});
+
+test('partitionScansByScope handles a mix of in-scope and out-of-scope scans in one call', () => {
+  const scans = [
+    { file: 'README.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+    { file: 'LEFTOVER.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(
+    inScope.map((scan) => scan.file),
+    ['README.md'],
+  );
+  assert.deepEqual(
+    outOfScopeTokens.map((entry) => entry.file),
+    ['LEFTOVER.md'],
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -2287,7 +2386,7 @@ test('bin/idd-onboard.mjs without --dry-run applies exactly the planned edits', 
   assert.equal(verdict.written, true);
   assert.deepEqual(verdict.plan, planned);
   assert.equal(
-    readFileSync(join(applyRoot, 'README.md'), 'utf8'),
+    readFileSync(join(applyRoot, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
 });
@@ -3024,22 +3123,35 @@ test('checkManifestCompleteness forwards --profile to resolveImportFiles, coveri
   assert.deepEqual(result.missingTarget, []);
 });
 
-test('checkPlaceholderResidue classifies a leftover onboarding placeholder as blocking residue', () => {
+// #3291: a file the manifest never imported -- LEFTOVER.md at the
+// target root -- is exactly the pre-fix bug shape (issue reproduction:
+// an adopter-owned src/greeting.mustache). Its tokens must land in
+// outOfScopeTokens, never residue/unknownTokens, and --substitute must
+// never plan a rewrite for it.
+test('checkPlaceholderResidue reports an out-of-manifest file under outOfScopeTokens, never residue/unknownTokens', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
   writeFileSync(
     join(targetRoot, 'LEFTOVER.md'),
     '{{REPO_NAME}} and {{SOME_ADOPTER_TOKEN}} remain\n',
   );
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
+  assert.deepEqual(
+    result.residue.filter((entry) => entry.file === 'LEFTOVER.md'),
+    [],
+  );
+  assert.deepEqual(
+    result.unknownTokens.filter((entry) => entry.file === 'LEFTOVER.md'),
+    [],
+  );
   assert.ok(
-    result.residue.some(
+    result.outOfScopeTokens.some(
       (entry) =>
         entry.file === 'LEFTOVER.md' && entry.token === '{{REPO_NAME}}',
     ),
   );
   assert.ok(
-    result.unknownTokens.some(
+    result.outOfScopeTokens.some(
       (entry) =>
         entry.file === 'LEFTOVER.md' &&
         entry.token === '{{SOME_ADOPTER_TOKEN}}',
@@ -3047,11 +3159,37 @@ test('checkPlaceholderResidue classifies a leftover onboarding placeholder as bl
   );
 });
 
+// #3291 regression (issue AC): an unresolved known token left in an
+// IN-SCOPE manifest file (never an adopter-owned one) must still block.
+test('checkPlaceholderResidue still classifies an unresolved token in an in-scope manifest file as blocking residue', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const inScopePath = join(targetRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
+  assert.ok(
+    result.residue.some(
+      (entry) =>
+        entry.file === '.markdownlint.yml' && entry.token === '{{REPO_NAME}}',
+    ),
+  );
+  assert.deepEqual(
+    result.outOfScopeTokens.filter(
+      (entry) => entry.file === '.markdownlint.yml',
+    ),
+    [],
+  );
+});
+
 test('checkPlaceholderResidue reports nothing for a fully substituted target', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
+  assert.deepEqual(result.outOfScopeTokens, []);
 });
 
 test('#1924 regression: importing the real template keeps the meta-docs literal', () => {
@@ -3075,7 +3213,7 @@ test('#1924 regression: importing the real template keeps the meta-docs literal'
   }
   // --verify's residue check must not read their surviving tokens as
   // unresolved placeholders.
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
 });
 
@@ -3130,11 +3268,35 @@ test('runVerify blocks when manifest completeness or placeholder residue fails',
   const missingManifestFile = runVerify(REPO_ROOT, targetRoot);
   assert.equal(missingManifestFile.blocking, true);
 
+  // #3291 regression: an unresolved token in an IN-SCOPE manifest file
+  // (never an adopter-owned one outside it) still blocks via runVerify.
   const residueRoot = makeFixtureDir();
   importAndSubstitute(residueRoot);
-  writeFileSync(join(residueRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const inScopePath = join(residueRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
   const residueResult = runVerify(REPO_ROOT, residueRoot);
   assert.equal(residueResult.blocking, true);
+  assert.ok(
+    residueResult.placeholderResidue.residue.some(
+      (entry) => entry.file === '.markdownlint.yml',
+    ),
+  );
+
+  // #3291: a token OUTSIDE the manifest never blocks -- it is reported
+  // under outOfScopeTokens instead.
+  const outOfScopeRoot = makeFixtureDir();
+  importAndSubstitute(outOfScopeRoot);
+  writeFileSync(join(outOfScopeRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const outOfScopeResult = runVerify(REPO_ROOT, outOfScopeRoot);
+  assert.equal(outOfScopeResult.blocking, false);
+  assert.ok(
+    outOfScopeResult.placeholderResidue.outOfScopeTokens.some(
+      (entry) => entry.file === 'LEFTOVER.md',
+    ),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -3295,10 +3457,14 @@ test('bin/idd-onboard.mjs --verify exits 1 and names the missing file when the m
   );
 });
 
-test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding placeholder is unresolved', () => {
+test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding placeholder is unresolved in an in-scope manifest file', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
-  writeFileSync(join(targetRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const inScopePath = join(targetRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
   const { status, verdict } = runCliBin([
     '--verify',
     '--source',
@@ -3311,7 +3477,28 @@ test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding
   const residue = (
     verdict.placeholderResidue as { residue: { file: string }[] }
   ).residue;
-  assert.ok(residue.some((entry) => entry.file === 'LEFTOVER.md'));
+  assert.ok(residue.some((entry) => entry.file === '.markdownlint.yml'));
+});
+
+// #3291: the pre-fix bug shape (issue reproduction) -- a known onboarding
+// token in a file OUTSIDE the imported manifest must never block --verify.
+test('bin/idd-onboard.mjs --verify exits 0 for a known token found outside the imported manifest', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  writeFileSync(join(targetRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const outOfScopeTokens = (
+    verdict.placeholderResidue as { outOfScopeTokens: { file: string }[] }
+  ).outOfScopeTokens;
+  assert.ok(outOfScopeTokens.some((entry) => entry.file === 'LEFTOVER.md'));
 });
 
 test('bin/idd-onboard.mjs --verify exits 0 even when the stale-import signal fires (informational only)', () => {
@@ -4673,6 +4860,77 @@ test('a real import + substitute produces a doc tree that passes the documented 
   assert.ok(
     filesChecked >= importedFileCount,
     `cspell only checked ${filesChecked} files, fewer than the ${importedFileCount} files --import wrote -- enableGlobDot may have regressed`,
+  );
+});
+
+// #3291 acceptance criteria: a real --import followed by a real
+// --substitute/--verify CLI run, with an adopter-owned file outside the
+// imported manifest carrying a known onboarding token -- the issue's own
+// reproduction shape (`src/greeting.mustache`).
+test('bin/idd-onboard.mjs --substitute never rewrites an adopter file outside the imported manifest; --verify treats it as informational only (#3291)', () => {
+  const targetRoot = makeFixtureDir();
+  const imported = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(imported.status, 0, JSON.stringify(imported.verdict));
+  assert.equal(imported.verdict.written, true);
+
+  mkdirSync(join(targetRoot, 'src'), { recursive: true });
+  const mustachePath = join(targetRoot, 'src', 'greeting.mustache');
+  const mustacheContent = 'Hello from {{REPO_NAME}}!\n';
+  writeFileSync(mustachePath, mustacheContent);
+
+  const dryRun = runCliBin([
+    '--substitute',
+    '--dry-run',
+    '--target',
+    targetRoot,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(dryRun.status, 0, JSON.stringify(dryRun.verdict));
+  const dryRunPlan = dryRun.verdict.plan as { file: string }[];
+  assert.ok(
+    dryRunPlan.every((entry) => entry.file !== 'src/greeting.mustache'),
+    `expected no plan entry for src/greeting.mustache, got: ${JSON.stringify(dryRunPlan)}`,
+  );
+  const dryRunOutOfScope = dryRun.verdict.outOfScopeTokens as {
+    file: string;
+  }[];
+  assert.ok(
+    dryRunOutOfScope.some((entry) => entry.file === 'src/greeting.mustache'),
+  );
+
+  const applied = runCliBin([
+    '--substitute',
+    '--target',
+    targetRoot,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(applied.status, 0, JSON.stringify(applied.verdict));
+  assert.equal(applied.verdict.written, true);
+  // Never rewritten -- byte-identical to what this test wrote above.
+  assert.equal(readFileSync(mustachePath, 'utf8'), mustacheContent);
+
+  const verified = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(verified.status, 0, JSON.stringify(verified.verdict));
+  assert.equal(verified.verdict.blocking, false);
+  const verifyOutOfScope = (
+    verified.verdict.placeholderResidue as {
+      outOfScopeTokens: { file: string }[];
+    }
+  ).outOfScopeTokens;
+  assert.ok(
+    verifyOutOfScope.some((entry) => entry.file === 'src/greeting.mustache'),
   );
 });
 
