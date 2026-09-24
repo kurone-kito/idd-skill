@@ -3585,20 +3585,29 @@ function assertPolicyDocNotClobbered(
 
 /**
  * Whether `pathA` and `pathB` -- both already confirmed to exist and be
- * plain files by the caller -- denote the same underlying file, via
- * `realpathSync` rather than a literal string comparison (#3292 review,
- * Copilot): on a case-insensitive filesystem (default on Windows and
- * macOS), `.github/idd/CONFIG.JSON` and `.github/idd/config.json` are
- * the same file despite differing as strings, so a plain `===` check
- * alone misses that alias. Returns `false` on any `realpathSync`
- * failure (for example one path no longer exists by the time this
- * runs) rather than throwing here -- the caller's own ancestor/leaf
- * checks are the authoritative existence guard; this helper only
- * decides sameness for two paths already known to exist.
+ * plain files by the caller -- denote the same underlying file, by
+ * comparing device/inode identity rather than a literal string or
+ * `realpathSync` comparison (#3292 review, Copilot, two rounds):
+ * `realpathSync` alone still misses a hard link, since a hard link is a
+ * second directory entry pointing at the same inode with no symlink for
+ * `realpathSync` to resolve through -- it has its own fully-canonical
+ * path, distinct from the original's. Comparing `lstatSync(...).dev`/
+ * `.ino` instead catches both that case and the earlier
+ * case-insensitive-filesystem alias (`.github/idd/CONFIG.JSON` and
+ * `.github/idd/config.json` on Windows/macOS share one directory entry,
+ * hence one inode) with a single mechanism -- the identity test Node's
+ * own `fs.Stats` documentation recommends for this exact purpose.
+ * Returns `false` on any `lstatSync` failure (for example one path no
+ * longer exists by the time this runs) rather than throwing here -- the
+ * caller's own ancestor/leaf checks are the authoritative existence
+ * guard; this helper only decides sameness for two paths already known
+ * to exist.
  */
 function isSameExistingFile(pathA: string, pathB: string): boolean {
   try {
-    return realpathSync(pathA) === realpathSync(pathB);
+    const statA = lstatSync(pathA);
+    const statB = lstatSync(pathB);
+    return statA.dev === statB.dev && statA.ino === statB.ino;
   } catch {
     return false;
   }

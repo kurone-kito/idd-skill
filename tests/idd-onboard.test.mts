@@ -4,6 +4,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -6176,7 +6177,7 @@ test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd
 // case-preserving, so this collision is only genuinely reproducible on
 // the "Windows platform tests" CI lane -- ext4 (this repo's other
 // lanes) is case-sensitive and would not exercise
-// isSameExistingFile's realpathSync-based comparison at all.
+// isSameExistingFile's dev/ino-identity comparison at all.
 test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/CONFIG.JSON refuses the case-insensitive-filesystem alias to config.json (#3292 review round 2, Copilot)', {
   skip: process.platform !== 'win32',
 }, () => {
@@ -6214,6 +6215,49 @@ test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd
     /must not resolve to \.github\/idd\/config\.json itself/,
   );
   assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+});
+
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc <a hard link to config.json> refuses the alias, since realpathSync alone cannot see it (#3292 review round 3, Copilot)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+  // A hard link is a second directory entry for the same inode -- unlike
+  // a symlink, it has its own fully-canonical path with nothing for
+  // realpathSync to resolve through, so only a dev/ino identity
+  // comparison (not realpathSync) can recognize it as the same file.
+  const hardLinkPath = join(root, '.github', 'idd', 'config-hardlink.json');
+  linkSync(configPath, hardLinkPath);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      hardLinkPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+  assert.equal(readFileSync(hardLinkPath, 'utf8'), originalConfig);
 });
 
 // Permission-denied is a distinct failure from ENOENT and must fail closed
