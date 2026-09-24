@@ -132,7 +132,9 @@ Before any mutating action in F3, apply the
    **Preferred path (helper runtime enabled)**: run the F3 merge helper
    documented in
    [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3).
-   First run it in dry-run (no `--apply`) and confirm `ready: true` with
+   Pass `--closing-issues <n>,<m>` for a multi-issue close
+   (forwarded to the collector). First run it in dry-run
+   (no `--apply`) and confirm `ready: true` with
    an empty `blockers[]` — it wraps the read-only `pre-merge-readiness`
    gate and adds no new authority. Then re-run with `--apply`: when
    `ready`, it re-fetches the head SHA and re-validates the claim
@@ -178,9 +180,8 @@ Before any mutating action in F3, apply the
      been re-run against `${PR_HEAD_SHA_F3}` (#2749) — covers commits
      that landed between F2 and this final gate, for example a
      required `{development-branch}` sync. `closing-set` (readiness
-     verdict) is evidence alongside steps 6-7's re-run here; D3.7
-     stays local. Pass `--closing-issues` here too for a
-     multi-issue close. Before running them,
+     verdict) evidences steps 6-7's re-run here; D3.7 stays local.
+     Before running them,
      confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
      exactly (after fetch, the claim gate must confirm
      `git branch --show-current` is `{branch-name}`; else hold).

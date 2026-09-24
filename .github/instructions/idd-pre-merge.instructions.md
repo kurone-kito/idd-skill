@@ -103,10 +103,12 @@ nonce was recorded for the active claim.
 (#2017) — pass `--claimless` instead when this PR has no linked issue to
 claim (`closingIssuesReferences` empty); it cannot combine with
 `--claim-issue`/`--claim-id` and fails closed if `closingIssuesReferences`
-is non-empty. For a multi-issue close (D3), pass `--closing-issues <n>,<m>`
-with the full set (else a `closing-set` mismatch). See
+is non-empty. See
 [docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md)
 for the full flag reference.
+
+**Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
+full set (else a `closing-set` mismatch).
 
 **Polling loop failure mode**: a zero exit with the full readiness
 JSON (`ready: false` + `blockers`) is not-ready-yet — keep polling. A
@@ -429,8 +431,8 @@ failure into a silent stall.
   cause makes it `false`, and the gate still routes to E1/E4. Fails
   closed: an unusable check makes this condition unmet.
 - **Closing-set and impact-checklist re-verification**:
-  `closingSet`/`closing-set` is mechanical evidence alongside
-  this section's own re-run of steps 6-7 and D3.7 below.
+  `closingSet`/`closing-set` evidences this section's own
+  re-run of steps 6-7 and D3.7 below.
   After fetch, the claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain` and
