@@ -751,6 +751,28 @@ const POST_WORK_ITEM_COMMENT_TOTAL_ATTEMPTS = 3;
 const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
 
 /**
+ * #3275: statuses that cannot succeed on retry -- the write is known NOT to
+ * have landed (bad credentials, target gone, or a validation failure the
+ * next identical attempt would repeat), so retrying only burns the bounded
+ * attempt budget. Deliberately excludes every ambiguous shape (`5xx`, a
+ * `403` secondary rate limit, or no derivable status at all, e.g. a
+ * timeout/transport error) -- those may have landed server-side and must
+ * go through the duplicate-check path in
+ * {@link postWorkItemCommentWithRetry} instead of failing immediately.
+ */
+const POST_WORK_ITEM_COMMENT_NON_RETRYABLE_STATUSES = new Set([401, 404, 422]);
+
+/**
+ * #3275: upper bound on how long a single retry wait may honor a failed
+ * POST's `Retry-After` (or rate-limit-reset) hint. `sleepSync` blocks the
+ * whole process, so a multi-minute secondary-rate-limit reset must not be
+ * slept through inline -- above this cap,
+ * {@link postWorkItemCommentWithRetry} fails closed with
+ * {@link PostWorkItemCommentNotVerifiedError} instead of sleeping.
+ */
+const POST_WORK_ITEM_COMMENT_MAX_RETRY_AFTER_MS = 5000;
+
+/**
  * #2460: the issues-comments POST endpoint is not idempotent -- each
  * successful call creates a new comment -- so a bare retry-on-any-failure
  * risks posting the same marker twice when a failure is ambiguous (the
@@ -760,23 +782,33 @@ const POST_WORK_ITEM_COMMENT_BASE_DELAY_MS = 200;
  * (paginated) comment history for an exact-body match: found means the
  * prior attempt actually landed, so return that comment instead of posting
  * again; not found means the prior attempt genuinely failed, so back off
- * and retry the POST. This scan is best-effort only (a transient read
- * failure here must never block the retry it is meant to protect) and only
- * ever runs on the error path, never the common single-attempt success
- * path. Requests the maximum page size (Copilot review, #2504) to bound
- * pagination overhead on a heavily-commented issue/PR.
+ * and retry the POST. This scan is best-effort only for a malformed row --
+ * a stray non-object entry among the rows is skipped, never treated as a
+ * scan failure -- but a genuine failure to fetch/paginate the comment
+ * history at all (#3275) is now distinguished from that "no match found"
+ * outcome, since the caller must not retry blindly when it cannot prove
+ * the previous attempt didn't land. Requests the maximum page size
+ * (Copilot review, #2504) to bound pagination overhead on a
+ * heavily-commented issue/PR.
  */
+type DuplicateCommentCheckOutcome =
+  | { kind: 'match'; comment: ProviderPostedComment }
+  | { kind: 'no-match' }
+  | { kind: 'check-failed'; cause: unknown };
+
 function findRecentExactBodyMatch(
   deps: GithubProviderAdapterDeps,
   repoPath: string,
   number: number,
   body: string,
-): ProviderPostedComment | null {
+): DuplicateCommentCheckOutcome {
   // The whole read-and-scan is wrapped in one try/catch, not just the
-  // `ghApiJson` call: a malformed row (e.g. a stray `null` entry) thrown
-  // from the loop body below must fail this best-effort scan the same
-  // way a transport failure does, never abort the retry it exists to
-  // protect (Copilot review, #2504).
+  // `ghApiJson` call: a malformed `rows` value (non-iterable, or a row
+  // whose shape trips an unexpected exception while scanning) must be
+  // classified `check-failed` the same way a transport failure is --
+  // never let it escape uncaught and skip the caller's own
+  // not-verified handling (Copilot review, #2504; regression caught by
+  // code review, #3275).
   try {
     const rows = deps.ghApiJson(
       `${repoPath}/issues/${number}/comments?per_page=100`,
@@ -804,9 +836,9 @@ function findRecentExactBodyMatch(
       // one exists.
       newest = { id, htmlUrl };
     }
-    return newest;
-  } catch {
-    return null;
+    return newest ? { kind: 'match', comment: newest } : { kind: 'no-match' };
+  } catch (cause) {
+    return { kind: 'check-failed', cause };
   }
 }
 
@@ -821,13 +853,98 @@ function findRecentExactBodyMatch(
 class MalformedPostWorkItemCommentResponseError extends Error {}
 
 /**
- * #2460: POST a work-item (issue/PR) comment with a bounded retry against
- * transient `gh` failures, guarding against the resulting duplicate-post
- * risk via {@link findRecentExactBodyMatch}, and validating the response
- * shape before treating the marker as posted (catches a 200-with-
- * malformed-body edge case a bare retry would not -- see
- * {@link MalformedPostWorkItemCommentResponseError} for why that specific
- * case fails fast rather than retrying).
+ * #3275: thrown instead of retrying when a possibly-landed POST failure's
+ * outcome could not be confirmed -- either the duplicate-body re-read
+ * itself failed (so neither "it landed" nor "it didn't" can be proven), or
+ * the failure carried a `Retry-After`/rate-limit-reset wait longer than
+ * {@link POST_WORK_ITEM_COMMENT_MAX_RETRY_AFTER_MS}. The caller must re-read
+ * live state before acting again rather than assume either outcome.
+ */
+class PostWorkItemCommentNotVerifiedError extends Error {}
+
+/**
+ * #3275: extract the JSON body from a `gh api --include` response, which
+ * prefixes the body with an HTTP status line and header block separated by
+ * a blank line. Tolerates a bare JSON body with no header envelope at all
+ * -- used both by tests that mock a plain successful response directly and
+ * by any other caller shape that never received the `--include` envelope
+ * -- by treating the whole trimmed text as the body when it doesn't start
+ * with an HTTP status line. The headers themselves are not needed here on
+ * the success path; a failed attempt's headers (for `Retry-After`) are
+ * read separately by {@link deriveRetryAfterMs}, from the thrown error's
+ * own captured stderr/stdout text.
+ *
+ * Deliberately not reusing `gh-exec.mts`'s existing
+ * `ghApiJsonWithHeaders`/`parseIncludedGhApiResponse`: that pair is
+ * success-only -- `execFileSync` throws before it can return headers for a
+ * FAILED request, which is exactly the case this module needs headers
+ * for (a `Retry-After` on an ambiguous 5xx/403 failure) -- and it isn't
+ * exported for reuse. Doing so would mean exporting a private helper and
+ * reshaping every existing `postWorkItemComment` test's `ghText` mock
+ * shape; not worth it for this bug-fix-scoped change (code review,
+ * #3275).
+ */
+function extractIncludedResponseBody(raw: string): string {
+  const trimmed = raw.trim();
+  if (!/^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(trimmed)) {
+    return trimmed;
+  }
+  const sections = trimmed.split(/\r?\n\r?\n/);
+  return sections.pop()?.trim() ?? '';
+}
+
+/**
+ * #3275: best-effort `Retry-After` (seconds) or rate-limit-reset
+ * (`x-ratelimit-reset` epoch seconds, only when paired with
+ * `x-ratelimit-remaining: 0`) extraction from a failed POST's captured
+ * output. Scans the same combined stderr/stdout/message text
+ * {@link ghErrorText} already assembles -- a `gh api --include` failure
+ * response's headers may surface on either stream depending on `gh`
+ * version -- so this works whether or not the header block survived as a
+ * clean `--include` envelope. Returns `null` when no wait is derivable,
+ * letting the caller fall back to the existing fixed jittered backoff.
+ */
+function deriveRetryAfterMs(error: unknown, nowMs: number): number | null {
+  const text = ghErrorText(error);
+  if (!text) {
+    return null;
+  }
+  const retryAfterMatch = text.match(/^retry-after:\s*(\d+)\s*$/im);
+  if (retryAfterMatch) {
+    return Number.parseInt(retryAfterMatch[1], 10) * 1000;
+  }
+  const remainingIsZero = /^x-ratelimit-remaining:\s*0\s*$/im.test(text);
+  const resetMatch = text.match(/^x-ratelimit-reset:\s*(\d+)\s*$/im);
+  if (remainingIsZero && resetMatch) {
+    return Math.max(0, Number.parseInt(resetMatch[1], 10) * 1000 - nowMs);
+  }
+  return null;
+}
+
+/**
+ * #2460 / #3275: POST a work-item (issue/PR) comment with a bounded retry
+ * against transient `gh` failures. A failure is classified first via
+ * {@link deriveGhHttpStatus}: `401`/`404`/`422` cannot succeed on retry and
+ * fail immediately with the original error, no re-read, no further
+ * attempt. Every other failure (a `5xx`, a `403` secondary rate limit, or
+ * no derivable status at all, e.g. a timeout/transport error) may have
+ * landed server-side, so the next attempt only proceeds after
+ * {@link findRecentExactBodyMatch} proves no duplicate exists -- a
+ * duplicate returns it instead of posting again, and a failed re-read
+ * throws {@link PostWorkItemCommentNotVerifiedError} instead of guessing.
+ * A `Retry-After`/rate-limit-reset hint on the failure
+ * ({@link deriveRetryAfterMs}) is honored before that next attempt, capped
+ * at {@link POST_WORK_ITEM_COMMENT_MAX_RETRY_AFTER_MS} -- above the cap,
+ * this also throws {@link PostWorkItemCommentNotVerifiedError} rather than
+ * blocking the process for the full wait. Once every attempt is
+ * exhausted, one final {@link findRecentExactBodyMatch} check runs before
+ * giving up -- the last attempt's own failure is just as ambiguous as any
+ * earlier one, so this confirms whether it actually landed instead of
+ * throwing a plain "all attempts failed" error that could tempt a caller
+ * into re-posting the same marker (code review, #3275). Also validates the
+ * response shape before treating the marker as posted (catches a
+ * 200-with-malformed-body edge case a bare retry would not -- see
+ * {@link MalformedPostWorkItemCommentResponseError}).
  */
 function postWorkItemCommentWithRetry(
   deps: GithubProviderAdapterDeps,
@@ -836,6 +953,7 @@ function postWorkItemCommentWithRetry(
   body: string,
 ): ProviderPostedComment {
   const sleep = deps.sleepSync ?? sleepSync;
+  const now = deps.now ?? Date.now;
   let lastError: unknown;
   for (
     let attempt = 1;
@@ -844,12 +962,27 @@ function postWorkItemCommentWithRetry(
   ) {
     if (attempt > 1) {
       const existing = findRecentExactBodyMatch(deps, repoPath, number, body);
-      if (existing) {
-        return existing;
+      if (existing.kind === 'match') {
+        return existing.comment;
+      }
+      if (existing.kind === 'check-failed') {
+        throw new PostWorkItemCommentNotVerifiedError(
+          `postWorkItemComment: POST to ${repoPath}/issues/${number} may have landed but the duplicate-body re-read failed; not verified, not retrying: ${String(lastError)}`,
+        );
+      }
+      const retryAfterMs = deriveRetryAfterMs(lastError, now());
+      if (
+        retryAfterMs !== null &&
+        retryAfterMs > POST_WORK_ITEM_COMMENT_MAX_RETRY_AFTER_MS
+      ) {
+        throw new PostWorkItemCommentNotVerifiedError(
+          `postWorkItemComment: POST to ${repoPath}/issues/${number} carried a Retry-After wait of ${retryAfterMs}ms, exceeding the ${POST_WORK_ITEM_COMMENT_MAX_RETRY_AFTER_MS}ms cap; not verified, not retrying: ${String(lastError)}`,
+        );
       }
       sleep(
-        POST_WORK_ITEM_COMMENT_BASE_DELAY_MS * (attempt - 1) +
-          Math.random() * POST_WORK_ITEM_COMMENT_BASE_DELAY_MS,
+        retryAfterMs ??
+          POST_WORK_ITEM_COMMENT_BASE_DELAY_MS * (attempt - 1) +
+            Math.random() * POST_WORK_ITEM_COMMENT_BASE_DELAY_MS,
       );
     }
     try {
@@ -861,10 +994,15 @@ function postWorkItemCommentWithRetry(
           `${repoPath}/issues/${number}/comments`,
           '--input',
           '-',
+          '--include',
         ],
         { input: JSON.stringify({ body }) },
       );
-      const parsed = JSON.parse(out) as { id?: unknown; html_url?: unknown };
+      const responseBody = extractIncludedResponseBody(out);
+      const parsed = JSON.parse(responseBody) as {
+        id?: unknown;
+        html_url?: unknown;
+      };
       const id = Number(parsed.id);
       const htmlUrl = String(parsed.html_url ?? '');
       if (!Number.isInteger(id) || id <= 0 || htmlUrl === '') {
@@ -877,8 +1015,33 @@ function postWorkItemCommentWithRetry(
       if (error instanceof MalformedPostWorkItemCommentResponseError) {
         throw error;
       }
+      const status = deriveGhHttpStatus(error);
+      if (
+        status !== null &&
+        POST_WORK_ITEM_COMMENT_NON_RETRYABLE_STATUSES.has(status)
+      ) {
+        throw error;
+      }
       lastError = error;
     }
+  }
+  // #3275 (code review): every failure reaching this point already passed
+  // the non-retryable-status check above without throwing, so it is
+  // necessarily a "may have landed" failure -- the same ambiguity the rest
+  // of this function exists to resolve. Reusing "throw the last error and
+  // give up" here without one final duplicate check would silently
+  // reintroduce that ambiguity for the LAST attempt specifically: a caller
+  // that sees this exception and (incorrectly) assumes nothing was posted
+  // could still re-post the same marker if this final attempt actually
+  // landed. Confirm one way or the other before giving up.
+  const finalCheck = findRecentExactBodyMatch(deps, repoPath, number, body);
+  if (finalCheck.kind === 'match') {
+    return finalCheck.comment;
+  }
+  if (finalCheck.kind === 'check-failed') {
+    throw new PostWorkItemCommentNotVerifiedError(
+      `postWorkItemComment: POST to ${repoPath}/issues/${number} may have landed but the final duplicate-body re-read failed; not verified: ${String(lastError)}`,
+    );
   }
   // Copilot review, #2504: `lastError` is `unknown` -- a non-`Error` thrown
   // by `deps.ghText`/`JSON.parse` (a string, `undefined`, ...) would make
@@ -1207,6 +1370,13 @@ export interface GithubProviderAdapterDeps {
    * no-op in tests to keep them fast.
    */
   sleepSync?: (ms: number) => void;
+  /**
+   * Backs {@link postWorkItemCommentWithRetry}'s rate-limit-reset-based
+   * `Retry-After` derivation (#3275). Optional so existing deps overrides
+   * keep compiling; defaults to the real `Date.now`. Inject a fixed value
+   * in tests for a deterministic `x-ratelimit-reset` wait computation.
+   */
+  now?: () => number;
 }
 
 const DEFAULT_DEPS: GithubProviderAdapterDeps = {
@@ -1215,6 +1385,7 @@ const DEFAULT_DEPS: GithubProviderAdapterDeps = {
   resolveViewerLogin: ghExecResolveViewerLogin,
   ghTextAsync,
   sleepSync,
+  now: Date.now,
 };
 
 /**

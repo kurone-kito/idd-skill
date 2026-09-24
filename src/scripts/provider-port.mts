@@ -618,6 +618,16 @@ export interface ProviderPort {
    * `gh pr comment` drop HTML-comment-first bodies. Consolidates
    * `post-idd-marker.mts`'s and `idd-roadmap-audit-execute.mts`'s two
    * independent existing implementations of this same shape.
+   *
+   * The GitHub adapter retries a bounded number of times only when a
+   * failure may have landed ambiguously server-side (a `5xx`, a `403`
+   * secondary rate limit, or an undetermined status such as a timeout),
+   * and only after a fresh duplicate-body re-read of the target's
+   * comments confirms no match -- a `401`/`404`/`422` fails immediately
+   * with no retry, and a failed re-read (or a `Retry-After` wait beyond a
+   * bounded cap) throws instead of guessing (#3275). Callers should treat
+   * any thrown error as "not verified" rather than assuming the comment
+   * was never posted.
    */
   postWorkItemComment(number: number, body: string): ProviderPostedComment;
 

@@ -818,6 +818,10 @@ process.exit(1);
     });
 
     // (1) the exact gh api arguments (JSON `--input -` path, not `-f body=`).
+    // `--include` (#3275) keeps the response's HTTP headers available for a
+    // failed attempt's `Retry-After` derivation; a plain JSON body (as this
+    // stub still returns) is parsed unchanged via the tolerant fallback in
+    // `extractIncludedResponseBody`.
     assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
       'api',
       '--method',
@@ -825,6 +829,7 @@ process.exit(1);
       'repos/o/r/issues/1047/comments',
       '--input',
       '-',
+      '--include',
     ]);
 
     // (2) the JSON request body piped to stdin carries the exact marker body.

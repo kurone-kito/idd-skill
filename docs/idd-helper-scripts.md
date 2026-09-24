@@ -2893,6 +2893,20 @@ close.
   single-marker render+POST primitive, so the calling phase must run its
   claim-revalidation gate before `--apply`, exactly as the manual POST path it
   replaces already requires.
+- **Write-failure classification (#3275)**: the underlying
+  `postWorkItemComment` POST (every `--apply` call above goes through it)
+  retries only a failure that may have landed ambiguously — a timeout,
+  transport error, a `5xx`, or a `403` secondary rate limit — and only
+  after a fresh, successful duplicate-body re-read of the target's
+  comments confirms no match; a found match is returned instead of
+  posting again. A non-retryable status (`401`, `404`, `422`) fails
+  immediately with the original error, no re-read, no further attempt.
+  When the duplicate re-read itself fails, or the failure carries a
+  `Retry-After` (or `x-ratelimit-reset` with `x-ratelimit-remaining: 0`)
+  wait longer than a bounded cap, the call throws instead of retrying —
+  the write's outcome was never confirmed, so the caller must re-read
+  live state before acting again rather than assume either success or
+  failure.
 - Stable contract: [`post-idd-marker.schema.json`][post-idd-marker-schema].
 
 ### Resume claim and route evidence
