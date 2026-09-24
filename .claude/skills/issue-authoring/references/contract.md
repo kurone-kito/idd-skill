@@ -263,7 +263,31 @@ after claim — this scan only adds an earlier, pre-publish checkpoint.
 A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
 
-**Same-shape follow-up chains.** A different case from both checks
+**Previously declined check.** Before treating a proposal as new, you
+**MUST** check whether it was already declined. Vocabulary alone can
+miss a match: the Groom outcome recorded on issue #2996 on 2026-09-15
+closed it as not-planned, yet issue #3164's own later search missed it
+six days after. Search closed issues using the proposal's core nouns
+rather than its new framing, plus at least one alternative phrasing:
+
+```sh
+gh issue list --repo <owner>/<repo> --state closed --limit 100 \
+  --search 'reason:"not planned" <core-nouns>'
+```
+
+When the proposal changes an existing mechanism, identify the PR that
+introduced or last reshaped it (for example from `git log -S` on the
+mechanism's symbol, followed by its merge commit's `Merge pull
+request #N` subject) and read that PR's review threads for a
+**Rejected** disposition of the same idea — for example, PR #2895
+review comment `3983246464` was dispositioned Rejected on 2026-09-10
+as a deliberate trade-off; that rejection is recorded only in that
+review thread. **Cite every match** found by either search in the
+drafted issue's Background, stating what is new since that outcome.
+When nothing is new, do **not** publish the issue as `ready` — route
+it to `needs-decision` or drop the proposal and record why.
+
+**Same-shape follow-up chains.** A different case from the checks
 above: an issue whose own acceptance criteria explicitly ask for a
 follow-up issue with the same acceptance criteria when the round does
 not fully complete (a "retry again" pattern, e.g., an iterative
@@ -276,9 +300,10 @@ diagnosis, no new information beyond the predecessor), route to
 `needs-decision` (or an equivalent hold) instead of authoring another
 identical-shape issue, and record why the chain paused so a later
 session or human can see the reasoning. This is a sibling check, not a
-replacement: the checks above guard against an accidental duplicate;
-this guards against a correct-but-repeated pattern continuing past the
-point it stops being useful.
+replacement: the checks above guard against an accidental duplicate or
+a previously declined proposal; this guards against a
+correct-but-repeated pattern continuing past the point it stops being
+useful.
 
 ## Output chooser
 

@@ -850,7 +850,8 @@
       "requiredText": [
         "It mirrors the canonical\ncontract in `docs/issue-authoring-skill.md`.",
         "## Target marker prefix",
-        "## Publication boundary"
+        "## Publication boundary",
+        "**Previously declined check.**"
       ]
     },
     {
