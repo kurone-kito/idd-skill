@@ -11,6 +11,7 @@ import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
+  resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mjs';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -171,6 +172,7 @@ export function main(argv = process.argv.slice(2)) {
       '--jq',
       '.login',
     ]).toLowerCase();
+    const permissionCache = new Map();
     const { logins: trustedMarkerLogins, sources: trustedMarkerActorsSources } =
       buildTrustedMarkerLogins(
         owner,
@@ -178,9 +180,9 @@ export function main(argv = process.argv.slice(2)) {
         viewerLogin,
         args.trustedMarkerLogins,
         issueComments,
+        permissionCache,
       );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-    const permissionCache = new Map();
     const tempClaim = resolveHelperActiveClaim(
       issueComments,
       trustedMarkerLogins,
@@ -280,6 +282,7 @@ export function main(argv = process.argv.slice(2)) {
     '--jq',
     '.login',
   ]).toLowerCase();
+  const permissionCache = new Map();
   const { logins: trustedMarkerLogins, sources: trustedMarkerActorsSources } =
     buildTrustedMarkerLogins(
       owner,
@@ -287,9 +290,9 @@ export function main(argv = process.argv.slice(2)) {
       viewerLogin,
       args.trustedMarkerLogins,
       issueComments,
+      permissionCache,
     );
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const permissionCache = new Map();
   const activeClaim = resolveHelperActiveClaim(
     issueComments,
     trustedMarkerLogins,
@@ -466,12 +469,13 @@ export function parseArgs(argv) {
     help,
   };
 }
-function buildTrustedMarkerLogins(
+export function buildTrustedMarkerLogins(
   owner,
   repo,
   viewerLogin,
   cliLogins,
   issueComments,
+  cache,
 ) {
   // Parse the config once and share it between the actor union and the
   // collaborator-trust toggle.
@@ -494,31 +498,22 @@ function buildTrustedMarkerLogins(
   if (!readCollaboratorTrustEnabled(config)) {
     return { logins: trusted, sources };
   }
-  const permissionCache = new Map();
-  const uniqueLogins = new Set(
-    issueComments
-      .map((comment) => String(comment.user?.login ?? '').toLowerCase())
-      .filter(Boolean),
+  // #1693 parity (kurone-kito/idd-skill#3340): delegate the
+  // collaborator-widening step to resolveTrustedCollaboratorMarkerLogins
+  // (marker-authors-first, collaborator-permission.mts) -- the same
+  // migration force-handoff.mts already made -- instead of
+  // permission-checking every unique issue-comment author. Checking
+  // every commenter over-trusted an ordinary write+ collaborator who
+  // never posted an operational marker.
+  const collaboratorLogins = resolveTrustedCollaboratorMarkerLogins(
+    owner,
+    repo,
+    issueComments,
+    { cache },
   );
   let collaboratorAdded = false;
-  for (const login of uniqueLogins) {
-    if (trusted.has(login)) {
-      continue;
-    }
-    const permission =
-      permissionCache.get(login) ??
-      safeGhText([
-        'api',
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        '--jq',
-        '.permission',
-      ]).toLowerCase();
-    permissionCache.set(login, permission);
-    if (
-      permission === 'admin' ||
-      permission === 'maintain' ||
-      permission === 'write'
-    ) {
+  for (const login of collaboratorLogins) {
+    if (!trusted.has(login)) {
       trusted.add(login);
       collaboratorAdded = true;
     }
