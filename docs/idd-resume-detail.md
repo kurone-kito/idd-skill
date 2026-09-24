@@ -94,6 +94,20 @@ observed incident yet — a resuming session finding the PR merged while the
 prior worker was still running F4 could otherwise remove that worker's
 live worktree).
 
+**Displaced-session safety.** The owned row's "claim = this session's
+verified `{claim-id}`" condition means a **freshly re-parsed** active
+claim per the shared claim-state rules
+(`idd-claim.instructions.md`), including rule 7's forced-handoff
+transfer: once a valid forced-handoff marker names this session's claim
+displaced, the active claim becomes the successor's pair, so the owned
+row no longer matches for this session at all — this is the same
+"verified" every other claim-matching row in Step 1 already relies on,
+not a new exposure. The "FH evidence names this session's
+already-verified `{claim-id}`" row below is the explicit backstop against
+a stale evaluation, since it checks this session's own recorded
+`{claim-id}` against FH evidence directly rather than against whatever
+the active claim currently is.
+
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
 contract (steps 4-7, plus step 1 when `{development-branch}` is not the
