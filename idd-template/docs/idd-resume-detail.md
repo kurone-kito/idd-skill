@@ -283,8 +283,13 @@ could ever observe it as 'alive'".
    `local_worktree_occupied` result reports
    `evidence.local_worktree.paths` and a `reason` starting
    `stale-claim-...` or `released-claim-...`. If `<path>` no longer
-   exists on disk (a prunable record), skip to `git worktree prune` —
-   nothing to preserve or remove. Otherwise run the profile-selected
+   exists on disk (a prunable record), skip to `git worktree remove
+   --force <path-from-list>` — mirroring B1's own same-shape recovery
+   rule for a prunable entry (`idd-work.instructions.md`); plain `git
+   worktree prune` silently no-ops on a record younger than Git's
+   default 3-month prune expiry, leaving the occupancy helper failing
+   closed on it (PR `#3354` review, Copilot). Nothing to preserve or
+   remove. Otherwise run the profile-selected
    `claim-lock` helper's check form (source-repo/vendored-node: `node
    scripts/claim-lock.mjs --check --worktree <path>`) to read which
    claim-id holds the lock. Proceed only when that claim-id matches the
@@ -303,13 +308,21 @@ could ever observe it as 'alive'".
    --verify MERGE_HEAD` (merge), `test -d "$(git -C <path> rev-parse
    --git-path rebase-merge)"` or `rebase-apply` (rebase), `git -C
    <path> rev-parse -q --verify CHERRY_PICK_HEAD` (cherry-pick), or
-   `git -C <path> rev-parse --git-path BISECT_LOG` existing (bisect).
-   Any match means back up the pre-operation branch tip before
-   continuing. Inspect
+   `test -f "$(git -C <path> rev-parse --git-path BISECT_LOG)"`
+   (bisect) — `rev-parse --git-path` alone only prints the path, the
+   same reason the rebase check above already wraps its own
+   `--git-path` result in `test -d` (PR `#3354` review, Copilot). Any
+   match means back up the pre-operation branch tip before continuing.
+   Inspect
    `git -C <path> status --porcelain --ignored`,
    unpushed commits (`git -C <path> log @{u}..HEAD`, or all commits
-   when there is no upstream), and `git -C <path> stash list`. Save
-   uncommitted working-tree changes with `git -C <path> stash push
+   when there is no upstream), and `git -C <path> stash list` (record
+   its current entries as the pre-step baseline — a sibling worktree
+   can already have unrelated entries there). When that status check
+   reports a line not prefixed `!!` (a tracked or untracked change —
+   `--ignored` always lists ignored paths too, e.g. `node_modules/`,
+   so their presence alone is not a signal to stash), save the change
+   with `git -C <path> stash push
    --include-untracked` — stash entries live in the shared repository,
    not the worktree's own private admin directory, so they survive
    step 4's removal — and preserve unpushed commits on a backup ref or
@@ -317,16 +330,46 @@ could ever observe it as 'alive'".
    does not stash ignored files, so copy those out separately: secrets
    (e.g. `.env`) — never commit or push them — and any other
    non-reproducible ignored data, mirroring `idd-merge.instructions.md`
-   F4's same worktree-removal rule.
-4. **Remove.** Confirm each step 3 action actually succeeded — the
-   stash entry appears in `git -C <path> stash list`, unpushed commits
+   F4's same worktree-removal rule. A worktree with no tracked or
+   untracked change has nothing to stash: `stash push` reports no
+   local changes to save and creates no new entry, so step 4 skips the
+   stash check for it (PR `#3354` review, Copilot).
+4. **Remove.** Confirm each step 3 action actually succeeded — a new
+   entry beyond the pre-step baseline appears in `git -C <path> stash
+   list` only when step 3 found a change to stash, unpushed commits
    are visible on the backup ref or in the bundle, and any copied-out
    ignored files landed outside the worktree — before removing
    anything. Stop and do not run `git worktree remove`, `--force`
-   included, if any of them failed. Then run `git worktree remove
-   <path>`, then `git worktree prune`. This also deletes that
-   worktree's claim lock and generated-tokens record, since both live
-   in its own private git-admin directory.
+   included, if any of them failed.
+
+   If `<path>` is the primary worktree — the path the first `worktree`
+   line of `git worktree list --porcelain` reports, distinct from
+   every subsequent linked-worktree stanza — `git worktree remove`
+   cannot remove it, and its admin directory is shared by every
+   concurrent session in the same clone and is never cleaned up by
+   removal (`src/scripts/claim-lock.mts`'s own documented scope; PR
+   `#3354` review, Copilot). This is typically the anti-pattern §W7
+   warns against (checking out the issue branch directly in the
+   primary worktree instead of adding a linked one): run `git -C
+   <path> checkout {development-branch}` there instead to
+   release the branch — re-resolve `{development-branch}` per §CSA's
+   note above if this file is entered without a fresh B1 pass — then
+   confirm `resume-claim-routing.mjs` now reports this branch's
+   `evidence.local_worktree.status` as `absent` before continuing to
+   step 5. If step 1's `claim-lock` check matched this primary
+   worktree's lock to the claim-id being recovered, remove that one
+   file now that the checkout released the branch (`rm
+   "$(git -C <path> rev-parse --absolute-git-dir)/idd-claim.lock"`) —
+   the same deletion `git worktree remove` performs for a linked
+   worktree, done by hand here since removal itself isn't possible.
+   Leave the generated-tokens record: it is keyed per claim-id, not
+   per branch, and `claim-lock.mts` already documents it as never
+   expected to be cleaned up.
+
+   Otherwise run `git worktree remove <path>`, then `git worktree
+   prune`. This also deletes that worktree's claim lock and
+   generated-tokens record, since both live in its own private
+   git-admin directory.
 5. **Re-enter.** Re-run Resume from Step 0. A now-`absent` worktree
    lets a stale claim take the normal stale-takeover path through A5,
    and a released claim take a fresh A5 claim. Route any preserved

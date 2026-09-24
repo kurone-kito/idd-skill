@@ -115,6 +115,6 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 ## Hold behavior
 
 On S2/S3 hold, missing helper, unanchored timestamps, or ambiguous
-claim/forced-handoff: session log only (no issue/PR comment);
-include §LWR wake-condition fields (`docs/idd-resume-detail.md`) on
-an S3 or S4 stop. Never invent forced-handoff consent.
+claim/forced-handoff: session log only (no issue/PR comment); on
+`local_worktree_occupied` (S3/S4), include §LWR fields
+(`docs/idd-resume-detail.md`). Never invent forced-handoff consent.
