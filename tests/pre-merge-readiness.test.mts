@@ -3077,14 +3077,97 @@ test('disposition evidence keeps freshness after an IDD reply even if later huma
   );
 });
 
-test('disposition evidence recognizes a stamped Accepted under a custom markerPrefix (#2139)', () => {
+// #3244: `hasFreshDisposition` no longer honors the review-reply stamp
+// regardless of author -- it only ever narrows who counts as an IDD
+// disposition author (#2135's "only makes the gate stricter" design
+// intent), never widens it. `isIddOriginatedThreadReply`'s own
+// presence-only classification (below, still author-blind by design) is
+// untouched, so the custom-`markerPrefix` coverage moves there instead of
+// exercising a now-removed `hasFreshDisposition` option.
+test('disposition evidence keeps a human-authored thread open when a later reply carries only the review-reply stamp under a custom markerPrefix (#3244)', () => {
   const stamp = renderReviewReplyStamp('org-project');
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [],
       threads: [
         {
-          id: 'thread-custom-prefix',
+          id: 'thread-custom-prefix-stamp-only',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                // No `**Accepted**`/`**Rejected**` prefix -- the stamp
+                // alone still makes this reply IDD-originated
+                // (`isIddOriginatedThreadReply`), so it is NOT
+                // presence-only, and the thread still lacks any actual
+                // disposition.
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `just a follow-up note\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence treats the same human-authored reply as presence-only once the stamp is removed (#3244)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-custom-prefix-no-stamp',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please fix the naming',
+              },
+              {
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: 'just a follow-up note',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence keeps a Copilot thread open when a stamped Accepted reply comes from an untrusted, non-PR-author account (#3244)', () => {
+  const stamp = renderReviewReplyStamp('org-project');
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-untrusted-stamped-accept',
           isResolved: false,
           comments: {
             pageInfo: { hasNextPage: false },
@@ -3107,8 +3190,54 @@ test('disposition evidence recognizes a stamped Accepted under a custom markerPr
     { iddAgentLogins: ['idd-bot'], markerPrefix: 'org-project' },
   );
 
-  assert.equal(summary.route, 'proceed');
-  assert.equal(summary.missingThreadCount, 0);
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence keeps a Copilot thread open when the stamped Accepted reply is posted by an untrusted PR author (#3244)', () => {
+  const stamp = renderReviewReplyStamp('org-project');
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-untrusted-pr-author-stamped-accept',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'copilot' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'consider extracting this helper',
+              },
+              {
+                author: { login: 'someone-else' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      markerPrefix: 'org-project',
+      prAuthorLogin: 'someone-else',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
 });
 
 test('disposition evidence classifies a trusted maintainer LGTM as a human reply (#2139)', () => {
