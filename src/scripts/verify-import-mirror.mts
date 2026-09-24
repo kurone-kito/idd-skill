@@ -537,23 +537,30 @@ function normalizeProseSegment(content: string): string {
  * into a false `content-mismatch`.
  *
  * A boundary line starts a fresh chunk carrying that item's raw
- * `markerIndent` + `marker` verbatim; the marker's own trailing
- * separating whitespace is canonicalized to a single space in the
- * EMITTED prefix, consistent with how every other incidental whitespace
- * amount in this rule is already tolerated -- but the new chunk's own
- * content-indent (case (2)'s "content zone" boundary for whatever comes
- * after it) is computed via `markdown-code.mts`'s own
- * {@link parseListItemContainer}, not by assuming that emitted single
- * space is the real separating width: an earlier version of this
- * function approximated content-indent as `markerIndent columns + marker
- * length + 1`, which disagreed with `parseListItemContainer`'s
- * CommonMark-correct handling of a 2-4-column separating gap (5+
- * collapses to one column of padding) and could accept a marker that had
- * actually already exited the zone (Copilot review, PR #3417). A line
- * that is not a boundary instead extends the CURRENT chunk (list item or
- * plain paragraph text alike), so ordinary reflow -- rewrapping a list
- * item's own continuation lines, or plain prose with no list items at
- * all -- still collapses exactly as before.
+ * `markerIndent` + `marker` verbatim, followed by the marker's own
+ * separating whitespace re-derived from `markdown-code.mts`'s own
+ * {@link parseListItemContainer} -- NOT canonicalized to a single space.
+ * An earlier version of this function both (a) approximated the new
+ * chunk's own content-indent as `markerIndent columns + marker length +
+ * 1` (disagreeing with `parseListItemContainer`'s CommonMark-correct
+ * handling of a 2-4-column separating gap, where 5+ collapses to one
+ * column of padding) and (b) always emitted exactly one canonical space
+ * in the PREFIX regardless of the real separating width (Copilot review,
+ * PR #3417, then a CodeRabbit review the same round). (b) is the more
+ * serious of the two: the real separating width can itself decide
+ * whether a LATER marker nests under this item or falls outside its
+ * zone: `1.` followed by exactly one separating space before `parent`
+ * nests a following `   - child` line under it, but `1.` followed by TWO
+ * separating spaces before `parent` does not (verified via `gh api
+ * /markdown`) -- so canonicalizing that width away let two
+ * structurally different documents normalize to the identical string, a
+ * false PASS rather than merely an overly strict false rejection.
+ * Deriving both the prefix's own padding and the tracked content-indent
+ * from the same `parseListItemContainer` call keeps them consistent by
+ * construction. A line that is not a boundary instead extends the
+ * CURRENT chunk (list item or plain paragraph text alike), so ordinary
+ * reflow -- rewrapping a list item's own continuation lines, or plain
+ * prose with no list items at all -- still collapses exactly as before.
  *
  * `markerIndent` is compared verbatim (raw column count) only when
  * deciding whether a line is a genuine boundary at all (case 2 above);
@@ -616,8 +623,18 @@ function normalizeParagraphPreservingListStructure(paragraph: string): string {
         isInterruptingListMarker(listItem.marker));
     if (isGenuineListBoundary && listItem !== null) {
       flushCurrentChunk();
-      currentPrefix = `${listItem.markerIndent}${listItem.marker} `;
-      currentChunkContentIndent = parseListItemContainer(line);
+      const contentIndent = parseListItemContainer(line);
+      const markerEndColumns =
+        indentationColumns(listItem.markerIndent) + listItem.marker.length;
+      // parseListItemContainer re-derives from the same parseListItemMatch
+      // shape that already matched `line` above (listItem !== null), so it
+      // is guaranteed non-null here too -- guarded defensively (falling
+      // back to the single-space width) rather than asserted, in case that
+      // invariant ever changes.
+      const paddingColumns =
+        contentIndent === null ? 1 : contentIndent - markerEndColumns;
+      currentPrefix = `${listItem.markerIndent}${listItem.marker}${' '.repeat(paddingColumns)}`;
+      currentChunkContentIndent = contentIndent ?? markerEndColumns + 1;
       currentContentLines = [listItem.content];
       hasCurrentChunk = true;
     } else if (hasCurrentChunk) {

@@ -681,6 +681,37 @@ test("normalizeProseWhitespace computes a list item's content-indent from its AC
   );
 });
 
+test("normalizeProseWhitespace preserves the emitted prefix's own separating width, not just the content-indent used to decide boundaries (CodeRabbit review, PR #3417)", () => {
+  // Regression (false PASS, the dangerous direction): an earlier version
+  // used parseListItemContainer's real content-indent to decide list
+  // BOUNDARIES, but still always EMITTED exactly one canonical space in
+  // the prefix regardless of the real width. That let two structurally
+  // different documents collapse to the identical normalized string: per
+  // CommonMark, "1. parent\n   - child\n" (one separating space after
+  // "1.") nests the "- child" item under "parent", but "1.  parent\n
+  // - child\n" (two separating spaces) does NOT -- verified via `gh api
+  // /markdown` (an ordered list followed by a SEPARATE bullet list, not
+  // one nested item). Both must therefore normalize differently.
+  const nestedOneSpace = '1. parent\n   - child\n';
+  const siblingTwoSpaces = '1.  parent\n   - child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nestedOneSpace),
+    normalizeProseWhitespace(siblingTwoSpaces),
+  );
+});
+
+test('rule 3 fail (CodeRabbit review, PR #3417): a marker-spacing change that flips nested-vs-sibling structure is a genuine mismatch, not tolerated', () => {
+  const upstream = Buffer.from('1. parent\n   - child\n');
+  const target = Buffer.from('1.  parent\n   - child\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
   // "- child" indented under "- parent" (a genuine nested item) versus
   // "- child" at column 0 (a sibling of "- parent", not nested under it)
