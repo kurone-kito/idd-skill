@@ -1,0 +1,40 @@
+{
+  "name": "same-second competing claims with an activation-nonce and a plain comment interleaved still resolve to the lexicographically earlier claim id",
+  "events": [
+    {
+      "createdAt": "2026-05-11T07:08:33.100Z",
+      "author": {
+        "login": "agent-b"
+      },
+      "body": "<!-- claimed-by: agent-b claim-zzzzzzzz supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-b: issue claim - IDD automation marker. Do not edit._\n"
+    },
+    {
+      "createdAt": "2026-05-11T07:08:33.300Z",
+      "author": {
+        "login": "agent-b"
+      },
+      "body": "<!-- activation-nonce: agent-b claim-zzzzzzzz nonce-b 2026-05-11T07:08:33Z -->\n\n_agent-b: claim activation nonce - IDD automation marker. Do not edit._\n"
+    },
+    {
+      "createdAt": "2026-05-11T07:08:33.500Z",
+      "author": {
+        "login": "some-collaborator"
+      },
+      "body": "watching this issue, good luck!"
+    },
+    {
+      "createdAt": "2026-05-11T07:08:33.900Z",
+      "author": {
+        "login": "agent-a"
+      },
+      "body": "<!-- claimed-by: agent-a claim-aaaaaaaa supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._\n"
+    }
+  ],
+  "expectedActiveClaim": {
+    "agentId": "agent-a",
+    "claimId": "claim-aaaaaaaa",
+    "supersedes": "none",
+    "branch": "issue/269-discover-suitability-split",
+    "createdAt": "2026-05-11T07:08:33.900Z"
+  }
+}

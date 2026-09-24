@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
+import {
+  DEFAULT_STALE_AGE_MS,
+  resolveActiveClaimForWriteGate,
+  summarizeClaimValidation,
+} from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   buildForcedHandoffEnabledGate,
@@ -562,6 +566,57 @@ test('detects same-second tie-break loss as disputed', () => {
   assert.equal(result.action, 'stop');
   assert.equal(result.reason, 'same-second-claim-tie-break-loss');
   assert.equal(result.active_claim?.claim_id, 'claim-a');
+});
+
+// kurone-kito/idd-skill#3266: an untrusted comment sitting between two
+// same-second trusted claims must never make evaluateResumeClaimRouting,
+// summarizeClaimValidation, and resolveActiveClaimForWriteGate disagree
+// on the winning claim-id. Before #3266, evaluateResumeClaimRouting
+// filtered untrusted authors out before ordering while the other two
+// ordered the full, unfiltered stream and skipped untrusted events only
+// later (inside applyClaimEvent) -- different trusted event sets ordered
+// around the same non-transitive comparator could produce different
+// winners for the identical underlying claim state (the write gate
+// reporting `claimLost` for a session the resume helper reported as
+// `already_owned`).
+test('evaluateResumeClaimRouting, summarizeClaimValidation, and resolveActiveClaimForWriteGate agree on the winner when an untrusted comment sits between two same-second claims', () => {
+  const events = [
+    {
+      createdAt: '2026-05-13T09:00:00.100Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-zzzzzzzz supersedes: none 2026-05-13T09:00:00Z branch: issue/6-task -->',
+    },
+    {
+      createdAt: '2026-05-13T09:00:00.500Z',
+      author: { login: 'stranger' },
+      body: 'I would also like to help with this issue!',
+    },
+    {
+      createdAt: '2026-05-13T09:00:00.900Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-aaaaaaaa supersedes: none 2026-05-13T09:00:00Z branch: issue/6-task -->',
+    },
+  ];
+  const isTrustedAuthor = trusted(['maintainer']);
+
+  const resumeResult = evaluateResumeClaimRouting(
+    { claimId: 'claim-aaaaaaaa', now: '2026-05-13T10:00:00Z', events },
+    { isTrustedAuthor },
+  );
+  const writeGateSummary = summarizeClaimValidation(events, {
+    isTrustedAuthor,
+    expectedClaimId: 'claim-aaaaaaaa',
+    expectedAgentId: 'copilot',
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  });
+  const writeGateActive = resolveActiveClaimForWriteGate(events, {
+    isTrustedAuthor,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  });
+
+  assert.equal(resumeResult.active_claim?.claim_id, 'claim-aaaaaaaa');
+  assert.equal(writeGateSummary.activeClaim.claimId, 'claim-aaaaaaaa');
+  assert.equal(writeGateActive?.claimId, 'claim-aaaaaaaa');
 });
 
 test('ignores heartbeat with mismatched branch and records warning', () => {

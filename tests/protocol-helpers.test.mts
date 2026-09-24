@@ -4,9 +4,12 @@ import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildActivitySnapshotSummary,
   classifyThreadAckOnlyPostDisposition,
+  compareClaimEventOrder,
+  compareClaimIds,
   EDITED_AFTER_DISPOSITION_HINT,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
+  orderClaimEvents,
   resolveActiveClaim,
   summarizeDispositionEvidenceForGate,
   summarizeRegularCommentsForGate,
@@ -3857,4 +3860,196 @@ test('parseClaimComment leaves a real supersedes claim ID verbatim', () => {
 
   const parsed = parseClaimComment(body, '2026-05-10T00:00:00Z');
   assert.equal(parsed?.supersedes, 'claim-NoneSuffix-1');
+});
+
+// kurone-kito/idd-skill#3266: exhaustive same-second 3-way race.
+//
+// Before #3266, `sortClaimEvents` mixed a claim-id comparison into the
+// same comparator used for `created_at`-second/time/index ordering, which
+// is not transitive whenever a non-claim event (here, each session's own
+// activation-nonce) shares a `created_at` second with two same-second
+// competing claims. This generates every valid interleaving of 3
+// same-second claims plus 3 same-second activation-nonces -- one nonce
+// per claiming session, each constrained to follow its own claim (the
+// only realistic ordering: a session posts its nonce after its own
+// claim) -- and asserts every interleaving resolves to the
+// lexicographically earliest claim-id. 6 items with 3 same-session
+// ordering constraints leaves 6! / 2^3 = 90 valid interleavings; the
+// #3266 audit measured 20 of 90 wrong on the pre-fix comparator.
+function permutationsOf<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) {
+    return [items.slice()];
+  }
+  const result: T[][] = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+    for (const tail of permutationsOf(rest)) {
+      result.push([items[i], ...tail]);
+    }
+  }
+  return result;
+}
+
+test('resolveActiveClaim resolves every valid interleaving of a same-second 3-way race to the lexicographically earliest claim-id (0/90 wrong winners)', () => {
+  const SECOND = '2026-05-11T07:08:33Z';
+  const sessions = ['a', 'b', 'c'] as const;
+  const claimOf = (session: string) => `claim-${session.repeat(8)}`;
+  type RaceItem = { kind: 'claim' | 'nonce'; session: string; body: string };
+  const items: RaceItem[] = sessions.flatMap((session) => [
+    {
+      kind: 'claim' as const,
+      session,
+      body: `<!-- claimed-by: agent-${session} ${claimOf(session)} supersedes: none 2026-05-11T07:08:31Z branch: issue/1-task -->`,
+    },
+    {
+      kind: 'nonce' as const,
+      session,
+      body: `<!-- activation-nonce: agent-${session} ${claimOf(session)} nonce-${session} 2026-05-11T07:08:32Z -->`,
+    },
+  ]);
+
+  let interleavingCount = 0;
+  let wrongWinnerCount = 0;
+  for (const permutation of permutationsOf(items)) {
+    const claimIndex = (session: string) =>
+      permutation.findIndex(
+        (it) => it.kind === 'claim' && it.session === session,
+      );
+    const nonceIndex = (session: string) =>
+      permutation.findIndex(
+        (it) => it.kind === 'nonce' && it.session === session,
+      );
+    const isValidInterleaving = sessions.every(
+      (session) => claimIndex(session) < nonceIndex(session),
+    );
+    if (!isValidInterleaving) {
+      continue;
+    }
+    interleavingCount += 1;
+
+    const events = permutation.map((item) => ({
+      body: item.body,
+      createdAt: SECOND,
+      author: { login: 'trusted-actor' },
+    }));
+    const active = resolveActiveClaim(events, () => true);
+    if (active?.claimId !== claimOf('a')) {
+      wrongWinnerCount += 1;
+    }
+  }
+
+  assert.equal(interleavingCount, 90);
+  assert.equal(wrongWinnerCount, 0);
+});
+
+// kurone-kito/idd-skill#3266: `orderClaimEvents` and the comparators it
+// uses must be deterministic and, individually, transitive -- the
+// property the pre-#3266 single comparator lacked.
+test('orderClaimEvents returns the identical order on repeated calls over generated mixed same-second event lists', () => {
+  const SECOND = '2026-06-01T12:00:00Z';
+  const claimA = `<!-- claimed-by: agent-a claim-aaaaaaaa supersedes: none ${SECOND} branch: issue/9-task -->`;
+  const claimB = `<!-- claimed-by: agent-b claim-bbbbbbbb supersedes: none ${SECOND} branch: issue/9-task -->`;
+  const release = `<!-- unclaimed-by: agent-z claim-zzzzzzzz ${SECOND} -->`;
+  const plainComment = 'thanks for picking this up!';
+  const baseItems = [
+    { label: 'claimA', body: claimA },
+    { label: 'claimB', body: claimB },
+    { label: 'release', body: release },
+    { label: 'plain', body: plainComment },
+  ];
+
+  for (const permutation of permutationsOf(baseItems)) {
+    const events = permutation.map((item, index) => ({
+      body: item.body,
+      createdAt: SECOND,
+      author: { login: 'trusted-actor' },
+      id: index,
+    }));
+
+    const firstOrder = orderClaimEvents(events);
+    const secondOrder = orderClaimEvents(events);
+    assert.deepEqual(
+      secondOrder,
+      firstOrder,
+      `orderClaimEvents must be deterministic for permutation ${permutation.map((it) => it.label).join(',')}`,
+    );
+
+    // Structural invariant this permutation lets us check directly: the
+    // two same-second claim events must land in ascending claim-id order
+    // (claimA before claimB) in the output, while `release` and `plain`
+    // -- neither of which parses as a `claimed-by` marker -- must keep
+    // exactly the relative order they had in THIS permutation's own
+    // input (their "fetch order" within the second).
+    const claimOrder = firstOrder
+      .filter((event) => event.body === claimA || event.body === claimB)
+      .map((event) => (event.body === claimA ? 'claimA' : 'claimB'));
+    assert.deepEqual(claimOrder, ['claimA', 'claimB']);
+
+    const inputNonClaimOrder = permutation
+      .filter((item) => item.label === 'release' || item.label === 'plain')
+      .map((item) => item.label);
+    const outputNonClaimOrder = firstOrder
+      .filter((event) => event.body === release || event.body === plainComment)
+      .map((event) => (event.body === release ? 'release' : 'plain'));
+    assert.deepEqual(outputNonClaimOrder, inputNonClaimOrder);
+  }
+});
+
+/** Checks that `compare` induces a transitive weak order over `items`: for
+ * every triple, `compare(a,b) <= 0 && compare(b,c) <= 0` implies
+ * `compare(a,c) <= 0`. */
+function assertTransitiveForEveryTriple<T>(
+  compare: (left: T, right: T) => number,
+  items: readonly T[],
+  label: string,
+): void {
+  for (const a of items) {
+    for (const b of items) {
+      for (const c of items) {
+        if (compare(a, b) <= 0 && compare(b, c) <= 0) {
+          assert.ok(
+            compare(a, c) <= 0,
+            `${label} is not transitive for (${JSON.stringify(a)}, ${JSON.stringify(b)}, ${JSON.stringify(c)})`,
+          );
+        }
+      }
+    }
+  }
+}
+
+test('compareClaimEventOrder is transitive for every generated triple', () => {
+  const items = [
+    { second: 100, time: 100000, index: 0 },
+    { second: 100, time: 100000, index: 1 },
+    { second: 100, time: 100000, index: 2 },
+    { second: 100, time: 100500, index: 0 },
+    { second: 100, time: 100999, index: 3 },
+    { second: 101, time: 101000, index: 0 },
+    { second: 99, time: 99000, index: 5 },
+    { second: null, time: null, index: 0 },
+    { second: null, time: null, index: 1 },
+    { second: null, time: null, index: 2 },
+  ];
+  assertTransitiveForEveryTriple(
+    compareClaimEventOrder,
+    items,
+    'compareClaimEventOrder',
+  );
+});
+
+test('compareClaimIds is transitive for every generated triple', () => {
+  const items = [
+    'claim-aaaaaaaa',
+    'claim-bbbbbbbb',
+    'claim-zzzzzzzz',
+    'claim-aaaaaaaa',
+    'a',
+    'aa',
+    'ab',
+    'b',
+    'AAA',
+    'aaa',
+    '',
+  ];
+  assertTransitiveForEveryTriple(compareClaimIds, items, 'compareClaimIds');
 });
