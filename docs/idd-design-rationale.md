@@ -1135,6 +1135,98 @@ are unchanged; only what the number is compared against changed. The
 unchanged too — it keeps serving freshness and CI-completion gating
 unaffected by this correction.
 
+### E4/E5 adopt-now urgency defer
+
+E4 scores each PATH A item on one axis, severity/relevance to PR
+intent: **High** → Accept forced, **Low** ("minor, unrelated to PR
+intent") → Reject recommended, **Medium** → judge by context. A
+finding that is minor but genuinely _in scope_ is not Low under that
+definition, so it lands in Medium's "judge by context" branch, and in
+practice the agent accepts it because it is correct and relevant.
+Every Accepted PATH A fix is a push, and E14 requests a fresh Copilot
+review after every push, so each such item typically buys one more
+Copilot review wave, and that wave's own diff can surface new
+findings.
+
+Live-observed baseline (2026-09-24; 60 merged PRs `#3089`-`#3210`,
+merged 2026-09-17..2026-09-23; checkable via `gh api
+repos/kurone-kito/idd-skill/pulls/<n>/reviews` filtered to
+`copilot-pull-request-reviewer[bot]`, plus `pulls/<n>/comments` for the
+disposition replies): 192 Copilot reviews, 136 carrying the
+`<!-- ccr-overview-v2 -->` overview (the other 56 predate it and carry
+no severity). Open findings by Copilot's own severity label, counted
+per appearance in a review's Open section (a carried-over finding
+counts again): High 70, Medium 66, Low 67. Disposition replies per
+unique finding thread (first severity seen): Copilot-Low Accepted 36,
+Rejected 0, no reply 3; Medium Accepted 31, Rejected 2 — E4's
+"Low → Reject recommended" branch effectively never fires. Per v2
+review, keyed by its highest open severity: 11 reviews had Low-only
+open findings and all 11 were followed by another Copilot review; 25
+reviews whose highest open finding was Medium were also followed by
+another one. Example: PR `#3147`'s Low-labelled wording findings were
+Accepted with "the review correctly identified wording issues in the
+F4 cleanup guidance; the pending in-scope documentation fix ...".
+`critiqueLoop.deferAfterRounds` (repo value `5`) does not cover this
+case: it only fires after the round threshold and only for Low items,
+and since its counter was fixed to count Copilot reviews (PR `#3168`,
+merged 2026-09-21) no merged PR has reached 5 Copilot reviews, so it
+has never fired — most review waves happen in rounds 1-4, before that
+cutoff can act.
+
+Copilot's severity label has no published definition, no
+configuration, and no API field: labels were introduced 2026-05-12
+("Copilot code review: Comment experience improvements") and the
+grouped overview (Open / Resolved since last review / Previously
+missed, each finding with a severity and a `#discussion_r<id>` link)
+on 2026-09-18 ("Copilot code review: An improved review experience"),
+both per the GitHub changelog. The label is readable only from the
+overview review body's `alt="<Level> severity"` image text next to
+each finding's `#discussion_r<id>` anchor; it is absent from inline
+comment bodies and from pre-v2 reviews, and exists only for Copilot
+(not CodeRabbit or Codex). A "Previously missed" finding carries a
+severity but no `#discussion_r<id>` link, since it is not an inline
+thread. So the agent's own E4 tier stays authoritative, and Copilot's
+label can only act as a floor for defer eligibility.
+
+Of the 33 unique Copilot-Medium finding titles in the window, most
+report shipped-behavior defects (fail-closed gaps, races, wrong
+comparisons; for example PR `#3154`, PR `#3156`, PR `#3160`), which
+stay adopt-now under condition (c). PR `#3210`'s two Medium findings
+were regressions of that PR's own rewrite, so condition (a) keeps them
+adopt-now. The deferrable Medium subset is mainly extra-test-coverage
+requests (for example PR `#3154` "Test occupied, absent, and prunable
+worktree results", PR `#3160` "Add end-to-end PR repair coverage") and
+terminology or clarity fixes (for example PR `#3149` "Align
+missing-input error with canonical --issue/--issues terminology"), so
+the Medium half of the ceiling is expected to save fewer waves than
+the Low half. Ceiling, stated honestly: 28 of the 136 v2 reviews had
+no open findings yet were still followed by another review (sync
+merges, other-bot fixes) — this trigger does not touch those.
+
+#### Groom hearing decisions (2026-09-24, kurone-kito/idd-skill#3222)
+
+- Add a second triage axis, "worth another Copilot review wave in this
+  PR" (adopt-now urgency), and defer a finding whose adopt-now urgency
+  is low to a bundled follow-up issue, the same way the round-count
+  cutoff does, but from round 1.
+- The severity ceiling for this new trigger is Low plus Medium (mode
+  `low-and-medium`); High is never deferred. This supersedes the
+  2026-09-10 Low-only ceiling **for this new trigger only**;
+  `deferAfterRounds` itself stays unchanged and Low-only.
+- Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
+  independent trigger applying from the first E4/E5 pass.
+- Apply to every PATH A actor, not only Copilot, with the agent's E4
+  tier authoritative and Copilot's label recorded as evidence.
+- The adopt-now allowlist is exactly (a) a regression this PR
+  introduced, (b) an unmet claimed-issue acceptance criterion or
+  requirement, (c) correctness, safety, or CI-stability, and (d)
+  piggybacking on a push that is already certain -- condition (d)
+  keeps new diff surface, and the fresh findings it can attract,
+  bounded.
+- Distribute as an opt-in policy key with default `off`; this
+  repository opts in to `low-and-medium` as a local dogfood policy
+  (`AGENTS.md`).
+
 ### review-ack worked example
 
 A review posts a regular-comment finding plus a suppressed one.

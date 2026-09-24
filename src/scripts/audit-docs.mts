@@ -191,6 +191,31 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
   { file: 'docs/workshop/README.md', mode: 'components' },
   { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
   { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
+  // #3240: the distributed template's own "Assert Node.js floor" steps
+  // mirror this repository's own (source-repo-only) inline floor-assert
+  // scripts -- see idd-work.instructions.md's B3 and the acceptance
+  // criteria on kurone-kito/idd-skill#3240.
+  { file: 'src/scripts/node-runtime-guard.mts', mode: 'full-range' },
+  // minimize-superseded-markers.mts inlines its own standalone duplicate
+  // of node-runtime-guard.mts's assertEntrySignal() check (#1208
+  // self-containment; see that file's own comment), so its range literal
+  // needs the same drift guard the canonical module gets above.
+  {
+    file: 'src/scripts/minimize-superseded-markers.mts',
+    mode: 'full-range',
+  },
+  {
+    file: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    mode: 'full-range',
+  },
+  {
+    file: 'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+    mode: 'full-range',
+  },
+  {
+    file: 'idd-template/.github/workflows/post-merge-cleanup.yml',
+    mode: 'full-range',
+  },
 ];
 
 // Sync pair `id`s allowed to keep a known onboarding placeholder token

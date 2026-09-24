@@ -35,6 +35,12 @@
  * and still syncs silently, as before.
  */
 
+// #3240: side-effect-only import, kept first so an unsupported Node (where
+// `import.meta.main` is `undefined`, not `false`) fails loudly before this
+// entry block runs. Direct import: this file does not reach cli-args.mts.
+// See node-runtime-guard.mts.
+import './node-runtime-guard.mts';
+
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

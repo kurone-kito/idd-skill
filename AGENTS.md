@@ -227,6 +227,24 @@ layered on top of the distributed IDD defaults:
   `kurone-kito/idd-skill` itself; `feedback:idd-core` is the
   source-repo-side counterpart applied once the maintainer has already
   decided to report the observed problem here.
+- **Adopt-now urgency defer**: This source repository also records
+  `critiqueLoop.deferByUrgency: "low-and-medium"` as a local IDD
+  dogfooding policy (applies only to `kurone-kito/idd-skill`), opting
+  in to `idd-review-triage.instructions.md`'s adopt-now urgency defer
+  trigger -- an independent E4/E5 trigger, active from round 1, that
+  defers a Low- or Medium-severity PATH A finding that is minor but
+  in scope (so it would otherwise land in E4's Medium "judge by
+  context" branch and typically get accepted) instead of spending
+  another Copilot review wave on it. Observed 2026-09-24, issue
+  `#3222`: a 60-PR baseline (`#3089`-`#3210`) found all 11 Low-only
+  reviews and 25 Medium-highest reviews followed by another Copilot
+  review wave, and `critiqueLoop.deferAfterRounds` (this repository's
+  own local `5`)
+  never fired because most review waves happen well before that round
+  threshold. See
+  [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
+  for the full baseline and the Groom-hearing decisions this opt-in
+  responds to.
 
 ## Branch strategy
 

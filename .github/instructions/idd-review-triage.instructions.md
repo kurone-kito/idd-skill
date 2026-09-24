@@ -54,8 +54,8 @@ it did **not** review the current HEAD: rate-limit / quota /
 credit-exhaustion warnings, queued / in-progress status, a bare request
 acknowledgement (e.g. CodeRabbit "Actions performed"), or an error /
 "temporarily unavailable" notice. A non-review notice carries no
-advisory result to score; handle it with the E6 non-review-notice rule
-instead of the normal PATH B disposition.
+advisory result to score; handle it under E6's non-review-notice rule
+instead.
 
 Then apply path-specific scoring:
 
@@ -85,10 +85,7 @@ Then apply path-specific scoring:
   (`idd-review-fix.instructions.md`: claim revalidation first, fetch
   the full body, edit only this claim, post the full result back,
   re-check `closingIssuesReferences`) even when E8's zero-Accepted-
-  PATH-A skip bypasses E9-E15, and E12 with it. This rule parallels
-  E10's "Round-count heuristic for genuinely-new findings" (same file):
-  that heuristic covers a shared root cause once PATH A work is
-  underway; this fence applies earlier, at PATH A/B scoring.
+  PATH-A skip bypasses E9-E15, and E12 with it.
 
 ## E5 — Record Accept / Reject decisions
 
@@ -138,55 +135,76 @@ the unchanged cap above).
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
-thread or a regular comment (E6 supports both PATH B sources) — matches
-an entry in this PR's resolved-thread index
-(`idd-review-snapshot.instructions.md` E1 Step 3). Matching is scoped to
-**this PR's** resolved threads only: a regular comment has no resolved
-state of its own, but can still match a prior resolved thread's claim.
+thread or regular comment (E6 supports both sources) — matches an entry
+in this PR's resolved-thread index (`idd-review-snapshot.instructions.md`
+E1 Step 3), scoped to **this PR's** resolved threads only: a regular
+comment has no resolved state of its own but can still match a prior
+resolved thread's claim.
 
-- Match the new item against the index by file area and substantive
-  claim, requiring the identical claim rather than merely a related
-  topic in the same file (same file but a different claim is not a
-  match).
-- On a match, open the linked prior thread — the index disposition alone
-  is not proof. Re-confirm the new item raises that **same underlying
-  claim**, not just a related one, then confirm the prior thread
-  actually recorded a **reasoned rejection with citable evidence** (not
-  a bare `**Rejected**`, and not the E6 non-review-notice rejection,
-  which asserts no result was reviewed rather than rejecting a claim),
-  then quickly recheck that the cited evidence still holds at the
-  current HEAD — the diff moves between rounds, so a prior file/line
-  citation can be stale.
-- **Shortcut.** If the prior disposition was a reasoned rejection with
-  evidence and that evidence still holds: reply to the new item with a
-  fresh, individually-authored disposition citing the prior thread's URL
-  and its evidence, then apply the existing E6 PATH B reply rules for
-  that item's source — resolve immediately after replying for a review
-  thread; reply only for a regular comment. Every recurrence still gets
-  its own reply, so the 1:1 disposition-count / no-combined-replies rule
-  (E6) is unchanged — only the reply's content is shortcut.
-- **Fall through** unchanged to "Verify before accept" above
-  when there is no match, re-confirmation shows the new item is not
-  actually the same underlying claim, the matched disposition is not a
-  reasoned rejection with evidence, the cited evidence no longer holds
-  at current HEAD, or the new occurrence carries genuinely new
-  information the prior thread did not address.
+- Match by file area and substantive claim — the identical claim, not
+  merely a related topic in the same file.
+- On a match, open the linked prior thread (the index disposition alone
+  is not proof); re-confirm the **same underlying claim**, that the
+  prior thread recorded a **reasoned rejection with citable evidence**
+  (not a bare `**Rejected**`, nor the E6 non-review-notice rejection,
+  which asserts no result was reviewed), and that the cited evidence
+  still holds at current HEAD — a prior file/line citation can go stale
+  between rounds.
+- **Shortcut.** If the prior rejection's evidence still holds: reply
+  with a fresh, individually-authored disposition citing the prior
+  thread's URL and evidence, then apply E6's PATH B reply rules for
+  that item's source (resolve after replying for a thread; reply only
+  for a regular comment). Every recurrence still gets its own reply —
+  only the content is shortcut.
+- **Fall through** unchanged to "Verify before accept" above on no
+  match, a different underlying claim, a disposition that isn't a
+  reasoned rejection with evidence, stale evidence, or genuinely new
+  information the prior thread didn't address.
 
-**Round-count cutoff (`critiqueLoop.deferAfterRounds`, default `12`).**
-Once the PR's total, paginated
-`copilot-pull-request-reviewer[bot]` review count (PR-wide, not
-per-claim; never one page's `length`) hits the threshold, disposition
-an undispositioned Low-severity (E4) PATH A item **Reject (defer)**
-instead of normal judgment — never an Accepted item mid-fix
-(`e10NoProgressHoldAfter` unaffected) nor a CODEOWNER/required-reviewer
-item (E6's AMD exception). Reply
-`**Rejected** — deferred to follow-up issue #<n> (round
-<round>/<threshold>): {reason}`, resolve normally, and bundle every
-item from this cutoff into one follow-up issue per E6's
-follow-up-issue rule, each with an AC bullet and the
+**Defer (`critiqueLoop.deferAfterRounds` / `critiqueLoop.deferByUrgency`).**
+Two independent triggers dispose an eligible PATH A item
+**Reject (defer)** instead of normal judgment — never an Accepted item
+mid-fix (`e10NoProgressHoldAfter` unaffected) nor a
+CODEOWNER/required-reviewer item (E6's AMD exception):
+
+- **Round-count** (`deferAfterRounds`, default `12`, Low-only,
+  unchanged). Once the PR's total, paginated
+  `copilot-pull-request-reviewer[bot]` review count (PR-wide, not
+  per-claim; never one page's `length`) hits the threshold, an
+  undispositioned Low-severity (E4) item is eligible. Reply
+  `**Rejected** — deferred to follow-up issue #<n> (round
+  <round>/<threshold>): {reason}`.
+- **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
+  unchanged when off; `low`/`low-and-medium` apply from round 1).
+  Scope: PATH A only — a Copilot inline thread asking for a code
+  change falls through to PATH A under E4's ambiguous-default rule.
+  Eligibility severity is the higher of E4's own tier and Copilot's
+  label for that thread — the `alt="<Level> severity"` text next to
+  its `#discussion_r<id>` link in the Open section of any
+  `<!-- ccr-overview-v2 -->` review on the PR; this floor only decides
+  eligibility, never E4's own tier or its Accept-forced rule. An item
+  is **adopt-now** (never eligible) when any holds: (a) a regression
+  this PR's diff introduced relative to its merge base; (b) the
+  claimed issue's acceptance criteria or requirement are unmet; (c) a
+  defect in shipped behavior — code, helper output, CI result, or
+  instruction text that changes what an agent does — or a
+  safety/CI-stability problem, excluding wording/clarity polish and
+  extra test coverage for already-working behavior; (d) another item
+  in the same E5 pass is already Accepted (any severity), so a push is
+  certain, and this fix stays within that push's files (bounds new
+  diff surface and its findings). Otherwise it is eligible when its
+  severity is within the mode's ceiling (`low`: Low; `low-and-medium`:
+  Low or Medium — High never eligible). Reply `**Rejected** — deferred
+  to follow-up issue #<n> (adopt-now: no; severity <tier>[, Copilot
+  <label>]): {reason}`.
+
+Resolve normally, and bundle every item either trigger defers in one
+E5 pass into one follow-up issue per E6's follow-up-issue rule (never
+appended to an earlier published follow-up), each with an AC bullet,
+exactly one `Refs #<originating-issue>` line, and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
 marker. See
-[rationale](../../docs/idd-design-rationale.md#e4e5-round-count-defer-cutoff).
+[rationale](../../docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
 
 ## E6 — Post disposition replies
 
@@ -237,13 +255,13 @@ reviewer feedback:
   reviewer, or a collaborator with Write/Maintain/Admin access per
   `GET /repos/{owner}/{repo}/collaborators/{username}/permission`),
   excluding the acting agent and the PR author, posted **after** your
-  AMD comment. A general comment/review from a qualifying person that
-  does not reference this item does not count.
+  AMD comment. A general comment/review not referencing this item
+  doesn't count.
 
-  If a qualifying response exists, apply the transitions below.
-  Otherwise, ensure a hold comment exists (post one if not), then
-  stop — do not re-reply or resolve; resume when the response appears
-  in a future E1 pass.
+  If a qualifying response exists, apply the transitions below;
+  otherwise ensure a hold comment exists (post one if not) and stop —
+  do not re-reply or resolve; resume when the response appears in a
+  future E1 pass.
 - **When the maintainer eventually responds** (their response surfaces
   in a future E1 pass as an unresolved thread or new reply):
   - If the maintainer **agrees no action is needed**: reply summarizing
@@ -252,12 +270,11 @@ reviewer feedback:
     thread.
   - If the maintainer **disagrees**: move the item to Accepted and
     proceed through the fix flow. Resolve the thread after fixing.
-  - If the maintainer's response arrived in a separate PR comment or
-    review rather than in the original thread: mirror the decision onto
-    the original thread and resolve the thread. Also **reply to the
-    maintainer's separate comment** (e.g., "Decision mirrored to the
-    review thread — {link}") so that F2's unreplied-comments gate does
-    not block merge on that comment.
+  - If the maintainer's response arrived in a separate PR comment/review
+    rather than the original thread: mirror the decision onto the
+    original thread and resolve it, and **reply to the maintainer's
+    separate comment** (e.g., "Decision mirrored to the review thread —
+    {link}") so F2's unreplied-comments gate doesn't block merge on it.
   - **No thread (regular-comment AMD)**: apply the same
     agree/disagree logic in a new comment naming it (no reply
     endpoint exists); skip every "resolve the thread" step above.
@@ -277,10 +294,9 @@ reviewer feedback:
     **state** itself to change — a reviewer state change (re-submit as
     `COMMENTED`/`APPROVED`) or an admin dismissal via
     `PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals`.
-    A comment merely agreeing with your rejection is **never sufficient**
-    on its own, whether posted by the original reviewer or by a
-    different maintainer/admin — ask them to change state or dismiss
-    explicitly.
+    A comment merely agreeing is **never sufficient** on its own,
+    whether from the original reviewer or another maintainer/admin —
+    ask them to change state or dismiss explicitly.
   - If the reviewer responds and disagrees: move the item to Accepted
     and proceed through the fix flow.
   - If the reviewer responds (either way): restart from E1.
@@ -295,8 +311,7 @@ reviewer feedback:
   `discover-roadmap-graph`, and only the `Refs` relationship is
   cycle-exempt for a closed leaf, so a different keyword (e.g.
   `Closes`) or a PR target leaves the reference unresolved until
-  the issue body is corrected. Mention the originating PR in prose
-  if useful. Mirrors the A1.5 rule in `idd-roadmap-audit.instructions.md`.
+  the issue body is corrected.
 
 Use these prefixes so that disposition is always unambiguous:
 
@@ -306,11 +321,11 @@ Use these prefixes so that disposition is always unambiguous:
 - CODEOWNER / required reviewer, or inconclusive (E5), exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
-Two requirements make the F2/F3 disposition-evidence gate recognize an
-`**Accepted**` / `**Rejected**` disposition — `isDispositionComment` reads
-"the body **starts with** that marker" and pairs dispositions to advisory
-comments **1:1 by count** (`**Awaiting maintainer decision**` is a
-separate PATH A signal, not part of this pairing):
+Two requirements let F2/F3's disposition-evidence gate recognize an
+`**Accepted**`/`**Rejected**` disposition: `isDispositionComment` reads
+"starts with that marker," pairing dispositions to advisory comments
+**1:1 by count** (`**Awaiting maintainer decision**` is a separate PATH A
+signal, excluded from this pairing):
 
 - The marker must be the **first bytes of the comment body** — no
   heading, block quote, code fence, or preamble before it (a code-fenced
@@ -336,37 +351,31 @@ separate PATH A signal, not part of this pairing):
   several markers into one comment; the 1:1 pairing clears only one item
   per comment, leaving the rest flagged `missing-disposition-evidence`.
 
-PATH B — Advisory items (completed review of the current HEAD):
+PATH B — Advisory items (completed review of current HEAD):
 
-- Reply immediately with a decision marker, even when no code change is
-  needed. Use `**Accepted**` / "no findings / no action required"
-  framing **only** when the advisory is a completed review of the
-  current HEAD:
+- Reply immediately with a decision marker, even with no code change
+  needed:
   - `**Accepted** — {what the advisory comment confirmed}`
   - `**Rejected** — {why no action is required}`
-- **Review threads**: resolve immediately after posting the marker.
-- **Regular comments**: reply only.
-- Do not send PATH B items to review-fix. Their work is complete once
-  the marker is posted and any thread resolution is done.
+- **Review threads**: resolve immediately after posting. **Regular
+  comments**: reply only.
+- PATH B never enters review-fix — work is complete once the marker
+  (and any thread resolution) is posted.
 
-**`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`
-/ `**Rejected**` above satisfies advisory-convergence's Clause 2
-(thread / comment disposition) only. When the latest Copilot review on
-current HEAD also reports `suppressedCount > 0` (a finding folded into
-a `<details><summary>Suppressed comments (N)</summary>` block instead
-of a comment, so it has no thread or comment ID of its own to reply
-to — see `docs/idd-helper-scripts.md`), Clause 1's `suppressedCount`
-term needs its own coverage
-(`suppressedCount === 0 || hasValidReviewAck`) regardless of any
-Clause 2 disposition elsewhere in the same review. After reading the
-review body and confirming the suppressed finding(s) are handled
-(fixed, or judged as needing no action), post `review-ack:` for the
-current HEAD SHA. `post-idd-marker.mjs` itself performs no author
-gating — anyone with `gh` credentials can post the comment — but
-`idd-advisory-convergence` only honors a marker whose GitHub author is
-a `trustedMarkerActors` login; an untrusted poster's marker is ignored,
-not rejected at post time (helper-first: `post-idd-marker --type
-review-ack --from-pr <pr-number> --agent-id <id> --timestamp
+**`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`/
+`**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/
+comment disposition) only. When the latest Copilot review on current
+HEAD also reports `suppressedCount > 0` (a finding folded into a
+`<details><summary>Suppressed comments (N)</summary>` block with no
+thread/comment ID of its own — see `docs/idd-helper-scripts.md`),
+Clause 1's `suppressedCount` term needs its own coverage
+(`suppressedCount === 0 || hasValidReviewAck`) regardless of any Clause
+2 disposition elsewhere in the review. After confirming the suppressed
+finding(s) are handled (fixed, or judged as needing no action), post
+`review-ack:` for the current HEAD SHA — only a
+`trustedMarkerActors`-authored marker counts; an untrusted poster's is
+ignored, not rejected at post time (helper-first: `post-idd-marker
+--type review-ack --from-pr <pr-number> --agent-id <id> --timestamp
 <ISO8601> --apply`):
 
 ```text
@@ -403,39 +412,37 @@ ack / error, as defined in E4):
   out of the next pass.
 - **Paraphrase, never reproduce, a bot's trigger or command string in
   `{reason}`.** Advisory bots scan comment bodies for their own
-  command-trigger strings even inside Markdown code spans, so quoting
-  a bot's literal review-request mention verbatim — fenced or not —
-  can fire it as though a fresh review had been manually requested.
-  Describe the situation in your own words instead. Canonical
-  paraphrase for the low-star / manual-trigger skip-review case:
-  "requires a manually triggered review for low-star repositories".
-- **Carry the rejection forward across pushes.** Once a notice carries a
-  `**Rejected** — {bot} did not review HEAD …` reply, that disposition
-  persists across later HEAD changes and pushes while the same notice
-  persists and the bot still hasn't reviewed any HEAD — a bumped
-  `updatedAt` or a re-posted identical summary needs no fresh rejection;
-  the F2/F3 disposition-evidence gate carries the existing one forward.
-  Scoped per bot (by GitHub login): one bot's carried rejection never
-  clears another's undispositioned notice. Re-disposition only when the
-  bot replaces the notice with an actual completed review — disposition
-  that under the completed-review rules instead.
-- **Never auto-request a fresh review to "upgrade" a notice.** Requesting
-  review state is owned solely by the advisory-wait protocol
+  command-trigger strings even inside code spans, so quoting a bot's
+  literal review-request mention verbatim — fenced or not — can fire
+  it as though manually requested; describe the situation in your own
+  words instead. Canonical paraphrase for the low-star/manual-trigger
+  skip-review case: "requires a manually triggered review for
+  low-star repositories".
+- **Carry the rejection forward across pushes.** Once a notice's
+  `**Rejected** — {bot} did not review HEAD …` reply exists, it
+  persists across later HEAD changes/pushes while the notice persists
+  and the bot still hasn't reviewed any HEAD — a bumped `updatedAt` or
+  a re-posted identical summary needs no fresh rejection; F2/F3's
+  disposition-evidence gate carries it forward. Scoped per bot (GitHub
+  login): one bot's carried rejection never clears another's
+  undispositioned notice. Re-disposition only when the bot posts an
+  actual completed review instead, under the completed-review rules.
+- **Never auto-request a fresh review to "upgrade" a notice** — that
+  belongs solely to the advisory-wait protocol
   (`idd-advisory-wait.instructions.md`, AW3 `REQUEST_NEEDED` → E14); a
-  maintainer may manually re-trigger a non-Copilot bot. A later
-  completed review is dispositioned normally on the next E1 pass.
-  **Never post an `advisory-wait` marker for a non-Copilot bot** —
-  AW2/AW3 treat any trusted same-HEAD marker as Copilot evidence,
-  wrongly satisfying the Copilot gate and consuming its cap. (The
-  **Zero-Accepted-PATH-A advisory re-review gate** below is a sanctioned
-  exception — it never triggers on a notice alone.)
-- **Fail-closed honesty**: never cite a non-review notice as evidence
-  that the advisory reviewer reviewed the current HEAD — not in the
-  disposition reply, the `Authoritative by` line, or the PR live status
-  digest.
-- **Non-blocking boundary**: this rule does not make PATH B a merge
-  blocker. The blocking advisory gate remains the Copilot advisory-wait
-  protocol in `idd-advisory-wait.instructions.md`, which is unchanged.
+  maintainer may manually re-trigger a non-Copilot bot, and a later
+  completed review dispositions normally next E1 pass. **Never post an
+  `advisory-wait` marker for a non-Copilot bot** — AW2/AW3 treat any
+  trusted same-HEAD marker as Copilot evidence, wrongly satisfying the
+  Copilot gate and consuming its cap (the **Zero-Accepted-PATH-A
+  advisory re-review gate** below is a sanctioned exception, never
+  triggered by a notice alone).
+- **Fail-closed, non-blocking**: never cite a non-review notice as
+  evidence the advisory reviewer reviewed current HEAD — not in the
+  disposition reply, `Authoritative by`, or the live status digest;
+  and this rule never makes PATH B a merge blocker — the Copilot
+  advisory-wait protocol (`idd-advisory-wait.instructions.md`) remains
+  the blocking gate, unchanged.
 
 ## E7 — Verify recorded dispositions
 
@@ -532,12 +539,12 @@ Route based on `branchState` from the helper (or `mergeable` /
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
   below.
 - **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
-  `UNKNOWN` / null because GitHub computes mergeability asynchronously and
-  has not settled — a **transient** state. Do **not** hold. Re-poll after a
-  short wait, up to a small fixed attempt budget (distributed default: 3
-  attempts, a few seconds apart), then route by the first settled result.
-  Only a state that is **still** `computing` / `unknown` after the budget
-  falls through to the hold below.
+  `UNKNOWN` / null because GitHub hasn't finished computing mergeability —
+  a **transient** state. Do **not** hold. Re-poll after a short wait, up
+  to a small fixed attempt budget (distributed default: 3 attempts, a
+  few seconds apart), then route by the first settled result. Only a
+  state that is **still** `computing` / `unknown` after the budget falls
+  through to the hold below.
 - **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
   a PR comment documenting the state and stop. Do not proceed to F-phase
   without confirmed branch-state evidence.
@@ -552,10 +559,10 @@ Route based on `branchState` from the helper (or `mergeable` /
    `git fetch origin {development-branch} && git merge
    origin/{development-branch}`. Use the
    [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-   when primary signing is non-interactive-hostile. That wrapper's
-   merge invocation includes a conventional `-m` subject (for example
-   `chore: merge origin/{development-branch} into the claimed branch`)
-   so a commitlint `commit-msg` hook does not reject the merge commit.
+   when primary signing is non-interactive-hostile — its merge
+   invocation includes a conventional `-m` subject (e.g. `chore: merge
+   origin/{development-branch} into the claimed branch`) so commitlint
+   doesn't reject the merge commit.
 3. If conflicts arise, resolve them and complete the merge with that
    same procedure — mirrors the D1 rebase note.
 4. Run **post-fix-validate**.
@@ -631,16 +638,15 @@ carries items — **AW6** (#1511) handles that residual from F2 instead.
 ## Advisory courtesy-ack convergence
 
 A trusted advisory bot's post-disposition courtesy reply (e.g. "thanks
-for confirming") advances the PR's `updatedAt`, which a naive
-review-currency check would treat as new activity and loop the
-review/snapshot cycle forever.
+for confirming") advances the PR's `updatedAt` — a naive review-currency
+check would treat this as new activity and loop the cycle forever.
 
 **Rule**: once every `ReviewItems_snapshot` item has an
 `**Accepted**`/`**Rejected**` disposition at the **current HEAD SHA**, a
 later **ack-only** comment from a trusted advisory bot does not reopen
 the loop — bind the merge to current HEAD and proceed. An **ack-only**
-comment opens no new thread, carries no `CHANGES_REQUESTED`, and raises
-no new finding; anything else re-opens the loop normally.
+comment opens no thread, carries no `CHANGES_REQUESTED`, and raises no
+new finding; anything else re-opens the loop.
 
 **Helper evidence**: when the advisory-bot identity is configured, the
 activity-snapshot / `pre-merge-readiness` evidence emits the structural

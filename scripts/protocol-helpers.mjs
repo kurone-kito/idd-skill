@@ -74,7 +74,13 @@ const UNSAFE_TEXT_RULES = [
     reason: 'contains failed-CI context',
   },
 ];
-const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
+// Exported (kurone-kito/idd-skill#3223) so copilot-review-wave-audit.mts can
+// classify a reply as a recognized-but-non-accept/reject disposition using
+// the exact same loose, no-em-dash-required marker this file's own
+// `isDispositionComment`-adjacent checks use -- see that helper's own doc
+// comment for why it reuses this pattern instead of
+// review-disposition-verify.mts's stricter, em-dash-requiring MARKER_AMD_RE.
+export const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 export function parsePaginatedGhNdjson(raw) {
   const text = String(raw ?? '').trim();
   if (!text) {
@@ -1536,8 +1542,15 @@ export function hasFreshDisposition(thread, options = {}) {
 // `trimEnd()` only, so leading whitespace is NOT stripped (preserving the
 // marker-first-bytes contract), while the notice / summary predicates below
 // `trimStart()` first.
-const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
-const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
+//
+// Exported (kurone-kito/idd-skill#3223) so copilot-review-wave-audit.mts can
+// classify a review-comment reply's disposition using the exact same
+// gate-credited marker shape `isDispositionComment` checks, rather than the
+// stricter, em-dash-requiring MARKER_ACCEPTED_RE/MARKER_REJECTED_RE in
+// review-disposition-verify.mts's `classifyMarker` (which are designed for a
+// different, gate-authority use).
+export const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
+export const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
 // #2249: loose "close but not exact" detector for `missingRegularComments[].hint`
 // (`MALFORMED_DISPOSITION_PREFIX_HINT`) -- deliberately laxer than the two
 // exact-match regexes above, matching only the four literal prefixes a

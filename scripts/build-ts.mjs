@@ -50,6 +50,12 @@
 // toolless bare-node CI lane runs that test with NO package-manager
 // install at all (no node_modules), so merely importing this file must
 // not require `typescript`/`@biomejs/biome` to be resolvable.
+// #3240: side-effect-only import, kept first so an unsupported Node (where
+// `import.meta.main` is `undefined`, not `false`) fails loudly before this
+// entry block runs. Direct import: this file does not reach cli-args.mts.
+// Dependency-free (node: builtins only), matching the bare-node import
+// requirement above. See node-runtime-guard.mts.
+import './node-runtime-guard.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

@@ -287,6 +287,33 @@ test('changes-requested escalation falls back when second threshold is invalid',
   );
 });
 
+test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'off');
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.deferByUrgency, 'off');
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'low' } })
+      .critiqueLoop.deferByUrgency,
+    'low',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { deferByUrgency: 'low-and-medium' },
+    }).critiqueLoop.deferByUrgency,
+    'low-and-medium',
+  );
+  // Unknown or invalid value falls back to the default.
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'high' } })
+      .critiqueLoop.deferByUrgency,
+    'off',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 42 } }).critiqueLoop
+      .deferByUrgency,
+    'off',
+  );
+});
+
 test('discover.selectionDesync defaults to off and accepts session-offset', () => {
   assert.equal(POLICY_DEFAULTS.discover.selectionDesync, 'off');
   assert.equal(normalizePolicyConfig({}).discover.selectionDesync, 'off');

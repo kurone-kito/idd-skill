@@ -818,6 +818,93 @@ test('the "Detect package manager" workflow step body is byte-identical across t
   }
 });
 
+test('every actions/setup-node step in idd-template/.github/workflows/*.yml pins check-latest and is immediately followed by a matching "Assert Node.js floor" step (idd-skill#3240)', () => {
+  const WORKFLOW_FILES = [
+    'idd-template/.github/workflows/post-merge-cleanup.yml',
+    'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+  ];
+  // This repository's workflow files consistently indent a `steps:` list
+  // item's own `- ` bullet at 6 spaces (verified across all four sites
+  // this guard covers); a comment line at the same indentation starts
+  // with `#`, not `- `, so it never matches this boundary.
+  const STEP_BOUNDARY = '\n      - ';
+
+  function stepIfCondition(stepText: string): string | undefined {
+    const match = /^ {8}if: (.+)$/m.exec(stepText);
+    return match?.[1].trim();
+  }
+
+  function stepName(stepText: string): string | undefined {
+    const [firstLine] = stepText.split('\n', 1);
+    const match = /^ {6}- name: (.+)$/.exec(firstLine);
+    return match?.[1].trim();
+  }
+
+  let totalSetupNodeSteps = 0;
+  for (const relativePath of WORKFLOW_FILES) {
+    const content = readText(relativePath);
+    let searchFrom = 0;
+    for (;;) {
+      const usesIndex = content.indexOf(
+        'uses: actions/setup-node@',
+        searchFrom,
+      );
+      if (usesIndex === -1) {
+        break;
+      }
+      searchFrom = usesIndex + 1;
+      totalSetupNodeSteps += 1;
+
+      const stepStartIndex = content.lastIndexOf(STEP_BOUNDARY, usesIndex);
+      assert.notEqual(
+        stepStartIndex,
+        -1,
+        `${relativePath}: could not find the step bullet enclosing the actions/setup-node use at offset ${usesIndex}`,
+      );
+      const stepStart = stepStartIndex + 1;
+
+      const nextStepIndex = content.indexOf(STEP_BOUNDARY, usesIndex);
+      assert.notEqual(
+        nextStepIndex,
+        -1,
+        `${relativePath}: expected a step after the actions/setup-node step at offset ${usesIndex}`,
+      );
+      const nextStepStart = nextStepIndex + 1;
+
+      const stepAfterNextIndex = content.indexOf(STEP_BOUNDARY, nextStepStart);
+      const stepAfterNextStart =
+        stepAfterNextIndex === -1 ? content.length : stepAfterNextIndex + 1;
+
+      const setupNodeStep = content.slice(stepStart, nextStepStart);
+      const followingStep = content.slice(nextStepStart, stepAfterNextStart);
+
+      assert.match(
+        setupNodeStep,
+        /\n {10}check-latest: true\n/,
+        `${relativePath}: the actions/setup-node step at offset ${usesIndex} is missing \`check-latest: true\``,
+      );
+
+      assert.equal(
+        stepName(followingStep),
+        'Assert Node.js floor',
+        `${relativePath}: the step immediately after actions/setup-node at offset ${usesIndex} must be named "Assert Node.js floor"`,
+      );
+
+      assert.equal(
+        stepIfCondition(followingStep),
+        stepIfCondition(setupNodeStep),
+        `${relativePath}: "Assert Node.js floor"'s if: must equal its actions/setup-node step's if: (offset ${usesIndex})`,
+      );
+    }
+  }
+  assert.equal(
+    totalSetupNodeSteps,
+    4,
+    'expected exactly 4 actions/setup-node steps across the three idd-template workflow files (idd-skill#3240); update this count alongside a deliberate step-count change',
+  );
+});
+
 test('policy normalization provides default-safe values and supports aliases', () => {
   assert.deepEqual(normalizePolicyConfig(null), {
     issueScope: 'roadmap-first',
@@ -877,6 +964,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       cPhaseLowSeveritySkipAfter: 3,
       e10NoProgressHoldAfter: 3,
       deferAfterRounds: 12,
+      deferByUrgency: 'off',
     },
     reviewEscalation: {
       changesRequestedFirstEscalation: 'PT24H',
@@ -982,6 +1070,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,
         deferAfterRounds: 20,
+        deferByUrgency: 'low-and-medium',
         telemetryHook: { command: 'notify-hook' },
       },
       reviewEscalation: {
@@ -1067,6 +1156,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,
         deferAfterRounds: 20,
+        deferByUrgency: 'low-and-medium',
       },
       reviewEscalation: {
         changesRequestedFirstEscalation: 'PT18H',

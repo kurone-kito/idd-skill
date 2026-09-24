@@ -9,6 +9,7 @@ import {
   DEFAULT_MANIFEST_PATH,
 } from '../src/scripts/discover-shared-file-overlap.mts';
 import { stripMarkdownCodeRegions } from '../src/scripts/markdown-code.mts';
+import { hasResolvedDecision } from '../src/scripts/resolved-decision.mts';
 import {
   checkActionability,
   checkAutonomy,
@@ -3218,6 +3219,123 @@ The maintainer approval is recorded; option 1 was chosen.
 ## Acceptance Criteria
 - [ ] the helper output contains the expected token
 - [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('hasResolvedDecision ignores a decision heading fenced inside a backtick code block (#3255)', () => {
+  // Before #3255, RESOLVED_DECISION_PATTERN ran against the raw body, so a
+  // heading that only appears inside a fenced code example -- never
+  // rendered as a real heading by CommonMark -- still counted as resolved.
+  const body = `Example of the convention:
+
+\`\`\`
+## Decision (resolved 2026-06-27)
+\`\`\`
+
+No actual decision has been made yet.
+`;
+  assert.equal(hasResolvedDecision(body), false);
+});
+
+test('hasResolvedDecision ignores a decision heading fenced inside a tilde code block (#3255)', () => {
+  const body = `Example of the convention:
+
+~~~
+## Decision (resolved 2026-06-27)
+~~~
+
+No actual decision has been made yet.
+`;
+  assert.equal(hasResolvedDecision(body), false);
+});
+
+test('hasResolvedDecision ignores a decision heading inside a multi-line HTML comment (#3255)', () => {
+  // A heading hidden inside an HTML comment is invisible in the rendered
+  // issue, so it must not count as a real resolved decision either.
+  const body = `<!--
+## Decision (resolved 2026-06-27)
+-->
+
+No actual decision has been made yet.
+`;
+  assert.equal(hasResolvedDecision(body), false);
+});
+
+test('hasResolvedDecision still recognizes a real, unfenced decision heading (#3255)', () => {
+  // Regression pin: the fix must not mask ordinary, genuinely rendered
+  // headings.
+  const body = `## Decision (resolved 2026-06-27)
+The maintainer ruled to implement option 1.
+`;
+  assert.equal(hasResolvedDecision(body), true);
+});
+
+test('hasResolvedDecision still matches a real heading immediately after a closing fence (#3255)', () => {
+  // Masking-boundary check: findFencedCodeRanges's own range already
+  // includes the newline terminating the closing fence line, and masking
+  // preserves every `\n`/`\r`, so a genuine heading on the very next line
+  // (no blank line separating it from the fence) must keep matching.
+  const body = `\`\`\`
+example code
+\`\`\`
+## Decision (resolved 2026-06-27)
+The maintainer ruled to implement option 1.
+`;
+  assert.equal(hasResolvedDecision(body), true);
+});
+
+test('hasResolvedDecision still matches a real heading immediately after a closing HTML comment (#3255)', () => {
+  const body = `<!-- unrelated note -->
+## Decision (resolved 2026-06-27)
+The maintainer ruled to implement option 1.
+`;
+  assert.equal(hasResolvedDecision(body), true);
+});
+
+test('verifiability still fails when the only decision heading is fenced inside a code block (#3255)', () => {
+  // Check 7 true-positive that must stay a fail: the sign-off wording and
+  // objective AC bullets are real, but the only "## Decision (resolved
+  // ...)" heading is inside a fenced code example -- never rendered as a
+  // real heading -- so the resolved-decision guard must not fire. The
+  // subjective sign-off bullet is kept outside the fence so this fails
+  // because the resolved-decision guard correctly does not fire, not
+  // because the subjective-approval scan itself found nothing.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `Example of the convention:
+
+\`\`\`
+## Decision (resolved 2026-06-27)
+\`\`\`
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability passes the same fixture once the decision heading is outside the fence (#3255)', () => {
+  // Same fixture as the previous test, with the heading moved outside the
+  // fence -- now a genuine resolved decision, so Check 7 passes.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Decision (resolved 2026-06-27)
+
+\`\`\`
+Example of the convention.
+\`\`\`
+
+## Acceptance Criteria
+- [ ] tests pass
+- [ ] final sign-off from the maintainer confirms the UX feels right
 `,
     },
   } as Context);

@@ -19,6 +19,12 @@
  * confidence from silently-ignored constraints.
  */
 
+// #3240: side-effect-only import, kept first so an unsupported Node (where
+// `import.meta.main` is `undefined`, not `false`) fails loudly before this
+// entry block runs. Direct import: this file does not reach cli-args.mts.
+// See node-runtime-guard.mts.
+import './node-runtime-guard.mts';
+
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
