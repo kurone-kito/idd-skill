@@ -22,7 +22,16 @@ import {
 // from the same module instead of reaching into advisory-wait-policy.mts
 // directly.
 export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
-
+// Façade re-export (kurone-kito/idd-skill#3258): `isCopilotErrorReviewBody`
+// now lives in the leaf `copilot-review-body.mts` module (alongside the new
+// review-body shape classifier `review-clause.mts` also imports), so that
+// module can be imported here -- rather than the reverse -- with no cycle.
+// Re-exporting it keeps every existing call site importing it from
+// protocol-helpers.mts (e.g. tests/pre-merge-readiness.test.mts) unchanged;
+// the separate named import below is this module's own internal use in
+// `findLastCopilotReviewCommit`, mirroring the `marker-helpers.mts` pattern
+// immediately above.
+export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
 // marker render/parse primitive now lives in the marker-helpers module.
 // Re-exporting it here keeps every existing call site importing from
@@ -31,6 +40,7 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
 // rule (it must never import back from this file).
 export * from './marker-helpers.mts';
 
+import { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
   ParsedClaimMarker,
@@ -4514,53 +4524,12 @@ export function isCopilotReviewerLogin(
   return normalized === configured;
 }
 
-/**
- * #3015: GitHub Copilot's "encountered an error" review body, observed live
- * on PR `#3013` (issue `#2986`, commit `46bfb73b`,
- * <https://github.com/kurone-kito/idd-skill/pull/3013#pullrequestreview-5212307067>,
- * `copilot-pull-request-reviewer[bot]`, `COMMENTED`, submitted
- * 2026-09-15T15:44:53Z): Copilot failed to review the PR at all, yet the
- * review still carries `comments.totalCount` (`itemCount`) `0`, the same
- * shape a genuine "no findings" empty review has. Without this check, that
- * false-empty review both satisfies `resolveLatestCopilotReviewClause`'s
- * Clause 1 (review-clause.mts) and wins `findLastCopilotReviewCommit`'s
- * `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit below, even though
- * Copilot never actually looked at the diff -- the same `itemCount === 0`
- * false-empty class `parseSuppressedCommentCount` (review-clause.mts,
- * #1880) already closed for the sibling "Suppressed comments (N)" shape.
- *
- * Matched by whole-body equality (after trimming and collapsing internal
- * whitespace, case-insensitively) against the exact observed template,
- * never a broad "error" substring search: this keeps the classifier
- * fail-closed toward under-matching, in the same spirit as
- * `isAdvisoryNonReviewNotice`, and -- unlike that function's substring/
- * heading search -- whole-body equality alone already excludes an advisory
- * bot quoting this exact sentence back in a larger review body (the
- * prose-quoting false-positive class `#1614` first found), with no need
- * for `parseSuppressedCommentCount`'s separate code-region-stripping step:
- * any additional content in the body (the bot's own commentary around the
- * quote) already breaks the equality match.
- */
-const COPILOT_ERROR_REVIEW_BODY =
-  'copilot encountered an error and was unable to review this pull ' +
-  'request. you can try again by re-requesting a review.';
-
-/**
- * `true` when `body` is GitHub Copilot's exact "encountered an error"
- * review-body template (#3015) -- see {@link COPILOT_ERROR_REVIEW_BODY}'s
- * doc comment for the observed incident and matching rationale. Reused by
- * `findLastCopilotReviewCommit` below and by
- * `resolveLatestCopilotReviewClause` (review-clause.mts) so both "latest
- * covering review" selectors skip this review the same way, mirroring how
- * both already share {@link isCopilotReviewerLogin}.
- */
-export function isCopilotErrorReviewBody(body: unknown): boolean {
-  const normalized = String(body ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  return normalized === COPILOT_ERROR_REVIEW_BODY;
-}
+// `isCopilotErrorReviewBody` (kurone-kito/idd-skill#3258) now lives in
+// `copilot-review-body.mts` -- a leaf module `review-clause.mts` also
+// imports -- and is re-exported/imported above (see the façade re-export
+// beside `export * from './marker-helpers.mts'` near the top of this
+// file) so this module's own `findLastCopilotReviewCommit` below and every
+// existing external importer keep working unchanged.
 
 export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
