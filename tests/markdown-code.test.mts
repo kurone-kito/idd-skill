@@ -1469,6 +1469,44 @@ test('maskMarkdownForScan masks a nested list item as code once a heading genuin
   assert.equal(masked.includes('Heading #1'), true);
 });
 
+test('maskMarkdownForScan keeps a lazy continuation open across a lone custom HTML tag (C1 critique, round 3)', () => {
+  // Round 2's own fix reused isLazinessInterruptingBlockStart
+  // unconditionally, which treats a lone custom HTML tag (CommonMark
+  // type 7) as always paragraph-interrupting -- but per spec, type 7
+  // can NEVER interrupt a paragraph. Verified against commonmark.js:
+  // the whole thing stays one open paragraph/nested list, so the later
+  // indented line is still real list content, not code.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  para continuation of inner, then custom tag follows',
+    '<customtag>',
+    '',
+    '    - [real link #1](https://example.com/should-stay-real)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan keeps a lazy continuation open across an ambiguous Setext-only dash run (C1 critique, round 3)', () => {
+  // Same round-2 gap, different shape: a bare 1-2-dash (or any-length
+  // `=`) run only resolves as a Setext heading underline when a
+  // genuinely open, non-lazy paragraph precedes it -- not when the
+  // paragraph it would "close" is itself only lazily continuing an
+  // enclosing list item, as here. Verified against commonmark.js: the
+  // dash run stays ordinary paragraph text and the list stays open.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '--',
+    '',
+    '    - [real link #2](https://example.com/should-stay-real-2)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);

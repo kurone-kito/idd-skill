@@ -275,16 +275,28 @@ function isMarkdownBlockStart(content: string): boolean {
 
 /**
  * True when `content` (already container-prefix-stripped, per
- * {@link parseContainerLine}) is a paragraph-interrupting block start:
- * {@link isMarkdownBlockStart}'s own coverage (headings, list-item
- * markers, thematic breaks) plus an HTML block opener (a generic
- * block-level tag, `<!--`, a processing instruction, `<!DOCTYPE`,
- * `<![CDATA[`, or a raw-text element), a lone custom HTML tag, or a
- * valid fence opener. This is CommonMark laziness's actual "does this
- * line end an in-progress paragraph regardless of indentation" test --
- * shared so a caller deciding whether an under-indented line lazily
- * continues a paragraph (as opposed to genuinely starting a new,
- * paragraph-interrupting block) does not need its own partial copy.
+ * {@link parseContainerLine}) LOOKS LIKE a paragraph-interrupting block
+ * start: {@link isMarkdownBlockStart}'s own coverage (headings,
+ * list-item markers, thematic breaks) plus an HTML block opener (a
+ * generic block-level tag, `<!--`, a processing instruction,
+ * `<!DOCTYPE`, `<![CDATA[`, or a raw-text element), a lone custom HTML
+ * tag, or a valid fence opener -- shared so a caller does not need its
+ * own partial copy of this shape test.
+ *
+ * Not context-complete: two of its sub-checks are only CONDITIONALLY
+ * paragraph-interrupting per CommonMark, and this function has no
+ * paragraph-openness context to resolve them (C1 critique round 2,
+ * kurone-kito/idd-skill#3283). A lone custom HTML tag (the
+ * {@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN} branch, CommonMark
+ * type 7) can NEVER interrupt a paragraph, and a bare `=`-run or short
+ * 1-2-dash run ({@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN}, folded
+ * into {@link isMarkdownBlockStart} here) only ends one when a
+ * genuinely open, non-lazy paragraph already precedes it -- see
+ * {@link findHtmlBlockRanges}'s own `noOpenParagraph`-gated handling of
+ * both for a context-complete example. A caller that has no such
+ * context available and needs a conservative, always-safe answer
+ * should use {@link isUnconditionalBlockStart} instead.
+ *
  * `fencedLine` is the caller's own {@link parseFencedLine} result,
  * since the `activeListContentIndent` it threads through differs per
  * call site.
@@ -297,6 +309,39 @@ function isLazinessInterruptingBlockStart(
     isMarkdownBlockStart(content) ||
     MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
     MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content) ||
+    (fencedLine !== null && isValidFenceOpener(fencedLine))
+  );
+}
+
+/**
+ * True when `content` UNCONDITIONALLY starts a new Markdown block that
+ * interrupts an in-progress paragraph, regardless of surrounding
+ * context. Deliberately narrower than
+ * {@link isLazinessInterruptingBlockStart}: drops its lone-custom-HTML-tag
+ * branch entirely (CommonMark type 7 can never interrupt a paragraph)
+ * and drops the genuinely ambiguous dash/equals-only shapes
+ * ({@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN}) from its
+ * `isMarkdownBlockStart` coverage (those only resolve as a
+ * paragraph-ending Setext underline when a real, non-lazy paragraph
+ * already precedes them -- context this function's callers do not
+ * carry). A genuine ATX heading, list-item marker, unambiguous
+ * (3-or-more-character) thematic break, HTML block type 1-6 opener, or
+ * valid fence opener is unaffected -- none of those depend on whether a
+ * paragraph happens to be open. C1 critique round 2 on
+ * kurone-kito/idd-skill#3283 found that reusing
+ * {@link isLazinessInterruptingBlockStart} unconditionally for
+ * {@link findIndentedCodeRanges}'s laziness guard over-masked real
+ * content (a custom tag or an ambiguous dash/equals run right after
+ * ordinary paragraph text was wrongly read as ending that paragraph).
+ */
+function isUnconditionalBlockStart(
+  content: string,
+  fencedLine: FencedLine | null,
+): boolean {
+  return (
+    (isMarkdownBlockStart(content) &&
+      !MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN.test(content)) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
     (fencedLine !== null && isValidFenceOpener(fencedLine))
   );
 }
@@ -1926,27 +1971,30 @@ export function findIndentedCodeRanges(
       // continues that paragraph and must NOT close the enclosing list's
       // content zone. A genuine dedent is a line that follows a blank (no
       // open paragraph to continue), follows a block-boundary-shaped line
-      // (not an ongoing paragraph either), OR -- Copilot-equivalent
-      // review round 2 on kurone-kito/idd-skill#3283: the first version
-      // of this guard checked only the *preceding* line's shape, missing
-      // that laziness also requires the *current* line to not itself be
-      // a paragraph-interrupting construct -- is ITSELF block-start-shaped
-      // (a heading, list marker, thematic break, HTML block opener, or a
-      // valid fence opener), which per CommonMark always starts a new
-      // block regardless of what preceded it. Without the first half of
-      // this guard, a lazy continuation line at a shallow indent
-      // incorrectly dropped `activeListContentIndent` to null, so a
-      // later, blank-separated, still-nested list item (relative to the
-      // *outer* list, indented enough to satisfy it but not the reset
-      // 4-column top-level default) was misread as a fresh top-level
-      // indented code block. Without the second half, a block-start-shaped
-      // current line at that same shallow indent was wrongly read as a
-      // lazy continuation instead of the genuine dedent it is, leaving a
-      // *later* indented line unmasked even though CommonMark renders it
-      // as real code once the list has actually closed.
+      // (not an ongoing paragraph either), OR -- C1 critique round 2 on
+      // kurone-kito/idd-skill#3283: the first version of this guard
+      // checked only the *preceding* line's shape, missing that laziness
+      // also requires the *current* line to not itself be a
+      // paragraph-interrupting construct -- unconditionally
+      // block-start-shaped itself (a heading, list marker, unambiguous
+      // thematic break, HTML block type 1-6 opener, or valid fence
+      // opener; see {@link isUnconditionalBlockStart} for why a lone
+      // custom HTML tag and an ambiguous Setext-only dash/equals run are
+      // deliberately excluded -- round 2 also found those two produce
+      // false positives here). Without the first half of this guard, a
+      // lazy continuation line at a shallow indent incorrectly dropped
+      // `activeListContentIndent` to null, so a later, blank-separated,
+      // still-nested list item (relative to the *outer* list, indented
+      // enough to satisfy it but not the reset 4-column top-level
+      // default) was misread as a fresh top-level indented code block.
+      // Without the second half, a block-start-shaped current line at
+      // that same shallow indent was wrongly read as a lazy continuation
+      // instead of the genuine dedent it is, leaving a *later* indented
+      // line unmasked even though CommonMark renders it as real code
+      // once the list has actually closed.
       (previousLineBlank ||
         previousLineBlockBoundary ||
-        isLazinessInterruptingBlockStart(
+        isUnconditionalBlockStart(
           parsed.content,
           parseFencedLine(rawLine, activeListContentIndent),
         ))
