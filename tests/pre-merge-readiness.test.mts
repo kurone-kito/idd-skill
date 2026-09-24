@@ -10412,8 +10412,34 @@ test('closingSet: an explicit null repository field is still treated as "no repo
   assert.equal(evidence.status, 'match');
 });
 
+// Copilot review, PR #3353: `Number(true) === 1` -- a raw `{ number: true }`
+// entry previously coerced to issue 1 and could match a real expected
+// number, defeating the malformed-entry fail-closed check immediately
+// above. Only a genuine `number`-typed value is ever accepted now.
+test('closingSet: a boolean number field never coerces to a matching issue number', () => {
+  const evidence = computeClosingSetEvidence({
+    ...baseClosingSetOptions(),
+    expected: [1],
+    closingIssuesReferences: [{ number: true }],
+  });
+  assert.equal(evidence.status, 'unavailable');
+});
+
 test('computePreMergeReadinessBlockers: an absent closingSet adds no closing-set blocker (unmigrated caller / unit fixture)', () => {
   assert.deepEqual(closingSetBlockers(undefined), []);
+});
+
+// Copilot review, PR #3353: a present `closingSet: null` previously read as
+// falsy and skipped the whole gate, same as a genuinely absent key -- since
+// the schema requires this section, only `undefined` (the unmigrated-caller
+// case above) may skip it; `null` must still reach `preMergeAsRecord`'s
+// `{}` fallback and block as `unavailable`.
+test('computePreMergeReadinessBlockers: a present closingSet: null still blocks as unavailable, unlike a genuinely absent key', () => {
+  const blockers = computePreMergeReadinessBlockers({
+    closingSet: null,
+  }).filter((blocker) => blocker.gate === 'closing-set');
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /unavailable/);
 });
 
 test('computePreMergeReadinessBlockers: an unrecognized closingSet.status fails closed with a blocker', () => {
@@ -10441,6 +10467,7 @@ function closingSetSmokeFakePort(
   overrides: {
     closingIssuesReferences?: unknown[];
     throwOnCommits?: boolean;
+    nonArrayCommits?: boolean;
   } = {},
 ): ProviderPort {
   const port = createFakeProviderAdapter({
@@ -10467,19 +10494,58 @@ function closingSetSmokeFakePort(
     },
     repositoryDefaultBranch: 'main',
   });
-  if (!overrides.throwOnCommits) {
-    return port;
+  if (overrides.throwOnCommits) {
+    return {
+      ...port,
+      listChangeRequestCommits() {
+        throw new Error('simulated commits-API failure');
+      },
+    };
   }
-  return {
-    ...port,
-    listChangeRequestCommits() {
-      throw new Error('simulated commits-API failure');
-    },
-  };
+  if (overrides.nonArrayCommits) {
+    // Copilot review, PR #3353: `listChangeRequestCommits` is declared
+    // `unknown[]` on the port, but nothing enforces that at runtime -- a
+    // non-conforming provider (or a malformed successful `gh` response)
+    // could hand back something else entirely.
+    return {
+      ...port,
+      listChangeRequestCommits() {
+        return { notAnArray: true } as unknown as unknown[];
+      },
+    };
+  }
+  return port;
 }
 
 test('collectPreMergeReadiness: a throwing listChangeRequestCommits read fails closed to closingSet.status "unavailable" (not an uncaught crash)', () => {
   const port = closingSetSmokeFakePort({ throwOnCommits: true });
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as { status: string };
+  assert.equal(closingSet.status, 'unavailable');
+  assert.ok(
+    (report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: a non-array listChangeRequestCommits response fails closed to closingSet.status "unavailable" instead of crashing', () => {
+  const port = closingSetSmokeFakePort({ nonArrayCommits: true });
   const report = collectPreMergeReadiness(
     [
       '--pr',

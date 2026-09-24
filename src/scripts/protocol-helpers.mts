@@ -9018,8 +9018,14 @@ export function computePreMergeReadinessBlockers(
   // `collectPreMergeReadiness` always emits a `closingSet` section. Whitelist
   // of recognized non-blocking statuses, not a denylist, matching
   // developmentBranchTarget's own convention: an unrecognized status must
-  // fail closed rather than silently pass.
-  if (report.closingSet) {
+  // fail closed rather than silently pass. Tested with `!== undefined`, not
+  // truthiness (Copilot review, PR #3353): since the schema requires this
+  // section, only a genuinely absent key (the unmigrated-caller case above)
+  // skips the gate -- a present `closingSet: null` (or any other falsy,
+  // non-object value) is malformed evidence and must still reach
+  // `preMergeAsRecord`'s own `{}` fallback below, which resolves to
+  // `status: "unavailable"` and blocks, rather than silently passing.
+  if (report.closingSet !== undefined) {
     const closingSet = preMergeAsRecord(report.closingSet);
     const status = String(closingSet.status || 'unavailable');
     if (status === 'skipped-non-default-branch' || status === 'match') {

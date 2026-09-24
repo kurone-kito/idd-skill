@@ -340,17 +340,24 @@ export function computeClosingSetEvidence(options) {
   for (const entry of rawRefs) {
     const record = entry !== null && typeof entry === 'object' ? entry : null;
     const rawNumber = record && 'number' in record ? record.number : entry;
-    const number = Number(rawNumber);
+    // Copilot review, PR #3353: `Number(rawNumber)` alone accepts a
+    // malformed JSON value such as `true` (`Number(true) === 1`) as a
+    // legitimate issue number -- `{ number: true }` would otherwise match
+    // expected issue 1 and read as clean. Require the raw value to
+    // already be a real `number` before coercing it, so only an actual
+    // JSON number (never a boolean, string, array, or object) is ever
+    // accepted as an issue number.
+    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
     if (!Number.isInteger(number) || number <= 0) {
-      // Copilot review, PR #3353: a malformed entry (no resolvable positive
-      // `number`) previously fell through `continue`, silently dropping it
-      // from `actual` -- e.g. expected `[7]` plus
-      // `[{ number: 7 }, {}]` reported `"match"`, even though the second,
-      // unverifiable entry could just as easily have been an undetected
-      // extra close whose `number` field was lost or mistransformed.
-      // `closingIssuesReferences` is a raw provider passthrough (no schema
-      // guarantee), so an entry this file cannot interpret makes the whole
-      // comparison untrustworthy, not just that one entry.
+      // A malformed entry (no resolvable positive `number`) previously
+      // fell through `continue`, silently dropping it from `actual` --
+      // e.g. expected `[7]` plus `[{ number: 7 }, {}]` reported `"match"`,
+      // even though the second, unverifiable entry could just as easily
+      // have been an undetected extra close whose `number` field was lost
+      // or mistransformed. `closingIssuesReferences` is a raw provider
+      // passthrough (no schema guarantee), so an entry this file cannot
+      // interpret makes the whole comparison untrustworthy, not just that
+      // one entry.
       return {
         status: 'unavailable',
         expected,

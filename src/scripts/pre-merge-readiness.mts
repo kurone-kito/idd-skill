@@ -914,9 +914,19 @@ export function collectPreMergeReadiness(
   // consumers already have their own fail-closed handling for that.
   let prCommits: PrCommitPayload[] | null = null;
   try {
-    prCommits = port.listChangeRequestCommits(
-      args.prNumber,
-    ) as PrCommitPayload[];
+    const rawCommits = port.listChangeRequestCommits(args.prNumber);
+    // Copilot review, PR #3353: `listChangeRequestCommits` is declared
+    // `unknown[]` on the provider port, but nothing enforces that at
+    // runtime -- a malformed/non-array successful response would silently
+    // pass the `as PrCommitPayload[]` cast (a compile-time-only promise),
+    // then crash `computeClosingSetEvidence`'s own `.length`/iteration
+    // (uncaught, outside this try/catch) instead of producing the
+    // documented `closingSet.status: "unavailable"`. Validate the shape
+    // here so any non-array response fails closed the same way a thrown
+    // read already does.
+    prCommits = Array.isArray(rawCommits)
+      ? (rawCommits as PrCommitPayload[])
+      : null;
   } catch {
     prCommits = null;
   }
@@ -947,10 +957,15 @@ export function collectPreMergeReadiness(
   let closingSetLiveDefaultBranch: string | null = liveDefaultBranch;
   if (closingSetLiveDefaultBranch === null) {
     try {
-      closingSetLiveDefaultBranch = port.getRepositoryDefaultBranch(
-        owner,
-        repo,
-      );
+      const rawDefaultBranch = port.getRepositoryDefaultBranch(owner, repo);
+      // Copilot review, PR #3353: the port's declared `string | null`
+      // return type is a compile-time promise only -- validate it here too
+      // (same rationale as the commits-array guard above), so a
+      // non-conforming provider implementation fails closed instead of
+      // handing a non-string value to the `baseRefName !==
+      // liveDefaultBranch` comparison below.
+      closingSetLiveDefaultBranch =
+        typeof rawDefaultBranch === 'string' ? rawDefaultBranch : null;
     } catch {
       closingSetLiveDefaultBranch = null;
     }
