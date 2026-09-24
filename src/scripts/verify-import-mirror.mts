@@ -188,6 +188,7 @@ import {
   findMarkdownCodeRanges,
   indentationColumns,
   isInterruptingListMarker,
+  parseListItemContainer,
   parseListItemMatch,
 } from './markdown-code.mts';
 
@@ -537,12 +538,22 @@ function normalizeProseSegment(content: string): string {
  *
  * A boundary line starts a fresh chunk carrying that item's raw
  * `markerIndent` + `marker` verbatim; the marker's own trailing
- * separating whitespace is canonicalized to a single space, consistent
- * with how every other incidental whitespace amount in this rule is
- * already tolerated. A line that is not a boundary instead extends the
- * CURRENT chunk (list item or plain paragraph text alike), so ordinary
- * reflow -- rewrapping a list item's own continuation lines, or plain
- * prose with no list items at all -- still collapses exactly as before.
+ * separating whitespace is canonicalized to a single space in the
+ * EMITTED prefix, consistent with how every other incidental whitespace
+ * amount in this rule is already tolerated -- but the new chunk's own
+ * content-indent (case (2)'s "content zone" boundary for whatever comes
+ * after it) is computed via `markdown-code.mts`'s own
+ * {@link parseListItemContainer}, not by assuming that emitted single
+ * space is the real separating width: an earlier version of this
+ * function approximated content-indent as `markerIndent columns + marker
+ * length + 1`, which disagreed with `parseListItemContainer`'s
+ * CommonMark-correct handling of a 2-4-column separating gap (5+
+ * collapses to one column of padding) and could accept a marker that had
+ * actually already exited the zone (Copilot review, PR #3417). A line
+ * that is not a boundary instead extends the CURRENT chunk (list item or
+ * plain paragraph text alike), so ordinary reflow -- rewrapping a list
+ * item's own continuation lines, or plain prose with no list items at
+ * all -- still collapses exactly as before.
  *
  * `markerIndent` is compared verbatim (raw column count) only when
  * deciding whether a line is a genuine boundary at all (case 2 above);
@@ -606,8 +617,7 @@ function normalizeParagraphPreservingListStructure(paragraph: string): string {
     if (isGenuineListBoundary && listItem !== null) {
       flushCurrentChunk();
       currentPrefix = `${listItem.markerIndent}${listItem.marker} `;
-      currentChunkContentIndent =
-        indentationColumns(listItem.markerIndent) + listItem.marker.length + 1;
+      currentChunkContentIndent = parseListItemContainer(line);
       currentContentLines = [listItem.content];
       hasCurrentChunk = true;
     } else if (hasCurrentChunk) {

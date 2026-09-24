@@ -661,6 +661,26 @@ test("normalizeProseWhitespace still treats a marker that EXITS the enclosing it
   );
 });
 
+test("normalizeProseWhitespace computes a list item's content-indent from its ACTUAL spacing width, not an assumed single space (Copilot review, PR #3417)", () => {
+  // Regression: an earlier version approximated a newly opened chunk's
+  // own content-indent as "markerIndent columns + marker length + 1",
+  // silently assuming exactly one separating space after the marker.
+  // CommonMark's real rule (markdown-code.mts's own
+  // parseListItemContainer) counts the ACTUAL separating width (up to
+  // 4 columns; 5+ collapses to 1). Here "1." is followed by TWO spaces
+  // before "parent", so the real content-indent is 4, not 3 -- a "5."
+  // marker indented 3 columns therefore falls OUTSIDE that zone (exits
+  // it, becoming a genuine boundary) even though 3 >= the assumed-wrong
+  // indent of 3 would have wrongly kept it "inside". Verified via `gh
+  // api /markdown`: this renders as two separate list items, not one.
+  const nested = '1.  parent\n   5. child\n';
+  const flattened = '1.  parent 5. child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
 test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
   // "- child" indented under "- parent" (a genuine nested item) versus
   // "- child" at column 0 (a sibling of "- parent", not nested under it)

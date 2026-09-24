@@ -1095,7 +1095,21 @@ export function parseListItemMatch(content: string): ListItemMatch | null {
   };
 }
 
-function parseListItemContainer(content: string): number | null {
+/**
+ * Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233), which
+ * needs the same content-indent computation this module's own
+ * list-content-indent tracking already uses internally, rather than a
+ * hand-derived approximation: an earlier version of that caller assumed
+ * a marker's separating whitespace is always exactly one column, which
+ * disagrees with this function's own CommonMark-correct handling of 2-4
+ * separating spaces (`5+` collapses to one column of padding) -- a
+ * marker like `5.` indented 3 columns under a `1.  ` opener (two
+ * separating spaces, real content-indent 4) was wrongly read as still
+ * inside that item's zone under the 1-column assumption, when it is
+ * actually outside it (Copilot review, PR #3417; verified via `gh api
+ * /markdown`).
+ */
+export function parseListItemContainer(content: string): number | null {
   const listItem = parseListItemMatch(content);
   if (!listItem) {
     return null;
