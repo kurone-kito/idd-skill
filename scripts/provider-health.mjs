@@ -159,15 +159,11 @@ export function classifyProviderHealth(snapshot, policy) {
   };
 }
 // #3338: `parseAdvisoryWaitRequestMarker` (imported above from
-// protocol-helpers.mts, itself re-exported from marker-helpers.mts) used
-// to be a private copy of this same grammar here, anchored on
-// `body.trim()` -- trimming BOTH ends, so a marker that did not actually
-// start at byte 0 (leading whitespace, or embedded after other text)
-// could still be recognized. The shared parser trims only trailing
-// whitespace (matching every other marker consumer), fixing that gap; see
-// the doc comment on the shared export for the full contract, including
-// why it does not extract a marker's own embedded `{ISO8601-requested-at}`
-// field via `isValidIsoTimestamp`.
+// protocol-helpers.mts, re-exported from marker-helpers.mts, where its doc
+// comment carries the full contract) replaces a private, `body.trim()`-based
+// copy that used to live here -- trimming BOTH ends let a marker that did
+// not actually start at byte 0 still be recognized. The shared parser
+// trims only trailing whitespace, matching every other marker consumer.
 //
 // `idd-review-fix.instructions.md` documents the REQUEST_NEEDED flow as
 // requesting the bot's review FIRST, then posting this marker, so the

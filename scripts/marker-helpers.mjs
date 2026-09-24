@@ -2411,11 +2411,15 @@ const ADVISORY_WAIT_FAMILY_ENTRIES = [
     label: '<!-- advisory-wait:',
     // Lazy timestamp capture anchored against the closing `-->`: the
     // canonical entry's own pattern tolerates zero spaces before `-->`
-    // (`\S+\s*-->\s*$`), so a greedy `(\S+)` here could capture the arrow
-    // itself as part of the timestamp when no space precedes it. `(\S+?)`
-    // backs off at the first position where `\s*-->` also matches, which
-    // is always the real field boundary because no well-formed field value
-    // contains the literal sequence `-->`.
+    // (`\S+\s*-->\s*$`), so a greedy `(\S+)` here could otherwise prefer
+    // capturing the arrow itself as part of the timestamp when no space
+    // precedes it. `(\S+?)` backs off at the FIRST position where
+    // `\s*-->` also matches -- the correct field boundary as long as the
+    // field value itself does not contain the literal sequence `-->`,
+    // true for every value this parser is actually exercised against
+    // (an ISO timestamp, `pending`, or another `\S+` token a trusted
+    // actor hand-composes) even though the canonical grammar does not
+    // structurally forbid it.
     extract: /^<!--\s*advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+?)\s*-->/,
   },
 ];
