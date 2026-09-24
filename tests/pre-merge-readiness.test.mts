@@ -745,6 +745,96 @@ test('buildPreMergeReadinessSummary: a malformed review-watermark comment surfac
   assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
 });
 
+// #3339: a review-watermark-shaped comment whose head SHA is 12 hex
+// characters (not the required 40) is accepted by the loose shape
+// `pattern` but rejected by parseReviewWatermarkComment's stricter field
+// check -- proving the same 'malformed-watermark' (not 'missing-watermark')
+// wiring as the glued-note case above also covers this distinct,
+// field-level defect class end to end.
+test('buildPreMergeReadinessSummary: a review-watermark comment with a too-short head SHA surfaces malformed-watermark', () => {
+  const prHeadSha = '7777777777777777777777777777777777777777';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(
+            12,
+          )} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
+// Same field-level defect class, this time on the `maxActivityUpdatedAt`
+// field: neither a valid ISO-8601 timestamp nor the literal `none`
+// sentinel.
+test('buildPreMergeReadinessSummary: a review-watermark comment with an invalid maxActivityUpdatedAt surfaces malformed-watermark', () => {
+  const prHeadSha = '8888888888888888888888888888888888888888';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} not-a-timestamp 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'malformed-watermark');
+});
+
+// Control case for the two tests above: with no watermark-shaped comment
+// at all (malformed or otherwise), the generic 'missing-watermark' reason
+// must still apply -- proving the new field-invalid branch does not widen
+// detectMalformedReviewWatermarkComments into flagging ordinary absence.
+test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays missing-watermark', () => {
+  const prHeadSha = '9999999999999999999999999999999999999999';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: 'just an ordinary regular comment, not marker-shaped at all',
+          createdAt: '2026-08-02T00:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
+});
+
 test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
   const prHeadSha = '5555555555555555555555555555555555555555';
   const customBotLogin = 'my-custom-review-bot[bot]';
