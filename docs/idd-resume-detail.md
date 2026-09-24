@@ -103,10 +103,19 @@ displaced, the active claim becomes the successor's pair, so the owned
 row no longer matches for this session at all — this is the same
 "verified" every other claim-matching row in Step 1 already relies on,
 not a new exposure. The "FH evidence names this session's
-already-verified `{claim-id}`" row below is the explicit backstop against
+already-verified `{claim-id}`" row — positioned right after the owned and
+unowned rows, before the catch-all row — is the explicit backstop against
 a stale evaluation, since it checks this session's own recorded
 `{claim-id}` against FH evidence directly rather than against whatever
-the active claim currently is.
+the active claim currently is; it must run before the catch-all so a
+displaced session stops silently per §FH's no-mutation rule instead of
+reaching the catch-all's hold comment.
+
+**Development-branch resolution.** Both rows resolve `{development-branch}`
+the same way B1's Worktree creation Step 2 does — re-resolve it here if
+entered directly (for example, on resume) without a fresh B1 pass, the same
+caveat this document's §CSA section and `idd-pr-submit.instructions.md`'s
+D1 use for the same variable.
 
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
