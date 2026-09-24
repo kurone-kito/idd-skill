@@ -105,6 +105,42 @@ test('classifyIssue rejects roadmap and blocked marker issues', () => {
   assert.equal(blocked.reason, 'blocked_by_marker');
 });
 
+test('classifyIssue ignores roadmap-id/blocked-by markers only quoted inside code (#3281)', () => {
+  const roadmapQuoted = classifyIssue(
+    {
+      number: 1,
+      title: 'quoted roadmap-id',
+      state: 'OPEN',
+      labels: [],
+      body: ['Example:', '```', '<!-- idd-skill-roadmap-id: x -->', '```'].join(
+        '\n',
+      ),
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(roadmapQuoted.orphan, true);
+  assert.equal(roadmapQuoted.reason, 'orphan');
+
+  const blockedQuoted = classifyIssue(
+    {
+      number: 2,
+      title: 'quoted blocked-by',
+      state: 'OPEN',
+      labels: [],
+      body: 'Example: `<!-- idd-skill-blocked-by: x -->`',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(blockedQuoted.orphan, true);
+  assert.equal(blockedQuoted.reason, 'orphan');
+});
+
 test('classifyIssue agrees with discover-roadmap-graph.mts that a label-only issue is not a roadmap (#3286)', () => {
   const labelOnlyIssue = {
     number: 6,

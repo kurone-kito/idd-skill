@@ -17,7 +17,7 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
@@ -39,9 +39,10 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // It tolerates optional indentation, nested blockquote (`>`) markers, and a
 // single list bullet (`-`/`*`/`+`) while staying line-anchored, so a dependency
 // written as `- Blocked by #55` or `> Depends on #66` is still recognized. The
-// extractors run `stripMarkdownCodeRegions` over the body first, so a
-// dependency line merely quoted inside inline code or a fenced block is already
-// masked out — treating code-quoted markers as false positives, consistent with
+// extractors run `maskMarkdownForScan` over the body first (#3281; originally
+// `stripMarkdownCodeRegions`), so a dependency line merely quoted inside
+// inline code, a fenced block, or an indented code block is already masked
+// out — treating code-quoted markers as false positives, consistent with
 // the #1121 repo behavior; excluding backticks from this prefix is a second
 // line of defense for the inline-code case. This const is declared before the
 // `import.meta.main` CLI block on purpose so it is initialized when the CLI
@@ -834,7 +835,7 @@ function consumeContinuationRefLines(
 
 export function extractBlockedByIssueNumbers(body: string): number[] {
   return dedupeNumbers(
-    extractKeywordLineRefs(stripMarkdownCodeRegions(body), 'Blocked by'),
+    extractKeywordLineRefs(maskMarkdownForScan(body), 'Blocked by'),
   );
 }
 
@@ -846,7 +847,15 @@ export function extractBlockedByRoadmapMarkers(
   // (which may contain a metacharacter) cannot corrupt or break the
   // extraction pattern. For the default `idd-skill` this is byte-identical
   // to the prior hardcoded literal.
-  const matches = body.matchAll(
+  //
+  // #3281: this scanner previously read the raw body unmasked, unlike
+  // every other extractor in this file — a `blocked-by` marker an issue
+  // only *quotes* as an example (inside a code span or fence) wrongly
+  // read as a real, live dependency. Mask first, matching the #1121
+  // boundary the rest of this file already applies. HTML comments stay
+  // unmasked (the default): the marker this regex looks for IS an HTML
+  // comment.
+  const matches = maskMarkdownForScan(body).matchAll(
     new RegExp(
       `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*([^\\s>]+)\\s*-->`,
       'gi',
@@ -856,7 +865,7 @@ export function extractBlockedByRoadmapMarkers(
 }
 
 export function extractDependencyIssueNumbers(body: string): number[] {
-  const stripped = stripMarkdownCodeRegions(body);
+  const stripped = maskMarkdownForScan(body);
   const explicitDependencies = extractKeywordLineRefs(stripped, 'Depends on');
   const taskListDependencies = [
     ...stripped.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
@@ -895,12 +904,12 @@ export function hasReviewFixLoopCutoffDeferMarker(
     `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*${escapeRegex(REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE)}\\s*-->`,
     'i',
   );
-  // Strip code regions first, matching the #1121 boundary every other
+  // Mask code regions first, matching the #1121 boundary every other
   // extractor in this file already applies: an issue that quotes this
-  // marker as inline-code or fenced-example prose (documenting the
-  // mechanism itself, as `#2877` and its own follow-up do) must not be
-  // misread as actually carrying a live marker.
-  return pattern.test(stripMarkdownCodeRegions(body));
+  // marker as inline-code, fenced, or indented-code-block example prose
+  // (documenting the mechanism itself, as `#2877` and its own follow-up
+  // do) must not be misread as actually carrying a live marker.
+  return pattern.test(maskMarkdownForScan(body));
 }
 
 /** The `numbers` extracted from the body's sole `Refs` keyword line, or an
@@ -953,7 +962,7 @@ export interface ReviewFixLoopCutoffRefsResult {
 export function extractReviewFixLoopCutoffRefsIssueNumbers(
   body: string,
 ): ReviewFixLoopCutoffRefsResult {
-  const stripped = stripMarkdownCodeRegions(body);
+  const stripped = maskMarkdownForScan(body);
   const linePattern = new RegExp(
     `${DEPENDENCY_LINE_PREFIX}Refs:?[ \\t]+(#\\d+.*)$`,
     'gim',

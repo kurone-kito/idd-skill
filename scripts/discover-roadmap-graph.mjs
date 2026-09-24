@@ -21,7 +21,7 @@ import {
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import { resolveLegacyClaimState } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
@@ -1622,7 +1622,7 @@ export function extractRoadmapMarkerId(
     `<!--\\s*${escapeRegex(markerPrefix)}-roadmap-id:\\s*([^\\s>]+)\\s*-->`,
     'i',
   );
-  const match = regex.exec(stripMarkdownCodeRegions(String(body ?? '')));
+  const match = regex.exec(maskMarkdownForScan(String(body ?? '')));
   return match ? match[1] : '';
 }
 /**
@@ -1686,9 +1686,10 @@ export function isTaskListCheckboxLine(line) {
 }
 export function extractTaskListReferences(body, options = {}) {
   // Match against a code-masked copy so a checkbox merely quoted inside inline
-  // code or a fenced block is not walked as a real task-list edge — consistent
-  // with the #1121 boundary already applied to extractRoadmapMarkerId (#1204).
-  // stripMarkdownCodeRegions preserves the line count, so the masked and raw
+  // code, a fenced block, or an indented code block is not walked as a real
+  // task-list edge — consistent with the #1121 boundary already applied to
+  // extractRoadmapMarkerId (#1204). maskMarkdownForScan (#3281; originally
+  // stripMarkdownCodeRegions) preserves the line count, so the masked and raw
   // lines share an index and evidence stays the raw line for any surviving edge
   // (e.g. one that shares a line with unrelated inline code).
   //
@@ -1732,7 +1733,7 @@ export function extractTaskListReferences(body, options = {}) {
   );
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
-  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  const maskedLines = maskMarkdownForScan(rawBody).split(/\r?\n/u);
   const references = [];
   for (let index = 0; index < maskedLines.length; index += 1) {
     const maskedLine = maskedLines[index];
@@ -1802,15 +1803,17 @@ export function extractKeywordReferences(body, options = {}) {
       : options.repo,
   );
   // Run the keyword match AND the trailing-segment scan against a code-masked
-  // copy of the body so a reference merely quoted inside inline code or a fenced
-  // block is not walked as a real graph edge — consistent with the #1121
-  // boundary already applied to extractRoadmapMarkerId (#1204). Only `evidence`
-  // reads the raw line; stripMarkdownCodeRegions preserves the line count, so
-  // the masked and raw lines share an index and evidence stays byte-identical
-  // for any surviving edge that is not itself inside/adjacent to code.
+  // copy of the body so a reference merely quoted inside inline code, a fenced
+  // block, or an indented code block is not walked as a real graph edge —
+  // consistent with the #1121 boundary already applied to
+  // extractRoadmapMarkerId (#1204). Only `evidence` reads the raw line;
+  // maskMarkdownForScan (#3281; originally stripMarkdownCodeRegions) preserves
+  // the line count, so the masked and raw lines share an index and evidence
+  // stays byte-identical for any surviving edge that is not itself
+  // inside/adjacent to code.
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
-  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  const maskedLines = maskMarkdownForScan(rawBody).split(/\r?\n/u);
   for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex += 1) {
     const maskedLine = maskedLines[lineIndex];
     const rawLine = rawLines[lineIndex] ?? maskedLine;

@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
+import { extractBlockedByRoadmapMarkers } from '../src/scripts/discover-readiness-check.mts';
 import {
   renderAuthoringOwnerMarker,
   renderAuthoringPublicationIntentMarker,
@@ -996,6 +997,22 @@ test('dependency-marker-rule fails when an orphan issue carries a blocked-by mar
   assert.equal(findingResult(report, 'dependency-marker-rule'), 'fail');
 });
 
+test('dependency-marker-rule agrees with extractBlockedByRoadmapMarkers that a blocked-by marker only quoted inline is not real (#2441-shaped, #3281)', () => {
+  // Reproduces the exact shape reported against issue #2441: the body's
+  // only blocked-by marker sits inside an inline code span, illustrating
+  // the marker's own syntax rather than declaring a real dependency.
+  // Before #3281, Discover's extractBlockedByRoadmapMarkers read the raw
+  // body (no masking at all) and disagreed with auditAuthoredIssue (which
+  // already masked code here) — this asserts both now agree.
+  const body = orphanBody().replace(
+    '## Background',
+    'See `<!-- idd-skill-blocked-by: some-roadmap -->` for syntax.\n\n## Background',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  assert.equal(findingResult(report, 'dependency-marker-rule'), 'pass');
+  assert.deepEqual(extractBlockedByRoadmapMarkers(body), []);
+});
+
 test('dependency-marker-rule fails when a child blocked-by marker is missing its value', () => {
   // A blocked-by marker with no `: <roadmap-id>` value looks present to the
   // author but is invisible to Discover's extractBlockedByRoadmapMarkers,
@@ -1345,6 +1362,28 @@ test('prose-dependency does not warn on a cross-repo shorthand reference', () =>
 test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
   const body = childBody({
     extraMarkers: 'Blocked by #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn when a Blocked by encoding is preceded by inline code on the same line, right after a blank line (#3281 review, CodeRabbit)', () => {
+  // maskMarkdownForScan replaces an inline code span (backticks and
+  // content) with spaces, preserving position -- masking the SAME
+  // already-masked text a second time can then read those replacement
+  // spaces as a fresh top-level indented code block, since a >=4-space
+  // run right after a blank line is indistinguishable from real
+  // indentation. Before #3281's fix, checkProseOnlyDependency passed the
+  // already-masked `text` into extractBlockedByIssueNumbers (which masks
+  // its own input again), so the whole "Blocked by #1391" line was
+  // silently dropped from the encoded set and wrongly flagged as an
+  // unencoded coordination reference.
+  const body = childBody({
+    extraMarkers: '`x` Blocked by #1391\n\nOnce #1391 merges, this can start.',
   });
   const report = auditAuthoredIssue(body, { shape: 'child' });
   const finding = report.findings.find(
