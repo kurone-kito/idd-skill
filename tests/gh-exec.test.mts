@@ -848,8 +848,16 @@ ${wrapper.stdout}
       try {
         await wrapper.invoke();
         const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+        // Exact-index adjacency, not a substring/membership check on the
+        // captured argv (CodeQL js/incomplete-url-substring-sanitization
+        // false positive on `argv.includes('ghes.example.com')`, #3336
+        // review): confirms --hostname is immediately followed by exactly
+        // the resolved host token, not merely that both strings appear
+        // somewhere in argv independently.
+        const hostnameIndex = argv.indexOf('--hostname');
         assert.ok(
-          argv.includes('--hostname') && argv.includes('ghes.example.com'),
+          hostnameIndex !== -1 &&
+            argv[hostnameIndex + 1] === 'ghes.example.com',
           `${wrapper.name} did not include a resolved --hostname: ${JSON.stringify(
             argv,
           )}`,
