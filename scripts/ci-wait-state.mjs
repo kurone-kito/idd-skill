@@ -22,7 +22,7 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 import { parseCliArgs } from './cli-args.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
@@ -98,7 +98,34 @@ if (import.meta.main) {
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call.
 function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const summary = collectCiWaitState(process.argv.slice(2));
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+}
+/**
+ * Collect the CI-wait-state snapshot for `--pr <number>`: resolve owner/
+ * repo, fetch the PR's branch/checks and governance reads from `port`,
+ * resolve the trusted `.github/idd/config.json` via `loadTrustedConfig`
+ * against the PR's base ref (or the repository's live default branch when
+ * `baseRefName` is empty), classify governance-read unreadability (#3300),
+ * and build the final summary via {@link buildCiWaitStateSummary}.
+ *
+ * `createPort`/`loadTrustedConfig` are injectable (default: the real
+ * GitHub adapter / trusted-ref loader) so a test can drive this whole
+ * collection entry end to end against `createFakeProviderAdapter`
+ * fixtures instead of a live `gh` process -- mirrors
+ * `pre-merge-readiness.mts`'s `collectPreMergeReadiness` injectable-
+ * parameter pattern. Before this, only the pure functions below
+ * (`isProtectionReadUnreadable`, `buildCiWaitStateSummary`) had a test
+ * seam; this orchestration itself -- choosing `trustedConfigRef`,
+ * applying `ciGate.trustEmptyProtectionReads` -- had none (Copilot
+ * review, PR #3350).
+ */
+export function collectCiWaitState(
+  argv,
+  createPort = createGithubProviderAdapter,
+  loadTrustedConfig = loadTrustedIddConfig,
+) {
+  const args = parseArgs(argv);
   if (args.help) {
     printHelp();
     process.exit(0);
@@ -113,7 +140,7 @@ function main() {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
+  const port = createPort(owner, repo);
   const pr = port.getChangeRequestBranchAndChecks(args.prNumber);
   // Raw (unencoded) branch name: listBranchRules/getBranchProtection do
   // their own encodeURIComponent internally, matching pre-merge-readiness's
@@ -136,11 +163,42 @@ function main() {
     branchRules,
     branchProtection,
   );
+  // #2373/#3300: resolve `.github/idd/config.json` from the PR's TRUSTED
+  // base ref, never this worktree's own local copy -- the same trust
+  // boundary `pre-merge-readiness.mts` and `resume-route-selection.mts`
+  // already apply to this exact config read. A PR branch that could edit
+  // its own local copy could otherwise widen its own
+  // `ciGate.trustEmptyProtectionReads`/`trustSourcePinnedRequiredChecks`
+  // opt-ins. Falls back to the repository's live default branch when
+  // `baseRefName` is empty (mirrors `collectPreMergeReadiness`'s
+  // identical fallback), and fails closed -- rather than silently
+  // defaulting the policy -- when neither resolves.
+  const trustedConfigRef =
+    baseRefName || port.getRepositoryDefaultBranch(owner, repo);
+  if (!trustedConfigRef) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${args.prNumber} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const iddConfig = loadTrustedConfig(owner, repo, trustedConfigRef);
+  const ciGate = normalizePolicyConfig(iddConfig).ciGate;
+  const trustEmptyProtectionReads = ciGate.trustEmptyProtectionReads === true;
   // #1689: `ciGate.trustSourcePinnedRequiredChecks` -- see
   // `buildRequiredChecksRollup`'s doc comment for the full rationale.
   const trustSourcePinnedRequiredChecks =
-    normalizePolicyConfig(loadIddConfig()).ciGate
-      .trustSourcePinnedRequiredChecks === true;
+    ciGate.trustSourcePinnedRequiredChecks === true;
+  // #3300: classify each governance read as readable or unreadable via the
+  // exported, gh-free pure function below -- see its doc comment. A `403`
+  // on either read is not handled here: the provider port already
+  // re-throws it, which crashes this function (and the whole process)
+  // before a summary is ever built, unchanged fail-closed behavior from
+  // before this change.
+  const protectionReadsUnreadable =
+    isProtectionReadUnreadable(branchRulesOutcome, trustEmptyProtectionReads) ||
+    isProtectionReadUnreadable(
+      branchProtectionOutcome,
+      trustEmptyProtectionReads,
+    );
   const summary = buildCiWaitStateSummary(
     {
       headRefOid: pr.headSha,
@@ -153,9 +211,26 @@ function main() {
       requiredCheckSourcePinnedUnresolved:
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
       trustSourcePinnedRequiredChecks,
+      protectionReadsUnreadable,
     },
   );
-  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  return summary;
+}
+/**
+ * Classify whether a branch-rules or classic branch-protection governance
+ * read must be treated as unreadable rather than "nothing configured"
+ * (#3300). A `not-found` outcome is GitHub's documented way of masking a
+ * `403` permission denial on these two endpoints (`idd-ci.instructions.md`'s
+ * Required-check discovery step 4 gathers the citations), so it is
+ * unreadable by default -- unless the repository has opted in to trusting
+ * it as genuinely empty via `ciGate.trustEmptyProtectionReads`, mirroring
+ * the rationale behind `resume-route-selection.mts`'s own
+ * `protectionReadsUnreadable` local. An `ok` outcome is always readable
+ * regardless of the opt-in. Exported and pure (no `gh` call, no process
+ * access) so this classification is directly unit-testable.
+ */
+export function isProtectionReadUnreadable(outcome, trustEmptyProtectionReads) {
+  return outcome.outcome === 'not-found' && !trustEmptyProtectionReads;
 }
 /**
  * Build the read-only D-phase CI snapshot: every current check keyed by
@@ -178,6 +253,7 @@ export function buildCiWaitStateSummary(input, options = {}) {
     options.requiredCheckSourcePinned === true,
     options.requiredCheckSourcePinnedUnresolved === true,
     options.trustSourcePinnedRequiredChecks === true,
+    options.protectionReadsUnreadable === true,
   );
   return {
     headRefOid: String(input.headRefOid ?? ''),
@@ -381,6 +457,12 @@ function buildRequiredChecksRollup(
   // unconditionally conservative regardless of this flag, since there is
   // no check name to correlate with a live run at all in that case.
   trustSourcePinnedRequiredChecks,
+  // #3300: true when a branch-rules or classic branch-protection read came
+  // back masked-404-unreadable (see `isProtectionReadUnreadable`). Checked
+  // first, before every other classification below -- see `status`'s own
+  // doc comment on `CiWaitRequiredChecksRollup` for why this must win
+  // unconditionally, including over an otherwise-"success" read.
+  protectionReadsUnreadable,
 ) {
   const names = [...requiredCheckNameSet].sort();
   if (names.length === 0) {
@@ -399,9 +481,12 @@ function buildRequiredChecksRollup(
       anyRequiredUnknown: false,
       requiredCheckSourcePinned,
       requiredCheckSourcePinnedUnresolved,
-      status: requiredCheckSourcePinned
-        ? 'source-pinned'
-        : 'no-required-checks',
+      protectionReadsUnreadable,
+      status: protectionReadsUnreadable
+        ? 'unreadable'
+        : requiredCheckSourcePinned
+          ? 'source-pinned'
+          : 'no-required-checks',
     };
   }
   const requiredEntries = checks.filter((check) => check.required);
@@ -429,7 +514,9 @@ function buildRequiredChecksRollup(
     allRequiredPresent &&
     dedupedRequiredEntries.every((check) => check.status === 'success');
   let status;
-  if (!allRequiredPresent) {
+  if (protectionReadsUnreadable) {
+    status = 'unreadable';
+  } else if (!allRequiredPresent) {
     status = 'missing';
   } else if (anyRequiredFailing) {
     status = 'failing';
@@ -466,6 +553,7 @@ function buildRequiredChecksRollup(
     anyRequiredUnknown,
     requiredCheckSourcePinned,
     requiredCheckSourcePinnedUnresolved,
+    protectionReadsUnreadable,
     status,
   };
 }
