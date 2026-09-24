@@ -1128,20 +1128,40 @@ has been posted and its own POST and re-fetch/verify above have both
 succeeded -- never before, and never interleaved with posting -- scan that
 same target's prior comments (the target issue for `authoring-owner`; the
 journal issue named in the record's own `journal` field for
-`authoring-publication-intent`, which naturally also hides other authoring
-sets' already superseded journal records on that shared journal --
-intentional, since the journal read path is the same paginated scan and is
-unaffected either way) and minimize (classifier `OUTDATED`) every prior
+`authoring-publication-intent`, which naturally also fetches other
+authoring sets' records on that shared journal -- intentional, since the
+journal read path is the same paginated scan either way, but the
+continuity-chain-identity restriction below means only the just-posted
+record's own target (and, for `authoring-publication-intent`, its own
+token too) is ever eligible for minimization, never a different set's)
+and minimize (classifier `OUTDATED`) every prior
 comment from a trusted marker actor whose body is a byte-exact match of the
-canonical rendered template for the same marker family.
+canonical rendered template for the same marker family AND shares the
+just-posted record's own continuity-chain identity (`target=` alone for
+`authoring-owner`; `target=`+`token=` together for
+`authoring-publication-intent`) -- on the journal-hosted
+`authoring-publication-intent` family this excludes a different target's
+record on the same shared journal, and a same-target record under a
+different token, even though both byte-exact-match the family template;
+this matches the mandatory Stage 2 sweep's own fixed classifier
+(`classifyAuthoringMarkerFamily` in `marker-helpers.mts`) so the two
+procedures never disagree about which prior record is eligible.
 `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
-`protocol-helpers.mts`) implements that check: it parses the candidate,
-re-renders the parsed fields with `renderAuthoringOwnerMarker` /
-`renderAuthoringPublicationIntentMarker`, and requires the result to equal
-the candidate's body exactly. A candidate that deviates from the template in
-any way -- reordered or extra fields, altered spacing, trailing content, a
-different visible note -- is never minimized; leave it visible rather than
-guessing. Skip the just-posted comment itself and any candidate whose
+`protocol-helpers.mts`) implements the byte-exact-template half of that
+check: it parses the candidate, re-renders the parsed fields with
+`renderAuthoringOwnerMarker` / `renderAuthoringPublicationIntentMarker`,
+and requires the result to equal the candidate's body exactly. A
+candidate that deviates from the template in any way -- reordered or
+extra fields, altered spacing, trailing content, a different visible
+note -- is never minimized; leave it visible rather than guessing. Apply
+the continuity-chain-identity half directly: parse each byte-exact
+candidate the same way (`parseAuthoringOwnerComment` /
+`parseAuthoringPublicationIntentComment`) and compare its `target=` field
+(plus `token=` for `authoring-publication-intent`) against the
+just-posted record's own fields -- the identical field comparison
+`classifyAuthoringMarkerFamily`'s own (module-private)
+`resolveAuthoringMarkerIdentity` performs internally for the Stage 2
+sweep. Skip the just-posted comment itself and any candidate whose
 `isMinimized` is already `true` (idempotent; the minimize helper's own probe
 already enforces this).
 
@@ -1369,8 +1389,8 @@ command above, now scoped to `--issue <anchor-issue-number> --issue
 <journal-issue-number>` -- covering the anchor's own owner-marker log
 and the journal's publication-intent log -- idempotent with every
 earlier target's own sweep above, since a comment either was already
-minimized or was not yet the newest for its own target within the
-family either way. Then
+minimized or was not yet the newest for its own continuity-chain
+identity within the family either way. Then
 reuse or
 append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID

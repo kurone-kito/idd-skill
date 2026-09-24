@@ -630,10 +630,13 @@ Fetch-driven hide-on-supersede sweep for authoring-owner /
 authoring-publication-intent markers (#2935): fetches each --issue's
 comments via GraphQL (selecting isMinimized, which REST never carries),
 classifies every comment with matchCanonicalAuthoringMarkerFamily, keeps
-only the single newest byte-exact canonical match per family among
-TRUSTED-actor authors, and minimizes (classifier OUTDATED by default)
-every other eligible, not-yet-minimized candidate in one mutation pass --
-reusing minimize-superseded-markers.mts's own runMinimize.
+only the single newest byte-exact canonical match per continuity-chain
+identity within each family (#3167: target= alone for authoring-owner;
+target=+token= together for authoring-publication-intent, #3374's
+collision-safe encoding) among TRUSTED-actor authors, and minimizes
+(classifier OUTDATED by default) every other eligible, not-yet-minimized
+candidate in one mutation pass -- reusing minimize-superseded-
+markers.mts's own runMinimize.
 
 Pass one --issue per target to sweep (the per-target preflight and the
 anchor-before-release-complete sweep points each pass one; the closing

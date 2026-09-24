@@ -200,3 +200,63 @@ test('classifyAuthoringMarkerFamily restores ascending index order across interl
   assert.deepEqual(result.newestTrustedIndexes, [4, 5]);
   assert.deepEqual(result.eligibleIndexes, [0, 1, 2, 3]);
 });
+
+test('classifyAuthoringMarkerFamily (#3374) scopes authoring-publication-intent identity to target+token TOGETHER: the SAME target with two DIFFERENT tokens is two independent identity groups', () => {
+  const comments = [
+    candidate(intentMarker('pending', 'kurone-kito/idd-skill#401', 'pub-x')), // token X stale
+    candidate(intentMarker('pending', 'kurone-kito/idd-skill#401', 'pub-y')), // token Y stale
+    candidate(
+      intentMarker('member', 'kurone-kito/idd-skill#401', 'pub-x', '401'),
+    ), // token X newest
+    candidate(
+      intentMarker('member', 'kurone-kito/idd-skill#401', 'pub-y', '401'),
+    ), // token Y newest
+  ];
+  const result = classifyAuthoringMarkerFamily(
+    comments,
+    MARKER_PREFIX,
+    'authoring-publication-intent',
+    new Set(['trusted-bot']),
+  );
+  // A target-only regression (dropping the token from the identity key)
+  // would merge all four into ONE group by target alone, reporting
+  // newestTrustedIndexes: [3] and eligibleIndexes: [0, 1, 2] -- wrongly
+  // flagging index 2 (token X's own current record) as superseded by
+  // index 3 (an unrelated token's record on the SAME target). The fix
+  // protects both tokens' own newest independently.
+  assert.deepEqual(result.newestTrustedIndexes, [2, 3]);
+  assert.deepEqual(result.eligibleIndexes, [0, 1]);
+});
+
+test('classifyAuthoringMarkerFamily (#3374) stays collision-safe when a field value embeds a raw NUL byte: two DIFFERENT (target, token) pairs that collide under a naive "target + NUL + token" join must still resolve to two independent identity groups', () => {
+  // Chosen so the pre-#3374 raw NUL join collides:
+  // `${target1}\0${token1}` === `${target2}\0${token2}` === "A\0X\0Y" for
+  // both pairs below (verified: target1="A\0X",token1="Y" and
+  // target2="A",token2="X\0Y" both join to the same string), even though
+  // the two pairs are genuinely different. JSON.stringify([target,
+  // token]) does not collide for this pair.
+  const target1 = 'A\u0000X';
+  const token1 = 'Y';
+  const target2 = 'A';
+  const token2 = 'X\u0000Y';
+  const comments = [
+    candidate(intentMarker('pending', target1, token1)), // pair 1 stale
+    candidate(intentMarker('pending', target2, token2)), // pair 2 stale
+    candidate(intentMarker('member', target1, token1, '401')), // pair 1 newest
+    candidate(intentMarker('member', target2, token2, '402')), // pair 2 newest
+  ];
+  const result = classifyAuthoringMarkerFamily(
+    comments,
+    MARKER_PREFIX,
+    'authoring-publication-intent',
+    new Set(['trusted-bot']),
+  );
+  // The pre-#3374 raw-NUL-join bug would merge all four into ONE group
+  // (both pairs joining to the identical "A\0X\0Y" string), reporting
+  // newestTrustedIndexes: [3] and eligibleIndexes: [0, 1, 2] -- wrongly
+  // flagging index 2 (pair 1's own current record) as superseded by
+  // index 3 (an unrelated pair's record). The JSON.stringify-based key
+  // protects both pairs' own newest independently.
+  assert.deepEqual(result.newestTrustedIndexes, [2, 3]);
+  assert.deepEqual(result.eligibleIndexes, [0, 1]);
+});
