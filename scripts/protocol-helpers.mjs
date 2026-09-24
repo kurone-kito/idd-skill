@@ -9727,6 +9727,94 @@ export function compareIsoTimestamps(left, right) {
   }
   return String(left ?? '').localeCompare(String(right ?? ''));
 }
+// kurone-kito/idd-skill#3259: requires the FULL canonical `review-ack:`
+// marker shape -- a valid trailing ISO-8601 timestamp, end-anchored --
+// matching the `review-ack:` entry in `OPERATIONAL_MARKERS`
+// (marker-helpers.mts) exactly, so a malformed or truncated comment never
+// counts as a valid ack. Moved here verbatim from `advisory-convergence.mts`
+// (originally #2050 / #2056) so a second caller
+// (`merged-pr-feedback-sweep.mts`) can reuse the SAME `review-ack:`
+// validity check the real `idd-advisory-convergence` gate already uses,
+// instead of a second ad-hoc marker-matching implementation that could
+// drift out of sync with it; `advisory-convergence.mts` now delegates to
+// {@link hasTrustedReviewAckAfter} below. Group 1 is the embedded commit
+// SHA (compared against the caller-supplied `commitSha`) and group 2 is
+// the embedded timestamp (validated with `isValidIsoTimestamp` -- the bare
+// digit-shape match alone accepts a syntactically-digit-shaped but
+// semantically invalid calendar date/time, e.g. `2026-99-99T99:99:99Z`).
+const REVIEW_ACK_MARKER_PATTERN =
+  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
+/**
+ * kurone-kito/idd-skill#3259 (moved verbatim from `advisory-convergence.mts`,
+ * originally #2050 / #2056): `true` when a trusted `review-ack:` marker
+ * exists among `comments` whose OWN GitHub-assigned `created_at` (never an
+ * embedded, agent-supplied timestamp -- the same "clock anchor is marker
+ * created_at, not embedded text" trust boundary `hasFreshDisposition`
+ * above and `summarizeSameHeadRerollMarkers` (advisory-convergence.mts)
+ * both already apply) is strictly after `reviewSubmittedAt`, AND whose
+ * embedded commit SHA equals `commitSha` (the same same-commit filter
+ * `summarizeSameHeadRerollMarkers` already applies to `advisory-reroll`
+ * markers against the PR's current HEAD -- callers needing that exact
+ * semantics pass the PR's HEAD sha here; a caller acknowledging a
+ * SPECIFIC review's own reviewed commit, such as
+ * `merged-pr-feedback-sweep.mts`, passes that review's own commit sha
+ * instead).
+ *
+ * The `createdAt > reviewSubmittedAt` ordering still invalidates a
+ * pre-existing ack when a later review lands (same commit or not, e.g. an
+ * AW6 same-HEAD reroll). The SHA check closes the delayed-POST race the
+ * ordering check cannot: a marker that embedded commit A can still
+ * receive a GitHub `createdAt` after review B's `submittedAt` if the PR
+ * advanced between render and POST.
+ *
+ * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
+ * invalid, or when `commitSha` is empty, since there is then no anchor to
+ * compare an ack against -- the safe direction for every known caller: an
+ * unresolved anchor means the finding stays reported / the clause stays
+ * unsatisfied, never silently cleared.
+ *
+ * `trustedMarkerLogins` must already be normalized (trimmed, lower-cased)
+ * by the caller, matching every other trusted-login-set consumer in this
+ * file.
+ */
+export function hasTrustedReviewAckAfter(
+  comments,
+  trustedMarkerLogins,
+  reviewSubmittedAt,
+  commitSha,
+) {
+  if (!isValidIsoTimestamp(reviewSubmittedAt) || !commitSha) {
+    return false;
+  }
+  const trusted = new Set(trustedMarkerLogins);
+  return comments.some((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
+    // Group 1 = embedded commit SHA, group 2 = embedded timestamp. The
+    // timestamp is otherwise never trusted for the createdAt-vs-
+    // reviewSubmittedAt comparison below, but a marker whose OWN
+    // digit-shaped field is not a real calendar date/time is malformed --
+    // reject it here the same way `detectMalformedOperationalMarker`
+    // (marker-helpers.mts) rejects other structurally-invalid markers.
+    if (!match || match[1] !== commitSha || !isValidIsoTimestamp(match[2])) {
+      return false;
+    }
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trusted.has(login)) {
+      return false;
+    }
+    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
+    // embedded (agent-supplied) timestamp field, same anchor rule AW2
+    // already states for `advisory-wait:`.
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
+    );
+  });
+}
 function threadActivityAt(thread) {
   if (isValidIsoTimestamp(thread.updatedAt ?? '')) {
     return thread.updatedAt;
