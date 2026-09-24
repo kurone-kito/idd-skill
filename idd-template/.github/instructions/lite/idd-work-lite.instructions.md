@@ -42,7 +42,11 @@ Every B1 step — including the step 10 and step 31 hold-comment posts —
 runs with checks 1-2 only. Checks 3-5 apply from B2 onward, once B1 step
 30's cwd check passes; steps 28-31 are the hand-off mechanism, so a
 step 28 or 29 failure that routes to step 31's hold still runs under
-checks 1-2 only. Never relax checks 1-2 anywhere.
+checks 1-2 only. Never relax checks 1-2 anywhere. This defers only this
+guard's own check 3-5 gate, never B1's own explicit lock-acquisition
+steps: steps 19 and 26 still require acquiring the worktree-local claim
+lock and recording tokens immediately after creation, before install or
+any other mutation, regardless of this deferral.
 
 1. The active claim still uses this session's claim id.
 2. If this session posted an activation nonce for the current claim,
