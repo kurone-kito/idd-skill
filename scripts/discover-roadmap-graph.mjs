@@ -28,6 +28,7 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 import {
+  DEFAULT_STALE_AGE_MS,
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
@@ -50,11 +51,6 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
-// Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
-// the default baked into protocol-helpers' `isStaleAt`, so when the configured
-// stale age equals this default the shared `isStaleAt` path is
-// reused verbatim instead of re-deriving the 24h math here.
-const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 // Policy default claim heartbeat interval (`claimTiming.heartbeatInterval`,
 // `PT12H`), used only for the diagnostic `heartbeatOverdue` annotation
 // (#1433) — it never feeds the 24h stale-takeover gate above.
@@ -1289,7 +1285,7 @@ function normalizeClaimComments(raw) {
  * resume-claim-routing's `isStaleByAge`.
  */
 export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
-  if (staleAgeMs === DEFAULT_CLAIM_STALE_AGE_MS) {
+  if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }
   const start = Date.parse(activeCreatedAt ?? '');
@@ -1471,8 +1467,7 @@ function currentSessionOwnsOccupiedWorktree(
  */
 export function buildClaimStateResolution(port, policy, currentClaimId) {
   const staleAgeMs =
-    parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
-    DEFAULT_CLAIM_STALE_AGE_MS;
+    parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS;
   const heartbeatIntervalMs =
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
@@ -1567,7 +1562,7 @@ export function buildCommentLoader(port) {
 /**
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
  * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
- * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
+ * rejected so the caller falls back to `DEFAULT_STALE_AGE_MS` instead of
  * configuring a 0ms stale age that would mark every claim immediately stale.
  *
  * Thin wrapper over the shared `parseIsoDurationToMs` from policy-helpers
@@ -1586,7 +1581,7 @@ export function parseClaimStaleAgeMs(value) {
  * non-positive total, mirroring {@link parseClaimStaleAgeMs}'s
  * garbage/non-positive handling so the caller falls back to
  * `DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS` the same way a rejected stale age
- * falls back to `DEFAULT_CLAIM_STALE_AGE_MS`.
+ * falls back to `DEFAULT_STALE_AGE_MS`.
  */
 export function parseClaimHeartbeatIntervalMs(value) {
   return parseIsoDurationToMs(String(value ?? '').trim());
