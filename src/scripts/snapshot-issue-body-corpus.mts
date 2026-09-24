@@ -281,8 +281,13 @@ function writeEntry(entry: CorpusEntry): void {
   writeFileSync(entryPath(entry.id), serializeJson(entry));
 }
 
-/** Raw GraphQL issue shape this tool fetches -- see fetchIssue below. */
-interface FetchedIssue {
+/** Raw GraphQL issue shape this tool fetches -- see fetchIssue below.
+ * Exported (#3368 Copilot review round 4) so
+ * tests/issue-body-corpus.test.mts can unit-test
+ * `mergedRefusalReason`/`negativeRefusalReason` directly against a
+ * synthetic issue shape, rather than only indirectly via the frozen
+ * corpus's own already-accepted entries. */
+export interface FetchedIssue {
   number: number;
   title: string;
   body: string;
@@ -418,9 +423,11 @@ function resolveLabelsPolicy(): {
  * Refusal reason for a `category: merged` candidate, or `null` when it
  * passes the Selection rule in the issue's own "Proposed change" section:
  * closed as completed, at least one trusted `claimed-by` marker comment,
- * closed by at least one merged pull request.
+ * closed by at least one merged pull request. Exported (#3368 Copilot
+ * review round 4) for direct unit testing alongside its `negative`
+ * sibling below.
  */
-function mergedRefusalReason(issue: FetchedIssue): string | null {
+export function mergedRefusalReason(issue: FetchedIssue): string | null {
   if (issue.state !== 'CLOSED' || issue.stateReason !== 'COMPLETED') {
     return `not closed as completed (state=${issue.state}, stateReason=${issue.stateReason ?? 'null'})`;
   }
@@ -442,9 +449,14 @@ function mergedRefusalReason(issue: FetchedIssue): string | null {
  * existed, `--add --category negative` accepted any fetched issue
  * unconditionally, so a maintainer could vendor an entry that violates
  * this category's own selection rule (nothing checked the label/reason or
- * the freshly computed verdict).
+ * the freshly computed verdict). Exported (#3368 Copilot review round 4):
+ * the frozen corpus test only ever checks a stored entry's own current
+ * verdict, never the selection GUARD itself, so a regression in this
+ * function's own accept/refuse logic could pass the suite unnoticed --
+ * tests/issue-body-corpus.test.mts now exercises this function directly
+ * with synthetic accept/refuse cases.
  */
-function negativeRefusalReason(
+export function negativeRefusalReason(
   issue: FetchedIssue,
   expected: ExpectedVerdict,
   labelsPolicy: {
@@ -478,6 +490,15 @@ function negativeRefusalReason(
 // cli-args.mts's own CANONICAL_INTEGER_PATTERN (positive-only variant):
 // the whole trimmed token must match before it is parsed.
 const CANONICAL_POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+
+// #3368 Copilot review round 4: `Number.isSafeInteger` alone still admits
+// a value well above what `ISSUE_QUERY`'s `$number: Int!` GraphQL variable
+// can carry -- GraphQL's signed 32-bit `Int` maximum, far below JS's own
+// safe-integer ceiling. A value in that gap (e.g. 2147483648) would pass
+// the safe-integer check and then fail later inside `ghGraphql` with an
+// opaque GraphQL variable-coercion error instead of a clear, up-front
+// rejection.
+const GRAPHQL_INT_MAX = 2_147_483_647;
 
 /**
  * Splits `--add`'s raw comma-separated value into tokens, throwing on an
@@ -536,6 +557,11 @@ function runAdd(
     if (!Number.isSafeInteger(parsed)) {
       throw new Error(
         `--add: issue number exceeds the safe integer range: ${rawId}`,
+      );
+    }
+    if (parsed > GRAPHQL_INT_MAX) {
+      throw new Error(
+        `--add: issue number exceeds the GraphQL Int range (max ${GRAPHQL_INT_MAX}): ${rawId}`,
       );
     }
     numbers.push(parsed);

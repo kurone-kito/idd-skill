@@ -9,6 +9,9 @@ import {
   type CorpusEntry,
   type CorpusIndexEntry,
   computeExpectedVerdict,
+  type FetchedIssue,
+  mergedRefusalReason,
+  negativeRefusalReason,
 } from '../src/scripts/snapshot-issue-body-corpus.mts';
 
 // #3288: freezes a real (and a fixed set of synthetic-gap) issue-body
@@ -266,6 +269,151 @@ test('every "negative" entry\'s stored expected verdict still rates non-ready', 
     [],
     `"negative" entries whose stored expected now rates ready (violates ` +
       `their own selection rule): ${stillReady.join(', ')}`,
+  );
+});
+
+// #3368 Copilot review round 4: the "still rates non-ready" test above
+// only ever checks a stored entry's OWN current verdict, never exercises
+// the selection GUARD itself (mergedRefusalReason /
+// negativeRefusalReason) -- a regression in that guard's own accept/
+// refuse logic (e.g. an inverted condition) could still pass the suite
+// unnoticed, since the committed corpus never contains a refused
+// candidate by construction. Exercise both accept and refuse paths
+// directly against synthetic FetchedIssue shapes.
+
+const BASE_FETCHED_ISSUE: FetchedIssue = {
+  number: 1,
+  title: 'placeholder',
+  body: 'placeholder',
+  state: 'CLOSED',
+  stateReason: 'COMPLETED',
+  labels: [],
+  hasMergedClosingPr: true,
+  hasTrustedClaim: true,
+};
+
+test('mergedRefusalReason accepts a closed-completed issue with a trusted claim and a merged closing PR', () => {
+  assert.equal(mergedRefusalReason(BASE_FETCHED_ISSUE), null);
+});
+
+test('mergedRefusalReason refuses an issue missing a trusted claimed-by marker', () => {
+  const reason = mergedRefusalReason({
+    ...BASE_FETCHED_ISSUE,
+    hasTrustedClaim: false,
+  });
+  assert.ok(
+    reason && /trusted claimed-by/.test(reason),
+    reason ?? '(no reason)',
+  );
+});
+
+test('mergedRefusalReason refuses an issue with no merged closing pull request', () => {
+  const reason = mergedRefusalReason({
+    ...BASE_FETCHED_ISSUE,
+    hasMergedClosingPr: false,
+  });
+  assert.ok(
+    reason && /merged closing pull request/.test(reason),
+    reason ?? '(no reason)',
+  );
+});
+
+test('mergedRefusalReason refuses an issue not closed as completed', () => {
+  const reason = mergedRefusalReason({
+    ...BASE_FETCHED_ISSUE,
+    state: 'OPEN',
+    stateReason: null,
+  });
+  assert.ok(
+    reason && /closed as completed/.test(reason),
+    reason ?? '(no reason)',
+  );
+});
+
+const LABELS_POLICY = {
+  blockedByHumanLabelName: 'status:blocked-by-human',
+  needsDecisionLabelName: 'status:needs-decision',
+};
+
+// A body/title pair whose computed verdict is a clean pass (no broad-scope,
+// external-coordination, or subjective-verification signal), so the
+// "renders ready" branch of negativeRefusalReason is reachable.
+const NEGATIVE_TEST_TITLE = 'A minimal, narrowly-scoped fixture-only issue';
+const NEGATIVE_TEST_BODY = [
+  'Add a single small helper function with a unit test.',
+  '',
+  '## Acceptance Criteria',
+  '',
+  '- `node --test tests/example.test.mts` passes.',
+].join('\n');
+const READY_EXPECTED = computeExpectedVerdict({
+  number: 0,
+  title: NEGATIVE_TEST_TITLE,
+  body: NEGATIVE_TEST_BODY,
+  labels: [],
+});
+assert.ok(
+  READY_EXPECTED.viability.passed &&
+    Object.values(READY_EXPECTED.triage).every((result) => result !== 'fail'),
+  'test fixture setup: NEGATIVE_TEST_BODY must compute to a clean-ready verdict',
+);
+
+test('negativeRefusalReason accepts an issue with the configured label and a non-ready verdict', () => {
+  const issue: FetchedIssue = {
+    ...BASE_FETCHED_ISSUE,
+    labels: ['status:needs-decision'],
+  };
+  // A non-ready expected verdict (viability fails) paired with the
+  // qualifying label -- the accept path.
+  const nonReadyExpected = {
+    viability: { passed: false, failedCriteria: ['clear_verification'] },
+    triage: READY_EXPECTED.triage,
+  };
+  assert.equal(
+    negativeRefusalReason(issue, nonReadyExpected, LABELS_POLICY),
+    null,
+  );
+});
+
+test('negativeRefusalReason accepts a not-planned closure with a non-ready verdict', () => {
+  const issue: FetchedIssue = {
+    ...BASE_FETCHED_ISSUE,
+    labels: [],
+    stateReason: 'NOT_PLANNED',
+  };
+  const nonReadyExpected = {
+    viability: { passed: false, failedCriteria: ['clear_verification'] },
+    triage: READY_EXPECTED.triage,
+  };
+  assert.equal(
+    negativeRefusalReason(issue, nonReadyExpected, LABELS_POLICY),
+    null,
+  );
+});
+
+test('negativeRefusalReason refuses an issue with neither the configured label nor a not-planned closure', () => {
+  const issue: FetchedIssue = {
+    ...BASE_FETCHED_ISSUE,
+    labels: ['bug'],
+    stateReason: 'COMPLETED',
+  };
+  const nonReadyExpected = {
+    viability: { passed: false, failedCriteria: ['clear_verification'] },
+    triage: READY_EXPECTED.triage,
+  };
+  const reason = negativeRefusalReason(issue, nonReadyExpected, LABELS_POLICY);
+  assert.ok(reason && /carries neither/.test(reason), reason ?? '(no reason)');
+});
+
+test('negativeRefusalReason refuses a qualifying-label issue whose current verdict rates ready', () => {
+  const issue: FetchedIssue = {
+    ...BASE_FETCHED_ISSUE,
+    labels: ['status:needs-decision'],
+  };
+  const reason = negativeRefusalReason(issue, READY_EXPECTED, LABELS_POLICY);
+  assert.ok(
+    reason && /rate this issue ready/.test(reason),
+    reason ?? '(no reason)',
   );
 });
 
