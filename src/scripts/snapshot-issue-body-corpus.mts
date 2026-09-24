@@ -318,7 +318,12 @@ function fetchIssue(
         issue?: {
           number: number;
           title: string;
-          body: string;
+          // #3368 Copilot review round 2: GitHub allows an empty/null issue
+          // body -- typed nullable/unknown here (not the optimistic
+          // `string` the GraphQL schema itself declares) so the coercion
+          // just below is never silently bypassed by a future refactor
+          // trusting this field's declared type.
+          body: unknown;
           state: string;
           stateReason: string | null;
           labels: { nodes: { name: string }[] };
@@ -361,7 +366,13 @@ function fetchIssue(
   return {
     number: issue.number,
     title: issue.title,
-    body: issue.body,
+    // #3368 Copilot review round 2: a GitHub issue body can be empty/null;
+    // every evaluator this tool feeds it to (evaluateA4Viability,
+    // evaluateSuitabilityLocal) already normalizes a missing body to `''`
+    // internally, but this fetch boundary previously passed the raw
+    // GraphQL value straight through as if `body: string` (the compile-
+    // time type) always held -- coerce it explicitly here instead.
+    body: String(issue.body ?? ''),
     state: issue.state,
     stateReason: issue.stateReason,
     labels: issue.labels.nodes.map((label) => label.name),
@@ -456,6 +467,34 @@ function negativeRefusalReason(
 // the whole trimmed token must match before it is parsed.
 const CANONICAL_POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
 
+/**
+ * Splits `--add`'s raw comma-separated value into tokens, throwing on an
+ * empty overall value or an empty individual token (a leading/trailing/
+ * doubled comma, e.g. `--add ""`, `--add "1,"`, or `--add "1,,2"`).
+ *
+ * #3368 Copilot review round 2: the previous `.split(',').map(trim)
+ * .filter(Boolean)` silently dropped empty tokens instead of rejecting
+ * them, so an empty or comma-terminated value could make `runAdd` write
+ * zero entries and exit successfully -- a typo silently looking like a
+ * no-op success rather than the advertised `<n>[,<n>...]` contract being
+ * violated. Each surviving token is still separately validated against
+ * `CANONICAL_POSITIVE_INTEGER_PATTERN` by `runAdd` itself.
+ */
+export function parseAddTokens(raw: string): string[] {
+  const trimmedWhole = raw.trim();
+  if (trimmedWhole === '') {
+    throw new Error('--add: value must not be empty');
+  }
+  const tokens = trimmedWhole.split(',').map((token) => token.trim());
+  const emptyIndex = tokens.indexOf('');
+  if (emptyIndex !== -1) {
+    throw new Error(
+      `--add: empty issue number token in "${raw}" (position ${emptyIndex + 1}) -- check for a leading, trailing, or doubled comma`,
+    );
+  }
+  return tokens;
+}
+
 function runAdd(
   owner: string,
   repo: string,
@@ -543,6 +582,17 @@ function existingEntryIds(): string[] {
     .sort();
 }
 
+/** Order-insensitive label-set equality, so a GraphQL response returning
+ * the same labels in a different order is never mistaken for a change. */
+function labelsEqual(a: readonly string[], b: readonly string[]): boolean {
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return (
+    sortedA.length === sortedB.length &&
+    sortedA.every((label, index) => label === sortedB[index])
+  );
+}
+
 function runRefresh(owner: string, repo: string): void {
   const isTrustedLogin = buildTrustedLoginChecker();
   const changed: string[] = [];
@@ -557,7 +607,16 @@ function runRefresh(owner: string, repo: string): void {
     }
     const issue = fetchIssue(owner, repo, number, isTrustedLogin);
     const freshSha = bodySha256(issue.body);
-    if (freshSha === existing.bodySha256) {
+    // #3368 Copilot review round 2: computeExpectedVerdict's input is
+    // title+body (labels are vendored metadata only, not currently
+    // consumed by either evaluator) -- keying the skip decision on
+    // bodySha256 alone missed a title-only edit, silently leaving the
+    // snapshot evaluating a stale title against the current helpers.
+    // Labels are still refreshed alongside a genuine change so the
+    // vendored metadata doesn't drift independently of body/title.
+    const titleChanged = issue.title !== existing.title;
+    const labelsChanged = !labelsEqual(issue.labels, existing.labels);
+    if (freshSha === existing.bodySha256 && !titleChanged && !labelsChanged) {
       continue;
     }
     const updated: CorpusEntry = {
@@ -574,9 +633,9 @@ function runRefresh(owner: string, repo: string): void {
   process.stdout.write(
     changed.length === 0
       ? 'snapshot-issue-body-corpus --refresh — no changes (every entry current)\n'
-      : `snapshot-issue-body-corpus --refresh — bodySha256 changed for ${changed.length} ${
+      : `snapshot-issue-body-corpus --refresh — body/title/labels changed for ${changed.length} ${
           changed.length === 1 ? 'entry' : 'entries'
-        } (run --update-expected before tests/issue-body-corpus.test.mts passes again): ${changed.join(', ')}\n`,
+        } (run --update-expected before tests/issue-body-corpus.test.mts passes again if the body or title changed): ${changed.join(', ')}\n`,
   );
 }
 
@@ -636,16 +695,7 @@ if (import.meta.main) {
       throw new Error('--add requires --category merged|negative');
     }
     const { owner, repo } = resolveCurrentGithubRepository();
-    runAdd(
-      owner,
-      repo,
-      add
-        .split(',')
-        .map((token) => token.trim())
-        .filter(Boolean),
-      category,
-      note,
-    );
+    runAdd(owner, repo, parseAddTokens(add), category, note);
   } else if (refresh) {
     const { owner, repo } = resolveCurrentGithubRepository();
     runRefresh(owner, repo);
