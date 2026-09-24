@@ -48,6 +48,7 @@ import {
   digestExternalCheckWaiverMarkerBody,
   renderAdvisoryWaitRecoveryMarker,
   renderExternalCheckWaiverComment,
+  renderReviewReplyStamp,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
@@ -840,6 +841,86 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.threads.blockingCount, 0);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+// #3244: `summarizeDispositionEvidenceForGate` (reused unfiltered for
+// Clause 2) no longer honors the #2135 review-reply stamp regardless of
+// author -- an untrusted account's stamped `**Accepted**` must not clear
+// a Copilot-authored thread.
+test('untrusted stamped Accepted: a stamped Accepted reply from an untrusted account does not satisfy the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_untrusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: 'someone-else' },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 1);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRT_untrusted_stamp']);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted marker actor satisfies the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_trusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 0);
+  assert.ok(!verdict.threads.blockingIds.includes('PRT_trusted_stamp'));
   assert.equal(verdict.threads.satisfied, true);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
