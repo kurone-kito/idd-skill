@@ -1444,6 +1444,31 @@ test('maskMarkdownForScan keeps a nested list item real after an inner list clos
   assert.equal(maskMarkdownForScan(body), body);
 });
 
+test('maskMarkdownForScan masks a nested list item as code once a heading genuinely closes the enclosing list (C1 critique, round 2)', () => {
+  // The first version of the #3283 fix above checked only the
+  // *preceding* line's shape for its laziness exception, not whether
+  // the *current* under-indented line was itself block-start-shaped.
+  // A heading, verified against commonmark.js, always ends an
+  // in-progress paragraph and genuinely closes the enclosing list
+  // (CommonMark laziness never applies to it), so the later, still
+  // blank-separated indented line is real indented code once the list
+  // has closed -- unlike the sibling test above, where nothing
+  // block-start-shaped ever appears and the outer list stays open.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  para continuation of inner, then heading follows',
+    '# Heading #1',
+    '',
+    '    - [not-a-link #1](https://example.com/should-be-code)',
+    '',
+  ].join('\n');
+  const masked = maskMarkdownForScan(body);
+  assert.equal(masked.includes('not-a-link'), false);
+  assert.equal(masked.includes('- outer'), true);
+  assert.equal(masked.includes('Heading #1'), true);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);

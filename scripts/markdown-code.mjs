@@ -248,6 +248,30 @@ function isMarkdownBlockStart(content) {
     MARKDOWN_THEMATIC_BREAK_PATTERN.test(content)
   );
 }
+/**
+ * True when `content` (already container-prefix-stripped, per
+ * {@link parseContainerLine}) is a paragraph-interrupting block start:
+ * {@link isMarkdownBlockStart}'s own coverage (headings, list-item
+ * markers, thematic breaks) plus an HTML block opener (a generic
+ * block-level tag, `<!--`, a processing instruction, `<!DOCTYPE`,
+ * `<![CDATA[`, or a raw-text element), a lone custom HTML tag, or a
+ * valid fence opener. This is CommonMark laziness's actual "does this
+ * line end an in-progress paragraph regardless of indentation" test --
+ * shared so a caller deciding whether an under-indented line lazily
+ * continues a paragraph (as opposed to genuinely starting a new,
+ * paragraph-interrupting block) does not need its own partial copy.
+ * `fencedLine` is the caller's own {@link parseFencedLine} result,
+ * since the `activeListContentIndent` it threads through differs per
+ * call site.
+ */
+function isLazinessInterruptingBlockStart(content, fencedLine) {
+  return (
+    isMarkdownBlockStart(content) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+    MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content) ||
+    (fencedLine !== null && isValidFenceOpener(fencedLine))
+  );
+}
 /** True when `content` opens with an HTML closing-tag slash (`</tag>`). */
 function isHtmlClosingSyntax(content) {
   return /^ {0,3}<\//u.test(content);
@@ -824,11 +848,10 @@ function findMarkdownBlockBoundary(text, start, end) {
         ? openingListContentIndent
         : null;
     const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
-    const isBlockStart =
-      isMarkdownBlockStart(parsed.content) ||
-      MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      (fencedLine !== null && isValidFenceOpener(fencedLine));
+    const isBlockStart = isLazinessInterruptingBlockStart(
+      parsed.content,
+      fencedLine,
+    );
     // A de-indented line that would otherwise end the list item's content
     // zone still lazily continues an in-progress ordinary paragraph --
     // CommonMark laziness -- unless the opening line is itself inside a
@@ -1707,16 +1730,32 @@ export function findIndentedCodeRanges(text, fencedRanges) {
       // CommonMark laziness: an under-indented, non-blank, non-list-item
       // line right after an ordinary (non-boundary) paragraph line lazily
       // continues that paragraph and must NOT close the enclosing list's
-      // content zone -- only a line that follows a blank (no open
-      // paragraph to continue) or a block-boundary-shaped line (heading,
-      // fence opener -- not an ongoing paragraph either) is a genuine
-      // dedent. Without this guard, a lazy continuation line at a shallow
-      // indent incorrectly dropped `activeListContentIndent` to null, so a
+      // content zone. A genuine dedent is a line that follows a blank (no
+      // open paragraph to continue), follows a block-boundary-shaped line
+      // (not an ongoing paragraph either), OR -- Copilot-equivalent
+      // review round 2 on kurone-kito/idd-skill#3283: the first version
+      // of this guard checked only the *preceding* line's shape, missing
+      // that laziness also requires the *current* line to not itself be
+      // a paragraph-interrupting construct -- is ITSELF block-start-shaped
+      // (a heading, list marker, thematic break, HTML block opener, or a
+      // valid fence opener), which per CommonMark always starts a new
+      // block regardless of what preceded it. Without the first half of
+      // this guard, a lazy continuation line at a shallow indent
+      // incorrectly dropped `activeListContentIndent` to null, so a
       // later, blank-separated, still-nested list item (relative to the
       // *outer* list, indented enough to satisfy it but not the reset
       // 4-column top-level default) was misread as a fresh top-level
-      // indented code block (kurone-kito/idd-skill#3283).
-      (previousLineBlank || previousLineBlockBoundary)
+      // indented code block. Without the second half, a block-start-shaped
+      // current line at that same shallow indent was wrongly read as a
+      // lazy continuation instead of the genuine dedent it is, leaving a
+      // *later* indented line unmasked even though CommonMark renders it
+      // as real code once the list has actually closed.
+      (previousLineBlank ||
+        previousLineBlockBoundary ||
+        isLazinessInterruptingBlockStart(
+          parsed.content,
+          parseFencedLine(rawLine, activeListContentIndent),
+        ))
     ) {
       activeListContentIndent = null;
       activeListContainerDepth = null;
