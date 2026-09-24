@@ -42,6 +42,7 @@ interface NodeOverride {
   state?: string;
   classification?: 'roadmap' | 'execution';
   labels?: string[];
+  stateReason?: string;
 }
 
 function node(override: NodeOverride) {
@@ -56,6 +57,7 @@ function node(override: NodeOverride) {
     effort: null,
     milestone: null,
     depth: override.number === ROADMAP ? 0 : 1,
+    ...(override.stateReason ? { stateReason: override.stateReason } : {}),
   };
 }
 
@@ -882,9 +884,32 @@ test('the evidence body is the canonical IDD roadmap completion audit comment', 
   assert.match(body, /Closed execution leaves: #1047, #1048\./);
   assert.match(
     body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): none\./,
+  );
+  assert.match(
+    body,
     /Open \/ unresolved \/ inaccessible \/ nested-roadmap \/ open-linked-PR descendants: none\./,
   );
   assert.match(body, /Closing the roadmap as completed\./);
+});
+
+test('the evidence body lists not-planned/duplicate children instead of calling them complete (#3326)', () => {
+  const report = readyReport();
+  report.nodes = report.nodes.map((entry) => {
+    if (entry.number === 1047) {
+      return { ...entry, stateReason: 'not_planned' };
+    }
+    if (entry.number === 1048) {
+      return { ...entry, stateReason: 'duplicate' };
+    }
+    return entry;
+  });
+  const body = buildRoadmapCompletionAuditBody(report);
+  assert.match(
+    body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1047 \(not_planned\), #1048 \(duplicate\)\./,
+  );
+  assert.doesNotMatch(body, /closed or otherwise complete/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1145,25 @@ test('--apply on a ready roadmap posts the comment, closes, and releases the cla
   assert.equal(calls.released[0]?.claimId, CLAIM_ID);
   // collect runs twice: initial evaluation + immediate-pre-close re-validation.
   assert.equal(calls.collects, 2);
+});
+
+test('--apply on a ready roadmap with a not-planned child still closes and lists it in the evidence (#3326)', async () => {
+  const report = readyReport();
+  report.nodes = report.nodes.map((entry) =>
+    entry.number === 1048 ? { ...entry, stateReason: 'not_planned' } : entry,
+  );
+  const { deps, calls } = makeDeps(report);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.blockers, []);
+  assert.equal(verdict.closed, true);
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+  assert.match(
+    calls.comments[0]?.body ?? '',
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1048 \(not_planned\)\./,
+  );
 });
 
 test('--apply on a blocked roadmap fails closed without mutating', async () => {

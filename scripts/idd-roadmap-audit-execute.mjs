@@ -350,7 +350,8 @@ function buildReachableLeafCounter(report) {
  * edge / depth counts, closed descendants split by classification, and the
  * traversal diagnostics) and asserts no open / unresolved / inaccessible /
  * nested-roadmap descendant remains. Only called when the roadmap is ready,
- * so every descendant is closed or otherwise complete.
+ * so every descendant is closed -- some as completed, others (listed
+ * separately) as not planned or duplicate (#3326).
  */
 export function buildRoadmapCompletionAuditBody(report) {
   const rootNumber = report.root.number;
@@ -369,16 +370,26 @@ export function buildRoadmapCompletionAuditBody(report) {
     .filter((node) => node.classification === 'roadmap')
     .map((node) => `#${node.number}`)
     .join(', ');
+  // Children closed without completion (not planned, duplicate, or any other
+  // non-null reason other than `completed`) are still closed work, but the
+  // headline below no longer calls them complete -- list which ones, and
+  // why, instead of silently folding them into "closed or otherwise
+  // complete" (#3326).
+  const closedWithoutCompletion = descendants
+    .filter((node) => typeof node.stateReason === 'string')
+    .map((node) => `#${node.number} (${node.stateReason})`)
+    .join(', ');
   return [
     COMPLETION_AUDIT_HEADING,
     '',
-    `Roadmap #${rootNumber} "${report.root.title}" audited as complete: every referenced child and descendant issue is closed or otherwise complete.`,
+    `Roadmap #${rootNumber} "${report.root.title}" audited as complete: every referenced child and descendant issue is closed; any child closed without completion is listed in the evidence below.`,
     '',
     'Evidence:',
     `- Graph: ${report.summary.nodeCount} nodes, ${report.summary.edgeCount} edges, max depth ${report.summary.maxDepth}.`,
     `- Closed descendants: ${descendants.length} (${executionCount} execution leaves, ${nestedRoadmapCount} nested roadmaps).`,
     `- Closed execution leaves: ${closedExecution || 'none'}.`,
     `- Closed nested roadmaps: ${closedNested || 'none'}.`,
+    `- Closed without completion (not planned / duplicate / other): ${closedWithoutCompletion || 'none'}.`,
     '- Open / unresolved / inaccessible / nested-roadmap / open-linked-PR descendants: none.',
     `- Diagnostics: ${report.summary.cycleCount} cycles, ${report.summary.unresolvedReferenceCount} unresolved references, ${report.summary.inaccessibleReferenceCount} inaccessible references, ${report.summary.duplicateReferenceCount} duplicate references.`,
     '',

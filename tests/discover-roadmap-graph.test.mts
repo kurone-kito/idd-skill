@@ -1844,6 +1844,43 @@ test('nodes carry the authored autopilot-suitability score (null when unscored)'
   assert.equal(byNumber.get(502)?.autopilotSuitability, null);
 });
 
+test('a CLOSED child carries stateReason only when closed without completion (#3326)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      645,
+      roadmapIssue(
+        645,
+        '- [ ] #646\n- [ ] #647\n- [ ] #648',
+        'state-reason-roadmap',
+      ),
+    ],
+    [
+      646,
+      {
+        ...executionIssue(646, 'not planned', 'closed'),
+        state_reason: 'not_planned',
+      },
+    ],
+    [
+      647,
+      {
+        ...executionIssue(647, 'completed', 'closed'),
+        state_reason: 'completed',
+      },
+    ],
+    [648, executionIssue(648, 'still open')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(645, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  assert.equal(byNumber.get(646)?.stateReason, 'not_planned');
+  assert.equal('stateReason' in (byNumber.get(647) ?? {}), false);
+  assert.equal('stateReason' in (byNumber.get(648) ?? {}), false);
+});
+
 function scoredExecutionIssue(number: number, score: number, state = 'open') {
   return executionIssue(
     number,
