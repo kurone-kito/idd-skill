@@ -68,8 +68,8 @@ To enable it in the target repository:
    emulation fragility, not a template defect — see
    [git-for-windows/git#1176](https://github.com/git-for-windows/git/issues/1176)).
    Remediation is host-level, not actionable from inside this
-   repository, and each step below is a temporary, last-resort
-   mitigation needing the operator's own administrator approval —
+   repository, and each mitigation below is temporary and last-resort,
+   needing the operator's own administrator approval —
    restore the affected protection immediately once the guard's commit
    or push succeeds: exclude the narrowest possible path (`.githooks/`,
    not the whole repository or install tree, where the antivirus
