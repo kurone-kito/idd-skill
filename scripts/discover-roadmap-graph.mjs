@@ -1337,9 +1337,9 @@ function sanitizedGitEnvironment() {
   delete env.GIT_OBJECT_DIRECTORY;
   return env;
 }
-function resolveCurrentSessionWorktreeIdentity() {
+function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
   try {
-    const cwd = process.cwd();
+    const cwd = cwdOverride ?? process.cwd();
     const env = sanitizedGitEnvironment();
     const discoveredRoot = removeTrailingGitLineFeed(
       execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
@@ -1368,13 +1368,24 @@ function resolveCurrentSessionWorktreeIdentity() {
     return null;
   }
 }
-export function resolveCurrentSessionClaimEvidence(claimId) {
+/**
+ * `worktreePath` (kurone-kito/idd-skill#3272): when given, every read below
+ * (the claim lock, the generated-tokens record, and Git's own worktree-root /
+ * branch identification) targets that path instead of `process.cwd()`. This
+ * lets a caller running from the primary checkout — where Resume Step 1
+ * runs, before Step 2 locates the claimed branch's own worktree — still
+ * prove ownership by naming that worktree explicitly, rather than requiring
+ * the caller's own cwd to already be inside it. Omitting it preserves the
+ * prior `process.cwd()`-only behavior exactly.
+ */
+export function resolveCurrentSessionClaimEvidence(claimId, worktreePath) {
   try {
-    const worktree = resolveCurrentSessionWorktreeIdentity();
+    const cwd = worktreePath ?? process.cwd();
+    const worktree = resolveCurrentSessionWorktreeIdentity(cwd);
     if (worktree === null) {
       return null;
     }
-    const lock = checkClaimLock(process.cwd());
+    const lock = checkClaimLock(cwd);
     const holder = lock.holder;
     if (
       !lock.present ||
@@ -1385,7 +1396,7 @@ export function resolveCurrentSessionClaimEvidence(claimId) {
     ) {
       return null;
     }
-    const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
+    const tokens = readGeneratedClaimTokens(cwd, claimId);
     return tokens.status === 'present' &&
       tokens.record.claimId === claimId &&
       tokens.record.agentId === holder.agentId

@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  acquireClaimLock,
+  recordGeneratedClaimTokens,
+} from '../src/scripts/claim-lock.mts';
+import {
+  isCurrentSessionWorktreeOwner,
+  resolveCurrentSessionClaimEvidence,
+} from '../src/scripts/discover-roadmap-graph.mts';
 import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
@@ -775,12 +789,90 @@ test('owner resume stops without independent local ownership evidence', () => {
     },
   );
 
-  assert.equal(result.state, 'non_inheritable');
+  // #3272: this is now `owner_evidence_required`, a state distinct from
+  // `non_inheritable` -- a claim-id match with no independent owner
+  // evidence is not the same fact as a genuinely disputed claim.
+  assert.equal(result.state, 'owner_evidence_required');
+  assert.notEqual(result.state, 'non_inheritable');
   assert.equal(result.action, 'stop');
   assert.equal(
     result.reason,
     'claim-id-match-without-independent-owner-evidence',
   );
+});
+
+test('an explicit --worktree path supplies owner evidence regardless of process.cwd() (#3272)', () => {
+  // The lock, generated-tokens record, and branch all live in a worktree
+  // this session is proving ownership of by NAME, not by being inside it --
+  // process.cwd() is deliberately left pointed at an unrelated, non-git
+  // directory to prove the evidence really comes from the passed path.
+  const worktree = mkdtempSync(join(tmpdir(), 'idd-resume-worktree-evidence-'));
+  const unrelatedCwd = mkdtempSync(join(tmpdir(), 'idd-resume-unrelated-cwd-'));
+  const claimId = 'claim-worktree-evidence';
+  const branch = 'issue/42-task';
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet', '-b', branch], {
+      cwd: worktree,
+      stdio: 'ignore',
+    });
+    acquireClaimLock(worktree, 'agent-owner', claimId, false);
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-owner',
+      claimId,
+      nonce: 'nonce-owner',
+    });
+    process.chdir(unrelatedCwd);
+
+    const result = evaluateResumeClaimRouting(
+      {
+        claimId,
+        now: '2026-05-13T10:00:01Z',
+        events: [
+          {
+            createdAt: '2026-05-12T10:00:00Z',
+            author: { login: 'maintainer' },
+            body: `<!-- claimed-by: agent-owner ${claimId} supersedes: none 2026-05-12T10:00:00Z branch: ${branch} -->`,
+          },
+        ],
+      },
+      {
+        isTrustedAuthor: trusted(['maintainer']),
+        inspectLocalWorktree: () => ({
+          status: 'occupied',
+          paths: [worktree],
+          reason: `matching local worktree for ${branch}`,
+        }),
+        isCurrentSessionOwner: (claim) => {
+          const evidence = resolveCurrentSessionClaimEvidence(
+            claim.claimId,
+            worktree,
+          );
+          if (
+            evidence === null ||
+            evidence.agentId !== claim.agentId ||
+            evidence.branchName !== claim.branch
+          ) {
+            return false;
+          }
+          return isCurrentSessionWorktreeOwner(
+            evidence.worktreePath,
+            evidence.branchName,
+            claim.branch,
+            { status: 'occupied', paths: [worktree], reason: null },
+          );
+        },
+      },
+    );
+
+    assert.equal(result.state, 'already_owned');
+    assert.equal(result.action, 'keep');
+    assert.equal(result.reason, 'claim-id-match');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(unrelatedCwd, { recursive: true, force: true });
+  }
 });
 
 test('owner resume keeps already_owned before B1 creates the worktree (#3154)', () => {
@@ -844,7 +936,10 @@ test('owner resume stops on an unreadable worktree probe too (#3154)', () => {
     },
   );
 
-  assert.equal(result.state, 'non_inheritable');
+  // #3272: same distinct state as the occupied-probe case above -- an
+  // unreadable probe is still "no independent owner evidence", not a
+  // genuinely disputed claim.
+  assert.equal(result.state, 'owner_evidence_required');
   assert.equal(result.action, 'stop');
   assert.equal(
     result.reason,
@@ -2526,5 +2621,270 @@ test('#3276 end-to-end: --fresh-claim-gate keeps the displaced claim active (alr
     assert.equal(pastOutput.fresh_claim_gate.verdict, 'stale-reclaimable');
   } finally {
     fixture.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Trusted-actor ladder (#3272): runCli now resolves trustedMarkerLogins via
+// the shared resolveTrustedMarkerActors ladder (flag, then
+// IDD_TRUSTED_MARKER_ACTORS, then the config's trustedMarkerActors array --
+// the same precedence pre-merge-readiness.mts already uses), instead of the
+// old union-everything resolveTrustedLogins. A non-empty flag now REPLACES
+// the env/config sources rather than adding to them; the viewer login is
+// still always added on top of whichever source wins.
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake `gh` that answers exactly the three read calls runCli makes (the
+ * viewer login, the issue's own comments, and the issue itself) with a
+ * single trusted-marker-ladder-relevant claimed-by comment, and fails any
+ * other call so an unexpected one surfaces as a test failure instead of
+ * hitting the network. Mirrors formatFlagFixture's shape above.
+ */
+function trustedLadderFixture({
+  policyTrustedMarkerActors = [],
+  commentLogin,
+  claimId,
+  branch,
+  createdAt,
+  agentId = 'agent-x',
+}: {
+  policyTrustedMarkerActors?: string[];
+  commentLogin: string;
+  claimId: string;
+  branch: string;
+  createdAt: string;
+  agentId?: string;
+}) {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-claim-routing-trust-ladder-'),
+  );
+  const policyPath = join(tempRoot, 'config.json');
+  writeFileSync(
+    policyPath,
+    JSON.stringify({ trustedMarkerActors: policyTrustedMarkerActors }),
+  );
+  const commentJson = JSON.stringify({
+    id: 1,
+    node_id: 'IC_trust_ladder',
+    body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
+    created_at: createdAt,
+    updated_at: createdAt,
+    user: { login: commentLogin },
+  });
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('viewer-login\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {
+  process.stdout.write(${JSON.stringify(commentJson)} + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1$/.test(arg))) {
+  process.stdout.write(JSON.stringify({
+    number: 1,
+    title: 'trust ladder fixture',
+    state: 'open',
+    html_url: 'https://github.com/o/r/issues/1',
+  }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh call: ' + JSON.stringify(args) + '\\n');
+process.exit(1);
+`,
+  );
+  return {
+    policyPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function runTrustedLadderCli(
+  policyPath: string,
+  extraArgs: string[],
+  env: NodeJS.ProcessEnv,
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-09-24T00:01:00Z',
+      '--policy',
+      policyPath,
+      ...extraArgs,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env },
+  );
+}
+
+test('a login trusted only via IDD_TRUSTED_MARKER_ACTORS is honored by --fresh-claim-gate (#3272)', () => {
+  const fixture = trustedLadderFixture({
+    policyTrustedMarkerActors: [],
+    commentLogin: 'trusted-via-env',
+    claimId: 'claim-ladder-env',
+    branch: 'issue/1-task',
+    createdAt: '2026-09-24T00:00:00Z',
+  });
+  try {
+    const result = runTrustedLadderCli(
+      fixture.policyPath,
+      ['--fresh-claim-gate'],
+      { ...process.env, IDD_TRUSTED_MARKER_ACTORS: 'trusted-via-env' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.policy.trusted_marker_actors_source, 'env');
+    assert.equal(output.fresh_claim_gate.verdict, 'already-claimed');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--trusted-marker-logins replaces the config trustedMarkerActors instead of adding to it (#3272)', () => {
+  const fixture = trustedLadderFixture({
+    policyTrustedMarkerActors: ['config-only-trusted'],
+    commentLogin: 'config-only-trusted',
+    claimId: 'claim-ladder-flag',
+    branch: 'issue/1-task',
+    createdAt: '2026-09-24T00:00:00Z',
+  });
+  try {
+    const result = runTrustedLadderCli(
+      fixture.policyPath,
+      ['--trusted-marker-logins', 'some-other-login'],
+      { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.policy.trusted_marker_actors_source, 'flag');
+    // config-only-trusted is no longer trusted -- the flag replaced the
+    // config array instead of adding to it, so the claimed-by comment it
+    // posted is filtered out and no claim is seen at all.
+    assert.equal(output.state, 'unclaimed');
+    assert.equal(output.reason, 'legacy-absent');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--worktree end-to-end: the real compiled CLI proves ownership via an occupied probe (#3272)', () => {
+  // Unlike the unit-level '--worktree path supplies owner evidence' test
+  // above (which hand-wires resolveCurrentSessionClaimEvidence directly
+  // into evaluateResumeClaimRouting), this spawns the actual compiled
+  // scripts/resume-claim-routing.mjs CLI so parseArgs()'s --worktree
+  // parsing and runCli()'s isCurrentSessionOwner closure are exercised for
+  // real (#3272 C1 finding: the unit test alone never proves the CLI
+  // argument threading itself is correct).
+  //
+  // inspectLocalWorktree's real occupancy probe always reads
+  // process.cwd() (it has no --worktree override of its own), so an
+  // `occupied` result requires a real second git worktree next to the
+  // spawned process's cwd. Using a disposable, fully standalone sandbox
+  // repo (not this shared host clone) keeps that real `git worktree add`
+  // isolated from the live idd-skill repository's own worktree state,
+  // which 15+ concurrent IDD sessions may be mutating at the same time.
+  const sandboxRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-worktree-flag-sandbox-'),
+  );
+  const primary = join(sandboxRoot, 'primary');
+  const secondary = join(sandboxRoot, 'secondary');
+  const branch = 'issue/1-task';
+  const claimId = 'claim-worktree-flag-e2e';
+  const agentId = 'agent-worktree-flag-e2e';
+  const createdAt = '2026-09-24T00:00:00Z';
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
+  const fixture = trustedLadderFixture({
+    policyTrustedMarkerActors: ['maintainer'],
+    commentLogin: 'maintainer',
+    claimId,
+    branch,
+    createdAt,
+    agentId,
+  });
+  try {
+    mkdirSync(primary, { recursive: true });
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: primary,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        // Disposable sandbox repo, never pushed or shared: disable commit
+        // signing rather than depend on this host's interactive GPG/SSH
+        // signing setup, which a non-interactive test run cannot satisfy.
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'root',
+      ],
+      { cwd: primary, stdio: 'ignore', env: gitEnv },
+    );
+    execFileSync('git', ['worktree', 'add', '-b', branch, secondary], {
+      cwd: primary,
+      stdio: 'ignore',
+    });
+    acquireClaimLock(secondary, agentId, claimId, false);
+    recordGeneratedClaimTokens(secondary, {
+      agentId,
+      claimId,
+      nonce: 'nonce-worktree-flag-e2e',
+    });
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+        '--issue',
+        '1',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-09-24T00:01:00Z',
+        '--policy',
+        fixture.policyPath,
+        '--claim-id',
+        claimId,
+        '--worktree',
+        secondary,
+      ],
+      {
+        cwd: primary,
+        encoding: 'utf8',
+        env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.state, 'already_owned');
+    assert.equal(output.action, 'keep');
+    assert.equal(output.reason, 'claim-id-match');
+  } finally {
+    fixture.restore();
+    rmSync(sandboxRoot, { recursive: true, force: true });
   }
 });
