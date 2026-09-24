@@ -3218,18 +3218,26 @@ const ADVISORY_WAIT_FAMILY_ENTRIES: {
   {
     family: 'advisory-wait-html',
     label: '<!-- advisory-wait:',
-    // Lazy timestamp capture anchored against the closing `-->`: the
-    // canonical entry's own pattern tolerates zero spaces before `-->`
-    // (`\S+\s*-->\s*$`), so a greedy `(\S+)` here could otherwise prefer
-    // capturing the arrow itself as part of the timestamp when no space
-    // precedes it. `(\S+?)` backs off at the FIRST position where
-    // `\s*-->` also matches -- the correct field boundary as long as the
-    // field value itself does not contain the literal sequence `-->`,
-    // true for every value this parser is actually exercised against
-    // (an ISO timestamp, `pending`, or another `\S+` token a trusted
-    // actor hand-composes) even though the canonical grammar does not
-    // structurally forbid it.
-    extract: /^<!--\s*advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+?)\s*-->/,
+    // Greedy timestamp capture, `$`-anchored to the true end of the
+    // (already `trimEnd()`'d) body -- mirroring the canonical entry's own
+    // `pattern` (`\S+\s*-->\s*$`) exactly, including its end anchor,
+    // rather than stopping at the first `-->`. The canonical grammar's
+    // last field is an unrestricted `\S+` token, so it can itself contain
+    // the literal sequence `-->` (Copilot review, PR #3380: a body like
+    // `<!-- advisory-wait: agent sha foo-->bar -->` is well-formed with
+    // timestamp `foo-->bar`). A non-`$`-anchored lazy `(\S+?)\s*-->`
+    // previously stopped at the FIRST `-->` instead, truncating that
+    // field to `foo` -- wrong per the parser's own field contract, and a
+    // regression: the pre-shared-grammar provider-health regex required
+    // its captured field to be a complete ISO timestamp immediately
+    // followed by `-->`, so it already rejected this exact adversarial
+    // shape outright (see the regression corpus rows below) rather than
+    // silently truncating it into a spurious ISO match. Since this regex
+    // only ever runs after `marker.pattern.test()` has already validated
+    // the body via that same `$`-anchored canonical pattern, backtracking
+    // here is guaranteed to find a match, and greedy + `$` forces it to
+    // the FINAL `-->` -- the correct field boundary.
+    extract: /^<!--\s*advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+)\s*-->\s*$/,
   },
 ];
 

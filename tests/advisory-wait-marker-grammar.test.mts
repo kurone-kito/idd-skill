@@ -230,6 +230,41 @@ const CORPUS: CorpusRow[] = [
     providerHealthRequestedAt: null,
   },
   {
+    // Regression guard (Copilot review round 1 on PR #3380): the
+    // canonical HTML pattern's last field is an unrestricted `\S+` token,
+    // so it can itself contain the literal `-->` sequence. The captured
+    // `timestamp` must be the FULL field up to the true final `-->`, not
+    // truncated at the first occurrence.
+    name: 'HTML, embedded --> inside the last field (Copilot example)',
+    body: `<!-- advisory-wait: ${AGENT} ${PR_HEAD_SHA} foo-->bar -->`,
+    family: 'advisory-wait-html',
+    headSha: PR_HEAD_SHA,
+    timestamp: 'foo-->bar',
+    sameHead: true,
+    isRequestMarker: true,
+    familyStart: true,
+    providerHealthRequestedAt: null,
+  },
+  {
+    // Regression guard: an ISO-shaped PREFIX followed by an embedded
+    // `-->` and trailing content is a sharper trap than the previous
+    // row -- a truncating extractor would return a spuriously valid ISO
+    // timestamp (`2026-01-01T00:00:00Z`) instead of the true, non-ISO
+    // full field. The pre-shared-grammar provider-health regex already
+    // rejected this exact shape outright (its captured group required
+    // an ISO timestamp immediately followed by `-->`), so a truncating
+    // extractor here would be a regression, not merely a new edge case.
+    name: 'HTML, ISO-prefix then embedded --> (regression trap)',
+    body: `<!-- advisory-wait: ${AGENT} ${PR_HEAD_SHA} ${TS}-->x -->`,
+    family: 'advisory-wait-html',
+    headSha: PR_HEAD_SHA,
+    timestamp: `${TS}-->x`,
+    sameHead: true,
+    isRequestMarker: true,
+    familyStart: true,
+    providerHealthRequestedAt: null,
+  },
+  {
     name: 'wrong SHA',
     body: `advisory-wait: ${AGENT} ${WRONG_SHA} ${TS}`,
     family: 'advisory-wait',
