@@ -54,18 +54,27 @@ step 4 repeats checks 1-2 before releasing the claim):
 ## F2.5 — Draft and post the handoff comment
 
 1. Read the recorded merge policy before composing the comment below.
-   Fetch the base branch and read its config file from there —
-   `git fetch origin main`, then
-   `git show origin/main:.github/idd/config.json` — never the local
-   worktree's own possibly-edited copy on this PR's branch, so a PR
-   cannot change its own release route (the #2373 trusted-ref
+   First run `git fetch origin main`. If the fetch itself fails, do
+   not fall back to a possibly-stale local `origin/main` — an
+   already-existing ref must never substitute for a fresh fetch, or a
+   later failure could silently authorize a release against outdated
+   policy. Only after a successful fetch, read the config file from
+   there — `git show origin/main:.github/idd/config.json` — never the
+   local worktree's own possibly-edited copy on this PR's branch, so a
+   PR cannot change its own release route (the #2373 trusted-ref
    reasoning). Resolve `mergePolicy`:
-   - No config file at all: treat it as `human_merge` (the schema's
-     documented default for an absent `config.json`).
-   - A config file without a `mergePolicy` key (schema-invalid, since
-     the key is required whenever the file exists), a failed read, or
-     any value other than `fully_autonomous_merge`, `human_merge`, or
-     `separate_merge_agent`: treat it as unrecognized.
+   - A successful fetch followed by `git show` failing with the
+     expected missing-path error (no `config.json` at that ref): treat
+     it as `human_merge` (the schema's documented default for an
+     absent `config.json`).
+   - Every other outcome — the fetch itself failing, a `git show`
+     error other than the missing-path case, a config file that fails
+     to parse, a config file without a `mergePolicy` key
+     (schema-invalid, since the key is required whenever the file
+     exists), or a present value other than `fully_autonomous_merge`,
+     `human_merge`, or `separate_merge_agent` — treat it as
+     unrecognized, and record the underlying failure (or the
+     unrecognized value) for step 2's comment.
 2. Compose a comment containing:
    - The PR number and branch.
    - The recorded F2 verdict: `prHeadSha` (the HEAD this verdict
@@ -74,9 +83,10 @@ step 4 repeats checks 1-2 before releasing the claim):
      `ready` (`true`/`false`), and, if `false`, every `blockers[]`
      entry verbatim (`gate` plus `detail`).
    - The active `{claim-id}`.
-   - The `mergePolicy` value read in step 1, quoted verbatim (an
-     unrecognized value included), or a note that the config file or
-     key was absent.
+   - Step 1's `mergePolicy` outcome, verbatim: the resolved value (an
+     unrecognized value included), the recorded failure when step 1
+     hit a fetch, read, or parse failure, or a note that the config
+     file was absent (the successful-fetch missing-path case only).
    - If `ready` is `true`: the merge command candidate, for the
      operator or a stronger-tier session to review and run —
      `gh pr merge {pr-number} --merge --match-head-commit "{prHeadSha}"`
