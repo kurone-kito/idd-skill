@@ -117,6 +117,17 @@ entered directly (for example, on resume) without a fresh B1 pass, the same
 caveat this document's §CSA section and `idd-pr-submit.instructions.md`'s
 D1 use for the same variable.
 
+**Sanctioned direct F4 entry.** `idd-merge.instructions.md`'s own opening
+line ("Read only after `idd-merge-handoff.instructions.md` routes the
+current claim to the autonomous merge path") describes the common F3-first
+path, where merge-handoff's job is deciding whether _this_ session may
+execute the merge under the repository's recorded policy
+(`fully_autonomous_merge` / `human_merge` / `separate_merge_agent`). Both
+rows here enter F4 directly, never F3, and only once the PR is already
+merged — the decision merge-handoff exists to make is already resolved by
+then, so there is nothing left for it to route. This is the sanctioned
+exception these two rows establish, not a bypass of a still-open decision.
+
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
 contract (steps 4-7, plus step 1 when `{development-branch}` is not the
