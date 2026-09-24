@@ -1674,3 +1674,19 @@ test("findHtmlCommentRanges does not let a fenced example's own list-marker-shap
     '```\n- x\n  ```\n     <!-- trigger\n\nAfter, Maintainer decision here.\n';
   assert.deepEqual(findHtmlCommentRanges(body), []);
 });
+
+test('findHtmlCommentRanges still masks a list-continuation opener indented with a tab (Copilot review round 5, PR #3413)', () => {
+  // "- item" opens a list item with content column 2; a following line
+  // indented with a single tab (expanding to column 4 via the usual
+  // tab-stop rule) reaches that column plus 2 extra columns, still
+  // within the "at most 3 extra columns" a continuation opener allows.
+  // `gh api markdown` confirms "- item\n\t<!-- x\n\nAfter" swallows the
+  // rest of the document. Before this fix, the continuation check
+  // rejected any non-space character (including a tab) outright, even
+  // though indentationColumns -- and the tracker's own contentIndent --
+  // are already tab-aware.
+  const body = '- item\n\t<!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 8, end: body.length },
+  ]);
+});

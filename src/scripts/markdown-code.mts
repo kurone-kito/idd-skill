@@ -1447,7 +1447,13 @@ function isAtHtmlBlockOpenerPosition(
   if (
     inheritedContentIndent === undefined ||
     inheritedContentIndent === null ||
-    /[^ ]/.test(content)
+    // Copilot review round 5, same PR: a continuation line's own
+    // indentation is tab-aware (matching indentationColumns below, and
+    // the tracker's own tab-stop-aware contentIndent derivation) -- a
+    // whitespace-only check that rejected any tab, not just any
+    // non-whitespace character, wrongly left "- item\n\t<!-- x"
+    // unmasked even when the tab reaches the inherited content indent.
+    /[^ \t]/.test(content)
   ) {
     return false;
   }
@@ -1486,12 +1492,19 @@ function isAtHtmlBlockOpenerPosition(
  * lineStart < end` condition -- the fence's own opening line is real,
  * unfrozen content, but every line after it through the closing
  * delimiter, inclusive, is frozen).
+ *
+ * `fencedRanges` (Copilot review round 5, same PR): optional, so a
+ * caller that already computed {@link findFencedCodeRanges} for its own
+ * purposes -- {@link maskMarkdownForScan}, on the hot path of several
+ * Discover/audit issue-body scanners, is the motivating case -- can pass
+ * it straight through instead of this function silently repeating that
+ * scan. Omitted (the default), it is computed here exactly as before.
  */
 function computeLineListContentIndents(
   text: string,
+  fencedRanges: MarkdownCodeRange[] = findFencedCodeRanges(text),
 ): Map<number, number | null> {
   const indents = new Map<number, number | null>();
-  const fencedRanges = findFencedCodeRanges(text);
   let fencedRangeIndex = 0;
   const listTracker = createListContentIndentTrackerState();
   let lineStart = 0;
@@ -1533,9 +1546,17 @@ function computeLineListContentIndents(
 export function findHtmlCommentRanges(
   text: string,
   ignoredOpenerRanges: MarkdownCodeRange[] = [],
+  // Copilot review round 5, same PR: optional, so a caller that already
+  // has fenced ranges (see computeLineListContentIndents's own doc
+  // comment) can pass them through rather than triggering a second
+  // findFencedCodeRanges scan here.
+  fencedRanges?: MarkdownCodeRange[],
 ): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
-  const lineListContentIndents = computeLineListContentIndents(text);
+  const lineListContentIndents = computeLineListContentIndents(
+    text,
+    fencedRanges,
+  );
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
   while (openMatch) {
@@ -2649,10 +2670,12 @@ export interface MaskMarkdownForScanOptions {
  * Computes {@link findFencedCodeRanges} exactly once (Copilot review, PR
  * #3399) and reuses it for every downstream range finder that needs it
  * ({@link findIndentedCodeRanges}, the inline scan, {@link
- * findHtmlBlockRanges}) -- calling {@link findMarkdownCodeRanges} here
- * instead would silently recompute the fence scan a second time on every
- * call, and this function is now on the hot path of several
- * Discover/audit issue-body scanners.
+ * findHtmlBlockRanges}, and -- via its own optional `fencedRanges`
+ * parameter, Copilot review round 5, PR #3413 -- {@link
+ * findHtmlCommentRanges}'s own list-content-indent tracking) -- calling
+ * {@link findMarkdownCodeRanges} here instead would silently recompute
+ * the fence scan a second time on every call, and this function is now
+ * on the hot path of several Discover/audit issue-body scanners.
  */
 export function maskMarkdownForScan(
   text: string,
@@ -2714,7 +2737,7 @@ export function maskMarkdownForScan(
     ]);
     ranges = mergeMarkdownCodeRanges([
       ...ranges,
-      ...findHtmlCommentRanges(normalized, ignoredOpenerRanges),
+      ...findHtmlCommentRanges(normalized, ignoredOpenerRanges, fencedRanges),
     ]);
   }
 
