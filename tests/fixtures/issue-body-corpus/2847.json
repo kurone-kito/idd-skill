@@ -1,0 +1,31 @@
+{
+  "id": "2847",
+  "category": "negative",
+  "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: investigate idd-advisory-convergence rollup staleness after pull_request_review events",
+  "labels": [
+    "bug",
+    "documentation",
+    "enhancement"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-a2f65c80a9c763ea; anchor=kurone-kito/idd-skill#2843; set=set-0a071ee0641b88b6; session=claude-sonnet5-95c4e29c82659dc7; token=pub-9fe62b3073dcda05 -->\n\n## Background\n\nA field-feedback gist reported that, across 3 independent merged PRs in\none adopter session (all on `idd-skill` `v0.9.0`, tagged\n2026-09-06T22:36:44+09:00), the `idd-advisory-convergence` required-check\nrollup repeatedly failed to reflect its own latest completed run after a\nreview event, needing several `gh run rerun` / `idd-rerun-\nadvisory-convergence --apply` recoveries before the merge gate cleared.\nConcrete API-verified evidence from one PR\n(`kurone-kito/dotfiles#398`, single unchanged head commit `0f06b2a`): 9\n`idd-advisory-convergence` check-run instances within a 14-minute window\n(8 `success` + 1 `cancelled`), each completing successfully on its own,\nwith the rollup not settling to a clean required-check state until the\nfinal rerun.\n\nThis is **not** a \"predates the fix\" case: `idd-skill` `v0.9.0` already\nincludes every closed fix previously filed against this same symptom\narea, all closed before the `v0.9.0` tag date --\n`#2638` (closed 2026-09-05), `#2643` (closed 2026-09-05), `#2136` (closed\n2026-08-18), and `#2326` (closed 2026-09-01) -- and the adopter still hit\nthe symptom on top of all of them.\n\nDirectly checked `.github/workflows/idd-advisory-convergence.yml` at\ncurrent `main`: its trigger config is `pull_request:\n[opened, reopened, synchronize]` + `pull_request_review: [submitted]` +\n`workflow_dispatch`. Every review submission (a CodeRabbit re-review, a\nCopilot re-review, a disposition-triggering review event) independently\nre-triggers a fresh run of this workflow -- confirming, as verified fact\nrather than the adopter's own unconfirmed theory, that a\n`pull_request_review`-triggered check-run cascade is a real, live trigger\nsurface for repeated reruns in a short window.\n\n`kurone-kito/idd-skill#1745` (\"CI-rollup divergence + over-broad\nbot-gated-skip caused a false CODEOWNER-deadlock diagnosis\") closed\n2026-08-01, well before all of the above.\n\n## Proposed change\n\nThis needs a maintainer decision/investigation because it is unclear\nwhich of the following applies:\n\n1. This is a distinct rerun-cascade code path from `#1745`/`#2638`/\n   `#2643`/`#2136`/`#2326` that has not yet been isolated -- reproduce\n   with a PR that receives review-dispositioning comments after CI/check\n   completion, and check whether the required-check rollup evaluation\n   reads a stale check-run id captured before the review event, rather\n   than re-resolving the latest run for the same\n   `(checkName, workflowName, headSha)` key.\n2. This is a genuine regression in one of those closed fixes' coverage,\n   specifically for the `pull_request_review`-triggered case.\n3. This is working as designed, with existing (but not automatic)\n   recovery tooling: the adopter's PR did eventually merge using the\n   existing `idd-rerun-advisory-convergence --apply` helper, so this may\n   reduce to a scope question of whether that recovery should trigger\n   automatically instead of needing a manual/agent-invoked rerun.\n\nConfidence on this finding is lower than the other tracks in this\nroadmap -- it comes from a single adopter, though with solid,\nAPI-verified evidence (the 9-check-run/14-minute data point above) -- so\nroute it to investigation and an explicit maintainer disposition rather\nthan a presumed fix.\n\n## Acceptance criteria\n\n- [ ] A maintainer or investigating session reproduces (or fails to\n      reproduce) the rollup-staleness symptom against a PR that receives\n      review-dispositioning comments after CI/check completion, using the\n      trigger surface confirmed above.\n- [ ] The investigation records which of the three directions above\n      applies, or an alternative disposition, as a comment or an update\n      to this issue.\n- [ ] If a code fix is warranted, this issue (or a follow-up issue it\n      spawns) is re-authored with concrete acceptance criteria matching\n      the chosen direction and routed back into the normal `ready`\n      execution flow.\n\n## Candidate files\n\n- `.github/workflows/idd-advisory-convergence.yml`\n- `idd-template/.github/workflows/idd-advisory-convergence.yml`\n- `scripts/rerun-advisory-convergence.mjs`\n\n<!-- idd-skill-authoring-bucket: needs-decision -->\n\n---\n\n_Autopilot suitability: 2 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. Investigation with an\nuncertain outcome and multiple non-exclusive dispositions._\n\n<!-- idd-skill-autopilot-suitability: 2 -->\n\n_Effort: M -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "2c209ee06ed728f6403d54fc7fa9f5252712085cb8e5bb7074c6bb4ff9846df3",
+  "fetchedAt": "2026-09-24T04:45:03.373Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

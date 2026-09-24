@@ -1,0 +1,29 @@
+{
+  "id": "2674",
+  "category": "negative",
+  "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "Issue-authoring durable journal (infrastructure — not an IDD work item)",
+  "labels": [
+    "documentation"
+  ],
+  "body": "This issue is **infrastructure, not an IDD work item**. It is the\nrepository-level authoring journal designated by repository policy for\nthe `issue-authoring` skill's owner-marker/publication-token protocol\n(`docs/issue-authoring-skill.md`'s \"Authoring label lifecycle\" section):\nthe durable record location for a **standalone** authoring set's\npre-create `state=pending` publication-intent record, when no existing\nanchor issue is available to host it.\n\nNo previous designation existed for this repository (checked\n`.github/idd/config.json` and `docs/customization.md`; the only prior\nworked example, `kurone-kito/idd-skill#2606`/`#2621`, reused an\nalready-existing discussion issue as its own anchor+journal rather than\nbootstrapping a dedicated one).\n\n- Do not claim or work this issue through the IDD Discover/Claim loop.\n- This issue is intentionally closed immediately after creation so\n  Discover never surfaces it as an open candidate. Future\n  issue-authoring sessions append `<!-- idd-skill-authoring-publication-intent:\n  ... -->` comments here via a direct API POST (closed issues still\n  accept comments) exactly as the protocol requires -- do not edit or\n  delete those comments.\n- Bootstrapped 2026-09-08 during authoring of the standalone orphan\n  fix for `idd-review-fix.instructions.md` E11's missing read-only\n  conflict check, with the repository owner's explicit approval to\n  bootstrap a dedicated journal rather than skip the step.\n",
+  "bodySha256": "c6fe83e70151a44720dbca6cf714514226dd5409c938fe82ba5be49fcf3c814a",
+  "fetchedAt": "2026-09-24T04:45:08.069Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

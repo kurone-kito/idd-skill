@@ -1,0 +1,30 @@
+{
+  "id": "2744",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:blocked-by-human); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "blocked-by-human: approve editing CODE_OF_CONDUCT files from kurone-kito/template",
+  "labels": [
+    "documentation",
+    "status:blocked-by-human"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-6830800bb0f53cf5; anchor=kurone-kito/idd-skill#2742; set=set-3773f5de4cc225d3; session=grok-idd-authoring-3b06f02ea18848c2; token=pub-c947276095f05766 -->\n\n## Background\n\nParent roadmap: #2742\n\n`kurone-kito/template#30` (template commit `5c93ea22`) updated the\nContributor Covenant files. Repository rules forbid modifying\ncommunity documents (`CODE_OF_CONDUCT*`, `CONTRIBUTING*`) without\nexplicit approval. This issue is that approval gate. It does not\nitself edit those files.\n\nIn scope for the sibling implementation issue, once approved:\n\n- English `.github/CODE_OF_CONDUCT.md` is already 3.0 here; the\n  remaining delta is the reporting channel (local: GitHub issues or\n  mention on X; template: private email `krone@kit.black`).\n- Japanese `.github/CODE_OF_CONDUCT.ja.md` is still the older 2.x-style\n  text; the template has a full 3.0 rewrite.\n- Chinese `.github/CODE_OF_CONDUCT.zh.md` needs the 3.0 numbered-list\n  alignment. Its title stays `贡献者公约`.\n\nOut of scope: `CONTRIBUTING*` (community docs, and the local extra\n\"Local development tooling\" section is IDD-specific).\n\n## Required action\n\nA maintainer with authority to change community documents should reply\non this issue with an explicit approval (or an explicit decline) to\nedit `.github/CODE_OF_CONDUCT.md`, `.github/CODE_OF_CONDUCT.ja.md`, and\n`.github/CODE_OF_CONDUCT.zh.md` only.\n\nIf the reporting-channel change should differ from the template\ndefault (`krone@kit.black` in all three files), say so in that reply.\n\n## Ready signal\n\nClose this issue after posting the approval or decline.\n\n- Approval unblocks the implementation issue.\n- Decline must say so clearly, and the implementation issue should\n  then be closed as not planned rather than executed.\n\n<!-- idd-skill-authoring-bucket: blocked-by-human -->\n\n---\n\n_Autopilot suitability: 1 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n\n_Effort: S -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "483339706c7a8163e32313ba4859efd3167d927f3aa7cf89064a1625046a731c",
+  "fetchedAt": "2026-09-24T04:45:04.188Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

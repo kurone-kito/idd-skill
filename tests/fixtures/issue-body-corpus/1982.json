@@ -1,0 +1,28 @@
+{
+  "id": "1982",
+  "category": "merged",
+  "note": "",
+  "title": "feat(pr-submit): apply the authoringLanguage policy to PR body prose",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nBlocked by #1981\n\n#1981 adds the `authoringLanguage` config field to\n`schemas/policy.schema.json`, but no instruction file reads it yet.\n`idd-template/.github/instructions/idd-pr-submit.instructions.md` (and\nits lite variant) currently gives no language guidance for the PR body\nit drafts, so the language it ends up in is whatever the executing\nagent defaults to. This issue is blocked by #1981 because documenting a\nconsumer's behavior against a config field that does not exist yet\nwould describe unshipped behavior in the present tense.\n\nThis repository is the source of a reusable IDD distribution:\n`idd-template/.github/instructions/idd-pr-submit.instructions.md` and\n`idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md`\nare the canonical sources; the repo-root\n`.github/instructions/idd-pr-submit.instructions.md` and its lite copy\nare generated targets (`audit/sync-manifest.json` pairs\n`idd-pr-submit-instructions` / `idd-pr-submit-lite-instructions`, mode\n`exact`). Edit the `idd-template/` copies, never the generated targets,\nper `docs/customization.md`'s \"Exception: this repository is the source\nof a reusable IDD distribution\" section.\n\n## Proposed change\n\n- In both\n  `idd-template/.github/instructions/idd-pr-submit.instructions.md` and\n  `idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md`,\n  add guidance that the PR body's prose sections follow the resolved\n  `authoringLanguage` value from `.github/idd/config.json`: a fixed\n  language tag when configured, the claimed issue's own body language\n  when the value is `match-source`, and English when the field is\n  absent.\n- Restate the same marker/footer carve-out defined in #1981: any\n  machine-parsed marker or exact-regex-matched visible line always\n  stays in its canonical form, unaffected by `authoringLanguage`.\n- Regenerate the two generated targets\n  (`.github/instructions/idd-pr-submit.instructions.md` and\n  `.github/instructions/lite/idd-pr-submit-lite.instructions.md`) from\n  the edited canonical sources using `pnpm run docs:sync` (`node\n  scripts/sync-docs.mjs --apply`). Do not hand-edit the generated\n  targets directly.\n\n## Acceptance criteria\n\n- Both canonical `idd-template/` instruction files describe the\n  `authoringLanguage` behavior for PR body prose, consistent with\n  #1981's field definition, including the marker/footer carve-out.\n- `node scripts/sync-docs.mjs --check` and `node scripts/audit-docs.mjs\n  --check` pass, confirming the generated `.github/instructions/`\n  targets match the edited canonical sources.\n- `pnpm run lint:minimum` passes.\n\n## Candidate files\n\n- `idd-template/.github/instructions/idd-pr-submit.instructions.md`\n- `idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md`\n- `.github/instructions/idd-pr-submit.instructions.md` (regenerated, not hand-edited)\n- `.github/instructions/lite/idd-pr-submit-lite.instructions.md` (regenerated, not hand-edited)\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "f277dc3d95c8e6a6e8756ae0de39e97a19c5941481d27305d8e4440bed9c4b95",
+  "fetchedAt": "2026-09-24T04:43:14.740Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

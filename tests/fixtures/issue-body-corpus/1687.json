@@ -1,0 +1,28 @@
+{
+  "id": "1687",
+  "category": "merged",
+  "note": "",
+  "title": "fix(claim): release the contested claim on walk-away and let staleness clear disputes",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\nA lost two-way claim race currently locks an issue against all\nmechanical reclaim, contradicting the documented promise that \"the\n24 h stale-takeover … remain[s] the race-recovery backstop\"\n(`idd-claim.instructions.md`).\n\nTwo halves combine into the livelock:\n\n1. **Instruction side.** `idd-claim.instructions.md`'s Claim\n   verification \"If any check fails\" paragraph (after the 5 checks)\n   directs: treat the claim as contested, return to Discover, do not\n   retry the same issue — with no instruction to post `unclaimed-by`.\n   The lite mirror is stricter still: \"Any failure → claim contested\n   → STOP, do not proceed\". When sessions A and B race through the\n   documented A5 TOCTOU window a few seconds apart, A's step 4 sees\n   B's strictly-later marker (contested → walk away) and B's step 3\n   sees A active (walk away). Neither posts a release, so A's claim\n   stays active with no live owner.\n2. **Helper side.** In `src/scripts/resume-claim-routing.mts`, the\n   route decision checks `laterCompetingClaim` **before**\n   `isStaleByAge`, so once a later competing claim exists the\n   `--fresh-claim-gate` returns `disputed`/`already-claimed` forever —\n   including after the active claim passes the 24 h staleness bound.\n   Discover Step 1.5's recommended mechanical path is exactly this\n   helper (`resume-claim-routing.mjs --fresh-claim-gate`), so via the\n   documented path the issue stays ineligible **indefinitely**, not\n   merely for `claim-stale-age`.\n   `findLaterCompetingClaim` also scans raw `claimed-by` markers and\n   never reconciles a competitor's own `unclaimed-by` release, so even\n   a courteous loser that releases its raced claim does not clear the\n   dispute.\n\nSame-second races self-heal via the tie-break; only different-second\nraces livelock. The owner-resume `disputed`/`stop` behavior is\ntest-locked (`tests/resume-claim-routing.test.mts`) and appears\nintended; the missing staleness escape and missing release are the\ndefects.\n\n## Proposed change\n\n1. In `resume-claim-routing.mts`, evaluate staleness of the *active*\n   claim before (or combined with) the `laterCompetingClaim` branch,\n   so a stale disputed claim still routes to `stale`/`takeover` for a\n   fresh session. Keep the owner-resume dispute semantics unchanged.\n2. Reconcile competitor releases: a competing `claimed-by` whose\n   claim-id has a later matching trusted `unclaimed-by` no longer\n   counts as a live competitor in `findLaterCompetingClaim`.\n3. In `idd-claim.instructions.md` step 4 (and the lite mirror,\n   `lite/idd-claim-lite.instructions.md`), instruct the abandoning\n   session that verified itself as the *parsed winner* to post\n   `unclaimed-by` for its own `{claim-id}` before returning to\n   Discover — it provably owns the active claim, so the release is\n   safe and restores the issue to unclaimed.\n4. Mirror the instruction edits into `idd-template/` sources and keep\n   the enforced bundle byte budgets passing.\n5. Add unit tests: (a) stale + disputed → `takeover`; (b) released\n   competitor no longer yields `disputed`; (c) existing owner-resume\n   dispute cases unchanged.\n\n## Acceptance criteria\n\n- [ ] `--fresh-claim-gate` on an issue whose active claim is older\n      than `claim-stale-age` returns a takeover-eligible route even\n      when a later competing claim marker exists.\n- [ ] A competitor claim followed by its own trusted `unclaimed-by`\n      does not produce `disputed`.\n- [ ] Claim verification step 4 (full + lite + template mirrors)\n      instructs the losing-but-active winner to release before\n      walking away.\n- [ ] Existing `resume-claim-routing` tests still pass; new tests\n      cover the two new behaviors; `pnpm test` passes.\n- [ ] `node scripts/idd-doctor.mjs` (bundle byte audit) passes after\n      the instruction edits.\n- [ ] Generated `scripts/*.mjs` matches `pnpm run build` output.\n\nRefs: 2026-07-28 fresh-model audit (helper + corpus agents converged\non this defect independently); adjacent open design question #1529\n(activation-nonce cold recovery) is unaffected.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "c1428c20b588feb93d1b695cc95e6ed4c5aa397d9ad2881c2239e4b81c647bfe",
+  "fetchedAt": "2026-09-24T04:43:31.236Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

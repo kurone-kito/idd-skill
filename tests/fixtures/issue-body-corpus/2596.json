@@ -1,0 +1,30 @@
+{
+  "id": "2596",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: discover-shared-file-overlap throws on an adopter with no audit/sync-manifest.json",
+  "labels": [
+    "bug",
+    "status:needs-decision"
+  ],
+  "body": "# needs-decision: discover-shared-file-overlap throws on an adopter with no audit/sync-manifest.json\n\n## Background\n\nRefs #2586. `discover-shared-file-overlap.mts`'s `loadManifest`\n(current `main`) fail-closes on **any** load error for\n`audit/sync-manifest.json`, with the comment that an empty manifest\nwould yield an empty high-contention set and make every candidate look\nnon-overlapping — a genuine concern for a source-repo maintainer, but\n`audit/sync-manifest.json` is a source-repo audit artifact that\n`idd-template/ONBOARDING.md`'s generated core file list does not ship\nto adopters at all. An adopter repository that never received that\nfile (which is every adopter following ONBOARDING as documented)\nthrows `ENOENT` the first time the A4 Step 2 helper runs.\n\nObserved on public `kurone-kito/dotfiles` (pin `v0.7.0`): the helper\nexits 1 with `failed to load sync manifest at\n.../audit/sync-manifest.json: ENOENT: no such file or directory`.\nDiscover's own instructions already call this helper \"advisory,\" so\nthe loop continued past the throw — the cost is noise plus a lost A4\nStep 2 overlap signal, not a hard Discover STOP. Current `main`'s\n`loadManifest` (`src/scripts/discover-shared-file-overlap.mts`) is\nunchanged from the pin on this exact behavior.\n\nThat fail-closed comment is also incomplete on its own terms: `runCli`\nalways passes `extraFiles: [args.manifest]` into\n`resolveHighContentionFiles`, so even a parsed-as-`{}` missing file\nwould still leave the high-contention set containing\n`{audit/sync-manifest.json}` (or whatever `--manifest` names) — not\ngenuinely empty, and still a no-op for the F-phase instruction\ncontention this check is actually meant to catch.\n\nA sibling helper already chose the other fail direction for the same\nmissing file: `loadHighContentionFiles` in `suitability-triage.mts`\nreturns `null` on an unreadable or incomplete manifest and degrades\nCheck 4, with an explicit note that A4 Step 2 is \"lower-stakes\" than\nCheck 4's own gate. The overlap CLI throwing is inconsistent with that\nsibling's degrade-on-missing choice, not a settled shared contract —\nwhich is why this is a maintainer decision rather than a unilateral\nempty-set patch: an unconsidered \"ENOENT → empty set, exit 0\" fix\nwould reproduce exactly the false-non-overlap failure mode the\nfail-closed comment exists to prevent.\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision among the\noptions below.\n\n### Options for a maintainer to choose among\n\n1. **Quieter skip (equivalent to today's Discover skip).** `ENOENT` →\n   a warning JSON field (e.g. `manifestMissing: true`) + exit 0; do\n   not invent a contention set. Same practical outcome as today's\n   \"helper threw, Discover continued,\" without the stack trace.\n2. **Hardcoded F-phase instruction basenames as fallback.** When the\n   audit artifact is absent, still report overlap against\n   `bundle-review`/`bundle-merge` member basenames — the adopter\n   signal actually useful for instruction-file contention — instead of\n   silently no-opping.\n3. **Ship a minimal adopter contention list**, distinct from the\n   source-repo `audit/sync-manifest.json` (do not start copying the\n   source-repo audit artifact into adopters just to silence `ENOENT`).\n4. **Document the gap only.** Keep this source repository's own\n   fail-closed behavior unchanged; tell Discover's instructions that an\n   adopter without the file should not invoke this helper at all.\n5. **Something else the maintainer prefers.**\n\n## Acceptance criteria\n\n- A maintainer states which option above to take (or a different\n  resolution) in a comment on this issue.\n- Close this issue once that decision is recorded. The chosen option\n  becomes a follow-up `ready` issue scoped to the exact helper/docs\n  change — this issue itself stays decision-only.\n\n## Candidate files\n\n- `src/scripts/discover-shared-file-overlap.mts`\n- `.github/instructions/idd-discover.instructions.md`\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. The fix shape itself is\na policy trade-off between adopter-compat and the fail-closed\ncorrectness property the comment protects; the field evidence above is\nalready gathered._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "2f862db3491155f9e3bc053009dbe1f14ac006fc753e8dcfe2ad4260b91ae2c6",
+  "fetchedAt": "2026-09-24T04:46:49.394Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

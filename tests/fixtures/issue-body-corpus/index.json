@@ -1,0 +1,447 @@
+[
+  {
+    "id": "1381",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1395",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1414",
+    "category": "merged",
+    "note": "Merged/ready real issue whose own body discusses cross-tool routing/registration in broad terms; today's A4 limited_scope criterion false-positives on that in-domain \"registration/routing\" prose (a known lexical-gate boundary gap, not a snapshot-tool bug)."
+  },
+  {
+    "id": "1433",
+    "category": "merged",
+    "note": "Merged/ready real issue about claim-staleness diagnostics; today's A4 limited_scope criterion false-positives on its own diagnostic-signal prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "1454",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1484",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1504",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1522",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1544",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1553",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1581",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1597",
+    "category": "merged",
+    "note": "Merged/ready real issue proposing a new audit skill for the instruction corpus itself; today's A4 autonomous_completion criterion and A4.5 verifiability check both false-positive on its own meta/self-referential \"instruction corpus\" prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "1625",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1650",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1675",
+    "category": "merged",
+    "note": "Merged/ready real issue about routing every gh subprocess call through a shared helper; today's A4 autonomous_completion criterion false-positives on its own cross-cutting-sounding \"every call\" prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "1687",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1697",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1706",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1719",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1742",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1810",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1834",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1873",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1906",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "1927",
+    "category": "merged",
+    "note": "Merged/ready real issue documenting hook-manager coexistence; today's A4 limited_scope criterion false-positives on its own \"coexistence\"/config-surface prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "1961",
+    "category": "merged",
+    "note": "Merged/ready real issue fixing cli-args.mts's own flag-disambiguation logic; today's A4 clear_verification criterion and A4.5 verifiability check both false-positive on its own flag-parsing meta prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "1982",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2011",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2034",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2060",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2079",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2137",
+    "category": "merged",
+    "note": "Merged/ready real issue about honoring reviewPolicy in advisory-convergence; today's A4.5 verifiability check false-positives on its own policy-conditional prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "2164",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2194",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2220",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2239",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2266",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2285",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2321",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2337",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2424",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2462",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2482",
+    "category": "merged",
+    "note": "Merged/ready real issue documenting an authoring-intent-to-discovery-signal table; today's A4 autonomous_completion criterion false-positives on its own cross-referencing documentation prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "2553",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2592",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2595",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2596",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2597",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2606",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2631",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2636",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2638",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2639",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2651",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2673",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2674",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2696",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2734",
+    "category": "merged",
+    "note": "Merged/ready real issue fixing suitability-triage.mts's OWN Check 3 false-positive on a skip-condition's prose; today's A4.5 trust_safety and actionability checks false-positive on this issue's own self-referential discussion of that same check's trigger vocabulary -- a textbook case of the exact lexical-gate boundary-gap class this corpus exists to catch (known gap, not a snapshot-tool bug)."
+  },
+  {
+    "id": "2744",
+    "category": "negative",
+    "note": "Selected as a negative entry (carries status:blocked-by-human); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2771",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2801",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2847",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2863",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2912",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2957",
+    "category": "merged",
+    "note": "Merged/ready real issue fixing an error-handler message-loss bug in minimize-superseded-markers.mjs; today's A4 clear_verification criterion false-positives on its own error-handling description (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "2959",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2967",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2975",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "2982",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "2996",
+    "category": "negative",
+    "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage)."
+  },
+  {
+    "id": "3029",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "3077",
+    "category": "merged",
+    "note": "Merged/ready real issue documenting hold-consolidation guidance; today's A4.5 verifiability check false-positives on its own guidance-document prose (known lexical-gate boundary gap)."
+  },
+  {
+    "id": "3129",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "3176",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "3223",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "3339",
+    "category": "merged",
+    "note": ""
+  },
+  {
+    "id": "gap-2767-01",
+    "category": "synthetic",
+    "note": "#2767 item 1 (unescaped nested straight quote inside a double-quoted decision): `findClosingQuoteIndex` never existed under that name anywhere in this repo's git history (verified via `git log --all -S`), so this was measured against today's actual mechanism, `isFollowedByFramingVerb`'s single `indexOf` scan for the same quote character. That scan still stops at the first same-character occurrence -- the nested \"camelCase\" -- so a genuinely attributed decision (\"Alice reports\") is still wrongly accepted as this issue's own live resolution; the comment's described gap is present today (MATCH)."
+  },
+  {
+    "id": "gap-2767-02",
+    "category": "synthetic",
+    "note": "#2767 item 2 (plural possessive apostrophe indistinguishable from a closing quote): the possessive apostrophe in \"modules' configs\" is immediately followed by whitespace, exactly like a genuine closing quote, so `isFollowedByFramingVerb`'s bare indexOf(\"'\") scan treats it as the closer and never reaches the real one before \"Alice reports\"; the genuine attribution is missed and the decision is wrongly counted as live. Same underlying mechanism as item 1's finding; the gap is present today (MATCH)."
+  },
+  {
+    "id": "gap-2767-03",
+    "category": "synthetic",
+    "note": "#2767 item 3 (terminal-punctuation short-circuit only treats a period as a self-containment signal): `findClosingQuoteIndex` never existed under that name in this repo's history. Today's SENTENCE_TERMINATOR_PATTERN treats \".\", \"!\", and \"?\" identically in both the backward and forward framing-verb scans (verified with matched .-/!-/?-terminated triples in both directions giving identical results). The specific period-only asymmetry the comment describes does not exist in today's code (MISMATCH)."
+  },
+  {
+    "id": "gap-2767-04",
+    "category": "synthetic",
+    "note": "#2767 item 4 (indented-code scanner has no list-item-nesting awareness): today's findIndentedCodeRanges (markdown-code.mts) carries substantial container/list-content-indent tracking that appears purpose-built for exactly this case. A dedicated research pass could not reproduce a nested, blank-line-preceded sub-bullet being wrongly masked as indented code across 5 varied constructions (single/double nesting, numbered lists, list-type switches, multi-blank-line resets); the gap does not reproduce today (MISMATCH)."
+  },
+  {
+    "id": "gap-2767-05",
+    "category": "synthetic",
+    "note": "#2767 item 5 (escaped intermediate strikethrough closer stops the search instead of continuing to a later valid one): isInStrikethroughSpan still exists under that name and correctly skips a backslash-escaped \"\\~~\", continuing the scan from just past it and pairing the real opener with the later, genuine closer. The struck-through decision is correctly excluded from resolved-decision detection; the gap is not present today (MISMATCH). Side note from the research pass: evaluateA4Viability's autonomous_completion still fails on this body via EXTERNAL_COORDINATION_PATTERN matching the raw \"Maintainer decision\" text once the resolved-decision span is (correctly) suppressed as struck-through -- expected secondary behavior, not part of item 5's own claim."
+  },
+  {
+    "id": "gap-2767-06",
+    "category": "synthetic",
+    "note": "#2767 item 6 (inline emphasis between the opening quote and the marker defeats the inverted-attribution check): isFollowedByFramingVerb still checks exactly one preceding character, not a scan through intervening Markdown emphasis. With \"*Maintainer decision...\" the character immediately before \"Maintainer\" is \"*\", which fails the quote-char check outright, so the real quote+attribution (\"reports the tracking issue\") is never checked. The gap is present today, verbatim as described (MATCH)."
+  },
+  {
+    "id": "gap-2767-07",
+    "category": "synthetic",
+    "note": "#2767 item 7 (literal \"&gt;\" inside a quoted HTML tag attribute value defeats the open-tag scan): isInsideOpenHtmlTag never existed under that name in this repo's git history. The closest current mechanism, matchInlineHtmlTagEnd / INLINE_HTML_OPEN_TAG_PATTERN (built for #2865), already has quoted-attribute-value state tracking that correctly consumes an embedded \">\" inside quotes without ending the tag early. No defeat of the open-tag scan was reproduced (MISMATCH)."
+  },
+  {
+    "id": "gap-2767-08",
+    "category": "synthetic",
+    "note": "#2767 item 8 (an ellipsis's final period trips the same terminal-punctuation short-circuit as a standalone sentence-ending period): isFollowedByFramingVerb's sentence-boundary scan uses the same uniform SENTENCE_TERMINATOR_PATTERN for an ellipsis's last dot as for an ordinary period -- the \"...\" right after the real closing quote is read as ending the current sentence, so the scan window closes before it ever reaches \"Alice reports\" two words later. The genuine inverted-attribution citation is missed and the decision is wrongly accepted as live; the gap is present today, via the unified (not period-specific) mechanism (MATCH)."
+  },
+  {
+    "id": "gap-2767-09",
+    "category": "synthetic",
+    "note": "#2767 item 9 (comment-looking text inside a Markdown link title masked as a real HTML comment): findHtmlCommentRanges's ignored-opener-ranges input only ever receives real code ranges (fenced/indented/inline); a link title is ordinary prose, never a code range, so the \"<!--\" opener inside the link title is not ignored. It is also unterminated in this body (no \"-->\" anywhere), so it masks from that point through end-of-body, swallowing the genuine, later \"Maintainer decision (...)\" marker entirely -- this also fails Check 7 verifiability and A4's autonomous_completion for an issue that actually has a valid resolved decision. The gap is present today (MATCH)."
+  },
+  {
+    "id": "gap-2767-10",
+    "category": "synthetic",
+    "note": "#2767 item 10 (a non-\"1\"-starting ordered-list marker wrongly interrupts a paragraph): the inline maintainer-decision pattern's block-start guard rejects ANY digit-led ordered marker on the hard-wrapped resolution line, regardless of the starting digit -- but CommonMark only lets a marker starting at \"1\" interrupt an open paragraph; a \"5.\" continuation is ordinary lazy-continuation prose. findIndentedCodeRanges's own isNonInterruptingListItem already encodes the correct CommonMark rule elsewhere in this same codebase, but resolved-decision.mts's guard has no equivalent exception, so a genuinely resolved decision whose resolution text happens to start with a non-\"1\" numbered continuation is wrongly rejected as an empty marker. The gap is present today (MATCH)."
+  },
+  {
+    "id": "gap-2767-11",
+    "category": "synthetic",
+    "note": "#2767 item 11 (a Setext heading nested inside a list item is read as a sibling section boundary): suitability-triage.mts's own NEXT_HEADING_PATTERN carries this exact accepted limitation in its own code comment (a \"-\" underline immediately following a list-item line is treated as a Setext boundary even where CommonMark itself would keep it inside the list). A bare \"---\" right after the second placeholder bullet (no blank line) is misread as that bullet's own Setext underline, truncating the Acceptance Criteria section before the real, substantive third bullet is ever scanned -- confirmed via a clean pass/fail delta against an otherwise-identical control using a blank line instead of the bare \"---\". The gap is present today, exactly as the code's own comment documents (MATCH)."
+  },
+  {
+    "id": "gap-2767-12",
+    "category": "synthetic",
+    "note": "#2767 item 12 (only the first \"## Acceptance Criteria\" heading is ever evaluated): the primary section-scoped ACCEPTANCE_CRITERIA_PATTERN match in checkVerifiability has no global flag, so only the first heading is ever located -- confirmed: a placeholder-only first section followed by a later, substantive second section fails Check 7 (verifiability) when the second section's real bullet is a bare (non-checkbox) list item, as authored here. The primary-scan gap is present today (MATCH); a research variant using this repo's own checkbox+outcome-word convention on the second section's bullet was sometimes rescued by a separate whole-body fallback further down the same function, so whether the final verdict flips depends on downstream bullet formatting -- this entry's own bare-bullet body reliably exercises the failing case. Unrelated to item 12's own claim: checkAutonomy (Check 6) also fails on this body, because its own literal \"- TBD\" placeholder bullet independently matches the UNRESOLVED_CHOICE_SOURCE pattern -- an artifact of the placeholder text choice, not a #2767 gap."
+  },
+  {
+    "id": "gap-2767-13",
+    "category": "synthetic",
+    "note": "#2767 item 13 (a CRLF body's captured Setext candidate-text line keeps its trailing \"\\r\", defeating the thematic-break exclusion and misreading two ordinary \"---\" lines as a Setext heading): the comment's own specific mechanism (a false-positive misread of two ordinary thematic breaks) does not reproduce -- under CRLF, NEXT_HEADING_PATTERN's search returns no match at all for every construction tried (the underline line's own trailing \"\\r\" blocks the pattern's own line-end alternative), a total false-negative miss rather than a false match (PARTIAL). The consequence is still real and dangerous in the same family: with the boundary never found, the Acceptance Criteria section scan becomes unbounded and silently absorbs a later, unrelated section's substantive bullet, turning a should-fail placeholder-only AC section into a wrongly-passing one purely because of CRLF line endings -- this entry's own verifiability: pass verdict (below) is exactly that wrongly-passing outcome; an otherwise-identical LF body fails verifiability instead, confirming the delta. Notably, the sibling pattern in triage-structural-evidence.mts (NEXT_ATX_HEADING_PATTERN) already carries an explicit \"\\r?\\n\" fix for exactly this class of bug; suitability-triage.mts's own NEXT_HEADING_PATTERN does not. Unrelated to item 13's own claim: checkAutonomy (Check 6) also fails on this body, because its own literal \"- TBD\" placeholder line independently matches the UNRESOLVED_CHOICE_SOURCE pattern -- an artifact of the placeholder text choice, not a #2767 gap."
+  }
+]

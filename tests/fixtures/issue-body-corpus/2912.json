@@ -1,0 +1,28 @@
+{
+  "id": "2912",
+  "category": "merged",
+  "note": "",
+  "title": "fix(advisory-convergence): bind self-referential-bootstrap-auto markers to the run that posted them",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "# fix(advisory-convergence): bind self-referential-bootstrap-auto markers to the run that posted them\n\n## Background\n\nDuring review of PR #2895 (issue #2657), a Codex P1 finding identified\na residual trust gap in `verifySelfReferentialBootstrapWaiverRun`\n(`src/scripts/advisory-convergence.mts`): the automatic\nself-referential-bootstrap-auto waiver's `run-id:` field is checked\nagainst `GET /repos/{owner}/{repo}/actions/runs/{run-id}` for the\nright workflow path, head SHA, repository, and event type\n(`pull_request_target`) — but none of that proves the CITED run is the\none that actually posted the comment. The run id is bearer evidence,\nnot provenance-bound.\n\nA same-repository `pull_request`-triggered workflow with\n`issues: write` (an actor this mechanism's own comments already assume\ncan post arbitrary `github-actions[bot]`-authored comments — see\n`collectFromGitHub`'s existing rate-limit-exhaustion-guard comments)\ncan discover a legitimate, concurrently running `pull_request_target`\nrun of `idd-advisory-convergence.yml` for its own PR (via the public\nActions API) and cite that run's id in a forged marker. All four\nexisting trust conditions on the cited run would still pass.\n\n## Why this is scoped narrower than it first looks\n\n`autoWaiverValid` also requires `touchesSelfReferentialAllowlist`,\nwhich is fetched independently from the PR's own live file-changes API\n(`listChangeRequestChangedFiles` / `listChangeRequestRenamedFromPaths`),\nnever from the attacker-controlled comment. A forged marker therefore\ncannot make a PR that does NOT touch the checker allowlist validate —\nit can only let a PR that already legitimately qualifies for the\nwaiver receive it via forgery instead of via the real job. The\nallowlist check remains the load-bearing security boundary.\n\nOne concrete exploit this bearer-evidence gap DID enable was closed\ndirectly in PR #2895 (see the `claimCandidateAmbiguous` fix in\n`src/scripts/advisory-convergence.mts`): a forged `claim-id:none`\nmarker could validate on a PR whose closing issues expose ambiguous,\nmultiple active claims — a state `selectLinkedIssueCandidate`\n(`external-check-waiver.mts`) always refuses to auto-post ANY marker\nfor. That narrow gap is now closed; this issue tracks the general\nprovenance-binding problem the narrow fix does not attempt to solve.\n\n## Proposed change\n\nBind a candidate marker's provenance to the run it cites, rather than\ntrusting the cited run's own metadata as sufficient. Two directions\nworth evaluating:\n\n1. **Run-log correlation.** The posting job's own run log (or its\n   jobs API) records the exact comment it created (e.g. via\n   `gh api .../issues/comments` in its own step output, or the API\n   response the posting step already receives). Fetch the cited run's\n   jobs/steps and confirm it actually performed a POST to the issue\n   comments endpoint that would explain this exact comment id/body/\n   timestamp, rather than trusting the run merely EXISTS with the\n   right shape.\n2. **Trusted creation-window binding.** Narrow the acceptable window\n   between the cited run's own `created_at`/`updated_at` and the\n   marker comment's `createdAt` tightly enough that only the actual\n   posting run's own brief execution window could have produced it,\n   combined with a per-run \"already consumed\" marker to prevent one\n   legitimate run's window from covering multiple forged comments.\n\nEither direction is new I/O (bounded, following the same\n`MAX_AUTO_WAIVER_RUN_LOOKUPS`-style budget discipline already used for\nrun-id lookups) and new fixture/test surface — not a small patch, which\nis why it was tracked here rather than attempted live during PR #2895's\nreview.\n\n## Acceptance criteria\n\n- [ ] A forged marker citing a real, legitimate, concurrently-running\n      `pull_request_target` run's id (but not actually posted by that\n      run) is rejected by `verifySelfReferentialBootstrapWaiverRun` or\n      its replacement, verified by a fake-provider test.\n- [ ] A genuine marker posted by the real `idd-advisory-convergence-\n      self-waiver` job continues to validate, with no new manual step\n      required by adopters.\n- [ ] Any new lookup this needs is bounded the same way\n      `MAX_AUTO_WAIVER_RUN_LOOKUPS` already bounds run-id lookups in\n      `collectFromGitHub`.\n- [ ] Full validation gate green (typecheck, build, `node --test\n      tests/*.test.mts`, cspell, biome, dprint, markdownlint,\n      `audit-code-span-wrap.mjs`, `audit-docs.mjs --check`).\n\nRefs #2657\n",
+  "bodySha256": "842f3341be9ca7c33a2b32b0537826a4052a07c844c3cea176c3cd7acf203e94",
+  "fetchedAt": "2026-09-24T04:42:40.794Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

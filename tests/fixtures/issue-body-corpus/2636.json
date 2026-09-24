@@ -1,0 +1,32 @@
+{
+  "id": "2636",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: idd-doctor's cleanup-backlog \"mirrors CI\" claim doesn't match the actual CI workflow",
+  "labels": [
+    "bug",
+    "documentation",
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "## Background\n\n`docs/idd-helper-scripts.md` (~L360, mirrored verbatim in\n`idd-template/docs/idd-helper-scripts.md`) and `src/scripts/idd-doctor.mts`'s\n`--help` text (~L4272, generated into `scripts/idd-doctor.mjs`) both state\nthat a local run during a merge burst should pass\n`--cleanup-backlog-window-days 1` to keep it fast, \"mirroring CI.\" The\noriginating issue, #1145 (closed), records the same claim as background\nfact: \"CI already sidesteps this with `--cleanup-backlog-window-days 1`.\"\n\nDirectly verified against the current `.github/workflows/idd-doctor.yml`:\nits only invocation is `run: node scripts/idd-doctor.mjs`, with no\narguments at all — every CI run uses the default 14-day window, not\n`--cleanup-backlog-window-days 1`. The claim that CI \"already sidesteps\"\nthis, or \"mirrors\" a short window, does not match the current workflow\nfile. (`idd-template/` does not ship an `idd-doctor.yml` at all — this\nhalf of the mismatch is source-repo-only; the misleading `--help` text\nin `idd-doctor.mts` is distributed to adopters who copy the script,\nindependent of whether their own repo runs it in CI.)\n\nObserved cost: a local `node scripts/idd-doctor.mjs` run (part of this\nrepository's own `pre-push-validate` chain) scanned merged PRs in the\n14-day default window, issuing one serial `gh api .../issues/<n>/comments`\ncall per merged PR (193 PRs at the time of observation) -- exceeding a\n120s timeout and completing only after roughly 280s. If CI runs the\nidentical unflagged invocation on every `pull_request` trigger, it likely\npays a comparable cost on every single PR.\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision between which\nside of the mismatch to fix, mirroring the decision pattern #2567,\n#2091, #2181, and #2377 already used for a related class of problem\n(a documented assumption drifting from shipped configuration).\n\n### Options for a maintainer to choose among\n\n1. **Wire `--cleanup-backlog-window-days` into CI** -- add the flag\n   (e.g. `1`, or another short value) to\n   `.github/workflows/idd-doctor.yml`'s `run: node scripts/idd-doctor.mjs`\n   step, matching the originally documented intent. A short per-PR window\n   is plausible here specifically because the check re-runs on every PR:\n   a rolling short window can still provide cumulative multi-day backlog\n   coverage across successive runs, at a fraction of the per-run cost.\n2. **Correct the documentation instead** -- if CI intentionally uses the\n   full 14-day window (for example because per-PR coverage should not\n   assume every intervening PR also ran the check), update\n   `docs/idd-helper-scripts.md` and `idd-doctor.mts`'s `--help` text (and\n   the `idd-template/docs/idd-helper-scripts.md` mirror) to stop claiming\n   this \"mirrors CI,\" stating instead that only a manual/local run\n   benefits from the flag.\n3. **Something else the maintainer prefers** (for example lowering the\n   default window, or having the workflow pass a different value\n   depending on trigger type).\n\n## Acceptance criteria\n\n- [ ] A maintainer states which option above to take (or a different\n      resolution) in a comment on this issue.\n- [ ] Close this issue once that decision is recorded. The chosen option\n      becomes a follow-up `ready` issue scoped to the exact\n      config/workflow/doc change.\n\n## Candidate files\n\n- `.github/workflows/idd-doctor.yml`\n- `docs/idd-helper-scripts.md`\n- `idd-template/docs/idd-helper-scripts.md`\n- `src/scripts/idd-doctor.mts` (and generated `scripts/idd-doctor.mjs`)\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. This is a policy/capacity\ntrade-off between CI thoroughness and per-run cost; the factual evidence\nabove is settled and does not need re-deriving._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "90ea8002bb75211c667480e8728bb46dc6beaf025593c48753f9f209e0373b7e",
+  "fetchedAt": "2026-09-24T04:45:16.933Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "1522",
+  "category": "merged",
+  "note": "",
+  "title": "feat(claim): add activation-nonce check to Claim verification",
+  "labels": [
+    "bug",
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nPart of the roadmap #1480 (sticky forced-handoff / concurrent-claim\ncross-session collision gap). Today, `idd-claim.instructions.md`'s\n`## Claim verification` section and `idd-overview-core.instructions.md`'s\nClaim revalidation gate key ownership purely on `agent-id`/`claim-id`\ntoken-string equality. Nothing is posted at forced-handoff\nadopt-verbatim time (\"no separate `claimed-by supersedes: none` post is\nrequired for the transfer itself\"), so two independent sessions\nadopting the identical sticky successor pair both see byte-identical\nGitHub state and both pass every existing check identically -- a\nverified near-miss (see #1480's background).\n\n**Interaction with #1439 (orchestrator delegation exception).** #1439\ndefines a legitimate case where a second session (a delegated worker)\nintentionally activates using an already-claimed `claim-id` it never\nposted itself -- structurally the same \"second session, same\n`claim-id`\" shape this nonce check is built to catch. #1439 is\n`Blocked by` this issue precisely so its delegation path can be\ndefined as a third, nonce-aware activation path once this nonce\nmechanism exists, rather than the two of them being designed blind to\neach other. Keep the nonce-posting and nonce-comparison logic added\nhere extensible to a third activation path (not hardcoded to only\n\"ordinary\" and \"forced-handoff adopt-verbatim\"), so #1439 does not\nneed to reopen this issue's design to add it.\n\n## Proposed change\n\n- In `idd-claim.instructions.md`'s `## Claim verification` section,\n  immediately after the existing adopt-verbatim text, add: at claim\n  activation time -- both an ordinary fresh `claimed-by supersedes:\n  none` post and a forced-handoff adopt-verbatim reconciliation -- post\n  a lightweight trusted marker comment carrying a fresh session-local\n  nonce alongside the `claim-id`.\n- At the Claim revalidation gate in\n  `idd-overview-core.instructions.md`, check the locally-held nonce\n  against the latest posted nonce for the active `claim-id`, alongside\n  the existing `claim-id` match. A detected second activation with a\n  different nonce routes through the existing same-second /\n  later-competing-claim tie-break logic\n  (`idd-claim.instructions.md`'s Claim verification steps), rather than\n  proceeding as sole owner.\n- Backward compatibility: an active claim whose most recent relevant\n  marker predates this change (no nonce field at all) must not be\n  treated as a detected collision -- absence of a nonce is \"no\n  comparison possible,\" not \"mismatch.\"\n- Update `idd-claim.instructions.md`'s Claim-state parsing rules if a\n  new marker field requires it, and add unit/integration test coverage\n  for: same-nonce (no collision), different-nonce (collision detected,\n  routes to tie-break), and missing-nonce (backward-compatible pass).\n- Regenerate mirrors with `node scripts/sync-docs.mjs --apply` and\n  confirm `node scripts/audit-docs.mjs --check` reports zero drift.\n\n## Acceptance criteria\n\n- [ ] Claim activation (ordinary fresh claim and forced-handoff\n      adopt-verbatim) posts a fresh session-local activation nonce.\n- [ ] The Claim revalidation gate detects a second activation with a\n      mismatched nonce for the same `claim-id` and routes it through\n      the existing tie-break logic instead of silently proceeding.\n- [ ] A pre-existing marker with no nonce field is not treated as a\n      collision (backward compatibility preserved).\n- [ ] New tests cover same-nonce, different-nonce, and missing-nonce\n      cases.\n- [ ] The nonce-posting/comparison design does not hardcode exactly\n      two activation paths -- a future third path (#1439's delegation\n      exception) can register a legitimate activation without\n      reopening this issue's design.\n- [ ] `node scripts/audit-docs.mjs --check` reports zero drift.\n\nPart of roadmap #1480.\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: L -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: L -->\n\n",
+  "bodySha256": "269c50996d637369a68d2ce0f1d20a19b93e2a0e55b18e97eab3d38d0ac0d43c",
+  "fetchedAt": "2026-09-24T04:43:43.643Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

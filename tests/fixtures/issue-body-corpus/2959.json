@@ -1,0 +1,30 @@
+{
+  "id": "2959",
+  "category": "negative",
+  "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "docs(onboarding): template-distribution.md's Option A gh api fetch loop has no ?ref=, resolving the mutable default branch",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "**Origin**: flagged by a Copilot review comment on `kurone-kito/dotfiles`#383's PR (the `v0.9.0` re-import round), carried forward unfixed to `v0.11.0`, reconfirmed by dotfiles#425's final-verification sweep.\n\n**File**: `idd-template/docs/onboarding/template-distribution.md`, \"Option A\" `gh api` fetch loop.\n\n**Problem**: The fetch loop queries:\n\n```\nrepos/kurone-kito/idd-skill/contents/idd-template/${FILE}\n```\n\nwith no `?ref=<tag-or-commit>` query parameter, so it resolves whatever the source repository's default branch (`main`) currently is at fetch time, rather than a pinned tag/commit. This contradicts the same file's own \"keep imports pinned to a released tag or commit\" guidance that applies everywhere else in the document.\n\n**Suggested fix**: Add `?ref=<pinned-tag-or-commit>` to the `contents` API call, with a placeholder the adopter fills in from their own recorded pin (mirroring how the rest of the document handles pinning).\n\n**Confirmed present** at `v0.11.0` verbatim (`idd-template/docs/onboarding/template-distribution.md`, ~line 336).\n",
+  "bodySha256": "4b35dcd440b806fe7ede415a524a56d818313fcd1fe135cb2ef1eccce6ebfd87",
+  "fetchedAt": "2026-09-24T04:45:00.928Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

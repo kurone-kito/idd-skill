@@ -1,0 +1,30 @@
+{
+  "id": "2967",
+  "category": "negative",
+  "note": "Selected as a negative entry (closed as not planned); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "docs(idd-merge): in-flight post-merge-cleanup.yml wait doesn't distinguish a terminal-state observation from a budget expiry mid-flight",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "**Origin**: flagged during `kurone-kito/dotfiles`#421's re-import cycle (PR dotfiles#430), confirmed as genuine drift within upstream's own `v0.11.0` release, not introduced by the consuming repository's re-import.\n\n**File**: `idd-template/.github/instructions/idd-merge.instructions.md`, in-flight `post-merge-cleanup.yml` wait.\n\n**Problem**: The instruction says (paraphrased): if a `post-merge-cleanup.yml` run is still in flight, wait (bounded), then \"Either way, continue to the rule below unchanged\" -- but \"either way\" collapses two materially different outcomes into one: (a) the wait observed the run reach a terminal state (success/failure/cancelled) before its bound expired, vs. (b) the bounded wait's own budget expired while the run was still in flight, with no observed terminal state at all. These have different implications for whether the subsequent step's assumptions about run state actually hold, but the instruction treats them identically (\"continue... unchanged\").\n\n**Suggested fix**: Branch on whether the wait observed a terminal state vs. hit its own budget while still in flight, and give the budget-expired branch its own explicit next step (e.g. a documented re-check point, or an explicit note that the run's final state is unconfirmed) rather than folding both into the same \"continue unchanged\" language.\n\n**Confirmed present** at `v0.11.0` verbatim (`idd-template/.github/instructions/idd-merge.instructions.md`, ~lines 351-363 in a fresh `v0.11.0` checkout: \"`post-merge-cleanup.yml` run is still in flight, waiting (bounded). ... Either way, continue to the rule below unchanged\").\n\n**Note for triage**: at least one downstream adopter (`kurone-kito/dotfiles`) substantially mitigates this specific race with a local divergence (a mandatory, freshly-fetched re-check of the trusted-author cleanup-evidence record immediately before each side's own POST call) but confirms upstream's own generic text has no equivalent for adopters without that local addition.\n",
+  "bodySha256": "d41ac6245947252ce7a1df013a4c1c1ffae9e0342e6512f5f24a1db35c4974b1",
+  "fetchedAt": "2026-09-24T04:45:00.036Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

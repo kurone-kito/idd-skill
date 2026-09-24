@@ -1,0 +1,29 @@
+{
+  "id": "2651",
+  "category": "merged",
+  "note": "",
+  "title": "fix(token-cost): duplicate same-attempt enter event drops stage start time in harvest join",
+  "labels": [
+    "bug",
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`token-cost-harvest.mjs`'s event-window join\n(`src/scripts/token-cost-harvest.mts`, `#2418`/`#2425`/`#2444`) is\nwhat promotes a local session sample to `kind: \"issue-loop\"`,\n`outcome: \"merged\"` for the `#2296` roadmap's sample pool. It has\nalready needed several fixes for join gaps that silently dropped\ncompleted issue-loops.\n\n`readEventWindows`'s `enterAtByAttempt` map is keyed\n`vendorSessionId -> latest enter timestamp` (see the\n`enterAtByAttempt.set(key, byAttempt)` call near line 1080). A\n*second* `enter` event from the same attempt (same `vendorSessionId`)\nfor the same `(issueNumber, vendor, stageId)` key, with no\nintervening `exit`, silently overwrites the first enter's timestamp.\nThe stage's true start time is lost and the computed window narrows\nto `[second-enter, exit)`.\n\nThis happens for real: a long-lived agent session that resumes after\na context-compaction restart and re-enters a phase (for example\n`review`) it had already entered earlier in the same session, without\nhaving logged an `exit` for the interrupted first entry, reproduces\nthis exactly.\n\n### Evidence (2026-09-05, this workstation)\n\n`events.jsonl` for issue `#2643`'s `review` stage:\n\n```\nenter review 2026-09-05T14:27:23.531Z  vendorSessionId=b17ac6fb...  claimId=678d3367...\nenter review 2026-09-05T14:40:33.464Z  vendorSessionId=b17ac6fb...  claimId=678d3367...\nexit  review 2026-09-05T14:48:04.462Z  vendorSessionId=b17ac6fb...  claimId=678d3367...\n```\n\nSymptom: a `token-cost-harvest.mjs --repo kurone-kito/idd-skill`\nrun performed right after PR #2650 (closing issue #2643) merged still\nreports only 1 `issue-loop` sample, even though issues `#2619`,\n`#2640`, `#2641`, `#2642`, and `#2643` all completed the same day with\nfull seven-stage `events.jsonl` coverage, valid GitHub `claimed-by`\nmarkers, and confirmed merges. Each instead produced an\n`#ew<issueNumber>` sample with `kind: \"session\"`,\n`outcome: \"unknown\"`, and an oddly narrow or point-like window (for\nexample `#ew2641` had `startedAt === endedAt`), rather than being\npromoted to `kind: \"issue-loop\"`, `outcome: \"merged\"`.\n\n## Proposed change\n\nRoot-cause and fix `readEventWindows`'s (or the downstream per-issue\nwindow assembly's) handling of a duplicate `enter` for the same\n`(issueNumber, vendor, stageId, vendorSessionId)` key with no\nintervening `exit`. Investigate whether preserving the *earliest*\nenter per attempt (instead of last-write-wins), or merging the two\nsub-windows, is correct here without breaking the existing\ncross-attempt disambiguation this map also serves (`idCompatible`,\n`isBoundaryConsistent`, the `#2432` claim-id-mismatch guard). Confirm\nthe fix against issue `#2643`'s recorded `events.jsonl` excerpt above,\nand check whether `#2619`/`#2640`/`#2641`/`#2642` (a different\nsession, `ef176242-...`) share the same root cause or a distinct one\nbefore generalizing the fix.\n\nRegenerating `docs/token-cost-snapshot.json` is explicitly out of\nscope for this issue -- that is a separate, later step once the\nharvest join is trusted again.\n\n## Acceptance criteria\n\n- A unit test in `tests/token-cost-harvest.test.mts` reproduces a\n  duplicate same-attempt `enter` (no intervening `exit`) for one\n  stage and asserts the resulting window still covers the full true\n  start-to-end span (or documents why narrowing is intentional),\n  with every existing cross-attempt test still green.\n- Running `node scripts/token-cost-harvest.mjs --repo\n  kurone-kito/idd-skill --dry-run` after the fix reports more than 1\n  `issue-loop` sample, or the harness's own doc comment records why\n  `#2619`/`#2640`/`#2641`/`#2642` remain unjoined for a different,\n  now-documented reason.\n- `docs/token-cost-snapshot.json` is unchanged by this issue's PR.\n\n## Candidate files\n\n- `src/scripts/token-cost-harvest.mts`\n- `tests/token-cost-harvest.test.mts`\n\nRefs #2296\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "747834150b303a48b6be3230d9ba2ab776adfe53338f2257efe38081eb855ec2",
+  "fetchedAt": "2026-09-24T04:42:48.327Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "1961",
+  "category": "merged",
+  "note": "Merged/ready real issue fixing cli-args.mts's own flag-disambiguation logic; today's A4 clear_verification criterion and A4.5 verifiability check both false-positive on its own flag-parsing meta prose (known lexical-gate boundary gap).",
+  "title": "fix(cli-args): reserve a declared flag's own alias before single-dash disambiguation",
+  "labels": [
+    "bug"
+  ],
+  "body": "## Bug Overview\n\n`cli-args.mts`'s shared `parseCliArgs()` wrapper's generic single-dash\ndisambiguation (`disambiguateSingleDashValues`) rewrites `--flag -X`\ninto `--flag=-X` for **any** declared `string`-type flag whenever the\nfollowing token starts with a single dash — including when that\nfollowing token is itself the flag's own declared short alias (e.g.\n`-h` for `--help`). This means `-h` immediately after any string flag\nis silently consumed as that flag's literal value instead of being\nrecognized as `--help`, on every `idd-*` helper already migrated onto\nthis wrapper (`#1466`/`#1467`), not just one.\n\nFound during #1955's review (chatgpt-codex-connector), which flagged\nthis exact pattern on `rerun-advisory-convergence.mts`'s `--check-name`\nflag. Confirmed empirically that the pre-migration native\n`node:util.parseArgs` call threw `ERR_PARSE_ARGS_INVALID_OPTION_VALUE`\n(\"ambiguous\") for the same input, so this is a real (if narrow)\nregression from adopting the shared wrapper — but it is **systemic to\nthe wrapper itself**, already present on every other already-migrated\nhelper's string flags (verified against `branch-name.mts`'s `--title`,\nunrelated to #1955's diff), not something #1955 introduced or could\nfix within its own narrow single-helper scope.\n\n## Expected Behavior\n\nA declared flag's own short/long alias (e.g. `-h`/`--help`) should\nnever be silently consumed as a preceding string flag's value.\n`node bin/idd-branch-name.mjs --title -h --number 5` (or any other\nalready-migrated helper's equivalent) should either show help or fail\nwith a clear parse error, not silently resolve `--title` to the\nliteral string `\"-h\"`.\n\n## Steps to Reproduce the Bug\n\n```sh\nnode bin/idd-branch-name.mjs --title -h --number 5\n```\n\nPrints `issue/5-h` (exit 0) instead of help output or a parse error.\n\n## Suggested fix\n\nIn `disambiguateSingleDashValues` (`src/scripts/cli-args.mts`), skip\nrewriting a value token that itself exactly matches one of the spec's\nown declared short (`-x`) or long (`--flag`) option forms — reserve\ndeclared aliases before applying the generic single-dash-value\ndisambiguation.\n\n## Environment\n\nn/a — reproduces on any supported Node/OS.\n\nRefs #1955\n",
+  "bodySha256": "0df26f1f74c1ca2afb7086e5e99a3414a97f088f80d9f126bdfc07a9a49dc6ac",
+  "fetchedAt": "2026-09-24T04:43:16.145Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

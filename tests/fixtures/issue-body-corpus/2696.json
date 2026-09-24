@@ -1,0 +1,28 @@
+{
+  "id": "2696",
+  "category": "merged",
+  "note": "",
+  "title": "fix(provider-adapter-github): keep real GraphQL thread IDs in missingThreads",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "<!-- idd-skill-authoring-publication: target=target-c09a1724b27a0981; anchor=anchor-1bb883fca8cd8cd9; set=set-d5e1ceb90943b3a0; session=claude-idd-main-447be8652fee; token=pub-94669e7fc5b1d0ea -->\n\n## Background\n\n`pre-merge-readiness.mjs`'s `dispositionEvidence.missingThreads` entries are meant to identify which review thread still lacks a fresh disposition, so an agent can go post one. When the underlying thread object carries no usable `id`, `summarizeDispositionEvidenceForGate` (`src/scripts/protocol-helpers.mts`, around the `missingThreads = (threads ?? [])...` block) falls back to a positional label: `` id: String(thread.id ?? '') || `thread-${index + 1}` ``.\n\nOn `kurone-kito/idd-skill#2688` this fallback fired for two entries (`thread-8`, `thread-10`), with no other identifying information. Recovering which real `PRRT_...` GraphQL thread each one was required a second, separate `gh api graphql` query fetching every thread's first comment and timestamp, then counting position in creation order to line the two up — expensive and error-prone busywork for something the tool should just report directly.\n\nRoot cause (verified against source): `src/scripts/provider-adapter-github.mts`'s `listChangeRequestReviewThreadsWithComments` (around line 1892) — the exact method `pre-merge-readiness.mjs` calls (around line 572) — maps `fetchReviewThreadsGeneric`'s nodes to `{isResolved, comments}`, dropping `node.id` from the returned shape. The shared fetcher's own docstring (around lines 375-386) confirms it \"always requests the thread `id` internally,\" and the GraphQL query string itself (around line 401) does fetch `id` — so the data is available, just discarded by this one port method before it ever reaches `summarizeDispositionEvidenceForGate`. The sibling method `listChangeRequestReviewThreadCommentIds` (around line 1948) keeps the same field as `threadId: node.id`, showing the capability already exists elsewhere in the same file; this looks like an asymmetric oversight from the #2267 port-method split rather than an intentional omission (no privacy/size rationale is stated anywhere near the dropped field).\n\n## Proposed change\n\n- In `src/scripts/provider-adapter-github.mts`, add `id: string` (the thread's real GraphQL node ID) to the return shape of `listChangeRequestReviewThreadsWithComments` (and its underlying `ProviderReviewThreadWithComments`-shaped type), populated from `node.id`, mirroring how `listChangeRequestReviewThreadCommentIds` already keeps it as `threadId`.\n- In `src/scripts/protocol-helpers.mts`, thread that `id` through into each `missingThreads` entry, so `` id: String(thread.id ?? '') || `thread-${index + 1}` `` resolves to the real thread ID whenever the caller supplies one, and the positional fallback only fires when a thread object genuinely has none.\n- Regenerate `scripts/provider-adapter-github.mjs` / `scripts/protocol-helpers.mjs` via `pnpm run build`.\n- Extend the relevant unit test(s) covering `missingThreads` construction to assert a real thread ID is used when the input thread object carries one, and that the positional fallback still applies when it does not.\n\n## Acceptance criteria\n\n- `pre-merge-readiness.mjs`'s `dispositionEvidence.missingThreads` entries report the real GraphQL thread `id` (for example `PRRT_...`) for every thread the underlying fetch actually retrieved one for, instead of a positional `thread-N` label.\n- The positional fallback remains correct and covered by a test for the case where no real ID is available.\n- No other field or behavior of `missingThreads` / `dispositionEvidence` changes.\n- `node --test tests/*.test.mts` passes, including the extended fixture.\n- `pnpm run lint:minimum` passes.\n\n## Candidate files\n\n- `src/scripts/provider-adapter-github.mts`\n- `src/scripts/protocol-helpers.mts`\n- `tests/protocol-helpers.test.mts` (or wherever the existing `missingThreads` fixtures live)\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "a42c616cdc0c5a5c2fde44bc46809bbb6f6d05f99cbedca8f325b5ab3f1c519b",
+  "fetchedAt": "2026-09-24T04:42:47.220Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

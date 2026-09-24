@@ -1,0 +1,27 @@
+{
+  "id": "gap-2767-09",
+  "category": "synthetic",
+  "note": "#2767 item 9 (comment-looking text inside a Markdown link title masked as a real HTML comment): findHtmlCommentRanges's ignored-opener-ranges input only ever receives real code ranges (fenced/indented/inline); a link title is ordinary prose, never a code range, so the \"<!--\" opener inside the link title is not ignored. It is also unterminated in this body (no \"-->\" anywhere), so it masks from that point through end-of-body, swallowing the genuine, later \"Maintainer decision (...)\" marker entirely -- this also fails Check 7 verifiability and A4's autonomous_completion for an issue that actually has a valid resolved decision. The gap is present today (MATCH).",
+  "title": "Adopt option A background",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nSee [draft notes](https://example.com/doc \"<!-- still drafting\") for background.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "2fc2b4ac9c18d013116e5b1c5f1a84fd1a757f53b28397de89ad5931a3feed1a",
+  "fetchedAt": "2026-09-24T07:22:41.390Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

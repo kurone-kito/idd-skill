@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-11",
+  "category": "synthetic",
+  "note": "#2767 item 11 (a Setext heading nested inside a list item is read as a sibling section boundary): suitability-triage.mts's own NEXT_HEADING_PATTERN carries this exact accepted limitation in its own code comment (a \"-\" underline immediately following a list-item line is treated as a Setext boundary even where CommonMark itself would keep it inside the list). A bare \"---\" right after the second placeholder bullet (no blank line) is misread as that bullet's own Setext underline, truncating the Acceptance Criteria section before the real, substantive third bullet is ever scanned -- confirmed via a clean pass/fail delta against an otherwise-identical control using a blank line instead of the bare \"---\". The gap is present today, exactly as the code's own comment documents (MATCH).",
+  "title": "Adopt src/foo.mts change (Setext-in-list)",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nMaintainer decision (#100, 2026-09-01): adopt the change described below.\n\n## Acceptance Criteria\n- Placeholder first bullet, no real substance\n- Second bullet also no real substance\n---\n- Real requirement naming `src/foo.mts` as the concrete artifact\n",
+  "bodySha256": "78b2886025043dc4124bee75e3b669d3ffa29109f402ab6d73b3f47eb45675bf",
+  "fetchedAt": "2026-09-24T07:22:41.392Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

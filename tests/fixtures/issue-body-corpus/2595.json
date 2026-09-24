@@ -1,0 +1,30 @@
+{
+  "id": "2595",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: resolve-review-thread has no claimless mode for operator-authorized unclaimed PRs",
+  "labels": [
+    "enhancement",
+    "status:needs-decision"
+  ],
+  "body": "# needs-decision: resolve-review-thread has no claimless mode for operator-authorized unclaimed PRs\n\n## Background\n\nRefs #2586. `resolve-review-thread.mjs --help` documents `--claim-issue\n<number>`/`--claim-id <claim-id>` as both required with `--apply` — a\ndeliberate safety property for the normal autonomous-claim case\n(re-validating the active claim before the reply-and-resolve mutation).\n\nNot every PR in an adopter repository's actual workflow is created\nthrough the Discover→Claim ceremony. A small, directly\noperator-authorized maintenance/policy PR (observed:\n`kurone-kito/setup.kito` PR #103, a one-line `.github/idd/config.json`\nchange explicitly requested and approved by the repository owner in an\ninteractive session, with no corresponding IDD issue or claim) has no\nclaim-issue/claim-id to supply. When an advisory bot posted a\nfalse-positive review comment on that PR, `resolve-review-thread.mjs\n--apply` could not be used at all, and the fallback was a hand-rolled\nREST+GraphQL reply-and-resolve sequence that bypasses the helper's\nstamped reply-identity convention (the `**Rejected** — {reason}`\nprefix and the `<!-- {markerPrefix}-review-reply -->` stamp).\n\nTwo sibling claim-aware helpers already solve an analogous no-claim\ncase differently, giving precedent for either direction here.\n`pre-merge-readiness.mjs` added `--claimless` for a no-issue PR\n(#2017, decided 2026-08-17: gated the same way\n`external-check-waiver.mjs`'s existing `--claimless` is — an explicit\nflag, rejects combination with `--claim-issue`/`--claim-id`, scoped to\nPRs with no `closingIssuesReferences`). `resolve-review-thread.mjs`\nnever received the same treatment.\n\n## Proposed change\n\nNo single proposed change: this is a maintainer decision among the\noptions below, the same pattern #2017/#2091/#2181/#2377 used for this\nclass of problem.\n\n### Options for a maintainer to choose among\n\n1. **Add an explicit `--claimless` mode**, mirroring #2017's\n   `pre-merge-readiness` precedent: reject combining it with\n   `--claim-issue`/`--claim-id`, and still enforce the\n   `**Rejected**`/`**Accepted**` reply-prefix and\n   `<!-- {markerPrefix}-review-reply -->` stamp conventions without\n   requiring a claim to re-validate against.\n2. **Document the fallback explicitly instead of changing the helper.**\n   State, at the point `resolve-review-thread.mjs --help` (or its\n   missing-flag error message) reports the requirement, that a\n   claim-less, directly-authorized PR is expected to use the manual\n   REST+GraphQL fallback — not only in a separate instructions file, as\n   today.\n3. **Something else the maintainer prefers.**\n\n## Acceptance criteria\n\n- A maintainer states which option above to take (or a different\n  resolution) in a comment on this issue.\n- Close this issue once that decision is recorded. The chosen option\n  becomes a follow-up `ready` issue scoped to the exact flag/docs\n  change, mirroring how #2017/#2091/#2181/#2377 were resolved — this\n  issue itself stays decision-only.\n\n## Candidate files\n\n- `src/scripts/resolve-review-thread.mts`\n- `.github/instructions/idd-review-triage.instructions.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented. This is a design-symmetry\ntrade-off with a settled precedent (#2017); the field evidence above is\nalready gathered and does not need re-deriving._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "c0d6bafb370edfcfae9394b9f43d2a8488d14d7c6cbf9c2e753edea9c3d484ee",
+  "fetchedAt": "2026-09-24T04:46:50.372Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "autonomous_completion"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "fail"
+    }
+  }
+}

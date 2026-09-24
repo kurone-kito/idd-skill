@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-08",
+  "category": "synthetic",
+  "note": "#2767 item 8 (an ellipsis's final period trips the same terminal-punctuation short-circuit as a standalone sentence-ending period): isFollowedByFramingVerb's sentence-boundary scan uses the same uniform SENTENCE_TERMINATOR_PATTERN for an ellipsis's last dot as for an ordinary period -- the \"...\" right after the real closing quote is read as ending the current sentence, so the scan window closes before it ever reaches \"Alice reports\" two words later. The genuine inverted-attribution citation is missed and the decision is wrongly accepted as live; the gap is present today, via the unified (not period-specific) mechanism (MATCH).",
+  "title": "Adopt option A after pause",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\n\"Maintainer decision (#100, 2026-09-01): adopt option A,\" ... Alice reports.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "9b6a92529c19075130ef6c08fd0c251022f7623f3e0f99aef3faaf5dbdbf9b73",
+  "fetchedAt": "2026-09-24T07:22:41.389Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}
