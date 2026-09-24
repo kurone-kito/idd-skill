@@ -568,11 +568,16 @@ alongside every later pre-mutation check:
 
 A matching `{claim-id}` re-acquires as a read-only check; a different
 `{claim-id}` is always a collision, regardless of lock age. Run
-`resume-claim-routing.mjs --issue <n> --fresh-claim-gate`: `already-claimed`
-for a different active claim means the claim is lost (stop); if the
-active claim's `{claim-id}` is the current claim, retry the local lock
-with `--takeover`; `claimable`/`stale-reclaimable` also retries with
-`--takeover` after the claim transition completes. If the helper is
+`resume-claim-routing.mjs --issue <n> --fresh-claim-gate`: `--takeover`
+is authorized only when the verdict is `already-claimed`, its
+`winning_claim_id` matches this session's verified `{claim-id}`, and the
+output's top-level `reason` is not a `released-claim-*` reason — the
+lock merely drifted.
+Every other result — a `released-claim-*` reason, `already-claimed` for
+another id, or `claimable`/`stale-reclaimable` (unexpected from inside
+the worktree since #3141, but handled the same) — means the claim was
+lost: stop, report, and post no new claim from this check; re-entry is
+only through a fresh Resume or Discover pass. If the helper is
 unavailable or malformed, fall back to this file's Claim-state parsing
 rules below for the same verdict. No release step — `git worktree
 remove` at F4 deletes the lock with the worktree, so a crashed
