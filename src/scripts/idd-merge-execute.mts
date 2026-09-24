@@ -116,6 +116,13 @@ interface IddMergeExecuteArgs {
   claimIdProvided: boolean;
   /** #3252: true when `--claimless` was given (exempts the claim-id gate). */
   claimless: boolean;
+  /**
+   * #3252: true when `--now` was given a value. Used only by the
+   * `--now`/`--apply` mutual-exclusion gate in `runMergeExecute` below;
+   * the value itself is forwarded to the collector via `passthrough`
+   * unchanged.
+   */
+  nowProvided: boolean;
 }
 
 /**
@@ -496,6 +503,16 @@ export function runMergeExecute(
       'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
     );
   }
+  // #3252: --now overrides every merge-gate clock (claim staleness,
+  // waiver expiry, advisory-convergence deadline, terminal-unavailability
+  // window, secondary-bot quiet window) -- safe for read-only dry-run
+  // evaluation, unsafe under --apply, where the caller could pick a clock
+  // the actual merge gate would never see live.
+  if (args.nowProvided && args.apply) {
+    throw new Error(
+      '--now and --apply are mutually exclusive: --now overrides every merge-gate clock, which is unsafe under --apply; pass --now only for a dry-run',
+    );
+  }
 
   const report = deps.collect(args.passthrough);
   const prHeadSha = String(report.prHeadSha ?? '');
@@ -833,6 +850,7 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
     repoRef: null,
     claimIdProvided: false,
     claimless: false,
+    nowProvided: false,
   };
   // Captured locally so `repoRef` is set only when BOTH are present; these
   // are ALSO forwarded to the collector via passthrough (we do not stop
@@ -911,6 +929,26 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
     if (token === '--claimless') {
       parsed.claimless = true;
       parsed.passthrough.push(token);
+      continue;
+    }
+    // #3252: same detect-without-changing purpose as `--claim-id` above,
+    // for the `--now`/`--apply` mutual-exclusion gate.
+    if (token === '--now' || token.startsWith('--now=')) {
+      let value: string | undefined;
+      if (token.includes('=')) {
+        value = token.slice(token.indexOf('=') + 1);
+        parsed.passthrough.push(token);
+      } else {
+        value = argv[index + 1];
+        if (value !== undefined && !value.startsWith('--')) {
+          parsed.passthrough.push(token, value);
+          index += 1;
+        } else {
+          parsed.passthrough.push(token);
+          value = undefined;
+        }
+      }
+      parsed.nowProvided = value !== undefined && value.trim() !== '';
       continue;
     }
     // Every other flag (and its value, if it takes one) is forwarded
