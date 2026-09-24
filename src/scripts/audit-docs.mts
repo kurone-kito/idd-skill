@@ -56,7 +56,10 @@ import {
 } from './helper-flag-drift.mts';
 import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mts';
 import type { MarkdownLinkAuditConfig } from './markdown-link-audit.mts';
-import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mts';
+import {
+  collectMarkdownLinkAuditViolations,
+  resolveDistributedFileSet,
+} from './markdown-link-audit.mts';
 
 interface ReadmePair {
   id: string;
@@ -293,7 +296,10 @@ function main(): void {
   checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
   checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
   checkOkfBundles(manifest.okfBundles ?? null);
-  checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
+  checkMarkdownLinkAudit(
+    manifest.markdownLinkAudit ?? null,
+    manifest.generatedBlocks ?? [],
+  );
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
@@ -853,13 +859,26 @@ function checkOkfBundles(bundles: OkfBundleConfig[] | null) {
 // isolated from that file's other concurrent edits) so it can be
 // unit-tested without I/O; the audit pipeline supplies the live glob and
 // reader.
-function checkMarkdownLinkAudit(config: MarkdownLinkAuditConfig | null) {
+function checkMarkdownLinkAudit(
+  config: MarkdownLinkAuditConfig | null,
+  generatedBlocks: GeneratedBlock[],
+) {
+  const distributedFileSet = resolveDistributedFileSet(config, generatedBlocks);
+  if (distributedFileSet && 'error' in distributedFileSet) {
+    const id =
+      config && typeof config.id === 'string' && config.id
+        ? config.id
+        : 'markdown-link-audit';
+    errors.push(`${id}: ${distributedFileSet.error}`);
+    return;
+  }
   errors.push(
     ...collectMarkdownLinkAuditViolations(
       config,
       repoFiles,
       (pattern) => globFiles(pattern, repoFiles),
       readText,
+      distributedFileSet ? distributedFileSet.paths : null,
     ),
   );
 }
@@ -1109,7 +1128,7 @@ function containsManifestListMismatch(currentErrors: string[]): boolean {
 
 function containsLinkAuditFailure(currentErrors: string[]): boolean {
   return currentErrors.some((error) =>
-    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context/.test(
+    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context|is not in the distributed core file set/.test(
       error,
     ),
   );
