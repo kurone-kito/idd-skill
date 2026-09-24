@@ -64,6 +64,48 @@ function withGhHostEnv(
   }
 }
 
+/**
+ * Async sibling of {@link withGhHostEnv} for an `await`ing test body
+ * (`ghTextAsync`) -- same save/clear/restore contract for both `GH_HOST`
+ * and `GITHUB_SERVER_URL`. Without this, a table-driven or `ghTextAsync`
+ * test that only ever assigns `process.env.GITHUB_SERVER_URL` directly
+ * leaves an inherited `GH_HOST` in place, which makes
+ * `resolveGhApiHostname` intentionally return no override (`gh` already
+ * honors `GH_HOST` itself) -- silently testing nothing on a machine or
+ * runner where `GH_HOST` happens to be set (Copilot review, #3336).
+ */
+async function withGhHostEnvAsync(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => Promise<void>,
+): Promise<void> {
+  const originalGhHost = process.env.GH_HOST;
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST === undefined) {
+    delete process.env.GH_HOST;
+  } else {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL === undefined) {
+    delete process.env.GITHUB_SERVER_URL;
+  } else {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    await run();
+  } finally {
+    if (originalGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = originalGhHost;
+    }
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+  }
+}
+
 // Stub `gh` on PATH (the discover-roadmap-graph.test.mts / post-idd-marker.test.mts
 // pattern) so every scenario below exercises the real execFileSync + child-process
 // contract without network access. Returns a cleanup callback that restores PATH;
@@ -804,7 +846,6 @@ process.stdout.write('{}');
 test('every exported gh api wrapper resolves the GHES host (#3336)', async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const argsFile = join(tempRoot, 'args.json');
-  const originalServerUrl = process.env.GITHUB_SERVER_URL;
   const wrappers: { name: string; stdout: string; invoke: () => unknown }[] = [
     {
       name: 'ghText',
@@ -838,40 +879,40 @@ test('every exported gh api wrapper resolves the GHES host (#3336)', async () =>
     },
   ];
   try {
-    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
-    for (const wrapper of wrappers) {
-      const restore = stubGh(`
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        for (const wrapper of wrappers) {
+          const restore = stubGh(`
 const fs = require('node:fs');
 fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
 ${wrapper.stdout}
 `);
-      try {
-        await wrapper.invoke();
-        const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
-        // Exact-index adjacency, not a substring/membership check on the
-        // captured argv (CodeQL js/incomplete-url-substring-sanitization
-        // false positive on `argv.includes('ghes.example.com')`, #3336
-        // review): confirms --hostname is immediately followed by exactly
-        // the resolved host token, not merely that both strings appear
-        // somewhere in argv independently.
-        const hostnameIndex = argv.indexOf('--hostname');
-        assert.ok(
-          hostnameIndex !== -1 &&
-            argv[hostnameIndex + 1] === 'ghes.example.com',
-          `${wrapper.name} did not include a resolved --hostname: ${JSON.stringify(
-            argv,
-          )}`,
-        );
-      } finally {
-        restore();
-      }
-    }
+          try {
+            await wrapper.invoke();
+            const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+            // Exact-index adjacency, not a substring/membership check on
+            // the captured argv (CodeQL js/incomplete-url-substring-
+            // sanitization false positive on
+            // `argv.includes('ghes.example.com')`, #3336 review): confirms
+            // --hostname is immediately followed by exactly the resolved
+            // host token, not merely that both strings appear somewhere in
+            // argv independently.
+            const hostnameIndex = argv.indexOf('--hostname');
+            assert.ok(
+              hostnameIndex !== -1 &&
+                argv[hostnameIndex + 1] === 'ghes.example.com',
+              `${wrapper.name} did not include a resolved --hostname: ${JSON.stringify(
+                argv,
+              )}`,
+            );
+          } finally {
+            restore();
+          }
+        }
+      },
+    );
   } finally {
-    if (originalServerUrl === undefined) {
-      delete process.env.GITHUB_SERVER_URL;
-    } else {
-      process.env.GITHUB_SERVER_URL = originalServerUrl;
-    }
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
@@ -1039,10 +1080,13 @@ const fs = require('node:fs');
 fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
 process.stdout.write('{}');
 `);
-  const originalServerUrl = process.env.GITHUB_SERVER_URL;
   try {
-    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
-    await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+      },
+    );
     assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
       'api',
       '--hostname',
@@ -1051,8 +1095,12 @@ process.stdout.write('{}');
       '--jq',
       '.title',
     ]);
-    process.env.GITHUB_SERVER_URL = 'https://github.com';
-    await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://github.com' },
+      async () => {
+        await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+      },
+    );
     assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
       'api',
       'repos/o/r/issues/1',
@@ -1060,11 +1108,6 @@ process.stdout.write('{}');
       '.title',
     ]);
   } finally {
-    if (originalServerUrl === undefined) {
-      delete process.env.GITHUB_SERVER_URL;
-    } else {
-      process.env.GITHUB_SERVER_URL = originalServerUrl;
-    }
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1078,17 +1121,20 @@ const fs = require('node:fs');
 fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
 process.stdout.write('{}');
 `);
-  const originalServerUrl = process.env.GITHUB_SERVER_URL;
   try {
-    process.env.GITHUB_SERVER_URL = 'https://ghes.example.com';
-    await ghTextAsync([
-      'api',
-      'graphql',
-      '--hostname',
-      'ghes.example.com',
-      '-f',
-      'query=query { viewer { login } }',
-    ]);
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        await ghTextAsync([
+          'api',
+          'graphql',
+          '--hostname',
+          'ghes.example.com',
+          '-f',
+          'query=query { viewer { login } }',
+        ]);
+      },
+    );
     assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
       'api',
       'graphql',
@@ -1098,11 +1144,6 @@ process.stdout.write('{}');
       'query=query { viewer { login } }',
     ]);
   } finally {
-    if (originalServerUrl === undefined) {
-      delete process.env.GITHUB_SERVER_URL;
-    } else {
-      process.env.GITHUB_SERVER_URL = originalServerUrl;
-    }
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
