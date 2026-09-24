@@ -118,9 +118,12 @@ tests/issue-body-corpus.test.mts.
   --refresh              re-fetch every existing merged/negative entry
                         (skips category: synthetic, which has no live
                         source) and rewrite body/title/labels/fetchedAt
-                        only for entries whose recomputed bodySha256
-                        changed -- "expected" is left untouched, so a
-                        changed entry needs --update-expected before
+                        for any entry whose recomputed bodySha256, title,
+                        or labels changed -- "expected" is left
+                        untouched in every case (including a title-only
+                        change, even though title feeds
+                        computeExpectedVerdict), so a changed entry
+                        needs --update-expected before
                         tests/issue-body-corpus.test.mts passes again.
                         Prints the changed ids.
   --update-expected      recompute "expected" for every entry (including
@@ -227,6 +230,15 @@ function writeEntry(entry) {
   }
   writeFileSync(entryPath(entry.id), serializeJson(entry));
 }
+// #3368 Copilot review round 3: `labels`/`comments` are fetched as a
+// single un-paginated page each (no cursor follow-up) -- a known,
+// fails-safe limitation, not silent bad data: an issue with its
+// configured selection-rule label or trusted claimed-by marker beyond
+// this page is wrongly REFUSED, never wrongly ADDED. 100 comfortably
+// covers this repository's own real corpus entries (the largest observed
+// during authoring had well under 100 of either); a repository with a
+// more heavily-discussed or more heavily-labeled issue history may need
+// real cursor pagination here as a follow-up.
 const ISSUE_QUERY = `
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -236,7 +248,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       body
       state
       stateReason
-      labels(first: 30) { nodes { name } }
+      labels(first: 100) { nodes { name } }
       closedByPullRequestsReferences(first: 10) { nodes { state } }
       comments(first: 100) { nodes { author { login } body createdAt } }
     }
@@ -395,7 +407,20 @@ function runAdd(owner, repo, ids, category, note) {
     if (!CANONICAL_POSITIVE_INTEGER_PATTERN.test(trimmed)) {
       throw new Error(`--add: not a positive integer issue number: ${rawId}`);
     }
-    numbers.push(Number.parseInt(trimmed, 10));
+    const parsed = Number.parseInt(trimmed, 10);
+    // #3368 Copilot review round 3: the whole-token regex above rejects a
+    // syntax typo but still accepts an arbitrarily long digit string;
+    // Number.parseInt silently rounds a value past Number.MAX_SAFE_INTEGER
+    // before it reaches the GraphQL `Int` variable, so a typo like
+    // `--add 9007199254740993` could address a different issue number (or
+    // fail later with an opaque GraphQL error) instead of being rejected
+    // up front.
+    if (!Number.isSafeInteger(parsed)) {
+      throw new Error(
+        `--add: issue number exceeds the safe integer range: ${rawId}`,
+      );
+    }
+    numbers.push(parsed);
   }
   const isTrustedLogin = buildTrustedLoginChecker();
   const labelsPolicy = resolveLabelsPolicy();
