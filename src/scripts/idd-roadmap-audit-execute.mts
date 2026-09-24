@@ -26,7 +26,6 @@ import {
   buildSubIssueLoader,
   enumerateRoadmapGraph,
   isClaimStaleByAge,
-  parseClaimStaleAgeMs,
   type RoadmapCycleDiagnostic,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
@@ -39,6 +38,7 @@ import type {
 import {
   DEFAULT_STALE_AGE_MS,
   normalizeApplyNow,
+  readClaimStaleAgeMs,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
   summarizeClaimValidationForWriteGate,
@@ -1684,14 +1684,15 @@ function createProductionDeps(
     viewerLogin,
     rawConfig: rawConfig as { trustedMarkerActors?: unknown } | null,
   });
-  // Honor the configured `claimTiming.staleAge` (docs/policy-constants.md);
-  // reuse discover-roadmap-graph's ISO-duration parser, falling back to the
-  // distributed 24 h default on an absent/invalid value.
-  const staleAgeMs =
-    parseClaimStaleAgeMs(
-      (rawConfig as { claimTiming?: { staleAge?: unknown } } | null)
-        ?.claimTiming?.staleAge,
-    ) ?? DEFAULT_STALE_AGE_MS;
+  // Honor the configured `claimTiming.staleAge` (docs/policy-constants.md).
+  // Copilot review, PR #3370: this previously used
+  // discover-roadmap-graph's parseClaimStaleAgeMs on the RAW value, which
+  // trims whitespace before parsing -- unlike normalizePolicyConfig's own
+  // schema check (no trim), so a value like " PT18H " was accepted here
+  // but fell back to the 24h default in every other write gate.
+  // readClaimStaleAgeMs applies the same normalized-then-parsed path as
+  // those other gates, so this can no longer disagree with them.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
   const loadIssue = buildIssueLoader(port);
   const loadSubIssues = buildSubIssueLoader(port);

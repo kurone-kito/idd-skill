@@ -24,10 +24,7 @@
 // high-confidence signal.
 
 import { parseCliArgs } from './cli-args.mts';
-import {
-  isClaimStaleByAge,
-  parseClaimStaleAgeMs,
-} from './discover-roadmap-graph.mts';
+import { isClaimStaleByAge } from './discover-roadmap-graph.mts';
 import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
@@ -40,6 +37,7 @@ import type {
 import {
   DEFAULT_STALE_AGE_MS,
   normalizeApplyNow,
+  readClaimStaleAgeMs,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
   summarizeClaimValidationForWriteGate,
@@ -524,11 +522,14 @@ function createProductionDeps(
     viewerLogin,
     rawConfig: rawConfig as { trustedMarkerActors?: unknown } | null,
   });
-  const staleAgeMs =
-    parseClaimStaleAgeMs(
-      (rawConfig as { claimTiming?: { staleAge?: unknown } } | null)
-        ?.claimTiming?.staleAge,
-    ) ?? DEFAULT_STALE_AGE_MS;
+  // Copilot review, PR #3370: this previously used
+  // discover-roadmap-graph's parseClaimStaleAgeMs on the RAW value, which
+  // trims whitespace before parsing -- unlike normalizePolicyConfig's own
+  // schema check (no trim), so a value like " PT18H " was accepted here
+  // but fell back to the 24h default in every other write gate.
+  // readClaimStaleAgeMs applies the same normalized-then-parsed path as
+  // those other gates, so this can no longer disagree with them.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const repoRef = `${owner}/${repo}`;
 
   return {
