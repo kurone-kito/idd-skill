@@ -206,7 +206,8 @@ Treat `stale` and `non-stale` in this section using the
   previously recorded and verified `{claim-id}`, continue with that same
   claim and do not post a new claim.
 - Re-validate that roadmap claim before every roadmap comment,
-  follow-up issue creation, body edit, label change, or close action.
+  follow-up issue creation or sub-issue link, body edit, label change,
+  or close action.
 - If the roadmap remains open and no PR branch will continue from the
   audit, release the roadmap-audit claim before returning to A2,
   stopping, or invoking A0-O (trigger (d)).
@@ -236,7 +237,10 @@ Apply one outcome:
   issue instead.
   1. First among the linking steps, once the duplicate/reuse check
      above has decided create vs. reuse, link the follow-up as a
-     native GitHub sub-issue of the roadmap being mutated. Create a
+     native GitHub sub-issue of the roadmap being mutated. Re-validate
+     the roadmap-audit claim immediately before this link call — the
+     duplicate check, and any issue-authoring creation step above, may
+     have taken long enough for the claim to have been lost. Create a
      new follow-up only through the repository's issue-authoring
      rules — never a bare `gh issue create` outside that flow
      (`idd-pr-submit.instructions.md`'s D3 direct-creation rule). When
