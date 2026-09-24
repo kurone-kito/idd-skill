@@ -71,6 +71,15 @@ import { readJson } from './test-utils.mts';
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
 
+// kurone-kito/idd-skill#3265: a recognized, clean `ccr-overview-v2` body --
+// mirrors `tests/advisory-convergence.test.mts`'s own `MINIMAL_V2_REVIEW_BODY`
+// (#3258), redeclared here since that file's constant is not exported. Given
+// to an existing `findLastCopilotReviewCommit` fixture that only cares about
+// `commitId` selection and would otherwise regress from an omitted body now
+// classifying `unrecognized`.
+const MINIMAL_V2_REVIEW_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n';
+
 for (const fixtureName of [
   'clean',
   'ack-only-current',
@@ -2188,17 +2197,22 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
     0,
   );
 
+  // kurone-kito/idd-skill#3265: both reviews carry a recognized body so
+  // 'new' still wins on `submittedAt` recency, unaffected by the
+  // recognized-shape filter this fixture does not otherwise exercise.
   assert.equal(
     findLastCopilotReviewCommit([
       {
         author: { login: 'copilot-pull-request-reviewer' },
         submittedAt: '2026-05-12T00:00:00Z',
         commitId: 'old',
+        body: MINIMAL_V2_REVIEW_BODY,
       },
       {
         author: { login: 'copilot-pull-request-reviewer' },
         submittedAt: '2026-05-12T00:00:00.100Z',
         commitId: 'new',
+        body: MINIMAL_V2_REVIEW_BODY,
       },
     ]),
     'new',
@@ -2265,10 +2279,14 @@ test('findLastCopilotReviewCommit: skips a Copilot error review when it is the O
 test("findLastCopilotReviewCommit: an error review does not mask an earlier genuine review's commit_id (#3015)", () => {
   assert.equal(
     findLastCopilotReviewCommit([
+      // kurone-kito/idd-skill#3265: carries a recognized body so it still
+      // counts as the earlier genuine review under the recognized-shape
+      // filter.
       {
         author: { login: 'copilot-pull-request-reviewer' },
         submittedAt: '2026-05-12T00:00:00Z',
         commitId: 'old-genuine',
+        body: MINIMAL_V2_REVIEW_BODY,
       },
       {
         author: { login: 'copilot-pull-request-reviewer' },

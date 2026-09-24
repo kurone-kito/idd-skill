@@ -31,6 +31,7 @@ import {
   buildAdvisoryWaitSummary,
   classifyCiChecks,
   computeSecondaryRequestedForHead,
+  findLastCopilotReviewCommit,
   isCopilotReviewerLogin,
   operationalMarkerPrefix,
   resolveCopilotPending,
@@ -45,6 +46,100 @@ const ciFailed = readJson('fixtures/ci/failed.json');
 const ciMixed = readJson('fixtures/ci/mixed.json');
 const ciSkippedNeutral = readJson('fixtures/ci/skipped-neutral.json');
 const advisoryWaitSchema = loadJson('schemas/advisory-wait-state.schema.json');
+
+// kurone-kito/idd-skill#3265: a recognized, clean `ccr-overview-v2` body --
+// mirrors `tests/advisory-convergence.test.mts`'s own `MINIMAL_V2_REVIEW_BODY`
+// (#3258), redeclared here since that file's constant is not exported. Used
+// wherever an existing fixture only cares about `lastCopilotCommit` matching
+// a given `commitId` and would otherwise regress from an omitted body now
+// classifying `unrecognized`.
+const MINIMAL_V2_REVIEW_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n';
+
+// PR #3045 review 5220457813 (trimmed: the long file-summary table and the
+// trailing promotional footer link are dropped -- neither affects shape
+// classification). Recognized via the `<summary>Pull request overview</summary>`
+// anchor (`overview-legacy`); its own "Suppressed comments (1)" finding
+// quotes the #3015 error sentence ("encountered an error") amid ordinary
+// review prose inside a fenced code block -- exactly the prose-quoting case
+// `isCopilotErrorReviewBody`'s whole-body-equality match (and this
+// classifier's own code-region stripping) must not misclassify as `error`.
+const PR_3045_REVIEW_5220457813_BODY = [
+  '### \u{1F7E1} Changes recommended',
+  '',
+  'Add coverage verifying that non-empty REST review bodies are preserved through normalization.',
+  '',
+  '*Get a fresh assessment by requesting another Copilot review.*',
+  '',
+  '<details>',
+  '<summary>Pull request overview</summary>',
+  '',
+  'This PR prevents Copilot error reviews from being treated as valid empty reviews in advisory convergence and pre-merge readiness.',
+  '',
+  '**Changes:**',
+  '- Adds strict Copilot error-review detection and filtering.',
+  '- Propagates review bodies through REST normalization.',
+  '- Adds regression tests and updates generated artifacts.',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (1)',
+  '',
+  '**tests/pre-merge-readiness-collection-smoke.test.mts:95**',
+  "* This only exercises the new `body: review.body ?? ''` mapping with an omitted body and an expected empty string, so the test would still pass if `normalizeReview` accidentally dropped a non-empty REST review body. Please add a fixture containing the exact Copilot error text and assert that it is preserved; otherwise the real pre-merge REST path could regress to counting the error review as an empty review without this test catching it.",
+  '```',
+  '      // #3015: forwarded so `findLastCopilotReviewCommit`',
+  '      // (protocol-helpers.mts, reached via `buildAdvisoryWaitSummary`) can',
+  '      // exclude a Copilot "encountered an error" review -- empty here since',
+  '      // the input fixture carries no `body`.',
+  "      body: '',",
+  '```',
+  '',
+  '- **Files reviewed:** 10/10 changed files',
+  '- **Comments generated:** 1',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
+
+// PR #3045 review 5220535877 (trimmed: the trailing promotional footer link
+// is dropped). Recognized via the `<summary>Review details</summary>` anchor
+// (`overview-legacy`); also quotes the error sentence amid a doc-comment
+// excerpt, same prose-quoting shape as the review above.
+const PR_3045_REVIEW_5220535877_BODY = [
+  '### \u{1F7E2} Approval recommended',
+  '',
+  'Only non-blocking documentation nits remain; no blocking correctness or safety issues were identified.',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (2)',
+  '',
+  '**src/scripts/protocol-helpers.mts:122**',
+  '* Adding `body` here makes the existing rationale near `buildSecondaryQuietWindowStatus` stale: it still says `ReviewLike` has no `body` and that review objects cannot carry marker text. Please update that comment (and regenerate the `.mjs` mirror) so it no longer contradicts this new field.',
+  '```',
+  '  body?: string | null;',
+  '```',
+  '**src/scripts/protocol-helpers.mts:122**',
+  '* Adding `body` here makes the existing explanation near `computeSecondaryAdvisoryReviewSettlement` stale: it still says `ReviewLike` has no body and that review objects cannot carry marker text. The classifier may intentionally inspect only top-level comments, but that is now a policy choice rather than a type limitation; update that comment so it does not contradict the new model.',
+  '```',
+  "  /** #3015: the review's own top-level body text -- both REST",
+  '   * (`GET /pulls/{n}/reviews`) and GraphQL already return this field under',
+  '   * the same `body` name, so no snake_case alias is needed here unlike',
+  '   * `submitted_at`/`commit_id` above. Consumed by',
+  '   * {@link isCopilotErrorReviewBody} to exclude a Copilot',
+  '   * "encountered an error" review from `findLastCopilotReviewCommit`\'s',
+  '   * latest-review selection. */',
+  '  body?: string | null;',
+  '```',
+  '',
+  '- **Files reviewed:** 10/10 changed files',
+  '- **Comments generated:** 0 new',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
 
 test('classifies CI check states for advisory wait decisions', () => {
   assert.equal(classifyCiChecks(ciSuccess).status, 'success');
@@ -963,10 +1058,14 @@ test('advisory wait summary resolves coverage against a configured primary bot',
         commit_id: headSha,
       },
       // A Copilot review must be ignored when the primary bot is CodeRabbit.
+      // kurone-kito/idd-skill#3265: carries a recognized body so it still
+      // counts once the DEFAULT bot path below applies the recognized-shape
+      // filter to it.
       {
         user: { login: 'copilot-pull-request-reviewer[bot]' },
         submitted_at: '2026-05-11T17:02:00Z',
         commit_id: 'c'.repeat(40),
+        body: MINIMAL_V2_REVIEW_BODY,
       },
     ],
     requestedReviewers: [{ login: 'coderabbitai[bot]' }],
@@ -1078,10 +1177,14 @@ test('buildAdvisoryWaitSummary: empty REST requestedReviewers plus timeline cove
     {
       prHeadSha: headSha,
       reviews: [
+        // kurone-kito/idd-skill#3265: carries a recognized body so it still
+        // counts as covering `priorHeadSha` under the default bot's
+        // recognized-shape filter.
         {
           user: { login: 'copilot-pull-request-reviewer' },
           submitted_at: '2026-08-18T23:00:00Z',
           commit_id: priorHeadSha,
+          body: MINIMAL_V2_REVIEW_BODY,
         },
       ],
       requestedReviewers: [],
@@ -1133,6 +1236,224 @@ test('buildAdvisoryWaitSummary: empty REST requestedReviewers and no GraphQL evi
     { now: '2026-08-19T00:00:00Z' },
   );
   assert.equal(summary.copilotPending, false);
+});
+
+// --- findLastCopilotReviewCommit: recognized-shape-only coverage (#3265) --
+//
+// kurone-kito/idd-skill#3258 gave Clause 1 a shared "what shape is this
+// Copilot review body" classifier (`classifyCopilotReviewBody`,
+// copilot-review-body.mts) instead of the #3015 error-template denylist
+// alone. This closes the same gap for `findLastCopilotReviewCommit`'s own
+// `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit: for the DEFAULT
+// Copilot bot, only a RECOGNIZED body (`overview-v2` / `overview-legacy`)
+// counts as covering its `commit_id` -- an `unrecognized` body (including a
+// FUTURE Copilot error wording the old denylist would not know about) or the
+// exact #3015 error template no longer wins it. A configured non-Copilot
+// primary bot has no known body signatures, so it keeps the pre-#3265
+// denylist-only behavior unchanged.
+
+const A_DIFFERENT_ERROR_SENTENCE =
+  'Copilot was unable to review this pull request due to an internal error.';
+
+test('findLastCopilotReviewCommit: an unrecognized Copilot review body does not count as covering its commit (#3265)', () => {
+  const headSha = 'a'.repeat(40);
+
+  // No body at all -- unrecognized, and no earlier genuine review exists.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+      },
+    ]),
+    '',
+  );
+
+  // Ordinary human-style approval prose -- also unrecognized (no known
+  // shape anchor at all), not merely "not the error template".
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: 'Looks good to me, approving.',
+      },
+    ]),
+    '',
+  );
+
+  // A DIFFERENT error wording than the exact #3015 template classifies
+  // `unrecognized` (not `error`) -- and must not count either, closing the
+  // shape-drift gap the old denylist-only check left open for a future
+  // Copilot error message the denylist does not know about.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: A_DIFFERENT_ERROR_SENTENCE,
+      },
+    ]),
+    '',
+  );
+
+  // The exact #3015 error template still does not count (already true
+  // pre-#3265, kept as a regression guard on the merged behavior).
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body:
+          'Copilot encountered an error and was unable to review this ' +
+          'pull request. You can try again by re-requesting a review.',
+      },
+    ]),
+    '',
+  );
+});
+
+test("findLastCopilotReviewCommit: an unrecognized-body review does not mask an EARLIER recognized review's commit (#3265)", () => {
+  const headSha = 'a'.repeat(40);
+  const priorHeadSha = 'b'.repeat(40);
+
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: priorHeadSha,
+        body: MINIMAL_V2_REVIEW_BODY,
+      },
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:01:00Z',
+        commitId: headSha,
+        body: A_DIFFERENT_ERROR_SENTENCE,
+      },
+    ]),
+    priorHeadSha,
+  );
+});
+
+test('findLastCopilotReviewCommit: a recognized overview-v2 or overview-legacy body still counts as coverage (#3265)', () => {
+  const headSha = 'a'.repeat(40);
+
+  // Current (v2) shape.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: MINIMAL_V2_REVIEW_BODY,
+      },
+    ]),
+    headSha,
+  );
+
+  // Legacy shape.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: '## Pull request overview\n\nLooks fine, no findings.',
+      },
+    ]),
+    headSha,
+  );
+
+  // The two real PR #3045 bodies that merely QUOTE the #3015 error sentence
+  // amid ordinary review prose -- both classify `overview-legacy` (a real
+  // `<details><summary>...</summary>` anchor elsewhere in the body), not
+  // `error`, so both still count, unlike a body matching the error
+  // template exactly.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: PR_3045_REVIEW_5220457813_BODY,
+      },
+    ]),
+    headSha,
+  );
+  assert.equal(
+    findLastCopilotReviewCommit([
+      {
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-09-24T00:00:00Z',
+        commitId: headSha,
+        body: PR_3045_REVIEW_5220535877_BODY,
+      },
+    ]),
+    headSha,
+  );
+});
+
+test('findLastCopilotReviewCommit: a configured non-Copilot primary bot keeps the pre-#3265 denylist-only behavior unchanged, including for a body-less review (#3265)', () => {
+  const headSha = 'a'.repeat(40);
+
+  // Body-less review still counts for a configured non-Copilot bot -- no
+  // known body signatures exist for an arbitrary bot, so the
+  // recognized-shape requirement is scoped to the default Copilot bot only.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          submittedAt: '2026-09-24T00:00:00Z',
+          commitId: headSha,
+        },
+      ],
+      'coderabbitai[bot]',
+    ),
+    headSha,
+  );
+
+  // An unrecognized-shaped body (ordinary prose) also still counts.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          submittedAt: '2026-09-24T00:00:00Z',
+          commitId: headSha,
+          body: 'Looks good to me, approving.',
+        },
+      ],
+      'coderabbitai[bot]',
+    ),
+    headSha,
+  );
+
+  // The exact #3015 Copilot error template is unrelated bot-specific text,
+  // but the pre-#3265 denylist check runs unconditionally on the body, so a
+  // non-Copilot bot review carrying that exact text still does not count --
+  // unchanged from before #3265.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          submittedAt: '2026-09-24T00:00:00Z',
+          commitId: headSha,
+          body:
+            'Copilot encountered an error and was unable to review this ' +
+            'pull request. You can try again by re-requesting a review.',
+        },
+      ],
+      'coderabbitai[bot]',
+    ),
+    '',
+  );
 });
 
 test('primary advisory bot login resolves defaults, overrides, and fail-safe fallbacks', () => {

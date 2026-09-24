@@ -40,7 +40,10 @@ export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 // rule (it must never import back from this file).
 export * from './marker-helpers.mts';
 
-import { isCopilotErrorReviewBody } from './copilot-review-body.mts';
+import {
+  classifyCopilotReviewBody,
+  isCopilotErrorReviewBody,
+} from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
   ParsedClaimMarker,
@@ -130,9 +133,10 @@ interface ReviewLike {
    * (`GET /pulls/{n}/reviews`) and GraphQL already return this field under
    * the same `body` name, so no snake_case alias is needed here unlike
    * `submitted_at`/`commit_id` above. Consumed by
-   * {@link isCopilotErrorReviewBody} to exclude a Copilot
-   * "encountered an error" review from `findLastCopilotReviewCommit`'s
-   * latest-review selection. */
+   * {@link isCopilotErrorReviewBody} (a configured non-Copilot primary bot)
+   * and, as of #3265, by {@link classifyCopilotReviewBody} (the default
+   * Copilot bot) to decide whether `findLastCopilotReviewCommit` counts
+   * this review as covering its `commit_id`. */
   body?: string | null;
 }
 
@@ -4531,18 +4535,56 @@ export function isCopilotReviewerLogin(
 // file) so this module's own `findLastCopilotReviewCommit` below and every
 // existing external importer keep working unchanged.
 
+/**
+ * kurone-kito/idd-skill#3265: for the DEFAULT Copilot bot, coverage is now a
+ * positive-signature decision instead of the #3015 error-template denylist
+ * alone -- only a review body {@link classifyCopilotReviewBody} recognizes as
+ * `overview-v2` or `overview-legacy` counts as covering its `commit_id`. A
+ * body classified `error` (the exact #3015 template) or `unrecognized`
+ * (including any FUTURE Copilot error wording the old denylist would not
+ * know about) no longer wins the `LAST_COPILOT_COMMIT == PR_HEAD_SHA`
+ * short-circuit, closing the same class of false-empty-review gap
+ * #3015/#1880 fixed for the exact known template, this time for shape drift
+ * too. The real PR #3045 review bodies that only QUOTE the error sentence
+ * amid ordinary review prose classify `overview-legacy` (a genuine
+ * `<details><summary>...</summary>` anchor elsewhere in the body), not
+ * `error` or `unrecognized`, so those two still count -- the classifier's
+ * code-region stripping and structural anchoring (not a broad substring
+ * search) is what keeps that prose-quoting case from being misread as the
+ * error template.
+ *
+ * A CONFIGURED NON-COPILOT primary bot keeps the pre-#3265 behavior
+ * unchanged (only the exact #3015 error template is excluded; a body-less
+ * or otherwise unrecognized-shaped review still counts) -- no shape
+ * signatures are known for an arbitrary bot, so a positive-signature
+ * requirement would silently break every existing non-Copilot caller.
+ */
 export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
+  const configuredBotLogin =
+    String(primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const isDefaultCopilotBot =
+    configuredBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const latest = reviews
-    .filter(
-      (review) =>
-        isCopilotReviewerLogin(
+    .filter((review) => {
+      if (
+        !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
-        ) && !isCopilotErrorReviewBody(review.body),
-    )
+        )
+      ) {
+        return false;
+      }
+      if (!isDefaultCopilotBot) {
+        return !isCopilotErrorReviewBody(review.body);
+      }
+      const { shape } = classifyCopilotReviewBody(review.body);
+      return shape === 'overview-v2' || shape === 'overview-legacy';
+    })
     .map((review) => ({
       submittedAt: review.submitted_at ?? review.submittedAt ?? '',
       commitId: review.commit_id ?? review.commitId ?? '',
