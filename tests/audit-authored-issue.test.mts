@@ -15,6 +15,16 @@ function effortFooter(hint: string): string {
   return `_Effort: ${hint} -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: ${hint} -->`;
 }
 
+// The leading "# <title>" line and the acceptance-criteria bullet naming a
+// concrete verification command (#3289) are both required for the new
+// triage-title-missing / triage-a45-verifiability findings to pass:
+// without a title, a body otherwise identical to this one fails
+// triage-title-missing; without a checkable command/outcome-signal word
+// in the acceptance criteria, evaluateSuitabilityLocal's Check 7
+// (Verifiability) fails on "thing works" naming no objective signal.
+// Verified empirically (suitability-triage.mjs --body-file --verbose and
+// a standalone evaluateA4Viability probe) that this body cleanly passes
+// all 3 A4 criteria and all 6 evaluated A4.5 checks.
 function orphanBody({
   score = 4,
   effort = 'M',
@@ -27,6 +37,8 @@ function orphanBody({
   proposedChange?: boolean;
 } = {}): string {
   return [
+    '# Add a sample orphan feature',
+    '',
     '## Background',
     '',
     'Some background text.',
@@ -34,7 +46,7 @@ function orphanBody({
     ...(proposedChange ? ['## Proposed change', '', 'Do the thing.', ''] : []),
     '## Acceptance criteria',
     '',
-    '- [ ] thing works',
+    '- [ ] `node --test tests/example.test.mts` passes with the new case covered',
     '',
     suitabilityFooter(score),
     ...(includeEffort ? ['', effortFooter(effort)] : []),
@@ -82,6 +94,16 @@ function roadmapBody({
  * to omit the `## Candidate files` section entirely (heading absent) or
  * `[]` to include the heading with no parseable path (heading present
  * but empty) -- the two distinct zero-path shapes that check exercises.
+ *
+ * The leading "# <title>" line (#3289) is required for the new
+ * triage-title-missing finding to pass; the "- [ ] tests pass" bullet
+ * already names an objective outcome signal ("pass"), so no further
+ * strengthening was needed for Check 7 (Verifiability) to pass. Verified
+ * empirically (suitability-triage.mjs --body-file --verbose and a
+ * standalone evaluateA4Viability probe, including the derived bodies the
+ * prose-dependency and authoring-marker-minimization-backlog tests below
+ * build from this fixture) that this body cleanly passes all 3 A4
+ * criteria and all 6 evaluated A4.5 checks.
  */
 function childBody({
   score = 5,
@@ -93,6 +115,8 @@ function childBody({
   candidateFiles?: readonly string[] | null;
 } = {}): string {
   return [
+    '# Add a sample child feature',
+    '',
     '## Background',
     '',
     'Context for this task.',
@@ -152,6 +176,128 @@ test('a well-formed child issue passes every check', () => {
   for (const finding of report.findings) {
     assert.equal(finding.result, 'pass', `${finding.id}: ${finding.detail}`);
   }
+  // Check 4 (duplicate_or_superseded) fundamentally needs a live GitHub
+  // search index and never runs offline -- its finding must always report
+  // "not applicable", never a hard pass/fail verdict this linter cannot
+  // actually back (#3289).
+  const check4 = report.findings.find(
+    (entry) => entry.id === 'triage-a45-duplicate_or_superseded',
+  );
+  assert.ok(check4, 'expected a triage-a45-duplicate_or_superseded finding');
+  assert.match(check4.detail, /^not applicable/);
+});
+
+// --- triage-a4-*/triage-a45-*/triage-title-missing: A4/A4.5 triage at
+// authoring time (#3289) ---
+
+test('triage-a45-verifiability fails on an undocumented either/or acceptance-criteria escape hatch', () => {
+  const body = childBody().replace(
+    '- [ ] tests pass',
+    '- Either add input validation to `parseConfig`, or document why validation is not needed.\n- tests pass',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(report.passed, false);
+  assert.equal(findingResult(report, 'triage-a45-verifiability'), 'fail');
+});
+
+test('triage-a4-limited_scope fails on an unexcluded BROAD_SCOPE_PATTERN phrase in prose', () => {
+  const body = childBody().replace(
+    'Implement the task.',
+    'Perform a global refactor of the module boundaries.',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(report.passed, false);
+  assert.equal(findingResult(report, 'triage-a4-limited_scope'), 'fail');
+});
+
+test('a failing triage finding is downgraded to a warning (not a failure) under --expect-bucket', () => {
+  const body = withAuthoringBucket(
+    childBody().replace(
+      '- [ ] tests pass',
+      '- Either add input validation to `parseConfig`, or document why validation is not needed.\n- tests pass',
+    ),
+    'needs-decision',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    labels: ['status:needs-decision'],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(report.passed, true);
+  const finding = report.findings.find(
+    (entry) => entry.id === 'triage-a45-verifiability',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+});
+
+test('the roadmap shape never reports a failing triage finding, even for an otherwise-triage-failing body', () => {
+  const body = roadmapBody().replace(
+    'Ship the initiative.',
+    'Perform a global refactor of the module boundaries.',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  for (const finding of report.findings) {
+    if (finding.id.startsWith('triage-')) {
+      assert.equal(finding.result, 'pass', `${finding.id}: ${finding.detail}`);
+    }
+  }
+});
+
+test('triage-title-missing passes when a leading "# <title>" body line is present', () => {
+  const report = auditAuthoredIssue(childBody(), { shape: 'child' });
+  assert.equal(findingResult(report, 'triage-title-missing'), 'pass');
+});
+
+test('triage-title-missing passes when --title is supplied and the body has no leading title line', () => {
+  const body = childBody().replace('# Add a sample child feature\n\n', '');
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    title: 'Add a sample child feature',
+  });
+  assert.equal(findingResult(report, 'triage-title-missing'), 'pass');
+});
+
+test('triage-title-missing fails when neither --title nor a leading "# <title>" body line is present', () => {
+  const body = childBody().replace('# Add a sample child feature\n\n', '');
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(report.passed, false);
+  assert.equal(findingResult(report, 'triage-title-missing'), 'fail');
+  // A missing title also suppresses every A4.5 finding as "not evaluated"
+  // (never a false pass or a noisy Check-2/Coherence fail cascade) --
+  // A4's own three criteria stay title-independent and still evaluate.
+  const verifiability = report.findings.find(
+    (entry) => entry.id === 'triage-a45-verifiability',
+  );
+  assert.equal(verifiability?.result, 'pass');
+  assert.match(verifiability?.detail ?? '', /^not evaluated/);
+});
+
+test('triage-title-missing never fails for the roadmap shape, even with no title at all', () => {
+  const report = auditAuthoredIssue(roadmapBody(), { shape: 'roadmap' });
+  assert.equal(findingResult(report, 'triage-title-missing'), 'pass');
+});
+
+test('triage-title-missing is not applicable (not a warning) under --expect-bucket, even with no title at all', () => {
+  // A bucket body's own distinct Background/Required action/Ready signal
+  // shape carries no title convention (unlike the ready orphan/child
+  // shapes) -- this follows the same isBucketAudit "not applicable"
+  // convention as required-headings/suitability-marker/
+  // roadmap-tracks-parse, not the A4/A4.5 findings' fail-to-warning one.
+  const body = withAuthoringBucket(
+    '## Background\n\nContext for the decision.\n\n## Required action\n\nDecide the thing.',
+    'needs-decision',
+  );
+  const report = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    labels: ['status:needs-decision'],
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'triage-title-missing',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
 });
 
 // --- suitability-marker: exactly one, coherent 1-5 ---

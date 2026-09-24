@@ -21,7 +21,15 @@
 // not-yet-minimized superseded authoring-owner / authoring-publication-intent
 // marker comments (see checkAuthoringMarkerMinimizationBacklog, #2896).
 // Every advisory/count-only check always reports `result: 'pass'` and
-// never changes the exit code.
+// never changes the exit code. For the orphan and child shapes (#3289),
+// it also runs the same A4 viability (discover-viability-gate.mts) and
+// A4.5 suitability (suitability-triage.mts) evaluators Discover runs
+// later, at claim time, so a body that would fail A4/A4.5 then is caught
+// before it is ever published instead of only after (see
+// buildTriageFindings); the roadmap shape and a missing title each
+// degrade this to a not-applicable/not-evaluated pass rather than a hard
+// failure, and Check 4 (duplicates) always reports "not applicable" since
+// it needs a live repository.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -44,6 +52,7 @@ import {
   isTaskListCheckboxLine,
 } from './discover-roadmap-graph.mjs';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
+import { evaluateA4Viability } from './discover-viability-gate.mjs';
 import { parseEffortMarker } from './effort.mjs';
 import {
   isUpstreamEscalationEnabled,
@@ -53,6 +62,11 @@ import {
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import {
   classifyAuthoringMarkerFamily,
+  countMarkerOccurrences,
+  DEFAULT_MARKER_PREFIX,
+  isAuthoringBucketValue,
+  normalizeMarkerPrefix,
+  parseAuthoringBucketMarker,
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
   parseAuthoringPublicationIntentComment,
@@ -60,8 +74,22 @@ import {
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
+import {
+  evaluateSuitabilityLocal,
+  splitLocalDraftTitleAndBody,
+} from './suitability-triage.mjs';
 
-const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// Re-export the pre-#3289 public surface: normalizeMarkerPrefix and
+// parseAuthoringBucketMarker (both now defined in marker-helpers.mts, see
+// that module's own "Shared markerPrefix / marker-occurrence helpers"
+// section for why) were exported from this file before #3289 moved them
+// out to break an import cycle with suitability-triage.mts; re-exporting
+// the imported bindings here keeps every existing caller of this module
+// (e.g. snapshot-issue-body-corpus.mts) working unchanged. The two
+// authoring-bucket types are re-exported for the same reason, even though
+// no other module currently imports them from here.
+export { normalizeMarkerPrefix, parseAuthoringBucketMarker };
+
 // Shared "skip" detail for every ready-shape-only check when
 // `--expect-bucket` is set (#2648 review, Codex): a needs-decision/
 // blocked-by-human body uses its own distinct heading/footer shape
@@ -72,6 +100,14 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // not-applicable.
 const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
   'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
+// Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
+// triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
+// never routes a roadmap node through A4 (evaluateA4Viability) or A4.5
+// (evaluateSuitabilityLocal) -- both gates only ever see an orphan or
+// child candidate -- so running them against a roadmap body would invent
+// a triage verdict Discover itself never computes.
+const TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL =
+  'not applicable: Discover never routes a roadmap node through A4 or A4.5 triage';
 // The authoring-marker suffixes this file checks for prefix consistency.
 // Most are defined in the contract (skills/issue-authoring/references/
 // contract.md); `upstream-candidate` is defined by roadmap #2700 and
@@ -305,6 +341,7 @@ const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[([^\]\n]+)\]:\s*(\S+)/gm;
 const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h', default: false },
   '--shape': { type: 'string' },
+  '--title': { type: 'string' },
   '--body-file': { type: 'string' },
   '--stdin': { type: 'boolean', default: false },
   '--marker-prefix': { type: 'string' },
@@ -454,6 +491,15 @@ export function auditAuthoredIssue(body, options) {
       labels,
       options.upstreamEscalationEnabled === true,
     ),
+    ...buildTriageFindings(
+      rawText,
+      shape,
+      options.title,
+      isBucketAudit,
+      blockedByHumanLabelName,
+      needsDecisionLabelName,
+      markerPrefix,
+    ),
   ];
   return {
     shape,
@@ -461,6 +507,146 @@ export function auditAuthoredIssue(body, options) {
     passed: findings.every((finding) => finding.result === 'pass'),
     findings,
   };
+}
+/**
+ * Runs the same A4 viability (`evaluateA4Viability`) and A4.5 suitability
+ * (`evaluateSuitabilityLocal`) evaluators Discover and
+ * `suitability-triage.mjs --body-file` already run, at authoring time
+ * (#3289) -- so a body that would fail A4/A4.5 at claim time is caught
+ * before it is ever published, instead of only after. Emits one
+ * `triage-title-missing` finding, one `triage-a4-<criterion id>` finding
+ * per A4 criterion, and one `triage-a45-<check id>` finding per A4.5
+ * check. Every branch below runs `evaluateA4Viability`/
+ * `evaluateSuitabilityLocal` unconditionally (even for a `roadmap` shape
+ * or a missing title, whose findings are then overridden to "not
+ * applicable"/"not evaluated") rather than hardcoding the criterion/check
+ * id-and-name list here, so this finding set can never drift from
+ * `discover-viability-gate.mts`'s `CRITERIA` array or
+ * `suitability-triage.mts`'s `CHECKS` array.
+ */
+function buildTriageFindings(
+  rawText,
+  shape,
+  explicitTitle,
+  isBucketAudit,
+  blockedByHumanLabelName,
+  needsDecisionLabelName,
+  markerPrefix,
+) {
+  const isRoadmap = shape === 'roadmap';
+  const { title: autoTitle, body: autoBody } =
+    splitLocalDraftTitleAndBody(rawText);
+  const trimmedExplicitTitle =
+    typeof explicitTitle === 'string' ? explicitTitle.trim() : '';
+  // An explicit --title always wins over a leading "# <title>" body line,
+  // per this option's own doc comment on AuditOptions.title.
+  const resolvedTitle =
+    trimmedExplicitTitle.length > 0 ? trimmedExplicitTitle : autoTitle;
+  const titleMissing = resolvedTitle.length === 0;
+  // #3 of the proposed change: with --expect-bucket, a would-be-failing
+  // triage finding (including triage-title-missing) is demoted to a pass
+  // with a warning instead, since a needs-decision/blocked-by-human body
+  // is meant to be non-ready -- mirroring how the rest of this file's
+  // ready-shape-only checks already special-case isBucketAudit.
+  const demoteIfBucketAudit = (finding) =>
+    isBucketAudit && finding.result === 'fail'
+      ? { ...finding, result: 'pass', severity: 'warning' }
+      : finding;
+  const titleFinding = (() => {
+    const id = 'triage-title-missing';
+    const name =
+      'A title is resolvable (--title, or a leading "# <title>" body line)';
+    if (isRoadmap) {
+      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    }
+    // Unlike the A4/A4.5 findings below, a bucket body's own distinct
+    // Background/Required action/Ready signal shape carries no title
+    // convention at all (see the contract's Mechanical pre-publish gate
+    // section) -- this is a structural prerequisite check, not a content
+    // triage verdict, so it follows checkSuitabilityMarker/
+    // checkRequiredHeadings/checkRoadmapTracksParse's existing
+    // isBucketAudit convention (not applicable) rather than
+    // demoteIfBucketAudit's fail-to-warning treatment.
+    if (isBucketAudit) {
+      return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+    }
+    if (!titleMissing) {
+      return pass(id, name, `title resolved: "${resolvedTitle}"`);
+    }
+    return fail(
+      id,
+      name,
+      'no title was found: pass --title, or start the drafted body with a leading "# <title>" line',
+    );
+  })();
+  // Deliberately never passes structuralEvidence (proposed-change point
+  // 4): authoring time has no live author/file data, so the #2767
+  // demotion (a lexical fail promoted to a passing 'warn' criterion) can
+  // never fire here -- every criterion result is 'pass' or 'fail', never
+  // 'warn', matching the local dry-run CLI's own documented contract.
+  const a4Result = evaluateA4Viability({
+    number: 0,
+    title: resolvedTitle,
+    body: autoBody,
+    state: 'draft',
+  });
+  const a4Findings = a4Result.criteria.map((criterion) => {
+    const id = `triage-a4-${criterion.id}`;
+    const name = `A4 viability: ${criterion.name}`;
+    if (isRoadmap) {
+      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    }
+    if (criterion.result !== 'fail') {
+      return pass(id, name, criterion.evidence);
+    }
+    return demoteIfBucketAudit(fail(id, name, criterion.evidence));
+  });
+  // Synthesize a "# <title>\n\nbody" blob so evaluateSuitabilityLocal's
+  // own internal splitLocalDraftTitleAndBody recovers exactly the
+  // resolved title (an explicit --title, not only a body's own leading H1
+  // line) -- it takes bodyText only and has no separate title parameter.
+  // When titleMissing, feed it autoBody unchanged: every triage-a45-*
+  // finding below is overridden to "not evaluated" regardless of what
+  // this run actually reports, so the exact title-less verdict is
+  // discarded -- only the check id/name metadata is used.
+  const suitabilityBodyText = titleMissing
+    ? autoBody
+    : `# ${resolvedTitle}\n\n${autoBody}`;
+  const suitability = evaluateSuitabilityLocal(suitabilityBodyText, {
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+    markerPrefix,
+  });
+  const a45Findings = suitability.checks.map((check) => {
+    const id = `triage-a45-${check.id}`;
+    const name = `A4.5 suitability: ${check.name}`;
+    if (isRoadmap) {
+      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    }
+    // Check 4 (duplicate_or_superseded) fundamentally needs a live GitHub
+    // search index -- reported as "not applicable" here the same way this
+    // file's own bucket-audit/not-applicable findings already read, never
+    // as a hard failure (proposed-change point 1).
+    if (check.id === 'duplicate_or_superseded') {
+      return pass(
+        id,
+        name,
+        `not applicable: needs the live repository (${check.evidence})`,
+      );
+    }
+    if (titleMissing) {
+      return pass(
+        id,
+        name,
+        'not evaluated: no title was resolved for this draft (see triage-title-missing)',
+      );
+    }
+    if (check.result !== 'fail') {
+      return pass(id, name, check.evidence);
+    }
+    return demoteIfBucketAudit(fail(id, name, check.evidence));
+  });
+  return [titleFinding, ...a4Findings, ...a45Findings];
 }
 function checkSuitabilityMarker(count, suitability, isBucketAudit) {
   const id = 'suitability-marker';
@@ -689,7 +875,7 @@ function checkUpstreamCandidateMarkerLabel(
 /**
  * Canonical parser for the authored
  * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700).
- * Unlike {@link parseAuthoringBucketMarker}, which tolerates repeated
+ * Unlike `parseAuthoringBucketMarker` (marker-helpers.mts), which tolerates repeated
  * occurrences as long as they agree on the same valid value, this marker
  * requires exactly one occurrence -- a second, even agreeing, `...: true`
  * comment is itself malformed, mirroring {@link checkSuitabilityMarker}'s
@@ -719,66 +905,9 @@ function parseUpstreamCandidateMarker(text, markerPrefix) {
   const match = regex.exec(text);
   return { present: true, malformed: match?.[1] !== 'true' };
 }
-/**
- * Canonical parser for the authored
- * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
- * marker, mirroring {@link parseAutopilotSuitabilityMarker}'s fail-safe
- * shape and repeated/disagreeing-value handling. `text` must already be
- * {@link stripMarkdownCodeRegions}-masked (every caller in this file
- * passes the shared `text`, not `rawText`), so a marker merely quoted in
- * prose cannot be mistaken for a real one.
- *
- * Uses the same rawCount-vs-coherent-count gap {@link
- * checkEffortVisibleLineAgreement} closes for the `effort` marker: the
- * value-capturing regex below requires a non-empty token
- * (`[^\s>]+`), so a value-less marker like
- * `<!-- {prefix}-authoring-bucket: -->` would otherwise never match it
- * at all and read as `present: false` — indistinguishable from no
- * marker, which would also make {@link checkAuthoringBucketMarkerRequired}
- * misreport a present-but-invalid marker as "none was found" (#2648
- * review, Copilot). `countMarkerOccurrences`'s detection-only regex
- * matches regardless of value, so comparing the two counts recovers the
- * distinction.
- */
-export function parseAuthoringBucketMarker(text, markerPrefix) {
-  const rawCount = countMarkerOccurrences(
-    text,
-    markerPrefix,
-    'authoring-bucket',
-  );
-  if (rawCount === 0) {
-    return { present: false, value: null, malformed: false };
-  }
-  const regex = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
-    'gi',
-  );
-  let coherentCount = 0;
-  let value = null;
-  let match = regex.exec(text);
-  while (match) {
-    coherentCount += 1;
-    const raw = match[1];
-    const parsed = isAuthoringBucketValue(raw) ? raw : null;
-    // Fail-safe: any invalid token, or a value disagreeing with an
-    // earlier coherent one, yields no bucket.
-    if (parsed === null || (value !== null && parsed !== value)) {
-      return { present: true, value: null, malformed: true };
-    }
-    value = parsed;
-    match = regex.exec(text);
-  }
-  if (coherentCount !== rawCount) {
-    // At least one occurrence matched the raw (any-value) scan but not
-    // the value-capturing one -- a value-less or otherwise malformed-shape
-    // marker.
-    return { present: true, value: null, malformed: true };
-  }
-  return { present: true, value, malformed: false };
-}
-function isAuthoringBucketValue(value) {
-  return value === 'needs-decision' || value === 'blocked-by-human';
-}
+// parseAuthoringBucketMarker and isAuthoringBucketValue moved to
+// marker-helpers.mts (#3289, same section as above) and are imported back
+// in; parseAuthoringBucketMarker is re-exported above.
 function checkMarkerPrefixConsistency(
   text,
   markerPrefix,
@@ -2110,11 +2239,8 @@ function splitIntoListItemBlocks(paragraph) {
   }
   return blocks;
 }
-function countMarkerOccurrences(text, markerPrefix, suffix) {
-  const base = createMarkerRegex(markerPrefix, suffix);
-  const global = new RegExp(base.source, `${base.flags}g`);
-  return [...text.matchAll(global)].length;
-}
+// countMarkerOccurrences moved to marker-helpers.mts (#3289, same section
+// as above) and is imported back in.
 /**
  * The text of the last paragraph (block separated by a blank line) that
  * appears before the LAST occurrence of the `{markerPrefix}-{suffix}`
@@ -2154,14 +2280,8 @@ function extractHeadings(text) {
   }
   return headings;
 }
-export function normalizeMarkerPrefix(prefix) {
-  // Trim first: a config value or CLI input with accidental leading/
-  // trailing whitespace (e.g. "idd-skill ") would otherwise become a
-  // distinct prefix that never matches any real marker, producing
-  // confusing false failures across every check.
-  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
-  return trimmed.length > 0 ? trimmed : DEFAULT_MARKER_PREFIX;
-}
+// normalizeMarkerPrefix moved to marker-helpers.mts (#3289, same section
+// as above) and is imported back in and re-exported above.
 function pass(id, name, detail) {
   return { id, name, result: 'pass', detail };
 }
@@ -2294,6 +2414,7 @@ function main() {
   const report = auditAuthoredIssue(bodyText, {
     shape: args.shape,
     markerPrefix,
+    title: args.title,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
@@ -2431,6 +2552,7 @@ function parseArgs(argv) {
   return {
     help,
     shape: values.shape,
+    title: values.title,
     bodyFile: values['body-file'],
     stdin: values.stdin,
     markerPrefix: values['marker-prefix'],
@@ -2463,12 +2585,27 @@ issue carries the owner-marker/publication-token trail, and (when
 --comments-file and/or --journal-comments-file is supplied) the
 authoring-marker-minimization-backlog check that counts eligible,
 not-yet-minimized superseded authoring-owner / authoring-publication-intent
-marker comments. Exits 0 when every check passes, 1 when any check fails,
-2 on a usage error; the advisory check and
+marker comments. For the orphan and child shapes, it also runs the same
+A4 viability and A4.5 suitability evaluators Discover uses later
+(triage-title-missing, triage-a4-<criterion>, triage-a45-<check>), so a
+body that would fail A4/A4.5 at claim time is caught before it is ever
+published; triage-a45-duplicate_or_superseded always reports "not
+applicable" (it needs a live repository) and the roadmap shape reports
+every triage finding as not applicable (Discover never routes a roadmap
+node through A4/A4.5). With --expect-bucket, a failing triage finding is
+downgraded to a warning instead of failing the report, since such a body
+is meant to be non-ready. Exits 0 when every check passes, 1 when any
+check fails, 2 on a usage error; the advisory check and
 authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
+  --title <text>                   the drafted issue's title, for the A4/A4.5
+                                    triage checks (orphan/child shapes only);
+                                    without it, a leading "# <title>" line of
+                                    the body is used instead. Required (one
+                                    way or the other) for those checks to
+                                    evaluate -- see triage-title-missing
   --body-file <path>               read the drafted issue body from a file
   --stdin                          read the drafted issue body from stdin
   --marker-prefix <prefix>         override the resolved markerPrefix

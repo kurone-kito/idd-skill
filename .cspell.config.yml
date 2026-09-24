@@ -30,6 +30,7 @@ words:
   - TOCTOU
   - tsfile
   - undispositioned
+  - unexcluded
   - unioned
   - unmigrated
   - unmirrored
