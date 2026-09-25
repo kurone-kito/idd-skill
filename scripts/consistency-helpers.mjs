@@ -3,6 +3,7 @@
 // The scripts/consistency-helpers.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { githubHeadingSlug } from './markdown-link-audit.mjs';
 import { parseProjectCommandRows } from './policy-helpers.mjs';
 
 export {
@@ -1811,4 +1812,273 @@ export function collectOkfFrontmatterViolations(bundles, listFiles, readFile) {
     }
   }
   return errors;
+}
+const LITE_PATH_SEGMENT = '/lite/';
+// Strips the same inline markdown syntax extractHeadingSlugs's own
+// heading-text normalization strips (markdown-link-audit.mts's private
+// stripHeadingMarkup) before slugging: backtick code spans and link text.
+// Duplicated rather than imported because the source function is not
+// exported -- the same small duplication audit-docs.mts's own
+// normalizeHeading already accepts for the identical reason.
+function stripHeadingInlineMarkup(text) {
+  return text
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+}
+// Locates `heading`'s GitHub slug in `text` (reusing the exported
+// `githubHeadingSlug`, with the same fence-aware ATX scan and
+// duplicate-suffix counting `extractHeadingSlugs` applies) and returns the
+// text from that heading's own line to the next heading of the same or
+// shallower level (exclusive), or to end-of-file when none follows. A
+// separate walk from `extractHeadingSlugs` is required here (not a call to
+// it) because that function reports slugs only, never the line position a
+// section boundary needs. Returns `null` when no heading in `text` slugs to
+// `heading`.
+function extractHeadingSection(text, heading) {
+  const expectedSlug = githubHeadingSlug(stripHeadingInlineMarkup(heading));
+  const lines = text.split(/\r?\n/);
+  const counts = new Map();
+  let inFence = false;
+  const headings = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const baseSlug = githubHeadingSlug(stripHeadingInlineMarkup(match[2]));
+    const seenCount = counts.get(baseSlug) ?? 0;
+    counts.set(baseSlug, seenCount + 1);
+    const slug = seenCount === 0 ? baseSlug : `${baseSlug}-${seenCount}`;
+    headings.push({ level: match[1].length, slug, lineIndex: index });
+  }
+  const foundIndex = headings.findIndex((entry) => entry.slug === expectedSlug);
+  if (foundIndex === -1) {
+    return null;
+  }
+  const found = headings[foundIndex];
+  let end = lines.length;
+  for (const later of headings.slice(foundIndex + 1)) {
+    if (later.level <= found.level) {
+      end = later.lineIndex;
+      break;
+    }
+  }
+  return lines.slice(found.lineIndex, end).join('\n');
+}
+// Validates one `standard`/`lite`/`omittedByDesign.lite` location: file
+// existence and path scope (a `standard` location must not live under
+// `lite/`; every other role must), heading resolvability, and exactly one
+// of `contains`/`pattern` actually matching within that heading's section.
+// Pushes onto `violations` in place rather than returning a list, since
+// every call site already has one shared accumulator per entry.
+function validateLiteGateParityLocation(
+  label,
+  role,
+  location,
+  readFile,
+  violations,
+) {
+  const loc = location && typeof location === 'object' ? location : {};
+  const file =
+    typeof loc.file === 'string' && loc.file.length > 0 ? loc.file : null;
+  if (!file) {
+    violations.push(`${label}: ${role} location is missing a string file`);
+    return;
+  }
+  const underLite = file.includes(LITE_PATH_SEGMENT);
+  if (role === 'standard' && underLite) {
+    violations.push(
+      `${label}: standard location file ${file} must not live under lite/`,
+    );
+  } else if (role !== 'standard' && !underLite) {
+    violations.push(
+      `${label}: ${role} location file ${file} must live under lite/`,
+    );
+  }
+  const text = readFile(file);
+  if (text === null) {
+    violations.push(`${label}: ${role} location file ${file} does not exist`);
+    return;
+  }
+  const heading =
+    typeof loc.heading === 'string' && loc.heading.length > 0
+      ? loc.heading
+      : null;
+  if (!heading) {
+    violations.push(`${label}: ${role} location is missing a string heading`);
+    return;
+  }
+  const section = extractHeadingSection(text, heading);
+  if (section === null) {
+    violations.push(
+      `${label}: ${role} location heading ${JSON.stringify(heading)} has no matching GitHub slug in ${file}`,
+    );
+    return;
+  }
+  const hasContains =
+    typeof loc.contains === 'string' && loc.contains.length > 0;
+  const hasPattern = typeof loc.pattern === 'string' && loc.pattern.length > 0;
+  if (hasContains === hasPattern) {
+    violations.push(
+      `${label}: ${role} location at ${file}#${heading} must carry exactly one of contains or pattern`,
+    );
+    return;
+  }
+  if (hasContains) {
+    if (!section.includes(loc.contains)) {
+      violations.push(
+        `${label}: ${role} location contains fragment not found in ${file}#${heading}`,
+      );
+    }
+    return;
+  }
+  let regex;
+  try {
+    regex = new RegExp(loc.pattern);
+  } catch {
+    violations.push(
+      `${label}: ${role} location pattern is not a valid regular expression`,
+    );
+    return;
+  }
+  if (!regex.test(section)) {
+    violations.push(
+      `${label}: ${role} location pattern not matched in ${file}#${heading}`,
+    );
+  }
+}
+/**
+ * Collect lite-vs-standard gate-parity violations across a
+ * `liteGateParity` registry. Pure (no I/O) so it can be unit-tested; the
+ * audit pipeline supplies `readFile` (returning `null` for a path that does
+ * not exist in the repository, never throwing).
+ *
+ * An entry must carry exactly one of `lite` (one or more locations) or
+ * `omittedByDesign` (`{ reason, lite: <location> }`); `helperGate` may
+ * additionally require a `gate: '<gate>'` literal inside a helper source
+ * file. See `audit/README.md` for the full contract.
+ */
+export function collectLiteGateParityViolations(entries, readFile) {
+  if (entries === null || entries === undefined) {
+    return [];
+  }
+  if (!Array.isArray(entries)) {
+    return ['liteGateParity: entries must be an array'];
+  }
+  const violations = [];
+  const seenIds = new Set();
+  for (const rawEntry of entries) {
+    const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry : {};
+    const id =
+      typeof entry.id === 'string' && entry.id.length > 0 ? entry.id : null;
+    const label = id ?? 'liteGateParity entry';
+    if (id === null) {
+      violations.push('liteGateParity: entry is missing a string id');
+    } else if (seenIds.has(id)) {
+      violations.push(`liteGateParity: duplicate id ${id}`);
+    } else {
+      seenIds.add(id);
+    }
+    if (entry.standard === undefined || entry.standard === null) {
+      violations.push(`${label}: entry is missing a standard location`);
+    } else {
+      validateLiteGateParityLocation(
+        label,
+        'standard',
+        entry.standard,
+        readFile,
+        violations,
+      );
+    }
+    const hasLite = entry.lite !== undefined && entry.lite !== null;
+    const hasOmission =
+      entry.omittedByDesign !== undefined && entry.omittedByDesign !== null;
+    if (hasLite === hasOmission) {
+      violations.push(
+        `${label}: entry must carry exactly one of lite or omittedByDesign`,
+      );
+    } else if (hasLite) {
+      const liteLocations = Array.isArray(entry.lite)
+        ? entry.lite
+        : [entry.lite];
+      if (liteLocations.length === 0) {
+        violations.push(`${label}: lite must be a location or non-empty array`);
+      }
+      for (const liteLocation of liteLocations) {
+        validateLiteGateParityLocation(
+          label,
+          'lite',
+          liteLocation,
+          readFile,
+          violations,
+        );
+      }
+    } else {
+      const omission =
+        entry.omittedByDesign && typeof entry.omittedByDesign === 'object'
+          ? entry.omittedByDesign
+          : {};
+      const reason =
+        typeof omission.reason === 'string' ? omission.reason.trim() : '';
+      if (reason.length === 0) {
+        violations.push(`${label}: omittedByDesign.reason must not be empty`);
+      }
+      if (omission.lite === undefined || omission.lite === null) {
+        violations.push(`${label}: omittedByDesign is missing a lite location`);
+      } else {
+        validateLiteGateParityLocation(
+          label,
+          'omittedByDesign.lite',
+          omission.lite,
+          readFile,
+          violations,
+        );
+      }
+    }
+    if (entry.helperGate !== undefined && entry.helperGate !== null) {
+      if (hasOmission) {
+        violations.push(
+          `${label}: helperGate is not meaningful on an omittedByDesign entry`,
+        );
+      }
+      const helperGate =
+        typeof entry.helperGate === 'object' ? entry.helperGate : {};
+      const source =
+        typeof helperGate.source === 'string' && helperGate.source.length > 0
+          ? helperGate.source
+          : null;
+      const gate =
+        typeof helperGate.gate === 'string' && helperGate.gate.length > 0
+          ? helperGate.gate
+          : null;
+      if (!source || !gate) {
+        violations.push(
+          `${label}: helperGate must carry string source and gate fields`,
+        );
+      } else {
+        const sourceText = readFile(source);
+        if (sourceText === null) {
+          violations.push(
+            `${label}: helperGate source ${source} does not exist`,
+          );
+        } else {
+          const literal = `gate: '${gate}'`;
+          if (!sourceText.includes(literal)) {
+            violations.push(
+              `${label}: helperGate literal ${JSON.stringify(literal)} not found in ${source}`,
+            );
+          }
+        }
+      }
+    }
+  }
+  return violations;
 }
