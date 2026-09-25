@@ -17,6 +17,7 @@ import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
+  classifyIddPrComment,
   classifyRegularBotComment,
   classifyThreadAckOnlyPostDisposition,
   hasFreshDisposition,
@@ -521,14 +522,40 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   }
   return report;
 }
-function evaluateOperationalComment(comment, pr, report, owner, repo) {
+// #3267: routed through the shared `classifyIddPrComment` (the SAME
+// authorship trust source, `isTrustedMarkerAuthor`, scoped to just this
+// comment's own author) rather than this file's own bare
+// `operationalMarkerPrefix` + separate trust check. `prefix` (the strict
+// whole-body `OPERATIONAL_MARKERS` match) still drives the minimization
+// candidate path unchanged -- a classifier-operational comment with no
+// `OPERATIONAL_MARKERS` entry (a live-status digest, or the CI-posted
+// `<!-- idd-cleanup-evidence:` / narrowly trusted `github-actions[bot]`
+// `<!-- idd-external-check-waiver:` shape, neither of which this file
+// recognized before) is now visible-but-inert: recorded via `addSkipped`,
+// never silently reclassified as a stray bot comment by
+// `evaluateRegularBotComment`.
+export function evaluateOperationalComment(comment, pr, report, owner, repo) {
+  const author = comment.author?.login ?? '';
+  const trusted = isTrustedMarkerAuthor(owner, repo, author);
   const prefix = operationalMarkerPrefix(comment.body);
-  if (!prefix) {
-    return false;
+  const classification = classifyIddPrComment(
+    { body: comment.body, author: { login: author } },
+    { trustedMarkerLogins: trusted ? [author] : [] },
+  );
+  if (prefix === null) {
+    if (classification !== 'idd-operational') {
+      return false;
+    }
+    const subject = subjectFromNode(comment, 'IssueComment', 'OUTDATED');
+    addSkipped(
+      report,
+      subject,
+      'IDD operational comment outside OPERATIONAL_MARKERS (live-status digest or CI-posted bookkeeping marker)',
+    );
+    return true;
   }
   const subject = subjectFromNode(comment, 'IssueComment', 'OUTDATED');
-  const author = comment.author?.login ?? '';
-  if (!isTrustedMarkerAuthor(owner, repo, author)) {
+  if (!trusted) {
     addSkipped(report, subject, 'operational marker author is not trusted');
     return true;
   }

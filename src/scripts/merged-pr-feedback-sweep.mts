@@ -23,6 +23,7 @@ import { classifyCopilotReviewBody } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
+  classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
   hasTrustedReviewAckAfter,
@@ -32,7 +33,6 @@ import {
   isKnownReviewBot,
   isReviewSummaryComment,
   normalizeTrustedMarkerLogins,
-  operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
@@ -228,26 +228,26 @@ function resolveLoginList(value: string): string[] | null {
   return tokens.length > 0 ? normalizeTrustedMarkerLogins(tokens) : null;
 }
 
-// IDD bookkeeping comments are not reviewer feedback.
+// IDD bookkeeping comments are not reviewer feedback (kurone-kito/idd-skill#3267:
+// routed through the shared `classifyIddPrComment` instead of the former
+// unconditional `body.startsWith('<!-- idd-')` short-circuit, which dropped
+// EVERY `<!-- idd-…` -shaped comment regardless of author -- an untrusted
+// look-alike now surfaces as feedback instead of being silently swallowed,
+// while a trusted actor's operational marker, live-status digest (any of
+// its three forms), or the CI-posted cleanup-evidence marker still counts
+// as bookkeeping, matching every other consumer's rule).
 function isIddBookkeeping(
   body: string | null | undefined,
   author: string,
-  isTrusted: (login: string) => boolean,
+  trustedMarkerLogins: string[],
+  iddAgentLogins: string[],
 ): boolean {
-  // IDD HTML-comment bookkeeping markers (cleanup-evidence, plan, digest,
-  // roadmap-audit, …) are posted by the agent or by CI automation such as
-  // github-actions, never by a reviewer; exclude them regardless of author.
-  if (
-    String(body ?? '')
-      .trimStart()
-      .startsWith('<!-- idd-')
-  ) {
-    return true;
-  }
-  // Operational-state markers (claimed-by / review-watermark / advisory-wait
-  // / …) count only from a trusted marker author; an untrusted look-alike is
-  // left in as surfacing context.
-  return operationalMarkerPrefix(body ?? '') !== null && isTrusted(author);
+  return (
+    classifyIddPrComment(
+      { body, author: { login: author } },
+      { trustedMarkerLogins, iddAgentLogins },
+    ) === 'idd-operational'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +260,6 @@ export function buildMergedPrFeedbackSweep(
 ): MergedPrSweepResult {
   const idd = new Set(
     options.iddAgentLogins.map((login) => login.toLowerCase()),
-  );
-  const trusted = new Set(
-    options.trustedMarkerActors.map((login) => login.toLowerCase()),
   );
   const advisory = new Set(
     options.advisoryBotLogins.map((login) => login.toLowerCase()),
@@ -282,16 +279,21 @@ export function buildMergedPrFeedbackSweep(
     options.advisoryBotLogins.map(advisoryBotIdentityToken),
   );
   const isIdd = (login: string): boolean => idd.has(login);
-  const isTrusted = (login: string): boolean => trusted.has(login);
   const isAdvisoryBot = (login: string): boolean =>
     isKnownReviewBot(login) || advisory.has(login);
   const isConfiguredAdvisoryBotIdentity = (login: string): boolean =>
     advisoryIdentities.has(advisoryBotIdentityToken(login));
-  // #3259: a normalized (trimmed, lower-cased) trusted-logins ARRAY, distinct
-  // from the `isTrusted` predicate above -- `hasTrustedReviewAckAfter`
-  // (protocol-helpers.mts) needs the list itself, not a membership test.
+  // #3259: a normalized (trimmed, lower-cased) trusted-logins ARRAY --
+  // `hasTrustedReviewAckAfter` (protocol-helpers.mts) needs the list itself,
+  // not a membership test. #3267: also reused by `isIddBookkeeping` below via
+  // `classifyIddPrComment`.
   const trustedMarkerLoginsForAck = normalizeTrustedMarkerLogins(
     options.trustedMarkerActors,
+  );
+  // #3267: `classifyIddPrComment` (via `isIddBookkeeping` below) also needs
+  // the raw iddAgentLogins array, not just the `isIdd` membership predicate.
+  const iddAgentLoginsForBookkeeping = normalizeTrustedMarkerLogins(
+    options.iddAgentLogins,
   );
   // #3259: defaults to Copilot exactly like `isCopilotReviewerLogin`'s own
   // `primaryBotLogin` parameter normalizes an absent/blank configured value,
@@ -313,11 +315,11 @@ export function buildMergedPrFeedbackSweep(
       pr.reviews ?? [],
       pr.threads ?? [],
       isIdd,
-      isTrusted,
       isAdvisoryBot,
       isConfiguredAdvisoryBotIdentity,
       primaryBotLogin,
       trustedMarkerLoginsForAck,
+      iddAgentLoginsForBookkeeping,
     );
     if (unresolvedThreads.length === 0 && unaddressedComments.length === 0) {
       continue;
@@ -423,11 +425,11 @@ function collectUnaddressedComments(
   reviews: SweepReviewInput[],
   threads: SweepThreadInput[],
   isIdd: (login: string) => boolean,
-  isTrusted: (login: string) => boolean,
   isAdvisoryBot: (login: string) => boolean,
   isConfiguredAdvisoryBotIdentity: (login: string) => boolean,
   primaryBotLogin: string,
   trustedMarkerLoginsForAck: string[],
+  iddAgentLoginsForBookkeeping: string[],
 ): SweepCommentFinding[] {
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
@@ -465,9 +467,15 @@ function collectUnaddressedComments(
       continue;
     }
     // IDD bookkeeping is not feedback: a trusted operational-state marker,
-    // or any `<!-- idd-… -->` comment (e.g. cleanup-evidence / plan / digest,
-    // which CI automation such as github-actions also posts).
-    if (isIddBookkeeping(comment.body, author, isTrusted)) {
+    // digest, or the CI-posted cleanup-evidence marker.
+    if (
+      isIddBookkeeping(
+        comment.body,
+        author,
+        trustedMarkerLoginsForAck,
+        iddAgentLoginsForBookkeeping,
+      )
+    ) {
       continue;
     }
     // The CodeRabbit summary-walkthrough comment is auto-generated

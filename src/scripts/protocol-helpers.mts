@@ -693,6 +693,217 @@ export const LIVE_STATUS_DIGEST_HISTORICAL_MARKER =
 export const LIVE_STATUS_DIGEST_REPAIR_MARKER =
   '<!-- idd-live-status-repair: v1 -->';
 
+/**
+ * PR-scoped subset of `OPERATIONAL_MARKERS` (marker-helpers.mts) that can
+ * legitimately appear as a comment on a PULL REQUEST -- the population
+ * {@link classifyIddPrComment}'s marker-prefix branch draws from, and the
+ * exact PREFIX set the two E1 exclusion lists
+ * (`idd-review-snapshot(-lite).instructions.md`) name
+ * (kurone-kito/idd-skill#3267). The two E1 lists also separately name the
+ * three live-status digest forms (current/historical/repair-evidence,
+ * exported as `LIVE_STATUS_DIGEST_MARKER` and friends) --
+ * `classifyIddPrComment` recognizes those by first-line, not prefix, so
+ * they are deliberately NOT part of this set; only the marker-PREFIX
+ * portion of each E1 list is this export's parity target. Deliberately
+ * narrower than the full `OPERATIONAL_MARKERS` array -- every excluded
+ * entry is excluded for a specific, checked reason, not by omission.
+ * `<!-- forced-handoff:` is NOT excluded by omission either: it genuinely
+ * is PR-scoped (a `context-scope: issue-plus-pr` payload names an open
+ * PR, per `idd-resume.instructions.md`'s forced-handoff evidence table),
+ * so `classifyIddPrComment` recognizes it directly (still trust-gated,
+ * same as every entry in this set) rather than through this array --
+ * kept out of the E1-doc-parity target because the two written E1 lists
+ * have never named it and this issue's own enumerated additions don't
+ * either; adding it would cost doc-budget bytes neither near-ceiling
+ * bundle can currently spare. `tests/pre-merge-readiness.test.mts`'s
+ * "regular comment gate ignores/keeps forced-handoff markers" pair pins
+ * this behavior.
+ *  - `<!-- activation-nonce:` is posted only to the claiming ISSUE
+ *    (idd-claim.instructions.md), never to a PR.
+ *  - `<!-- idd-provider-outage-declaration:` and
+ *    `<!-- idd-provider-outage-advanced:` are posted to the configured
+ *    `providerOutage.declarationTarget` ISSUE, not the PR under review
+ *    (see their own doc comments in marker-helpers.mts).
+ *  - `<!-- idd-provider-outage-park:` and `<!-- idd-out-of-loop:` ARE
+ *    posted on the PR itself, but each already has its own dedicated,
+ *    non-review-activity consumer (`provider-outage-park.mts`'s resume
+ *    logic, and `classifyPrLoopMembership` respectively) -- folding them
+ *    into this review-activity exclusion set is out of this issue's
+ *    scope, and the issue's own enumerated E1 doc additions omit both.
+ */
+export const PR_OPERATIONAL_COMMENT_PREFIXES: readonly string[] = Object.freeze(
+  [
+    '<!-- review-watermark:',
+    '<!-- review-baseline:',
+    '<!-- zero-accepted-path-a-gate:',
+    '<!-- claimed-by:',
+    '<!-- unclaimed-by:',
+    'advisory-wait:',
+    'advisory-wait-recovery:',
+    '<!-- advisory-wait:',
+    'advisory-reroll:',
+    'review-ack:',
+    'copilot-unavailable:',
+    '<!-- idd-external-check-waiver:',
+    '<!-- idd-local-validation-evidence:',
+  ],
+);
+
+/**
+ * The post-merge F4 cleanup evidence marker (kurone-kito/idd-skill#3267):
+ * `post-merge-cleanup.yml` posts it under the `github-actions[bot]` identity
+ * via `GITHUB_TOKEN`. Deliberately NOT part of `OPERATIONAL_MARKERS` /
+ * `PR_OPERATIONAL_COMMENT_PREFIXES` -- unlike that array's entries, this
+ * marker's own trust source (`idd-doctor.mts`'s
+ * `readCleanupEvidenceTrustedLogins`) is the repository's configured
+ * `trustedMarkerActors` PLUS `github-actions[bot]`, so it is checked
+ * separately below under both the general trusted-union branch and the
+ * `github-actions[bot]`-narrow branch, rather than folded into the
+ * single OPERATIONAL_MARKERS-keyed check the trusted-union branch already
+ * runs for every other prefix.
+ */
+const IDD_CLEANUP_EVIDENCE_PREFIX = '<!-- idd-cleanup-evidence:';
+
+/**
+ * The exact PR-comment marker prefix a same-repository GitHub Actions
+ * workflow posts under the `github-actions[bot]` identity via `GITHUB_TOKEN`
+ * with NO general trusted-actor requirement (kurone-kito/idd-skill#2657 /
+ * #3267) -- confirmed against `advisory-convergence.mts`'s
+ * self-referential-bootstrap-auto path, the only such workflow this
+ * repository's own workflows post. `IDD_CLEANUP_EVIDENCE_PREFIX` above is
+ * ALSO trusted from this same actor (checked separately, since it is also
+ * trusted from a configured trustedMarkerActor, unlike this one). Deliberately
+ * NOT `PR_OPERATIONAL_COMMENT_PREFIXES` or `OPERATIONAL_MARKERS` -- this is
+ * narrow trust for this ONE actor, for exactly this one shape, never a
+ * blanket trust grant for every operational marker that actor's login
+ * could theoretically post (a `github-actions[bot]` comment starting with
+ * any OTHER operational prefix, e.g. `<!-- claimed-by:`, is not trusted by
+ * this path and counts as ordinary activity).
+ */
+const GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX =
+  '<!-- idd-external-check-waiver:';
+
+/** The GitHub Actions bot identity the two constants above scope trust to. */
+const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
+
+export type IddPrCommentClassification =
+  | 'idd-operational'
+  | 'idd-disposition'
+  | 'review';
+
+/**
+ * Classify one PR comment as IDD's own operational bookkeeping, an IDD
+ * disposition reply, or genuine review activity -- the single decision
+ * point kurone-kito/idd-skill#3267 unifies across the consumers that used
+ * to apply their own, slightly different rule: `buildActivitySnapshotSummary`,
+ * the shared `summarizeRegularCommentsForGate` /
+ * `summarizeDispositionEvidenceForGate` gate helpers, `buildDispositionPlan`'s
+ * `markerCouldBeStolen` (disposition-non-review-notices.mts),
+ * `isIddBookkeeping` (merged-pr-feedback-sweep.mts), and
+ * `audit-pr-cleanup.mts`'s own operational-marker check.
+ *
+ * The trusted set for this rule is the union of `trustedMarkerLogins` and
+ * `iddAgentLogins` (normalized, case-insensitive) -- kept as two distinct
+ * input fields rather than one, so a caller stays explicit about which
+ * configured policy set supplies which login; see the acceptance criteria
+ * on #3267 for why excluding only `trustedMarkerLogins` fails open (an IDD
+ * agent's own digest refresh, posted under a login recorded only in
+ * `iddAgentLogins`, would otherwise count as genuine activity and clear
+ * earlier human feedback).
+ *
+ * Returns `idd-operational` in either of two cases:
+ *  - the author is in the trusted union AND (the body starts with a
+ *    `PR_OPERATIONAL_COMMENT_PREFIXES` entry OR `<!-- forced-handoff:`,
+ *    matched via the lenient `operationalMarkerPrefixByStart` "begins
+ *    with" check E1's written rule uses -- a malformed marker from a
+ *    trusted actor is still their own bookkeeping, never someone else's
+ *    review feedback -- OR its first line is one of the three
+ *    live-status digest forms (current/historical/repair-evidence) OR it
+ *    starts with `IDD_CLEANUP_EVIDENCE_PREFIX`);
+ *  - the author is exactly `github-actions[bot]` and the body starts with
+ *    `IDD_CLEANUP_EVIDENCE_PREFIX` or
+ *    `GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX` -- independent of
+ *    `trustedMarkerLogins`/`iddAgentLogins` membership.
+ *
+ * Returns `idd-disposition` when neither of the above matched but the
+ * body is a recognized disposition shape (`isDispositionComment` /
+ * `isNonReviewNoticeDisposition` / `isReviewSummaryDisposition`), gated on
+ * the SAME trusted union -- an untrusted look-alike `**Accepted**` is
+ * `review`, matching E1's "anything else, including marker-shaped
+ * comments from untrusted authors" contract.
+ *
+ * Returns `review` otherwise. Consumers that only care about excluding
+ * IDD's own bookkeeping from review-activity/disposition-evidence
+ * accounting branch on `=== 'idd-operational'` alone; `idd-disposition`
+ * is informational classification that intentionally keeps counting as
+ * activity/reply evidence where the caller already relies on that
+ * (E1's watermark ordering, kurone-kito/idd-skill#2590).
+ */
+export function classifyIddPrComment(
+  comment: {
+    body?: string | null;
+    author?: AuthorRef | null;
+    user?: AuthorRef | null;
+  },
+  options: {
+    trustedMarkerLogins?: unknown[] | null;
+    iddAgentLogins?: unknown[] | null;
+  } = {},
+): IddPrCommentClassification {
+  const body = String(comment?.body ?? '');
+  const authorLogin = String(
+    comment?.author?.login ?? comment?.user?.login ?? '',
+  )
+    .trim()
+    .toLowerCase();
+  const trustedLogins = new Set([
+    ...normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
+    ...normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
+  ]);
+  const isTrustedAuthor = trustedLogins.has(authorLogin);
+
+  if (isTrustedAuthor) {
+    const markerPrefix = operationalMarkerPrefixByStart(body);
+    if (
+      markerPrefix !== null &&
+      (markerPrefix === '<!-- forced-handoff:' ||
+        PR_OPERATIONAL_COMMENT_PREFIXES.includes(markerPrefix))
+    ) {
+      return 'idd-operational';
+    }
+    const bodyFirstLine = firstLine(body);
+    if (
+      bodyFirstLine === LIVE_STATUS_DIGEST_MARKER ||
+      bodyFirstLine === LIVE_STATUS_DIGEST_HISTORICAL_MARKER ||
+      bodyFirstLine === LIVE_STATUS_DIGEST_REPAIR_MARKER
+    ) {
+      return 'idd-operational';
+    }
+    if (body.trimStart().startsWith(IDD_CLEANUP_EVIDENCE_PREFIX)) {
+      return 'idd-operational';
+    }
+  } else if (authorLogin === GITHUB_ACTIONS_BOT_LOGIN) {
+    const trimmedBody = body.trimStart();
+    if (
+      trimmedBody.startsWith(IDD_CLEANUP_EVIDENCE_PREFIX) ||
+      trimmedBody.startsWith(GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX)
+    ) {
+      return 'idd-operational';
+    }
+  }
+
+  if (
+    isTrustedAuthor &&
+    (isDispositionComment({ body }) ||
+      isNonReviewNoticeDisposition({ body }) ||
+      isReviewSummaryDisposition({ body }))
+  ) {
+    return 'idd-disposition';
+  }
+
+  return 'review';
+}
+
 export interface LiveStatusDigestSnapshotEntry {
   id: string;
   bodySha256: string;
@@ -5795,29 +6006,27 @@ export function buildActivitySnapshotSummary(
 
   // #3194 (round 36 field feedback): a live-status digest edit must never
   // perturb review-currency (idd-overview-appendix.instructions.md's "Live
-  // status digest" section) -- the same fail-closed, first-line-only digest
-  // recognition `isOperationalOrDigestCommentForGate` uses for
-  // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`.
-  // Issue #3337: gated by `trustedMarkerLogins` (unlike the pre-#3337
-  // unconditional exclusion this comment used to describe) -- a digest is
-  // only ever the agent's own activity, so only a trusted author's
+  // status digest" section). #3267 routes this exclusion through the
+  // shared `classifyIddPrComment` -- the same decision
+  // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`
+  // use -- which additionally recognizes the historical and repair-evidence
+  // digest forms (not just the current one #3194/#3337 originally covered)
+  // and the narrow `github-actions[bot]` external-check-waiver /
+  // cleanup-evidence shapes. Only a trusted author's operational-marker or
   // digest-marker comment is excluded here; an untrusted actor's
-  // digest-marker-shaped comment counts as ordinary activity requiring
+  // marker-shaped comment counts as ordinary activity requiring
   // disposition, matching the documented digest contract
-  // (`idd-comment-minimization.md`'s "Live Status Digest Contract"). A
-  // comment merely mentioning the marker text on a line other than its
-  // first still counts as regular activity below, regardless of author.
-  const filteredComments = comments.filter((comment) => {
-    const body = comment.body ?? '';
-    const authorLogin = (comment.author?.login ?? '').toLowerCase();
-    if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
-      return !trustedMarkerLogins.has(authorLogin);
-    }
-    if (!trustedMarkerLogins.has(authorLogin)) {
-      return true;
-    }
-    return operationalMarkerPrefixByStart(body) === null;
-  });
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract"). This
+  // function does not pass `iddAgentLogins` -- only
+  // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`
+  // need that extra trust source (see `classifyIddPrComment`'s own doc
+  // comment).
+  const filteredComments = comments.filter(
+    (comment) =>
+      classifyIddPrComment(comment, {
+        trustedMarkerLogins: [...trustedMarkerLogins],
+      }) !== 'idd-operational',
+  );
 
   // Structural ack-only evidence (#858): the posting moment of the latest
   // disposition by a configured disposition author opens the window;
@@ -6208,6 +6417,21 @@ export function summarizeRegularCommentsForGate(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
   const threads = Array.isArray(options.threads) ? options.threads : [];
+  // #3267: trusted set is the union of trustedMarkerLogins and
+  // iddAgentLogins -- see classifyIddPrComment's own doc comment for why
+  // excluding only trustedMarkerLogins fails open for an IDD agent's own
+  // digest refresh posted under a login recorded only in iddAgentLogins.
+  const isIddOperationalComment = (comment: {
+    body: string;
+    authorLogin: string;
+  }) =>
+    classifyIddPrComment(
+      { body: comment.body, author: { login: comment.authorLogin } },
+      {
+        trustedMarkerLogins: [...trustedMarkerLogins],
+        iddAgentLogins: [...iddAgentLogins],
+      },
+    ) === 'idd-operational';
 
   const normalized = comments
     .map((comment, inputIndex) => ({
@@ -6237,12 +6461,7 @@ export function summarizeRegularCommentsForGate(
 
   const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
     if (
-      isOperationalOrDigestCommentForGate(
-        comment.body,
-        comment.authorLogin,
-        trustedMarkerLogins,
-        iddAgentLogins,
-      ) ||
+      isIddOperationalComment(comment) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
       return latestTimestamp;
@@ -6282,15 +6501,7 @@ export function summarizeRegularCommentsForGate(
   );
 
   const items = normalized
-    .filter(
-      (comment) =>
-        !isOperationalOrDigestCommentForGate(
-          comment.body,
-          comment.authorLogin,
-          trustedMarkerLogins,
-          iddAgentLogins,
-        ),
-    )
+    .filter((comment) => !isIddOperationalComment(comment))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter(
       (comment) =>
@@ -6586,6 +6797,19 @@ export function summarizeDispositionEvidenceForGate(
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
+  // #3267: trusted set is the union of trustedMarkerLogins and
+  // iddAgentLogins -- see classifyIddPrComment's own doc comment.
+  const isIddOperationalComment = (comment: {
+    body: string;
+    authorLogin: string;
+  }) =>
+    classifyIddPrComment(
+      { body: comment.body, author: { login: comment.authorLogin } },
+      {
+        trustedMarkerLogins: [...trustedMarkerLogins],
+        iddAgentLogins: [...iddAgentLogins],
+      },
+    ) === 'idd-operational';
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
@@ -6661,15 +6885,7 @@ export function summarizeDispositionEvidenceForGate(
     );
 
   const outstandingComments = normalizedComments
-    .filter(
-      (comment) =>
-        !isOperationalOrDigestCommentForGate(
-          comment.body,
-          comment.authorLogin,
-          trustedMarkerLogins,
-          iddAgentLogins,
-        ),
-    )
+    .filter((comment) => !isIddOperationalComment(comment))
     .filter(
       (comment) =>
         !iddAgentLogins.has(comment.authorLogin) &&
@@ -6835,12 +7051,7 @@ export function summarizeDispositionEvidenceForGate(
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
         isValidIsoTimestamp(comment.activityAt) &&
-        !isOperationalOrDigestCommentForGate(
-          comment.body,
-          comment.authorLogin,
-          trustedMarkerLogins,
-          iddAgentLogins,
-        ),
+        !isIddOperationalComment(comment),
     )
     .sort((left, right) => {
       const byTime = compareIsoTimestamps(left.activityAt, right.activityAt);
@@ -12218,50 +12429,13 @@ export function isConfiguredAdvisoryBotLogin(
   return false;
 }
 
-function _isOperationalOrDigestComment(body: string): boolean {
-  return (
-    operationalMarkerPrefix(body) !== null ||
-    firstLine(body) === LIVE_STATUS_DIGEST_MARKER
-  );
-}
-
-function isOperationalOrDigestCommentForGate(
-  body: string,
-  authorLogin: unknown,
-  trustedMarkerLogins: Set<string>,
-  // Issue #3337: a digest-marker comment is only ever the target's OWN
-  // agent activity, so it must be excluded here only when its author is
-  // recognized as trusted OR as an IDD agent -- never unconditionally.
-  // Checking `trustedMarkerLogins` alone would fail open: a digest posted
-  // by an `iddAgentLogins` member outside the trusted set would then count
-  // as a genuine IDD reply, wrongly advancing `lastIddReplyAt`
-  // (`summarizeRegularCommentsForGate`) or entering `agentReplyComments`
-  // (`summarizeDispositionEvidenceForGate`), which could mark earlier
-  // feedback as answered. An author in neither set is a genuine stranger,
-  // so their digest-marker-shaped comment now counts as ordinary activity
-  // requiring disposition, matching the documented digest contract
-  // (`idd-comment-minimization.md`'s "Live Status Digest Contract").
-  iddAgentLogins: Set<string> = new Set(),
-): boolean {
-  const marker = operationalMarkerPrefix(body);
-  if (marker === '<!-- forced-handoff:') {
-    return trustedMarkerLogins.has(
-      String(authorLogin ?? '')
-        .trim()
-        .toLowerCase(),
-    );
-  }
-  if (marker !== null) {
-    return true;
-  }
-  if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
-    const login = String(authorLogin ?? '')
-      .trim()
-      .toLowerCase();
-    return trustedMarkerLogins.has(login) || iddAgentLogins.has(login);
-  }
-  return false;
-}
+// #3267: the former `_isOperationalOrDigestComment` (unused) and
+// `isOperationalOrDigestCommentForGate` (used by
+// `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`)
+// are replaced by the shared `classifyIddPrComment` -- see its doc comment
+// for the unified rule, including the historical/repair-evidence digest
+// forms and the narrow `github-actions[bot]` recognition neither of these
+// two functions had.
 
 function buildBodyPreview(body: unknown): string {
   return firstLine(String(body ?? '')).slice(0, 120);
