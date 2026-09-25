@@ -11532,6 +11532,32 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(resolvedFirst?.classifier, 'RESOLVED');
     assert.equal(resolvedSecond?.classifier, 'RESOLVED');
   });
+
+  // #3466 (CodeRabbit CLI review): a bare count cap (ignoring each pair's
+  // own chronological order) can over-count. A stray disposition dated
+  // BEFORE every remaining notice can never validly cover any of them and
+  // must not inflate the resolvable count -- greedy matching discards it
+  // instead of crediting it toward a later notice.
+  test('#3466: a disposition predating every notice cannot cover a later notice', () => {
+    const strayDisposition = {
+      ...dispositionReply,
+      id: 3001,
+      createdAt: '2026-09-25T14:00:00Z',
+    };
+    const onlyNotice = {
+      ...codexNotice,
+      id: 3002,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const comments = [strayDisposition, onlyNotice];
+
+    const result = classifyRegularBotComment(onlyNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(result, null);
+  });
 }
 
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->

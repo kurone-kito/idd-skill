@@ -2918,117 +2918,97 @@ export function countUncoveredCodeRabbitEmbeddedFindings(
 }
 
 // #3466: unlike `hasExplicitDispositionAfter` (the CodeRabbit
-// summary-walkthrough branch below), this notice-specific check must never
-// fall back to a bare product-word match. That fallback's `\bCodeRabbit\b`
-// test only makes sense there because a CodeRabbit summary sticky is itself
-// CodeRabbit-specific, so any disposition mentioning "CodeRabbit" is safely
-// attributable to it. A Codex usage-limit notice has no such single-bot
-// context -- in a multi-advisory-bot repository, a differently-worded
-// disposition that merely happens to name a DIFFERENT configured bot (e.g.
-// "**Rejected** -- CodeRabbit rate-limited, no findings to triage.") must
-// never resolve it. Match strictly on the production non-review-notice
-// template instead (`isNonReviewNoticeDisposition`, the same "**Rejected**
-// ... did not review HEAD ..." shape `disposition-non-review-notices.mts`
-// posts) plus per-bot login attribution (`dispositionNamesAdvisoryBot`) --
-// the same pairing the #1018 carry-forward logic elsewhere in this file
-// already uses for exactly this multi-bot-safety reason.
-function hasNonReviewNoticeDispositionAfter(
-  targetComment: CommentLike,
-  comments: CommentLike[],
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
-): boolean {
-  const isDispositionAuthor =
-    typeof options.isDispositionAuthor === 'function'
-      ? options.isDispositionAuthor
-      : (login: string) => !isKnownReviewBot(login);
-  const targetTime = Date.parse(targetComment.createdAt ?? '');
-  const targetBotLogin = String(targetComment.author?.login ?? '');
-  return comments.some((comment) => {
-    const author = String(comment.author?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (
-      !isDispositionAuthor(author) ||
-      !isNonReviewNoticeDisposition({ body: comment.body }) ||
-      !dispositionNamesAdvisoryBot(comment.body ?? '', targetBotLogin)
-    ) {
-      return false;
-    }
-    const dispositionTime = Date.parse(comment.createdAt ?? '');
-    return (
-      Number.isFinite(targetTime) &&
-      Number.isFinite(dispositionTime) &&
-      dispositionTime > targetTime
-    );
-  });
-}
-
+// summary-walkthrough branch below), notice/disposition attribution must
+// never fall back to a bare product-word match. That fallback's
+// `\bCodeRabbit\b` test only makes sense there because a CodeRabbit summary
+// sticky is itself CodeRabbit-specific, so any disposition mentioning
+// "CodeRabbit" is safely attributable to it. A Codex usage-limit notice has
+// no such single-bot context -- in a multi-advisory-bot repository, a
+// differently-worded disposition that merely happens to name a DIFFERENT
+// configured bot (e.g. "**Rejected** -- CodeRabbit rate-limited, no findings
+// to triage.") must never resolve it. Match strictly on the production
+// non-review-notice template instead (`isNonReviewNoticeDisposition`, the
+// same "**Rejected** ... did not review HEAD ..." shape
+// `disposition-non-review-notices.mts` posts) plus per-bot login attribution
+// (`dispositionNamesAdvisoryBot`).
+//
 // A Codex usage-limit notice (`isCodexUsageLimitNotice`) is a flat,
 // single-shot notice, not an editable review a later revision could still
 // add threads to -- unlike the CodeRabbit summary-walkthrough branch below,
 // it never resolves on its own. It becomes a minimization candidate only
-// once a LATER trusted IDD disposition attributes THIS exact notice, using
-// the strict, per-bot-scoped check above. Absent that disposition, the
-// notice stays an unresolved skip, same as before this branch existed --
-// and a non-notice Codex comment (a review summary, a finding reply, etc.)
-// is never classified here at all, since `isCodexUsageLimitNotice` only
-// recognizes the flat notice shape.
+// once a LATER trusted IDD disposition is paired to THIS exact notice.
+//
 // #3466 Copilot review (PR #3470): a bare "does any qualifying disposition
-// exist after me" check is not one-to-one -- if a merged PR carries two
-// Codex usage-limit notices from the same connector and only ONE later
-// trusted `**Rejected**` reply, both notices independently see that same
-// disposition and both would return `RESOLVED`, letting F4 minimize an
-// undispositioned notice too. The #1018 carry-forward elsewhere in this
-// file already solves the identical multi-notice-vs-one-disposition
-// problem for the F2/F3 gate by capping credit to the oldest N notices
-// when only N matching dispositions exist (never binding a specific
-// disposition to a specific notice -- see that loop's own comment). Mirror
-// that exact count-capped convention here: rank this notice among every
-// Codex usage-limit notice in the comment set (oldest first) and require
-// at least that many matching trusted dispositions to exist before it can
-// resolve.
-function rankAmongCodexUsageLimitNotices(
-  comment: CommentLike,
-  comments: CommentLike[],
-): number {
-  const notices = comments.filter(
-    (candidate) =>
-      advisoryBotIdentityToken(candidate.author?.login ?? '') ===
-        'chatgpt-codex-connector' &&
-      isCodexUsageLimitNotice(candidate.body ?? ''),
-  );
-  const bySortedTime = notices
-    .map((candidate, inputIndex) => ({ candidate, inputIndex }))
-    .sort((left, right) => {
-      const leftTime = Date.parse(left.candidate.createdAt ?? '');
-      const rightTime = Date.parse(right.candidate.createdAt ?? '');
-      if (leftTime !== rightTime) {
-        return leftTime - rightTime;
-      }
-      return left.inputIndex - right.inputIndex;
-    });
-  return bySortedTime.findIndex(({ candidate }) => candidate === comment);
-}
-
-function countNonReviewNoticeDispositionsForBot(
+// exist after me" check is not one-to-one -- two Codex usage-limit notices
+// sharing a single later trusted disposition would both independently see
+// it and both resolve, letting F4 minimize an undispositioned notice too.
+// Pairing must be genuinely 1:1. Greedily match every notice for this bot
+// (oldest first) to the earliest still-unconsumed matching disposition that
+// postdates it -- the same greedy-interval-matching shape as the #1018
+// carry-forward elsewhere in this file (credit the oldest N notices when
+// only N matching dispositions exist), refined to also respect each pair's
+// own chronological order rather than a bare count cap: a disposition that
+// predates every remaining notice can never validly cover any of them, so it
+// is discarded rather than counted.
+function resolvedCodexUsageLimitNotices(
   comments: CommentLike[],
   targetBotLogin: string,
-  isDispositionAuthorOption?: (login: string) => boolean,
-): number {
-  const isDispositionAuthor =
-    typeof isDispositionAuthorOption === 'function'
-      ? isDispositionAuthorOption
-      : (login: string) => !isKnownReviewBot(login);
-  return comments.filter((candidate) => {
-    const author = String(candidate.author?.login ?? '')
-      .trim()
-      .toLowerCase();
-    return (
-      isDispositionAuthor(author) &&
-      isNonReviewNoticeDisposition({ body: candidate.body }) &&
-      dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
-    );
-  }).length;
+  isDispositionAuthor: (login: string) => boolean,
+): Set<CommentLike> {
+  const byTime = <T extends CommentLike>(items: T[]) =>
+    items
+      .map((candidate, inputIndex) => ({
+        candidate,
+        inputIndex,
+        time: Date.parse(candidate.createdAt ?? ''),
+      }))
+      .filter((entry) => Number.isFinite(entry.time))
+      .sort((left, right) =>
+        left.time !== right.time
+          ? left.time - right.time
+          : left.inputIndex - right.inputIndex,
+      );
+
+  const notices = byTime(
+    comments.filter(
+      (candidate) =>
+        advisoryBotIdentityToken(candidate.author?.login ?? '') ===
+          'chatgpt-codex-connector' &&
+        isCodexUsageLimitNotice(candidate.body ?? ''),
+    ),
+  );
+  const dispositions = byTime(
+    comments.filter((candidate) => {
+      const author = String(candidate.author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      return (
+        isDispositionAuthor(author) &&
+        isNonReviewNoticeDisposition({ body: candidate.body }) &&
+        dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
+      );
+    }),
+  );
+
+  const resolved = new Set<CommentLike>();
+  let dispositionIndex = 0;
+  for (const notice of notices) {
+    while (
+      dispositionIndex < dispositions.length &&
+      !(dispositions[dispositionIndex].time > notice.time)
+    ) {
+      // Not strictly newer than the oldest remaining notice, so it can
+      // never validly cover this or any later (newer) notice either --
+      // discard and keep looking.
+      dispositionIndex += 1;
+    }
+    if (dispositionIndex >= dispositions.length) {
+      break;
+    }
+    resolved.add(notice.candidate);
+    dispositionIndex += 1;
+  }
+  return resolved;
 }
 
 function classifyCodexUsageLimitNotice(
@@ -3043,25 +3023,16 @@ function classifyCodexUsageLimitNotice(
   if (!isCodexUsageLimitNotice(comment.body ?? '')) {
     return null;
   }
-  const rank = rankAmongCodexUsageLimitNotices(comment, comments);
-  if (rank === -1) {
-    // Unreachable in normal use (the target is itself one of `comments`),
-    // but fail closed rather than guess this notice's place in line.
-    return null;
-  }
-  const matchingDispositionCount = countNonReviewNoticeDispositionsForBot(
+  const isDispositionAuthor =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login: string) => !isKnownReviewBot(login);
+  const resolved = resolvedCodexUsageLimitNotices(
     comments,
     author,
-    options.isDispositionAuthor,
+    isDispositionAuthor,
   );
-  if (rank >= matchingDispositionCount) {
-    return null;
-  }
-  if (
-    !hasNonReviewNoticeDispositionAfter(comment, comments, {
-      isDispositionAuthor: options.isDispositionAuthor,
-    })
-  ) {
+  if (!resolved.has(comment)) {
     return null;
   }
   return {
