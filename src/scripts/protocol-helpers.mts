@@ -3850,7 +3850,14 @@ const CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE = new RegExp(
 const CODERABBIT_ACK_MATCHES_LEADIN_RE =
   /^[.!]\s+(?:this|that|it|the\s+fix)\s+$/i;
 
-function isKnownAdvisoryAckTemplate(comment: {
+// Exported (kurone-kito/idd-skill#3263) so the bot-comment corpus contract
+// test can call this wording classifier directly, the same way it calls
+// every other exported classifier in `BOT_WORDING_CLASSIFIERS` below --
+// previously module-private, reachable only through
+// `classifyThreadAckOnlyPostDisposition`'s own author+shape+snapshot-
+// boundary gate, which needs a whole thread fixture rather than a single
+// comment body.
+export function isKnownAdvisoryAckTemplate(comment: {
   author?: { login?: string | null } | null;
   body?: string | null;
 }): boolean {
