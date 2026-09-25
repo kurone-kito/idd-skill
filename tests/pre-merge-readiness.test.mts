@@ -7313,6 +7313,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on an unclaimed PR is valid
     activeClaimId: '',
     trustedMarkerLogins: ['kurone-kito'],
     now: '2026-05-17T00:00:00Z',
+    loopMembership: 'out-of-loop-claimless',
   });
   assert.equal(result.valid.length, 1);
   assert.equal(result.wrongClaim.length, 0);
@@ -7334,9 +7335,50 @@ test('summarizeExternalCheckWaivers: "NONE"/"None" (any case) on an unclaimed PR
       activeClaimId: '',
       trustedMarkerLogins: ['kurone-kito'],
       now: '2026-05-17T00:00:00Z',
+      loopMembership: 'out-of-loop-claimless',
     });
     assert.equal(result.valid.length, 1, `sentinel ${sentinel} must validate`);
   }
+});
+
+test('summarizeExternalCheckWaivers: claim-id "none" on an in-loop PR with no active claim is wrongClaim (kurone-kito/idd-skill#3330)', () => {
+  const head = 'f'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'none' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const omitted = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
+    prHeadSha: head,
+    activeClaimId: '',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(omitted.valid.length, 0);
+  assert.equal(omitted.wrongClaim.length, 1);
+  const syntheticNone = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
+    prHeadSha: head,
+    activeClaimId: 'none',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+    loopMembership: 'in-loop',
+  });
+  assert.equal(syntheticNone.valid.length, 0);
+  assert.equal(syntheticNone.wrongClaim.length, 1);
+  const claimless = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
+    prHeadSha: head,
+    activeClaimId: 'none',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+    loopMembership: 'out-of-loop-claimless',
+  });
+  assert.equal(claimless.valid.length, 1);
+  assert.equal(claimless.wrongClaim.length, 0);
 });
 
 test('summarizeExternalCheckWaivers: a non-none, non-matching claim id on an unclaimed PR still fails to wrongClaim (regression #1077, claimless-reject-wrong-sentinel)', () => {
@@ -14202,6 +14244,39 @@ test('#2911 claimless: an active-claim-bound wrongClaim marker fails closed to s
   assert.equal(claimIdentityInstalledAtOf(summary), '');
   assert.equal(staleSelfWaiverOf(summary).stale, true);
   assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+});
+
+test('#3330: a none-bound auto-marker on an in-loop PR with no active claim is staleSelfWaiver reason wrong-claim', () => {
+  const base = withSelfWaiverCheckState(
+    selfWaiverInputBase(),
+    'SUCCESS',
+    '2026-05-11T23:25:00Z',
+  );
+  const marker = selfWaiverMarkerComment({
+    id: 'self-waiver-none-in-loop',
+    claimId: 'none',
+    expiresAt: '2026-05-13T00:00:00Z',
+    runId: '4242',
+    createdAt: '2026-05-11T23:10:00Z',
+  });
+  const summary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents: [], comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      claimless: true,
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(summary).stale, true);
+  assert.equal(staleSelfWaiverOf(summary).reason, 'wrong-claim');
+  const claimlessSummary = buildPreMergeReadinessSummary(
+    { ...base, claimEvents: [], comments: [...(base.comments ?? []), marker] },
+    selfWaiverOptions({
+      claimless: true,
+      loopMembership: 'out-of-loop-claimless',
+      autoWaiverRunVerified: { '4242': true },
+    }),
+  );
+  assert.equal(staleSelfWaiverOf(claimlessSummary).stale, false);
 });
 
 test("#2911 (Codex review, PR #2915, P1): a fresher pass from a DIFFERENT producer never masks a stale pass from the checker workflow's own producer", () => {

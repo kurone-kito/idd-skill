@@ -238,6 +238,33 @@ test('collectFromGitHub falls back to the default terminal window when advisoryW
   });
 });
 
+test('collectFromGitHub derives loop membership for a none waiver (kurone-kito/idd-skill#3330)', () => {
+  withHermeticCwd(() => {
+    const claimlessPort = createFakeProviderAdapter(baseFixture());
+    const claimless = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => claimlessPort,
+    );
+    assert.equal(claimless.inputs.loopMembership, 'out-of-loop-claimless');
+
+    const inLoopPort = createFakeProviderAdapter({
+      ...baseFixture(),
+      changeRequestConvergenceViews: {
+        [PR_NUMBER]: {
+          ...baseFixture().changeRequestConvergenceViews[PR_NUMBER],
+          closingIssuesReferences: [{ number: 7 }],
+        },
+      },
+      comments: { 7: [] },
+    });
+    const inLoop = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER), '--owner', 'o', '--repo', 'r']),
+      () => inLoopPort,
+    );
+    assert.equal(inLoop.inputs.loopMembership, 'in-loop');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // self-referential-bootstrap-auto waiver run-id resolution
 // (kurone-kito/idd-skill#2657): collectFromGitHub is the only place this
