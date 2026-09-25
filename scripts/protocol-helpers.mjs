@@ -1812,6 +1812,153 @@ export function countUncoveredCodeRabbitEmbeddedFindings(
   const embeddedFindingCount = extractCodeRabbitEmbeddedFindings(body).length;
   return Math.max(0, embeddedFindingCount - threadedCommentCount);
 }
+// #3466: unlike `hasExplicitDispositionAfter` (the CodeRabbit
+// summary-walkthrough branch below), notice/disposition attribution must
+// never fall back to a bare product-word match. That fallback's
+// `\bCodeRabbit\b` test only makes sense there because a CodeRabbit summary
+// sticky is itself CodeRabbit-specific, so any disposition mentioning
+// "CodeRabbit" is safely attributable to it. A Codex usage-limit notice has
+// no such single-bot context -- in a multi-advisory-bot repository, a
+// differently-worded disposition that merely happens to name a DIFFERENT
+// configured bot (e.g. "**Rejected** -- CodeRabbit rate-limited, no findings
+// to triage.") must never resolve it. Match strictly on the production
+// non-review-notice template instead (`isNonReviewNoticeDisposition`, the
+// same "**Rejected** ... did not review HEAD ..." shape
+// `disposition-non-review-notices.mts` posts) plus per-bot login attribution
+// (`dispositionNamesAdvisoryBot`).
+//
+// A Codex usage-limit notice (`isCodexUsageLimitNotice`) is a flat,
+// single-shot notice, not an editable review a later revision could still
+// add threads to -- unlike the CodeRabbit summary-walkthrough branch below,
+// it never resolves on its own. It becomes a minimization candidate only
+// once a LATER trusted IDD disposition is paired to THIS exact notice.
+//
+// #3466 review history (PR #3470) tried three progressively stricter
+// order-based pairing schemes here -- a bare "any qualifying disposition
+// exists after me" check, a count cap mirroring the #1018 carry-forward,
+// then a greedy chronological match -- and each one drew a new, genuine
+// correctness finding from a fresh review round (order-based reassignment
+// can always misattribute a disposition to an unrelated notice it never
+// named). Per this project's own E10 round-count heuristic ("after several
+// consecutive rounds each finding something new in the same area... prefer
+// removing or substantially simplifying the fragile mechanism"), this now
+// binds a notice to a disposition ONLY via the disposition's own explicit,
+// unambiguous `(source: #issuecomment-{id})` reference -- never by order,
+// count, or any other guess. This is not a narrowing of the accepted
+// contract: the issue's own acceptance criteria requires a disposition
+// that "attributes that same comment", and both the production
+// `buildDispositionBody` template and this repository's own E6 instruction
+// ALWAYS include that exact reference -- there is no documented,
+// real-world disposition shape this simplification stops recognizing.
+const DISPOSITION_SOURCE_ISSUECOMMENT_RE = /\(source:\s*#issuecomment-(\d+)\)/;
+const ISSUECOMMENT_URL_ID_RE = /#issuecomment-(\d+)/;
+/** The REST (numeric) comment id for `comment`, however this caller's
+ * `CommentLike` happens to carry it -- a plain/numeric-string `id` (the
+ * shape `disposition-non-review-notices.mts` and this file's own test
+ * fixtures use), or extracted from a GraphQL-shaped `url`/`html_url`
+ * (`audit-pr-cleanup.mts`'s real GraphQL node ids aren't REST ids
+ * themselves, but the comment's own web URL still ends in
+ * `#issuecomment-{REST id}` either way). `null` when neither yields one. */
+function restCommentId(comment) {
+  const rawId = comment.id;
+  if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+    return String(rawId);
+  }
+  // Defensive, not currently exercised by any known caller: a REST id
+  // that already arrived pre-stringified (e.g. round-tripped through
+  // JSON) rather than as a `number` or a GraphQL node id.
+  if (typeof rawId === 'string' && /^\d+$/.test(rawId)) {
+    return rawId;
+  }
+  const url = String(comment.html_url ?? comment.url ?? '');
+  return ISSUECOMMENT_URL_ID_RE.exec(url)?.[1] ?? null;
+}
+function dispositionSourceCommentId(body) {
+  return (
+    DISPOSITION_SOURCE_ISSUECOMMENT_RE.exec(String(body ?? ''))?.[1] ?? null
+  );
+}
+function resolvedCodexUsageLimitNotices(
+  comments,
+  targetBotLogin,
+  isDispositionAuthor,
+) {
+  const noticeByRestId = new Map();
+  for (const candidate of comments) {
+    if (
+      advisoryBotIdentityToken(candidate.author?.login ?? '') !==
+        'chatgpt-codex-connector' ||
+      !isCodexUsageLimitNotice(candidate.body ?? '')
+    ) {
+      continue;
+    }
+    const restId = restCommentId(candidate);
+    if (restId) {
+      noticeByRestId.set(restId, candidate);
+    }
+  }
+  const resolved = new Set();
+  for (const candidate of comments) {
+    const author = String(candidate.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      !isDispositionAuthor(author) ||
+      !isNonReviewNoticeDisposition({ body: candidate.body }) ||
+      !dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
+    ) {
+      continue;
+    }
+    const sourceId = dispositionSourceCommentId(candidate.body);
+    if (!sourceId) {
+      continue;
+    }
+    const notice = noticeByRestId.get(sourceId);
+    if (!notice) {
+      continue;
+    }
+    const noticeTime = Date.parse(notice.createdAt ?? '');
+    const dispositionTime = Date.parse(candidate.createdAt ?? '');
+    if (
+      !Number.isFinite(noticeTime) ||
+      !Number.isFinite(dispositionTime) ||
+      !(dispositionTime > noticeTime)
+    ) {
+      // A binding that names a real, present notice but predates it is
+      // internally inconsistent -- nothing can genuinely disposition a
+      // comment that has not been posted yet -- so it is discarded rather
+      // than resolving anything.
+      continue;
+    }
+    resolved.add(notice);
+  }
+  return resolved;
+}
+function classifyCodexUsageLimitNotice(comment, comments, options) {
+  const author = comment.author?.login ?? '';
+  if (advisoryBotIdentityToken(author) !== 'chatgpt-codex-connector') {
+    return null;
+  }
+  if (!isCodexUsageLimitNotice(comment.body ?? '')) {
+    return null;
+  }
+  const isDispositionAuthor =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login) => !isKnownReviewBot(login);
+  const resolved = resolvedCodexUsageLimitNotices(
+    comments,
+    author,
+    isDispositionAuthor,
+  );
+  if (!resolved.has(comment)) {
+    return null;
+  }
+  return {
+    classifier: 'RESOLVED',
+    reason: 'Codex usage-limit notice has matched IDD disposition evidence',
+  };
+}
 export function classifyRegularBotComment(
   comment,
   comments,
@@ -1820,7 +1967,10 @@ export function classifyRegularBotComment(
 ) {
   const author = comment.author?.login ?? '';
   if (!isCodeRabbitLogin(author)) {
-    return null;
+    if (!options.includeCodexUsageLimitNotice) {
+      return null;
+    }
+    return classifyCodexUsageLimitNotice(comment, comments, options);
   }
   if (hasUnresolvedKnownBotThreads(threads)) {
     return null;
@@ -3774,6 +3924,28 @@ const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
 // contract at the call sites. Fail-closed: an empty token, or a disposition
 // body that does not structurally match either canonical template, names no
 // bot.
+// Splits a `dispositionNamesAdvisoryBot` login span into its individual
+// bot-login tokens. The span normally names exactly one bot, but #2475
+// established that a single disposition may structurally name several at
+// once, joined by `and` and/or a comma (`"A[bot] and B[bot]"`,
+// `"A[bot], B[bot], and C[bot]"`) -- this must keep splitting that shape
+// apart rather than treating it as one opaque string.
+//
+// #3466 (Copilot review, PR #3470): the Oxford-comma three-plus-bot form
+// (`"A[bot], B[bot], and C[bot]"`) needs its trailing `, and ` collapsed to
+// a plain `, ` FIRST -- splitting directly on the alternation below would
+// otherwise stop the comma-separator match right after the comma (its
+// trailing `\s*` only consumes the single space before "and"), leaving
+// "and C[bot]" as one segment and making the leading-token extraction see
+// "and" instead of "C[bot]".
+const DISPOSITION_LOGIN_SPAN_OXFORD_AND_RE = /,\s+and\s+/gi;
+const DISPOSITION_LOGIN_SPAN_SPLIT_RE = /\s*,\s*|\s+and\s+/i;
+// A GitHub login itself never contains whitespace or `(` -- so the LEADING
+// run of non-space, non-`(` characters in a (post-split) span segment is
+// exactly its login, whether or not a human-readable parenthetical product
+// name follows it (`"coderabbitai[bot] (CodeRabbit)"`, still a single
+// segment after the `and`/`,` split above).
+const DISPOSITION_LOGIN_TOKEN_RE = /^[^\s(]+/;
 export function dispositionNamesAdvisoryBot(
   dispositionBody,
   noticeAuthorLogin,
@@ -3789,7 +3961,24 @@ export function dispositionNamesAdvisoryBot(
   if (span === undefined) {
     return false;
   }
-  return span.toLowerCase().includes(token);
+  // #3466 (Copilot review, PR #3470): exact per-login match, not a
+  // substring/`.includes()` check on the whole span -- a lookalike or
+  // fork bot login that merely CONTAINS this bot's identity token as a
+  // substring (e.g. a configured `chatgpt-codex-connector-fork[bot]`
+  // alongside the real `chatgpt-codex-connector[bot]`) must never match
+  // it. Split the span into its individual per-bot segments (#2475's
+  // multi-bot shape), extract just the leading login token from each
+  // (tolerating a trailing human-readable parenthetical, as above), and
+  // require an exact match after the same `[bot]`-suffix normalization.
+  return span
+    .replace(DISPOSITION_LOGIN_SPAN_OXFORD_AND_RE, ', ')
+    .split(DISPOSITION_LOGIN_SPAN_SPLIT_RE)
+    .some(
+      (part) =>
+        advisoryBotIdentityToken(
+          DISPOSITION_LOGIN_TOKEN_RE.exec(part.trim())?.[0] ?? '',
+        ) === token,
+    );
 }
 // #2544/#2547: classifies the configured secondary advisory bot's current
 // standing for the CURRENT HEAD into exactly one of three outcomes --
@@ -6123,6 +6312,14 @@ export function summarizeDispositionEvidenceForGate(
                   .trim()
                   .toLowerCase(),
               ),
+            // #3466: this gate has its own multi-bot-safe carry-forward for
+            // a dispositioned Codex notice below (the #1018 loop, matched
+            // per author via `dispositionNamesAdvisoryBot`), including
+            // bookkeeping that marks the matched disposition consumed so it
+            // can never leak into the generic 1:1 pairing pool. Do not opt
+            // in here -- `includeCodexUsageLimitNotice` is for the
+            // F4-cleanup caller only (`audit-pr-cleanup.mts`), which has no
+            // such separate mechanism.
           },
         ) === null
       );

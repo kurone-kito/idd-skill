@@ -544,6 +544,16 @@ Current safe classes are:
 - CodeRabbit review-trigger acknowledgements after a later IDD
   disposition that names CodeRabbit confirms the requested review
   completed
+- A Codex usage-limit notice (from the Codex connector) that has a
+  later trusted IDD disposition explicitly bound to that exact notice
+  via its `(source: #issuecomment-{id})` reference and naming the
+  Codex connector, mirroring the CodeRabbit disposition-evidence
+  requirement above. The binding is exact, never order- or count-based
+  -- a disposition that does not carry this notice's own id never
+  resolves it, even when it names the right bot. This is an
+  F4-cleanup-only recognition path -- the F2/F3 merge-gate readiness
+  checks carry their own separate, multi-bot-safe disposition
+  carry-forward for the same notice and do not opt into it.
 
 Bot review parent bodies with no associated review threads are skipped
 by design, including Copilot error review bodies. They remain visible

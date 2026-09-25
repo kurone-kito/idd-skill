@@ -889,6 +889,10 @@ function evaluateRegularBotComment(
     isDispositionAuthor: makeIddDispositionAuthorPredicate(
       report.trustedMarkerActors,
     ),
+    // #3466: F4 cleanup has no separate carry-forward mechanism for a
+    // dispositioned Codex usage-limit notice (unlike the F2/F3 merge-gate
+    // consumers of this same classifier), so it opts in explicitly.
+    includeCodexUsageLimitNotice: true,
   });
   const subject = subjectFromNode(
     comment,

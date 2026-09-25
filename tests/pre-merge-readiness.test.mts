@@ -11333,6 +11333,405 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
   });
 }
 
+// #3466: classifyRegularBotComment's CodeRabbit-only branch previously
+// returned null unconditionally for every non-CodeRabbit author, so a
+// dispositioned Codex usage-limit notice never became a cleanup candidate --
+// observed live on PR #3456 (notice comment 5835065252, dispositioned by
+// comment 5835210438) and again on the prior loop's merged PR #3444.
+// Fixtures below are modeled on that PR #3456 pair. The new branch is
+// opt-in via `includeCodexUsageLimitNotice` -- only `audit-pr-cleanup.mts`'s
+// F4 caller passes it; `summarizeDispositionEvidenceForGate` and
+// `summarizeRegularCommentsForGate` (the F2/F3 merge-gate consumers of this
+// same classifier) do not, since each already carries its own multi-bot-safe
+// carry-forward for this exact notice.
+{
+  const codexNotice = {
+    id: 5835065252,
+    createdAt: '2026-09-25T15:35:04Z',
+    body:
+      'You have reached your Codex usage limits for code reviews. You can ' +
+      'see your limits in the [Codex usage dashboard]' +
+      '(https://chatgpt.com/codex/cloud/settings/usage).',
+    author: { login: 'chatgpt-codex-connector[bot]' },
+  };
+  const dispositionReply = {
+    id: 5835210438,
+    createdAt: '2026-09-25T15:45:16Z',
+    body:
+      '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+      '53e76e8c95520aa5cecdef7294fca825a3397cbc (Codex usage limits for ' +
+      'code reviews reached); this is not a completed review ' +
+      '(source: #issuecomment-5835065252)',
+    author: { login: 'kurone-kito' },
+  };
+  const isDispositionAuthor = (login: string) => login === 'kurone-kito';
+
+  test('#3466: a dispositioned Codex usage-limit notice becomes a cleanup candidate', () => {
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, dispositionReply],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
+
+  test('#3466: the same notice with no later trusted disposition stays skipped', () => {
+    const result = classifyRegularBotComment(codexNotice, [codexNotice], [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    assert.equal(result, null);
+  });
+
+  test('#3466: a non-notice Codex comment stays unclassified', () => {
+    const codexSummary = {
+      id: 42,
+      createdAt: '2026-09-25T15:00:00Z',
+      body: 'Reviewed the diff; looks good overall, one nit inline.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const result = classifyRegularBotComment(
+      codexSummary,
+      [codexSummary, dispositionReply],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a dispositioned Codex notice stays unclassified by default (opt-in required)', () => {
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, dispositionReply],
+      [],
+      { isDispositionAuthor },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a disposition naming a DIFFERENT bot does not resolve the Codex notice', () => {
+    const wrongBotDisposition = {
+      id: 99,
+      createdAt: '2026-09-25T15:45:16Z',
+      body:
+        '**Rejected** — coderabbitai[bot] did not review HEAD ' +
+        '53e76e8c95520aa5cecdef7294fca825a3397cbc (rate limited); this is ' +
+        'not a completed review',
+      author: { login: 'kurone-kito' },
+    };
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, wrongBotDisposition],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a disposition from an untrusted (non-IDD) author does not resolve the notice', () => {
+    const untrustedDisposition = {
+      ...dispositionReply,
+      author: { login: 'some-random-commenter' },
+    };
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, untrustedDisposition],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+
+  // #3466 review history (PR #3470): three progressively stricter
+  // order-based pairing schemes (bare "any qualifying disposition after
+  // me", a count cap, then greedy chronological matching) each drew a new
+  // correctness finding from a fresh review round -- order-based
+  // reassignment can always misattribute a disposition to a notice it
+  // never named. The final design drops order-based pairing entirely:
+  // a disposition with no source id matching either PRESENT notice
+  // resolves NEITHER, even though it postdates both and even though only
+  // one disposition is "available" -- there is no fallback left to
+  // reassign it to the older (or any) notice.
+  test('#3466: a disposition matching neither present notice by source id resolves neither', () => {
+    const firstNotice = {
+      ...codexNotice,
+      id: 1001,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const secondNotice = {
+      ...codexNotice,
+      id: 1002,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    // Inherits dispositionReply's `(source: #issuecomment-5835065252)`
+    // suffix, which names neither 1001 nor 1002.
+    const unrelatedDisposition = {
+      ...dispositionReply,
+      id: 1003,
+      createdAt: '2026-09-25T15:20:00Z',
+    };
+    const comments = [firstNotice, secondNotice, unrelatedDisposition];
+
+    const resolvedFirst = classifyRegularBotComment(firstNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedSecond = classifyRegularBotComment(
+      secondNotice,
+      comments,
+      [],
+      {
+        isDispositionAuthor,
+        includeCodexUsageLimitNotice: true,
+      },
+    );
+
+    assert.equal(resolvedFirst, null);
+    assert.equal(resolvedSecond, null);
+  });
+
+  // Complement: each notice with its OWN correctly source-bound disposition
+  // resolves independently -- binding is per-comment-id, not order or count.
+  test('#3466: two Codex notices each resolve via their own correctly-bound disposition', () => {
+    const firstNotice = {
+      ...codexNotice,
+      id: 2001,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const secondNotice = {
+      ...codexNotice,
+      id: 2002,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    const firstDisposition = {
+      id: 2003,
+      createdAt: '2026-09-25T15:05:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-2001)',
+      author: { login: 'kurone-kito' },
+    };
+    const secondDisposition = {
+      id: 2004,
+      createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-2002)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [
+      firstNotice,
+      firstDisposition,
+      secondNotice,
+      secondDisposition,
+    ];
+
+    const resolvedFirst = classifyRegularBotComment(firstNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedSecond = classifyRegularBotComment(
+      secondNotice,
+      comments,
+      [],
+      {
+        isDispositionAuthor,
+        includeCodexUsageLimitNotice: true,
+      },
+    );
+
+    assert.equal(resolvedFirst?.classifier, 'RESOLVED');
+    assert.equal(resolvedSecond?.classifier, 'RESOLVED');
+  });
+
+  // A disposition with no source id matching the present notice, whether
+  // or not it happens to postdate it, never resolves it -- exact binding
+  // only, no order-based fallback exists to reassign a stray disposition.
+  test('#3466: a disposition matching no present notice by source id cannot cover it', () => {
+    const strayDisposition = {
+      ...dispositionReply,
+      id: 3001,
+      createdAt: '2026-09-25T14:00:00Z',
+    };
+    const onlyNotice = {
+      ...codexNotice,
+      id: 3002,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const comments = [strayDisposition, onlyNotice];
+
+    const result = classifyRegularBotComment(onlyNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(result, null);
+  });
+
+  // #3466 (Copilot review, PR #3470): the canonical machine-generated
+  // disposition body already names its own source notice's REST comment id
+  // in a trailing `(source: #issuecomment-{id})` suffix. An exact,
+  // unambiguous binding on that id must win over order-based guessing --
+  // the older notice must not resolve merely because it comes first when a
+  // single disposition explicitly names the NEWER one.
+  test('#3466: a disposition bound by source-comment-id resolves the notice it names, not an older one by mere order', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 101,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const newerNotice = {
+      ...codexNotice,
+      id: 102,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    const dispositionForNewer = {
+      id: 103,
+      createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-102)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [olderNotice, newerNotice, dispositionForNewer];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedNewer = classifyRegularBotComment(newerNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+    assert.equal(resolvedNewer?.classifier, 'RESOLVED');
+  });
+
+  // #3466 (second Copilot review, PR #3470): a disposition whose source id
+  // names a PRESENT notice, but whose own timestamp predates that notice
+  // (an internally inconsistent, invalid binding), must be discarded
+  // outright -- not left in the fallback pool, where order-based pass 2
+  // could otherwise reassign it to a completely different, older notice
+  // its own declared content never named.
+  test('#3466: a chronologically invalid but resolvable source binding is discarded, not reassigned to an older notice', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 301,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const newerNotice = {
+      ...codexNotice,
+      id: 302,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    // Names the NEWER notice (302) but is timestamped before it exists --
+    // an invalid disposition, since nothing can disposition a comment that
+    // has not been posted yet.
+    const invalidDisposition = {
+      id: 303,
+      createdAt: '2026-09-25T15:05:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-302)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [olderNotice, newerNotice, invalidDisposition];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedNewer = classifyRegularBotComment(newerNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+    assert.equal(resolvedNewer, null);
+  });
+
+  // #3466 (fifth Copilot review, PR #3470): a disposition bound to a PRESENT
+  // comment that is a normal Codex comment, not a usage-limit notice, must
+  // never resolve an unrelated, actually-undispositioned notice. This was a
+  // real gap under the order-based fallback (an unrecognized source id fell
+  // through to reassignment); dropping that fallback entirely
+  // (`resolvedCodexUsageLimitNotices` no longer has a pass 2) already closes
+  // it structurally -- this test pins that as a regression guard.
+  test('#3466: a disposition bound to a present non-notice comment does not resolve an unrelated notice', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 401,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const normalCodexComment = {
+      id: 402,
+      createdAt: '2026-09-25T15:10:00Z',
+      body: 'Reviewed the diff; looks fine overall.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const dispositionForNormalComment = {
+      id: 403,
+      createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-402)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [
+      olderNotice,
+      normalCodexComment,
+      dispositionForNormalComment,
+    ];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+  });
+
+  // `restCommentId`'s GraphQL-shaped path: `audit-pr-cleanup.mts`'s real
+  // callers fetch comments over GraphQL, whose `id` is a node id
+  // (`IC_kwDO...`), never a REST-numeric id or numeric string -- every
+  // other fixture above uses a plain-number `id` and so never exercises
+  // this branch. The REST id is instead recovered from the comment's own
+  // `url`, which always ends in `#issuecomment-{REST id}` regardless.
+  test('#3466: resolves a notice via restCommentId extracted from a GraphQL-shaped url, not a numeric id', () => {
+    const graphqlNotice = {
+      id: 'IC_kwDOexample5001',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/3470#issuecomment-5001',
+      createdAt: '2026-09-25T15:00:00Z',
+      body: 'You have reached your Codex usage limits for code reviews.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const graphqlDisposition = {
+      id: 'IC_kwDOexample5002',
+      createdAt: '2026-09-25T15:10:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-5001)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [graphqlNotice, graphqlDisposition];
+
+    const result = classifyRegularBotComment(graphqlNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
+}
+
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
 // hasFreshDisposition still requires a fresh disposition for a CodeRabbit
 // thread finding that was edited in place after its disposition (updatedAt
