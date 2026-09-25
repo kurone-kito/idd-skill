@@ -1287,4 +1287,24 @@ test('#3465: pre-merge CI predicate follows required-check success, pending, fai
     {},
   );
   assert.equal(ciWaitSummaryIsPreMergeCiPassing(noRequired), true);
+
+  const staleFailureThenSuccess = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'ci',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'ci',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(staleFailureThenSuccess), true);
 });

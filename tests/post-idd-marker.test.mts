@@ -1244,13 +1244,14 @@ function watermarkFromPrGhStub(
   headSha: string,
   options: {
     rollupNodes?: readonly Record<string, unknown>[];
+    rollupHeadSha?: string;
     rulesBody?: string;
     commentsBody?: string;
   } = {},
 ): string {
   const rollup = JSON.stringify(
     statusCheckRollupResponse(
-      headSha,
+      options.rollupHeadSha ?? headSha,
       options.rollupNodes ?? [PASSING_CHECK_RUN],
     ),
   );
@@ -1368,6 +1369,30 @@ test('#3465: --from-pr watermark refuses a still-pending required check', () => 
     }),
     false,
   );
+});
+
+test('#3465: --from-pr watermark refuses when the required-check HEAD differs from the snapshot', () => {
+  const otherHead = 'b'.repeat(40);
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, { rollupHeadSha: otherHead }),
+  );
+  try {
+    runWatermarkFromPr(false);
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /does not match the activity snapshot HEAD/,
+    );
+    assert.match(failure.stderr ?? '', new RegExp(otherHead));
+    assert.match(failure.stderr ?? '', new RegExp(SHA));
+    return;
+  } finally {
+    restore();
+  }
+  throw new Error('expected the CLI to exit non-zero');
 });
 
 test('#3465: a non-required failure does not refuse a passing required check', () => {

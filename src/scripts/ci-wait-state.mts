@@ -842,10 +842,16 @@ export function ciWaitSummaryIsPreMergeCiPassing(
   summary: CiWaitStateSummary,
 ): boolean {
   const rollup = summary.requiredChecks;
+  // #3465: the no-required-checks fallback must see the same name-keyed
+  // latest instance `selectLatestCheckEntryPerName` already uses for the
+  // required rollup. A raw `summary.checks` scan treats a stale FAILURE
+  // beside a later SUCCESS for the same check name as `some-failing`,
+  // while `resolvePresentRunConclusion` dedupes that pair to all-passing.
+  const latestChecks = selectLatestCheckEntryPerName(summary.checks);
   const presentRunConclusion =
-    summary.checks.length === 0
+    latestChecks.length === 0
       ? 'none'
-      : summary.checks.every((check) => check.status === 'success')
+      : latestChecks.every((check) => check.status === 'success')
         ? 'all-passing'
         : 'some-failing';
   return isPreMergeCiAllPassing({

@@ -1668,20 +1668,31 @@ if (import.meta.main) {
     // Advisory-family --from-pr types derive only head-sha and are not gated.
     if (isWatermark) {
       let requiredChecksPassing = false;
+      let ciHead = '';
       try {
-        requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(
-          collectCiWaitState([
-            '--pr',
-            String(args.fromPr),
-            '--owner',
-            args.owner,
-            '--repo',
-            args.repo,
-          ]),
-        );
+        const ciSummary = collectCiWaitState([
+          '--pr',
+          String(args.fromPr),
+          '--owner',
+          args.owner,
+          '--repo',
+          args.repo,
+        ]);
+        ciHead = ciSummary.headRefOid.trim();
+        requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(ciSummary);
       } catch (error) {
         process.stderr.write(
           `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${error.message}\n`,
+        );
+        process.exit(1);
+      }
+      // A second live read can observe a newer HEAD than the activity
+      // snapshot already copied into the watermark fields. A passing
+      // result for that newer HEAD must not authorize a marker whose
+      // head-sha and ci-completed-at still belong to the snapshot.
+      if (ciHead.toLowerCase() !== liveHeadSha.toLowerCase()) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s required-check read is for HEAD ${ciHead || '(empty)'}, which does not match the activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.\n`,
         );
         process.exit(1);
       }
