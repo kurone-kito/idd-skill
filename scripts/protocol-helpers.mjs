@@ -1923,6 +1923,17 @@ function resolvedCodexUsageLimitNotices(
   // already applied (trusted author, canonical template, correct bot
   // attribution) plus chronological validity (the disposition must
   // postdate the notice it names).
+  //
+  // A disposition whose source id resolves to a PRESENT notice is claimed
+  // by that notice's identity regardless of whether the chronological
+  // check passes (second Copilot review, PR #3470): a binding that names a
+  // real notice but predates it is internally inconsistent -- not a
+  // genuine disposition of anything -- so it must be discarded outright
+  // rather than left in the fallback pool, where order-based pass 2 could
+  // otherwise reassign it to a completely different, unrelated (older)
+  // notice its own declared content never named. Only a source id that
+  // resolves to no present notice (unknown, or absent entirely) leaves the
+  // disposition eligible for pass 2.
   const noticeByRestId = new Map();
   for (const notice of notices) {
     const restId = restCommentId(notice.candidate);
@@ -1936,11 +1947,13 @@ function resolvedCodexUsageLimitNotices(
       return;
     }
     const notice = noticeByRestId.get(sourceId);
-    if (!notice || !(disposition.time > notice.time)) {
+    if (!notice) {
       return;
     }
-    resolved.add(notice.candidate);
     consumedDispositions.add(index);
+    if (disposition.time > notice.time) {
+      resolved.add(notice.candidate);
+    }
   });
   // Pass 2 -- greedy oldest-first fallback, for every notice pass 1 left
   // unresolved, using only dispositions pass 1 did not already consume (a

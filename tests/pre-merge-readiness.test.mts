@@ -11599,6 +11599,50 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(resolvedOlder, null);
     assert.equal(resolvedNewer?.classifier, 'RESOLVED');
   });
+
+  // #3466 (second Copilot review, PR #3470): a disposition whose source id
+  // names a PRESENT notice, but whose own timestamp predates that notice
+  // (an internally inconsistent, invalid binding), must be discarded
+  // outright -- not left in the fallback pool, where order-based pass 2
+  // could otherwise reassign it to a completely different, older notice
+  // its own declared content never named.
+  test('#3466: a chronologically invalid but resolvable source binding is discarded, not reassigned to an older notice', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 301,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const newerNotice = {
+      ...codexNotice,
+      id: 302,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    // Names the NEWER notice (302) but is timestamped before it exists --
+    // an invalid disposition, since nothing can disposition a comment that
+    // has not been posted yet.
+    const invalidDisposition = {
+      id: 303,
+      createdAt: '2026-09-25T15:05:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-302)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [olderNotice, newerNotice, invalidDisposition];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedNewer = classifyRegularBotComment(newerNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+    assert.equal(resolvedNewer, null);
+  });
 }
 
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
