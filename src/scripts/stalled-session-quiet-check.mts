@@ -588,9 +588,9 @@ function runGh(args: string[]): string {
   } catch (error) {
     const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
     if (stderr) {
-      // Keep the compatibility message, and retag the wrapper so the
-      // envelope classifies the original gh failure (the message still
-      // carries the HTTP text deriveGhHttpStatus reads).
+      // Keep the compatibility message, and mark the wrapper as a gh
+      // command so the envelope classifies the original gh failure (the
+      // message still carries the HTTP text deriveGhHttpStatus reads).
       throw tagGhCommandError(new Error(`gh command failed: ${stderr}`));
     }
     throw error;
