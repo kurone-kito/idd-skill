@@ -1890,6 +1890,32 @@ test('a CLOSED child carries stateReason only when closed without completion (#3
   assert.equal('stateReason' in (byNumber.get(648) ?? {}), false);
 });
 
+test('a CLOSED nested-roadmap child carries stateReason the same way a leaf child does (#3398)', async () => {
+  const issues = new Map<number, unknown>([
+    [690, roadmapIssue(690, '- [ ] #691', 'nested-state-reason-roadmap')],
+    [
+      691,
+      {
+        ...roadmapIssue(
+          691,
+          'nested roadmap, no children',
+          'nested-child-roadmap',
+          'closed',
+        ),
+        state_reason: 'not_planned',
+      },
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(690, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  assert.equal(byNumber.get(691)?.classification, 'roadmap');
+  assert.equal(byNumber.get(691)?.stateReason, 'not_planned');
+});
+
 function scoredExecutionIssue(number: number, score: number, state = 'open') {
   return executionIssue(
     number,
