@@ -36,6 +36,7 @@ import {
   buildSubstitutionPlan,
   buildUntrustedLabelerGuardWorkflowContent,
   checkGitRemoteBranchExists,
+  checkHeldSchemaDrift,
   checkHelperLoad,
   checkManifestCompleteness,
   checkPackagePinWarning,
@@ -3475,6 +3476,136 @@ test('checkPackagePinWarning falls back to instructions-only/no-warning when pac
   assert.equal(result.warning, null);
 });
 
+/** A tiny idd-skill source whose manifest is exactly `files`. */
+function writeDriftManifest(root: string, files: Record<string, string>): void {
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'idd-template-core-files',
+          paths: Object.keys(files),
+        },
+      ],
+    }),
+  );
+  for (const [relativePath, content] of Object.entries(files)) {
+    const absolute = join(root, ...relativePath.split('/'));
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+}
+
+const DRIFT_SCHEMA = 'schemas/widget.schema.json';
+const DRIFT_FIXTURE = 'fixtures/schemas/widget.valid.json';
+const DRIFT_MODULE = 'src/scripts/producer.mts';
+const DRIFT_UNRELATED = 'src/scripts/unrelated.mts';
+
+function driftFiles(
+  schema: string,
+  moduleText: string,
+): Record<string, string> {
+  return {
+    [DRIFT_SCHEMA]: schema,
+    [DRIFT_FIXTURE]: '{ "ok": true }\n',
+    [DRIFT_MODULE]: moduleText,
+    [DRIFT_UNRELATED]: 'export const unrelated = true;\n',
+  };
+}
+
+test('checkHeldSchemaDrift flags a held module that references a changed schema', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+  assert.match(String(result.warning), /widget\.schema\.json/);
+  const verify = runVerify(sourceRoot, targetRoot, undefined, [DRIFT_MODULE]);
+  assert.equal(verify.blocking, false);
+  assert.equal(verify.heldSchemaDrift.findings.length, 1);
+});
+
+test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(
+    targetRoot,
+    driftFiles(
+      '{ "version": 1 }\n',
+      `${moduleText}// updated with the schema\n`,
+    ),
+  );
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, { hold: [] });
+  assert.deepEqual(result.findings, []);
+  assert.equal(result.warning, null);
+});
+
+test('checkHeldSchemaDrift does not flag a schema that is itself held', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_SCHEMA, DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift does not flag a held module that does not reference the changed schema', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_UNRELATED],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift matches a fixture basename and stays advisory on the CLI', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "const fixture = 'widget.valid.json';\n";
+  const sourceFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "ok": false }\n';
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+  ]);
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    sourceRoot,
+    '--target',
+    targetRoot,
+    '--hold',
+    DRIFT_MODULE,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const heldSchemaDrift = verdict.heldSchemaDrift as {
+    findings: { schemaOrFixturePath: string }[];
+  };
+  assert.equal(heldSchemaDrift.findings.length, 1);
+  assert.equal(heldSchemaDrift.findings[0]?.schemaOrFixturePath, DRIFT_FIXTURE);
+});
+
 test('runVerify exposes packagePinWarning without letting it affect blocking', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
@@ -3943,8 +4074,31 @@ test('bin/idd-onboard.mjs --verify exits 2 when combined with --force or --dry-r
   }
 });
 
-test('bin/idd-onboard.mjs --verify exits 2 when combined with --hold', () => {
+test('bin/idd-onboard.mjs --verify accepts --hold and stays exit 0 when the held file is not a schema drift', () => {
   const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--hold',
+    '.cspell.config.yml',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const heldSchemaDrift = verdict.heldSchemaDrift as {
+    findings: unknown[];
+    warning: string | null;
+  };
+  assert.deepEqual(heldSchemaDrift.findings, []);
+  assert.equal(heldSchemaDrift.warning, null);
+});
+
+test('bin/idd-onboard.mjs --verify exits 2 for an unknown --hold path', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
   try {
     execFileSync(
       process.execPath,
@@ -3955,8 +4109,10 @@ test('bin/idd-onboard.mjs --verify exits 2 when combined with --hold', () => {
         REPO_ROOT,
         '--target',
         targetRoot,
+        '--allow-root',
+        tmpdir(),
         '--hold',
-        '.cspell.config.yml',
+        'schemas/not-in-the-manifest.json',
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -3964,8 +4120,7 @@ test('bin/idd-onboard.mjs --verify exits 2 when combined with --hold', () => {
   } catch (error) {
     const failed = error as { status?: number; stderr?: string };
     assert.equal(failed.status, 2);
-    assert.match(String(failed.stderr), /does not accept flag\(s\)/);
-    assert.match(String(failed.stderr), /--hold/);
+    assert.match(String(failed.stderr), /unknown --hold path/);
   }
 });
 
@@ -3978,6 +4133,7 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
   assert.match(help, /placeholderResidue/);
   assert.match(help, /staleImportSignal/);
   assert.match(help, /packagePinWarning/);
+  assert.match(help, /heldSchemaDrift/);
 });
 
 // ---------------------------------------------------------------------------
