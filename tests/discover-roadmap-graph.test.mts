@@ -347,6 +347,103 @@ Depends on kurone-kito/idd-skill#303
   );
 });
 
+test('#3284 review fix: a visible dependency preceded by an inline HTML comment is still anchored', () => {
+  // The anchor check must read the HTML-comment-masked view, not the
+  // default `maskedLine` (comments visible): `<!-- note -->` is invisible
+  // prose GitHub never renders, so it must not count as an
+  // anchor-breaking prefix any more than it counts as a
+  // keyword-suppressing one.
+  assert.deepEqual(extractKeywordReferences('<!-- note --> Blocked by #12'), [
+    {
+      target: 12,
+      relationship: 'dependency',
+      evidence: '<!-- note --> Blocked by #12',
+    },
+  ]);
+});
+
+test('#3284 review fix (round 2): a dependency keyword needs the same whitespace gap the shared grammar requires', () => {
+  // `dependency-grammar.mts`'s line pattern requires `[ \t]+` after the
+  // keyword (or after an immediately adjacent colon) before it will even
+  // attempt to parse a ref-list, so `Blocked by#12`/`Blocked by:#12` (no
+  // gap) are not dependency declarations there -- the graph must reject
+  // the same near-miss spellings instead of accepting them via a bare
+  // trimStart()/replace().
+  assert.deepEqual(extractKeywordReferences('Blocked by#12'), []);
+  assert.deepEqual(extractKeywordReferences('Blocked by:#12'), []);
+  assert.deepEqual(extractKeywordReferences('Blocked by: #12'), [
+    { target: 12, relationship: 'dependency', evidence: 'Blocked by: #12' },
+  ]);
+});
+
+test('#3284 review fix (round 2): a comment-only keyword later on the line must not suppress the continuation sweep', () => {
+  // The segment boundary and continuation-eligibility check must be based
+  // on the HTML-comment-masked view, not the raw `KEYWORD_REFERENCE_REGEX`
+  // matches (which still see a keyword hidden inside an HTML comment) --
+  // otherwise a comment-only "Depends on" on the same line as a real
+  // "Blocked by" would wrongly end the segment early and suppress the
+  // #2441 line-wrap sweep for the following line, even though the shared
+  // grammar (which masks the comment) reads straight through it.
+  const body = 'Blocked by #12 <!-- Depends on #13 -->\n#14';
+  assert.deepEqual(extractKeywordReferences(body), [
+    {
+      target: 12,
+      relationship: 'dependency',
+      evidence: 'Blocked by #12 <!-- Depends on #13 -->',
+    },
+    {
+      target: 14,
+      relationship: 'dependency',
+      evidence: 'Blocked by #12 <!-- Depends on #13 -->',
+    },
+  ]);
+});
+
+test('#3284 review fix (round 3): a colon separated from the keyword by whitespace is not a valid gap', () => {
+  // The shared grammar's line pattern only tolerates a colon immediately
+  // adjacent to the keyword (`Blocked by:`), never one separated from it
+  // by whitespace of its own (`Blocked by :`) -- a bare `/^:?[ \t]+/`
+  // check on the post-keyword text can't tell these apart (it happily
+  // matches just the leading space and stops, having said nothing about
+  // what follows), so the graph now reuses
+  // `hasDependencyReferenceListStart` -- the exact token-start test the
+  // shared grammar itself applies -- immediately after the gap.
+  assert.deepEqual(extractKeywordReferences('Blocked by : #12'), []);
+});
+
+test('#3284 review fix (round 3): a cross-repository sentinel is excluded from the prefetch crawl', async () => {
+  // `expandForPrefetch` mapped every cached reference's `target` without
+  // filtering `unresolvable-reference` the way it already filters
+  // `non-blocking-reference` -- since an `unresolvable-reference`
+  // sentinel's `target` is a digit parsed from a cross-repository token
+  // purely for the diagnostic (never a real local issue number), the
+  // prefetch crawl would otherwise fetch and transitively expand an
+  // unrelated local issue that happens to share that digit.
+  const fetchedNumbers: number[] = [];
+  const issues = new Map<number, unknown>([
+    [
+      950,
+      roadmapIssue(
+        950,
+        '- [ ] [Upstream fix](https://github.com/other/repo/issues/951)',
+        'prefetch-cross-repo-roadmap',
+      ),
+    ],
+    [951, executionIssue(951, 'unrelated local issue sharing the digit')],
+  ]);
+
+  await enumerateRoadmapGraph(950, {
+    loadIssue: async (issueNumber) => {
+      fetchedNumbers.push(issueNumber);
+      return issues.get(issueNumber) ?? null;
+    },
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+
+  assert.deepEqual(fetchedNumbers, [950]);
+});
+
 test('extractKeywordReferences stops before incidental narrative mentions', () => {
   const body = `
 Refs #401; similar to #402
@@ -1219,10 +1316,18 @@ test('collapses exact same-triple mentions from the same issue body', async () =
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);
 });
 
-test('collapses same-body Blocked-by prose and standalone line to one dependency', async () => {
-  // #2799: issue-authoring routinely narrates why a dependency exists and
-  // restates it as a standalone `Blocked by #N` line. Both are `dependency`
-  // with different evidence; that must not emit duplicateReferences.
+test('#2799, #3284: a same-body Blocked-by prose mention is ignored; only the standalone line is a dependency', async () => {
+  // #2799 originally let issue-authoring's narrated-prose habit ("...the
+  // condition (Blocked by #332)...") plus a standalone restatement both
+  // register as `dependency` edges to the same target, needing a
+  // deduplication step so the pair would not also emit a
+  // `duplicateReferences` diagnostic. #3284's Maintainer decision made the
+  // line-anchored grammar authoritative for every helper, including this
+  // one, so the mid-sentence prose mention is no longer recognized as a
+  // dependency at all -- only the standalone line is, and there is
+  // nothing left to deduplicate for this body. See the test below for
+  // deduplication still holding across two genuinely line-anchored
+  // mentions of the same target.
   const issues = new Map([
     [330, roadmapIssue(330, '- [ ] #331', 'blocked-by-double-mention-roadmap')],
     [
@@ -1250,7 +1355,38 @@ test('collapses same-body Blocked-by prose and standalone line to one dependency
       source: 331,
       target: 332,
       relationship: 'dependency',
-      evidence: 'sessions follow when they hit the condition (Blocked by #332)',
+      evidence: 'Blocked by #332',
+    },
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3284: two genuinely line-anchored Blocked-by mentions of the same target still collapse to one dependency', async () => {
+  const issues = new Map([
+    [
+      333,
+      roadmapIssue(333, '- [ ] #334', 'blocked-by-double-anchored-roadmap'),
+    ],
+    [334, executionIssue(334, 'Blocked by #335\n\nBlocked by #335')],
+    [335, executionIssue(335, 'closed dependency', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(333, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const dependencyEdges = graph.edges.filter(
+    (edge) =>
+      edge.source === 334 &&
+      edge.target === 335 &&
+      edge.relationship === 'dependency',
+  );
+  assert.deepEqual(dependencyEdges, [
+    {
+      source: 334,
+      target: 335,
+      relationship: 'dependency',
+      evidence: 'Blocked by #335',
     },
   ]);
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);
@@ -1350,6 +1486,40 @@ test('reports inaccessible and unresolved references fail-safe', async () => {
       relationship: 'task-list',
       evidence: '- [ ] #402',
       reason: 'issue_not_found',
+    },
+  ]);
+});
+
+test('#3284: a task-list link naming another repository is neither a node nor a candidate', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      420,
+      roadmapIssue(
+        420,
+        '- [ ] [Upstream fix](https://github.com/other/repo/issues/12)',
+        'root-roadmap',
+      ),
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(420, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+  });
+
+  assert.deepEqual(
+    graph.nodes.map((node) => node.number),
+    [420],
+  );
+  assert.deepEqual(graph.executionCandidates, []);
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, [
+    {
+      source: 420,
+      target: 12,
+      relationship: 'unresolvable-reference',
+      evidence: '- [ ] [Upstream fix](https://github.com/other/repo/issues/12)',
+      reason: 'cross_repository_reference',
     },
   ]);
 });
@@ -3775,6 +3945,31 @@ test('--with-readiness on a single root annotates only open execution-leaf nodes
     ),
     false,
   );
+});
+
+test('#3284 review fix: --with-readiness resolves a same-repo qualified Blocked-by the same way the graph traversal does', async () => {
+  // Before this fix, `annotateReadiness` never threaded `currentRepo`
+  // into `evaluateDiscoverReadiness`, so a `Blocked by owner/repo#N` line
+  // naming the SAME repository resolved to a real graph edge (via
+  // `currentRepoRef`) but reported unresolvable in the readiness
+  // annotation for the very same node -- a cross-path disagreement this
+  // issue exists to eliminate.
+  const issues = new Map<number, unknown>([
+    [940, roadmapIssue(940, '- [ ] #941', 'epic-same-repo-qualified')],
+    [941, executionIssue(941, 'Blocked by kurone-kito/idd-skill#942')],
+    [942, executionIssue(942, 'open blocker')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(940, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    readiness: readinessResolution(),
+  });
+
+  const leaf = graph.nodes.find((node) => node.number === 941);
+  assert.deepEqual(leaf?.readiness?.reasons, ['blocked_by_open_issue:#942']);
+  assert.equal(leaf?.readiness?.ready, false);
 });
 
 const delay = (ms: number) =>
