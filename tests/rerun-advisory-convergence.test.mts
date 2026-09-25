@@ -1323,7 +1323,8 @@ test('#2549: a run-attempt-unknown live-coverage-recovered instance is NOT promo
   assert.equal(recovered?.rerunBudgetHeld, true);
   assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
   assert.deepEqual(plan.recoveryRefreshPlan, []);
-  assert.notEqual(plan.rerunPolicyHoldNotice, '');
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
 });
 
 // A live-coverage-recovered instance with NO passing sibling anywhere in
@@ -1350,6 +1351,144 @@ test('#2549: a budget-exhausted live-coverage-recovered instance with no passing
   assert.equal(recovered?.rerunBudgetHeld, true);
   assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
   assert.notEqual(plan.rerunPolicyHoldNotice, '');
+});
+
+// #3472: the no-passing-sibling case above stays withheld from every plan,
+// but the hold notice must name `--refresh-latest --apply` so an agent
+// does not stop on the maintainer-decision sentence. Default `--apply`
+// still executes nothing, because these instances are not promoted.
+test('#3472: a budget-held live-coverage recovery that was not promoted names --refresh-latest and default --apply does not rerun it', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      prNumber: 3467,
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.rerunPolicy, 'rerun-once');
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.equal(plan.instances[0]?.isLiveCoverageRecovery, true);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.match(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+  assert.match(
+    plan.rerunPolicyHoldNotice,
+    /node scripts\/rerun-advisory-convergence\.mjs --pr 3467 --refresh-latest --apply/,
+  );
+  assert.doesNotMatch(
+    plan.rerunPolicyHoldNotice,
+    /maintainer must manually decide/,
+  );
+  const calls: string[] = [];
+  const applied = applyRerunPlan(plan, {
+    rerunAndWait: (command) => {
+      calls.push(command.command);
+    },
+    recomputePlan: () => plan,
+  });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(applied.executed, []);
+  assert.equal(applied.resolved, true);
+});
+
+test('#3472: an ordinary budget-held instance still requires a maintainer decision', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+});
+
+test('#3472: a withheld non-live-coverage sibling keeps the maintainer-decision notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      prNumber: 3467,
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '7004',
+          conclusion: 'failure',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+});
+
+test('#3472: rerunPolicy hold does not prescribe --refresh-latest for a live-coverage recovery', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      prNumber: 3467,
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true, rerunPolicy: 'hold' }),
+  );
+  assert.match(plan.rerunPolicyHoldNotice, /"hold"/);
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+});
+
+test('#3472: an unconfirmed live-coverage attempt keeps the maintainer-decision notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      prNumber: 3467,
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: null,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.instances[0]?.isLiveCoverageRecovery, true);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
 });
 
 // A repository that opted out of ALL automatic reruns (`ciWait.rerunPolicy:
