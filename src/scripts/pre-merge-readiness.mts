@@ -2020,7 +2020,7 @@ export function normalizeThread(thread: ProviderReviewThreadWithComments) {
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt || comment.createdAt,
         pullRequestReview: { id: comment.pullRequestReviewId ?? null },
-        lastEditedAt: comment.lastEditedAt,
+         lastEditedAt: comment.lastEditedAt,
       })),
     },
   };
@@ -2473,8 +2473,12 @@ function resolveOutageDeclarationActiveForConvergenceSelector({
     const policy = normalizePolicyConfig(iddConfig);
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return false;
+    // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+    // reject a body-edited declaration marker. Safe inside this function's
+    // existing fail-closed try/catch: a GraphQL failure here degrades to
+    // `false`, never a crash.
     const declarationComments = port
-      .listWorkItemComments(targetIssue)
+      .listWorkItemComments(targetIssue, { includeEditState: true })
       .map(toIssueCommentPayload);
     const authorityOf = (actorLogin: string): AuthorityEvidence =>
       normalizeAuthorityEvidence(
@@ -2547,8 +2551,12 @@ function resolveAdvisoryConvergenceOutageRelief({
     }
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return notRelieved;
+    // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+    // reject a body-edited declaration marker. Safe inside this function's
+    // existing fail-closed try/catch: a GraphQL failure here degrades to
+    // `notRelieved`, never a crash.
     const declarationComments = port
-      .listWorkItemComments(targetIssue)
+      .listWorkItemComments(targetIssue, { includeEditState: true })
       .map(toIssueCommentPayload);
     const authorityOf = (actorLogin: string): AuthorityEvidence =>
       normalizeAuthorityEvidence(

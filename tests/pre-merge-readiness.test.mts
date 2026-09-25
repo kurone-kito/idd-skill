@@ -870,6 +870,75 @@ test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays mi
   assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
 });
 
+// #3249: a body-edited watermark is not merely a different kind of
+// malformed -- it must read as though no watermark exists at all (the
+// shape was never wrong, only its current trustworthiness), so the route
+// stays the generic 'missing-watermark', not 'malformed-watermark'.
+test('buildPreMergeReadinessSummary: an edited trusted review-watermark comment reads as absent (missing-watermark), not malformed', () => {
+  const prHeadSha = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+          updatedAt: '2026-08-02T01:00:00Z',
+          lastEditedAt: '2026-08-02T01:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
+});
+
+// #3249: when an edited watermark is posted after a genuinely unedited one,
+// the unedited watermark must still be found and used -- an edit on a
+// LATER comment must not poison selection of an earlier, still-trustworthy
+// one.
+test('buildPreMergeReadinessSummary: an unedited review-watermark preceding a later edited one is still used', () => {
+  const prHeadSha = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:10:00Z',
+          updatedAt: '2026-08-02T01:00:00Z',
+          lastEditedAt: '2026-08-02T01:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:15:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  // The live snapshot matches the surviving (older, unedited) watermark
+  // exactly, so the route proceeds instead of returning to E1.
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'proceed');
+});
+
 test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
   const prHeadSha = '5555555555555555555555555555555555555555';
   const customBotLogin = 'my-custom-review-bot[bot]';

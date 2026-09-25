@@ -171,7 +171,7 @@ test('normalizeThread maps a ProviderPort review-thread node, including nested c
           updatedAt: '',
           authorLogin: 'reviewer-user',
           pullRequestReviewId: 'PRR_1',
-          lastEditedAt: null,
+           lastEditedAt: null,
         },
       ],
     }),
