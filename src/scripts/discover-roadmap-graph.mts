@@ -16,6 +16,12 @@ import {
 import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
+  consumeDependencyContinuationRefLines,
+  consumeDependencyReferenceList,
+  type DependencyGrammarUnresolvedToken,
+  hasDependencyReferenceListStart,
+} from './dependency-grammar.mts';
+import {
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
@@ -944,6 +950,7 @@ export async function enumerateRoadmapGraph(
       options.readiness,
       loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
 
@@ -999,7 +1006,30 @@ export async function enumerateRoadmapGraph(
     visitedIssuePaths.add(visitKey);
 
     recordNode(issue, path);
-    const references = await getReferences(issue);
+    const allReferences = await getReferences(issue);
+    // #3284: a cross-repository dependency/task-list reference is encoded
+    // as a `relationship: 'unresolvable-reference'` sentinel (see
+    // `extractKeywordReferences`/`extractTaskListReferences`) rather than
+    // a real edge -- record it directly as a diagnostic and drop it here,
+    // before it can ever become an edge, a node, or a duplicate/cycle
+    // candidate below.
+    const references = allReferences.filter((reference) => {
+      if (reference.relationship !== 'unresolvable-reference') {
+        return true;
+      }
+      recordReferenceDiagnostic(
+        diagnostics.unresolvedReferences,
+        unresolvedKeys,
+        {
+          source: issue.number,
+          target: reference.target,
+          relationship: reference.relationship,
+          evidence: reference.evidence,
+        },
+        'cross_repository_reference',
+      );
+      return false;
+    });
     // Per visit, not graph-global: the same issue can be visited again on
     // another provenance path. A later same-triple mention in this body
     // (prose + standalone `Blocked by #N`, or two identical task-list
@@ -1181,7 +1211,12 @@ export async function enumerateRoadmapGraph(
   // would still fetch (and transitively expand) a target `visitIssue` itself
   // never visits, needlessly spending GitHub requests and rate-limit budget
   // on a subgraph the real traversal was designed to skip entirely
-  // (CodeRabbit, PR #2381).
+  // (CodeRabbit, PR #2381). #3284 (Copilot review, PR #3415): an
+  // `unresolvable-reference` sentinel is excluded the same way --
+  // `visitIssue` filters it into a diagnostic before it ever becomes a real
+  // edge, so its `target` (a digit parsed from a cross-repository token
+  // purely for the diagnostic, never a real local issue number) must not
+  // schedule an unrelated local issue for prefetch either.
   async function expandForPrefetch(issueNumber: number): Promise<number[]> {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue) || issue.isPullRequest) {
@@ -1189,7 +1224,9 @@ export async function enumerateRoadmapGraph(
     }
     return (await getReferences(issue))
       .filter(
-        (reference) => reference.relationship !== 'non-blocking-reference',
+        (reference) =>
+          reference.relationship !== 'non-blocking-reference' &&
+          reference.relationship !== 'unresolvable-reference',
       )
       .map((reference) => reference.target);
   }
@@ -1308,6 +1345,12 @@ export async function enumerateAllRoadmapsGraph(
   options: EnumerateAllRoadmapsGraphOptions = {},
 ): Promise<RoadmapGraphUnionReport> {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // #3284 (Copilot review, PR #3415): threaded into `annotateReadiness`
+  // below so the union's own readiness annotation resolves a qualified
+  // `owner/repo#N` dependency token against the same repository each
+  // per-root `enumerateRoadmapGraph` call already uses for its own
+  // `currentRepoRef`.
+  const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
   // Resolve the configured suitability floor (normalized to an integer
   // 1-5, falling back to the default when unset) once, then rank unscored
   // leaves at that configured floor.
@@ -1479,6 +1522,7 @@ export async function enumerateAllRoadmapsGraph(
       options.readiness,
       options.loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
 
@@ -1663,6 +1707,7 @@ async function annotateReadiness(
   readiness: ReadinessResolution,
   loadIssue: (issueNumber: number) => unknown,
   markerPrefix: string,
+  currentRepo: string,
 ): Promise<void> {
   const openEntries = entries.filter(
     (entry) => String(entry.state).toUpperCase() === 'OPEN',
@@ -1686,6 +1731,14 @@ async function annotateReadiness(
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
       markerPrefix,
+      // #3284 (Copilot review, PR #3415): without this, a `Blocked
+      // by`/`Depends on` line naming this same repository
+      // (`owner/repo#N`) resolves to a real graph edge via
+      // `currentRepoRef` above but reports unresolvable here, splitting
+      // the same node's readiness annotation from the graph's own
+      // traversal -- exactly the cross-path disagreement this issue
+      // exists to eliminate.
+      currentRepo: currentRepo || undefined,
       now: readiness.nowIso,
     },
   );
@@ -2443,9 +2496,9 @@ export function extractTaskListReferences(
   // evaluation, before a later top-level const would have initialized
   // (TDZ).
   const bareOrLinkTextRe =
-    /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\([^)\n]*\))?/u;
+    /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\(([^)\n]*)\))?/u;
   const linkUrlRe =
-    /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
+    /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*?([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
   const trailingReferenceRe =
     /(?:^|\s)\(?(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))\)?[.,;:]*\s*$/u;
   const currentRepoRef = normalizeRepoRef(
@@ -2465,14 +2518,54 @@ export function extractTaskListReferences(
     if (!isTaskListCheckboxLine(maskedLine)) {
       continue;
     }
-    const leadingMatch =
-      maskedLine.match(bareOrLinkTextRe) ?? maskedLine.match(linkUrlRe);
-    if (leadingMatch) {
-      const target = Number.parseInt(leadingMatch[1], 10);
+    // #3284: the leading bare/link-text form (`- [ ] #123` or
+    // `- [ ] [#123](url)`) had no repository check on its optional
+    // trailing `(url)` at all, and the leading link-URL form
+    // (`- [ ] [text](url)`) checked only the URL's trailing issue/PR
+    // number, never the owner/repo segment immediately before it -- so
+    // `- [ ] [Upstream fix](https://github.com/other/repo/issues/12)`
+    // silently became a local #12 edge. Both forms now check that
+    // segment (when present) against `currentRepoRef`, routing a genuine
+    // mismatch to the same `unresolvable-reference` sentinel the
+    // dependency-keyword handling above uses (recognized by `visitIssue`,
+    // which records it as a `cross_repository_reference` diagnostic
+    // instead of a real edge/node). An unknown `currentRepoRef` (no
+    // `owner`/`repo` supplied) skips the check and keeps resolving
+    // optimistically, unchanged from before -- this function has never
+    // required an `owner`/`repo` argument, and today's two `(#2476)`
+    // tests call it with none.
+    const bareOrLinkTextMatch = maskedLine.match(bareOrLinkTextRe);
+    const linkUrlMatch = bareOrLinkTextMatch
+      ? null
+      : maskedLine.match(linkUrlRe);
+    if (bareOrLinkTextMatch) {
+      const target = Number.parseInt(bareOrLinkTextMatch[1], 10);
+      const trailingUrlText = bareOrLinkTextMatch[2];
+      const crossRepo =
+        typeof trailingUrlText === 'string'
+          ? isCrossRepoGithubIssueUrl(trailingUrlText, currentRepoRef)
+          : false;
       if (Number.isInteger(target) && target > 0) {
         references.push({
           target,
-          relationship: 'task-list',
+          relationship: crossRepo ? 'unresolvable-reference' : 'task-list',
+          evidence: (rawLines[index] ?? maskedLine).trim(),
+        });
+      }
+      continue;
+    }
+    if (linkUrlMatch) {
+      const qualifiedRepoRef = normalizeRepoRef(
+        linkUrlMatch[1],
+        linkUrlMatch[2],
+      );
+      const target = Number.parseInt(linkUrlMatch[3], 10);
+      const crossRepo =
+        Boolean(currentRepoRef) && qualifiedRepoRef !== currentRepoRef;
+      if (Number.isInteger(target) && target > 0) {
+        references.push({
+          target,
+          relationship: crossRepo ? 'unresolvable-reference' : 'task-list',
           evidence: (rawLines[index] ?? maskedLine).trim(),
         });
       }
@@ -2543,6 +2636,16 @@ export function extractKeywordReferences(
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
   const maskedLines = maskMarkdownForScan(rawBody).split(/\r?\n/u);
+  // #3284: a second, HTML-comment-masked view used only for the two
+  // dependency keywords (`Blocked by`/`Depends on`) below -- see the
+  // dependency branch inside the loop for why the default `maskedLines`
+  // above (HTML comments left visible, matching every other keyword's
+  // existing, unchanged behavior) isn't reused for them.
+  // `maskMarkdownForScan` always preserves length and line structure, so
+  // this stays index-aligned with `maskedLines`/`rawLines`.
+  const dependencyMaskedLines = maskMarkdownForScan(rawBody, {
+    htmlComments: 'mask',
+  }).split(/\r?\n/u);
   for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex += 1) {
     const maskedLine = maskedLines[lineIndex];
     const rawLine = rawLines[lineIndex] ?? maskedLine;
@@ -2588,6 +2691,128 @@ export function extractKeywordReferences(
         NON_BLOCKING_ANNOTATION_PATTERN.test(segment)
           ? 'non-blocking-reference'
           : baseRelationship;
+
+      if (baseRelationship === 'dependency') {
+        // #3284: `Blocked by`/`Depends on` share the
+        // `dependency-grammar.mts` ref-list parser instead of
+        // `extractKeywordReferenceTargets` below, gaining
+        // `https://github.com/owner/repo/issues/N` token recognition,
+        // fail-safe cross-repository reporting, and GitHub's line-wrap
+        // continuation (#2441). Unlike every other keyword this function
+        // matches anywhere on the line, a dependency match only counts
+        // when it is genuinely line-anchored (only optional indentation,
+        // blockquote markers, and at most one list marker may precede
+        // it) -- the issue's own Maintainer decision names the
+        // line-anchored grammar "the single `Blocked by` grammar shared
+        // by every helper". A non-anchored match (a narrated mid-sentence
+        // mention) produces no reference at all here, the same "no
+        // dependency" outcome a negated match produces; see the updated
+        // #2799 regression test for the resulting behavior on a body
+        // that narrates a dependency in prose and also restates it as a
+        // standalone line.
+        //
+        // The anchor check (and the segment below it) both read from
+        // `dependencyMaskedLines` (HTML comments additionally masked),
+        // never the default `maskedLine` -- an HTML comment is invisible
+        // prose that must not count as an anchor-breaking prefix any
+        // more than it counts as a keyword-suppressing one (Copilot
+        // review, PR #3415): `<!-- note --> Blocked by #12` is a genuine
+        // anchored dependency once the comment is masked away, even
+        // though `maskedLine` alone (comments visible, matching every
+        // other keyword's own unchanged behavior) would see a non-blank
+        // prefix and wrongly reject it.
+        const dependencyMaskedLine = dependencyMaskedLines[lineIndex] ?? '';
+        const dependencyLineAnchorRe =
+          /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?$/u;
+        if (
+          !dependencyLineAnchorRe.test(
+            dependencyMaskedLine.slice(0, matchIndex),
+          )
+        ) {
+          continue;
+        }
+        if (
+          dependencyMaskedLine.slice(matchIndex, segmentStart).trim() === ''
+        ) {
+          // The keyword itself sits inside an HTML comment -- suppressed,
+          // the same as a negated match.
+          continue;
+        }
+        // #3284 (Copilot review, PR #3415, rounds 2-3): the shared
+        // grammar's line pattern requires horizontal whitespace after the
+        // keyword (optionally after a colon immediately adjacent to the
+        // keyword, never after leading whitespace of its own) before it
+        // will even try to parse a ref-list -- `Blocked by#12`,
+        // `Blocked by:#12`, and `Blocked by : #12` (colon separated from
+        // the keyword by whitespace) are none of them a dependency
+        // declaration there. A hand-approximated gap check drifted from
+        // this twice already (round 2 required no gap at all; a
+        // same-round fix then accepted a bare `/^:?[ \t]+/` match, which
+        // says nothing about what follows the gap and so still let
+        // `Blocked by : #12` through), so this reuses
+        // `hasDependencyReferenceListStart` -- the exact token-start test
+        // the shared line pattern itself applies -- instead of
+        // hand-approximating a fourth time.
+        const dependencyGapMatch = dependencyMaskedLine
+          .slice(segmentStart)
+          .match(/^:?[ \t]+/u);
+        if (
+          !dependencyGapMatch ||
+          !hasDependencyReferenceListStart(
+            dependencyMaskedLine.slice(
+              segmentStart + dependencyGapMatch[0].length,
+            ),
+          )
+        ) {
+          continue;
+        }
+        // The ordinary `segmentEnd` computed above is bounded by the next
+        // `KEYWORD_REFERENCE_REGEX` match on the UNMASKED `maskedLine`, so
+        // a keyword hidden inside an HTML comment later on this same line
+        // (invisible prose) would wrongly truncate this dependency's own
+        // segment and suppress its continuation sweep below, even though
+        // the shared grammar (which masks that comment) reads straight
+        // through it. Recompute the boundary -- and the continuation
+        // eligibility below -- against a fresh keyword search over
+        // `dependencyMaskedLine`, so only a genuinely visible later
+        // keyword ends this segment early.
+        const laterKeywordInMasked = [
+          ...dependencyMaskedLine
+            .slice(segmentStart)
+            .matchAll(KEYWORD_REFERENCE_REGEX),
+        ][0];
+        const dependencySegmentEnd = laterKeywordInMasked
+          ? segmentStart + (laterKeywordInMasked.index ?? 0)
+          : dependencyMaskedLine.length;
+        const dependencySegment = dependencyMaskedLine
+          .slice(segmentStart, dependencySegmentEnd)
+          .trimStart()
+          .replace(/^:\s*/u, '');
+        const dependencyResult = consumeDependencyReferenceList(
+          dependencySegment,
+          { currentRepo: currentRepoRef || undefined },
+        );
+        pushDependencyReferences(
+          references,
+          dependencyResult,
+          relationship,
+          rawLine,
+        );
+        if (!laterKeywordInMasked && dependencyResult.remaining.trim() === '') {
+          pushDependencyReferences(
+            references,
+            consumeDependencyContinuationRefLines(
+              dependencyMaskedLines,
+              lineIndex + 1,
+              { currentRepo: currentRepoRef || undefined },
+            ),
+            relationship,
+            rawLine,
+          );
+        }
+        continue;
+      }
+
       for (const target of extractKeywordReferenceTargets(
         segment,
         currentRepoRef,
@@ -2604,6 +2829,47 @@ export function extractKeywordReferences(
     }
   }
   return references;
+}
+
+/** Extract the last run of digits in `token` (e.g. `12` from
+ * `other/repo#12` or from a `.../issues/12` URL) -- used only to give a
+ * cross-repository dependency sentinel (see {@link
+ * pushDependencyReferences}) a diagnostic-friendly `target` number; it is
+ * never treated as a real local issue number. */
+function parseTrailingDigits(token: string): number {
+  const match = token.match(/(\d+)(?!.*\d)/u);
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+
+/**
+ * Push a {@link consumeDependencyReferenceList} /
+ * {@link consumeDependencyContinuationRefLines} result's resolved local
+ * numbers as ordinary `relationship`-tagged references, and its
+ * cross-repository `unresolvable` tokens as `unresolvable-reference`
+ * sentinels -- `visitIssue` recognizes that relationship and reroutes it
+ * to `diagnostics.unresolvedReferences` instead of a real edge/node (see
+ * the call site in `enumerateRoadmapGraph`).
+ */
+function pushDependencyReferences(
+  references: RoadmapGraphReference[],
+  result: {
+    numbers: number[];
+    unresolvable: DependencyGrammarUnresolvedToken[];
+  },
+  relationship: string,
+  rawLine: string,
+): void {
+  const evidence = rawLine.trim();
+  for (const target of result.numbers) {
+    references.push({ target, relationship, evidence });
+  }
+  for (const unresolvedToken of result.unresolvable) {
+    references.push({
+      target: parseTrailingDigits(unresolvedToken.token),
+      relationship: 'unresolvable-reference',
+      evidence,
+    });
+  }
 }
 
 /**
@@ -2714,6 +2980,36 @@ function normalizeRepoRef(owner: unknown, repo: unknown): string {
   return normalizedOwner && normalizedRepo
     ? `${normalizedOwner}/${normalizedRepo}`
     : '';
+}
+
+/**
+ * #3284: `true` only when `text` is a recognizable
+ * `https://github.com/owner/repo/issues|pull/N` URL naming a repository
+ * other than `currentRepoRef`. Arbitrary non-URL prose (an ordinary
+ * parenthetical aside on a `- [ ] [#123] (context)` item) and an
+ * unrecognized URL shape both return `false` -- this is a targeted
+ * repository check, not a general "is this a GitHub URL" validator -- as
+ * does an empty `currentRepoRef` (unknown current repository), matching
+ * {@link extractTaskListReferences}'s existing repo-scope checks. The
+ * regex is function-local, not a module-level const, because this file's
+ * `import.meta.main` CLI entry block sits well above this function and a
+ * module-level const declared after it would be in the temporal dead zone
+ * for any synchronous CLI path that reaches here.
+ */
+function isCrossRepoGithubIssueUrl(
+  text: string,
+  currentRepoRef: string,
+): boolean {
+  if (!currentRepoRef) {
+    return false;
+  }
+  const githubIssueOrPrUrlRe =
+    /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/\d+/u;
+  const match = text.match(githubIssueOrPrUrlRe);
+  if (!match) {
+    return false;
+  }
+  return normalizeRepoRef(match[1], match[2]) !== currentRepoRef;
 }
 
 function normalizeSubIssueReferences(
