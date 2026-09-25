@@ -41,6 +41,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
+  classifyIddPrComment,
   compareIsoTimestamps,
   DEFAULT_ADVISORY_BOT_LOGINS,
   dispositionNamesAdvisoryBot,
@@ -307,11 +308,23 @@ export function buildDispositionPlan(input, options = {}) {
   // errs toward posting (#1122). Notices are excluded because the gate carves
   // them and their dispositions out of the general pool; agent-authored comments
   // (operational markers, digests, the dispositions themselves) are excluded via
-  // `trustedMarkerLogins`; other summaries are handled by the greedy pass above.
+  // the shared `classifyIddPrComment` (kurone-kito/idd-skill#3267) rather than a
+  // blanket `!trustedMarkerLogins.has(other.login)` check -- the prior blanket
+  // check skipped EVERY comment by a trusted marker login regardless of its
+  // body, so a genuine review-shaped comment from a trusted human collaborator
+  // (`idd-overview-core.instructions.md`'s collaborator-trust carve-out) could
+  // never "steal" the pairing slot either, silently under-covering the older
+  // comment's own claim on the disposition marker. Only a comment the
+  // classifier calls `review` -- genuine feedback, not IDD's own operational
+  // or disposition traffic -- can steal; other summaries are handled by the
+  // greedy pass above.
   const markerCouldBeStolen = (dispositionActivityAt) =>
     comments.some(
       (other) =>
-        !trustedMarkerLogins.has(other.login) &&
+        classifyIddPrComment(
+          { body: other.body, author: { login: other.login } },
+          { trustedMarkerLogins: [...trustedMarkerLogins] },
+        ) === 'review' &&
         !isAdvisoryNonReviewNotice(other.body) &&
         !isReviewSummaryComment(other.body) &&
         compareIsoTimestamps(
