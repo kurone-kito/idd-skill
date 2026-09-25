@@ -5,8 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
 
-import { ghText } from '../src/scripts/gh-exec.mts';
+import {
+  ghText,
+  tagGhCommandError,
+  wrapGhCompatibilityError,
+} from '../src/scripts/gh-exec.mts';
 import type {
   HelperCliResult,
   RunHelperCliIo,
@@ -392,6 +397,39 @@ test('classifyHelperError: a toProviderError-shaped .cause chain carrying a gh 4
   } finally {
     restore();
   }
+});
+
+test('wrapGhCompatibilityError keeps a bare gh: HTTP line classifiable without changing the compatibility message', () => {
+  const original = Object.assign(new Error('Command failed: gh api'), {
+    stderr: 'gh: HTTP 404\n',
+  });
+  const wrapped = wrapGhCompatibilityError(original);
+  assert.equal(wrapped.message, 'gh command failed: gh: HTTP 404');
+  assert.equal(
+    Object.prototype.propertyIsEnumerable.call(wrapped, 'stderr'),
+    false,
+  );
+  assert.equal(inspect(wrapped).includes('stderr'), false);
+  const classified = classifyHelperError(wrapped);
+  assert.equal(classified.kind, 'not-found');
+  assert.equal(classified.httpStatus, 404);
+  assert.match(classified.message, /gh command failed: gh: HTTP 404/);
+
+  const wrapped503 = wrapGhCompatibilityError(
+    Object.assign(new Error('Command failed: gh api'), {
+      stderr: 'gh: HTTP 503',
+    }),
+  );
+  const classified503 = classifyHelperError(wrapped503);
+  assert.equal(classified503.kind, 'transport');
+  assert.equal(classified503.httpStatus, 503);
+
+  // The prefixed message alone does not satisfy the line-start match.
+  const messageOnly = classifyHelperError(
+    tagGhCommandError(new Error('gh command failed: gh: HTTP 404')),
+  );
+  assert.equal(messageOnly.kind, 'transport');
+  assert.equal(messageOnly.httpStatus, null);
 });
 
 // --- gate / internal -----------------------------------------------------

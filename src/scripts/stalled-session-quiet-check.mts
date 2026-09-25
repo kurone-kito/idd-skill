@@ -13,7 +13,7 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
-  tagGhCommandError,
+  wrapGhCompatibilityError,
 } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -588,10 +588,9 @@ function runGh(args: string[]): string {
   } catch (error) {
     const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
     if (stderr) {
-      // Keep the compatibility message, and mark the wrapper as a gh
-      // command so the envelope classifies the original gh failure (the
-      // message still carries the HTTP text deriveGhHttpStatus reads).
-      throw tagGhCommandError(new Error(`gh command failed: ${stderr}`));
+      // Keep the compatibility message, and keep the original stderr so a
+      // bare `gh: HTTP NNN` line still classifies.
+      throw wrapGhCompatibilityError(error);
     }
     throw error;
   }

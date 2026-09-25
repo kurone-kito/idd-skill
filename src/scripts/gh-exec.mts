@@ -70,6 +70,33 @@ export function tagGhCommandError<T>(error: T): T {
 }
 
 /**
+ * Rebuild the historical `gh command failed: <stderr>` error a helper
+ * throws for compatibility, without dropping the original stderr stream.
+ *
+ * `deriveGhHttpStatus` recognizes a bare `gh: HTTP NNN` line only when
+ * that line starts the scanned text. A message that merely prefixes the
+ * same text (`gh command failed: gh: HTTP 404`) does not match, so a real
+ * 404 is classified as `transport` with `httpStatus: null`. Copying the
+ * original stderr onto the new error, non-enumerable, lets the classifier
+ * read that line. Node's uncaught crash text still prints only `.message`,
+ * so the unset-envelope output stays the compatibility sentence (Copilot
+ * review, PR #3442).
+ */
+export function wrapGhCompatibilityError(error: unknown): Error {
+  const rawStderr = (error as { stderr?: unknown } | null)?.stderr;
+  const stderr = String(rawStderr ?? '').trim();
+  const wrapped = new Error(`gh command failed: ${stderr}`);
+  if (rawStderr != null && String(rawStderr).length > 0) {
+    Object.defineProperty(wrapped, 'stderr', {
+      value: rawStderr,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return tagGhCommandError(wrapped);
+}
+
+/**
  * Default `execFileSync`/`execFile` timeout (ms) applied when a caller
  * supplies none — the existing 30s convention already used at 54+
  * `GH_TEXT_LOOP_TIMEOUT_OPTIONS` call sites (#1675). Without this, a

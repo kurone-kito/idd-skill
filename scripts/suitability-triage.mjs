@@ -20,7 +20,7 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
   resolveGhApiHostname,
-  tagGhCommandError,
+  wrapGhCompatibilityError,
 } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -4525,10 +4525,9 @@ function runGh(args) {
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();
     if (stderr) {
-      // Keep the compatibility message, and mark the wrapper as a gh
-      // command so the envelope classifies the original gh failure (the
-      // message still carries the HTTP text deriveGhHttpStatus reads).
-      throw tagGhCommandError(new Error(`gh command failed: ${stderr}`));
+      // Keep the compatibility message, and keep the original stderr so a
+      // bare `gh: HTTP NNN` line still classifies.
+      throw wrapGhCompatibilityError(error);
     }
     throw error;
   }
