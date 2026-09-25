@@ -11333,6 +11333,117 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
   });
 }
 
+// #3466: classifyRegularBotComment's CodeRabbit-only branch previously
+// returned null unconditionally for every non-CodeRabbit author, so a
+// dispositioned Codex usage-limit notice never became a cleanup candidate --
+// observed live on PR #3456 (notice comment 5835065252, dispositioned by
+// comment 5835210438) and again on the prior loop's merged PR #3444.
+// Fixtures below are modeled on that PR #3456 pair. The new branch is
+// opt-in via `includeCodexUsageLimitNotice` -- only `audit-pr-cleanup.mts`'s
+// F4 caller passes it; `summarizeDispositionEvidenceForGate` and
+// `summarizeRegularCommentsForGate` (the F2/F3 merge-gate consumers of this
+// same classifier) do not, since each already carries its own multi-bot-safe
+// carry-forward for this exact notice.
+{
+  const codexNotice = {
+    id: 5835065252,
+    createdAt: '2026-09-25T15:35:04Z',
+    body:
+      'You have reached your Codex usage limits for code reviews. You can ' +
+      'see your limits in the [Codex usage dashboard]' +
+      '(https://chatgpt.com/codex/cloud/settings/usage).',
+    author: { login: 'chatgpt-codex-connector[bot]' },
+  };
+  const dispositionReply = {
+    id: 5835210438,
+    createdAt: '2026-09-25T15:45:16Z',
+    body:
+      '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+      '53e76e8c95520aa5cecdef7294fca825a3397cbc (Codex usage limits for ' +
+      'code reviews reached); this is not a completed review ' +
+      '(source: #issuecomment-5835065252)',
+    author: { login: 'kurone-kito' },
+  };
+  const isDispositionAuthor = (login: string) => login === 'kurone-kito';
+
+  test('#3466: a dispositioned Codex usage-limit notice becomes a cleanup candidate', () => {
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, dispositionReply],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
+
+  test('#3466: the same notice with no later trusted disposition stays skipped', () => {
+    const result = classifyRegularBotComment(codexNotice, [codexNotice], [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    assert.equal(result, null);
+  });
+
+  test('#3466: a non-notice Codex comment stays unclassified', () => {
+    const codexSummary = {
+      id: 42,
+      createdAt: '2026-09-25T15:00:00Z',
+      body: 'Reviewed the diff; looks good overall, one nit inline.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const result = classifyRegularBotComment(
+      codexSummary,
+      [codexSummary, dispositionReply],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a dispositioned Codex notice stays unclassified by default (opt-in required)', () => {
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, dispositionReply],
+      [],
+      { isDispositionAuthor },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a disposition naming a DIFFERENT bot does not resolve the Codex notice', () => {
+    const wrongBotDisposition = {
+      id: 99,
+      createdAt: '2026-09-25T15:45:16Z',
+      body:
+        '**Rejected** — coderabbitai[bot] did not review HEAD ' +
+        '53e76e8c95520aa5cecdef7294fca825a3397cbc (rate limited); this is ' +
+        'not a completed review',
+      author: { login: 'kurone-kito' },
+    };
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, wrongBotDisposition],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+
+  test('#3466: a disposition from an untrusted (non-IDD) author does not resolve the notice', () => {
+    const untrustedDisposition = {
+      ...dispositionReply,
+      author: { login: 'some-random-commenter' },
+    };
+    const result = classifyRegularBotComment(
+      codexNotice,
+      [codexNotice, untrustedDisposition],
+      [],
+      { isDispositionAuthor, includeCodexUsageLimitNotice: true },
+    );
+    assert.equal(result, null);
+  });
+}
+
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
 // hasFreshDisposition still requires a fresh disposition for a CodeRabbit
 // thread finding that was edited in place after its disposition (updatedAt

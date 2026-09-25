@@ -2917,15 +2917,114 @@ export function countUncoveredCodeRabbitEmbeddedFindings(
   return Math.max(0, embeddedFindingCount - threadedCommentCount);
 }
 
+// #3466: unlike `hasExplicitDispositionAfter` (the CodeRabbit
+// summary-walkthrough branch below), this notice-specific check must never
+// fall back to a bare product-word match. That fallback's `\bCodeRabbit\b`
+// test only makes sense there because a CodeRabbit summary sticky is itself
+// CodeRabbit-specific, so any disposition mentioning "CodeRabbit" is safely
+// attributable to it. A Codex usage-limit notice has no such single-bot
+// context -- in a multi-advisory-bot repository, a differently-worded
+// disposition that merely happens to name a DIFFERENT configured bot (e.g.
+// "**Rejected** -- CodeRabbit rate-limited, no findings to triage.") must
+// never resolve it. Match strictly on the production non-review-notice
+// template instead (`isNonReviewNoticeDisposition`, the same "**Rejected**
+// ... did not review HEAD ..." shape `disposition-non-review-notices.mts`
+// posts) plus per-bot login attribution (`dispositionNamesAdvisoryBot`) --
+// the same pairing the #1018 carry-forward logic elsewhere in this file
+// already uses for exactly this multi-bot-safety reason.
+function hasNonReviewNoticeDispositionAfter(
+  targetComment: CommentLike,
+  comments: CommentLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+): boolean {
+  const isDispositionAuthor =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login: string) => !isKnownReviewBot(login);
+  const targetTime = Date.parse(targetComment.createdAt ?? '');
+  const targetBotLogin = String(targetComment.author?.login ?? '');
+  return comments.some((comment) => {
+    const author = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      !isDispositionAuthor(author) ||
+      !isNonReviewNoticeDisposition({ body: comment.body }) ||
+      !dispositionNamesAdvisoryBot(comment.body ?? '', targetBotLogin)
+    ) {
+      return false;
+    }
+    const dispositionTime = Date.parse(comment.createdAt ?? '');
+    return (
+      Number.isFinite(targetTime) &&
+      Number.isFinite(dispositionTime) &&
+      dispositionTime > targetTime
+    );
+  });
+}
+
+// A Codex usage-limit notice (`isCodexUsageLimitNotice`) is a flat,
+// single-shot notice, not an editable review a later revision could still
+// add threads to -- unlike the CodeRabbit summary-walkthrough branch below,
+// it never resolves on its own. It becomes a minimization candidate only
+// once a LATER trusted IDD disposition attributes THIS exact notice, using
+// the strict, per-bot-scoped check above. Absent that disposition, the
+// notice stays an unresolved skip, same as before this branch existed --
+// and a non-notice Codex comment (a review summary, a finding reply, etc.)
+// is never classified here at all, since `isCodexUsageLimitNotice` only
+// recognizes the flat notice shape.
+function classifyCodexUsageLimitNotice(
+  comment: CommentLike,
+  comments: CommentLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean },
+): CommentClassification | null {
+  const author = comment.author?.login ?? '';
+  if (advisoryBotIdentityToken(author) !== 'chatgpt-codex-connector') {
+    return null;
+  }
+  if (!isCodexUsageLimitNotice(comment.body ?? '')) {
+    return null;
+  }
+  if (
+    !hasNonReviewNoticeDispositionAfter(comment, comments, {
+      isDispositionAuthor: options.isDispositionAuthor,
+    })
+  ) {
+    return null;
+  }
+  return {
+    classifier: 'RESOLVED',
+    reason: 'Codex usage-limit notice has matched IDD disposition evidence',
+  };
+}
+
 export function classifyRegularBotComment(
   comment: CommentLike,
   comments: CommentLike[],
   threads: ThreadLike[],
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    // #3466: opt-in only. `summarizeDispositionEvidenceForGate` and
+    // `summarizeRegularCommentsForGate` (the F2/F3 merge-gate consumers of
+    // this classifier) each already carry their OWN multi-bot-safe
+    // carry-forward for a dispositioned Codex notice (the #1018 loop and
+    // `matchTrustedAdvisoryStickyDispositions`, respectively), including
+    // bookkeeping that marks the matched disposition consumed so it can
+    // never leak into a generic 1:1 pairing pool and falsely resolve a
+    // DIFFERENT bot's still-undispositioned notice. Recognizing the notice
+    // here too, unconditionally, would let this classifier's own result
+    // bypass that bookkeeping and reopen exactly that leak. Only
+    // `audit-pr-cleanup.mts`'s F4 cleanup caller -- which has no such
+    // separate mechanism of its own -- opts in.
+    includeCodexUsageLimitNotice?: boolean;
+  } = {},
 ): CommentClassification | null {
   const author = comment.author?.login ?? '';
   if (!isCodeRabbitLogin(author)) {
-    return null;
+    if (!options.includeCodexUsageLimitNotice) {
+      return null;
+    }
+    return classifyCodexUsageLimitNotice(comment, comments, options);
   }
 
   if (hasUnresolvedKnownBotThreads(threads)) {
@@ -7731,6 +7830,14 @@ export function summarizeDispositionEvidenceForGate(
                   .trim()
                   .toLowerCase(),
               ),
+            // #3466: this gate has its own multi-bot-safe carry-forward for
+            // a dispositioned Codex notice below (the #1018 loop, matched
+            // per author via `dispositionNamesAdvisoryBot`), including
+            // bookkeeping that marks the matched disposition consumed so it
+            // can never leak into the generic 1:1 pairing pool. Do not opt
+            // in here -- `includeCodexUsageLimitNotice` is for the
+            // F4-cleanup caller only (`audit-pr-cleanup.mts`), which has no
+            // such separate mechanism.
           },
         ) === null
       );
