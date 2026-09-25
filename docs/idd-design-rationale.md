@@ -169,28 +169,18 @@ a worktree Discover isn't running from. That same header comment is
 also explicit that a hit is corroborating bootstrap evidence only, not
 sole proof of current-session ownership by itself — under this
 repository's heavy-concurrency dogfooding, a different, still-live
-sibling session's own A5 claim can leave an indistinguishable record
-at that same shared path. Step 1.5's check therefore does **not**
-conclude ownership from `present: true` and adopt the recorded pair
-outright; it only stops Step 1.5 from silently discarding the
-candidate as an ordinary foreign claim, and routes it to
-`idd-resume.instructions.md` instead, so that file's own
-GitHub-authoritative claim-state rules — not a local file alone — make
-the actual ownership call. Resume's own Step 1 table already treats an
-active non-stale claim from another session as "STOP — not inheritable
-even if agent-id matches," and only continues with the same
-`{claim-id}` once independently verified as this session's own; a
-genuinely foreign, still-live claim with no forced-handoff evidence
-still lands on one of those existing STOP/quiet-window routes,
-unchanged from today. Until `#3273` closes its own gap, Resume's
-mechanized path does not yet consume this session's on-disk record
-either, so a genuine same-machine recovery surfaces as a reported stop
-rather than a silent auto-resume — a strict improvement over today's
-silent skip regardless, since a human or a later pass can now act on
-it instead of it vanishing from view. This keeps the original pre-scan
-mitigation intact for the two-different-sessions case it exists for,
-while replacing today's silent skip with a real, GitHub-authoritative
-investigation for the same-machine-recovery case.
+sibling session's own A5 claim can leave its own record at that same
+shared path. The file is keyed by claim-id, and its `agentId` is the
+session signal Discover already holds, so Step 1.5 routes to
+`idd-resume.instructions.md` only when that plain `present: true`
+record's `agentId` equals this session's `{agent-id}`. A different
+`agentId` stays ineligible and the scan continues, so a live sibling
+does not stop selection. Resume still decides ownership for a matching
+record. A context clear that minted a new `{agent-id}` cannot match
+and stays ineligible: the shared primary has no process binding that
+would separate that record from a live sibling, so the foreign-claim
+filter stays. This keeps the pre-scan's skip of a genuinely different
+session intact.
 
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to
