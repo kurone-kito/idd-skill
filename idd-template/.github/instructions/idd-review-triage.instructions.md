@@ -198,7 +198,9 @@ E5 pass into one follow-up issue per E6's follow-up-issue rule (never
 appended to an earlier published follow-up), each with an AC bullet,
 exactly one `Refs #<originating-issue>` line, and the
 `<!-- {{PROJECT_MARKER_PREFIX}}-authoring-defer-source: review-fix-loop-cutoff -->`
-marker. See
+marker, then continue at once to the issue-authoring skill's Stage 2
+narrow auto-release exception instead of stopping at the Stage 1
+hold. See
 [rationale](../../docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
 
 ## E6 — Post disposition replies
