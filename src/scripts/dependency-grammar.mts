@@ -242,12 +242,80 @@ export function hasDependencyReferenceListStart(text: string): boolean {
   return TOKEN_START_RE.test(text);
 }
 
+/** The parsed local numbers and any unresolvable (cross-repository) tokens
+ * a single keyword-line match (plus any swept continuation lines)
+ * produced -- see {@link matchDependencyKeywordLine}. */
+export interface DependencyKeywordLineMatch {
+  numbers: number[];
+  unresolvable: DependencyGrammarUnresolvedToken[];
+}
+
+/**
+ * Test whether `lines[index]` opens a canonical `keyword` dependency line
+ * (after the optional prefix above), sweeping in any immediately
+ * following GitHub-wrapped continuation lines (#2441) the same way
+ * {@link extractDependencyReferences} does. Returns `undefined` when the
+ * line does not open a keyword dependency declaration at all -- no
+ * keyword match, or the captured tail does not start with a recognized
+ * reference token.
+ *
+ * Unlike {@link extractDependencyReferences}, this function never masks
+ * its input: `lines` must already be the caller's own masked-and-split
+ * body (#3285). A caller that needs a per-line "does the shared grammar
+ * already accept this line" answer without re-masking a body it already
+ * masked once should call this directly instead of re-invoking
+ * {@link extractDependencyReferences} on an isolated single line --
+ * re-masking one line in isolation loses the surrounding document
+ * context a structural mask (fenced/indented code) depends on, and can
+ * turn a valid nested/indented dependency line into a spurious top-level
+ * indented code block, silently dropping it. Exported so a caller doesn't
+ * have to hand-roll the same `DEPENDENCY_LINE_PREFIX`/`TOKEN_START`/
+ * `consume*` logic a second time -- see {@link hasDependencyReferenceListStart}'s
+ * own doc comment for the three-time drift history of independently
+ * re-deriving pieces of this grammar.
+ */
+export function matchDependencyKeywordLine(
+  lines: readonly string[],
+  index: number,
+  keyword: string,
+  options: DependencyGrammarOptions = {},
+): DependencyKeywordLineMatch | undefined {
+  const linePattern = new RegExp(
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}:?[ \\t]+(${TOKEN_START}.*)$`,
+    'i',
+  );
+  const match = lines[index]?.match(linePattern);
+  if (!match) {
+    return undefined;
+  }
+  const lineResult = consumeDependencyReferenceList(match[1], options);
+  const numbers = [...lineResult.numbers];
+  const unresolvable = [...lineResult.unresolvable];
+  // #2441's line-wrap sweep only applies when the keyword line's own
+  // reference list is the *entire* rest of the line -- trailing prose
+  // (`Blocked by #10.`) means the next line is unrelated text, not a
+  // GitHub-wrapped continuation, so sweeping it in would over-capture.
+  // Mirrors the same guard `discover-roadmap-graph.mts`'s dependency
+  // handling already applies at its own match position.
+  if (lineResult.remaining.trim() === '') {
+    const continuation = consumeDependencyContinuationRefLines(
+      lines,
+      index + 1,
+      options,
+    );
+    numbers.push(...continuation.numbers);
+    unresolvable.push(...continuation.unresolvable);
+  }
+  return { numbers, unresolvable };
+}
+
 /**
  * Extract every `keyword` (`Blocked by` / `Depends on`) dependency
  * reference from `body`, line-anchored: the keyword must open the line
  * (after the optional prefix above). `body` is the **raw** issue/PR body;
  * masking (inline code, HTML comments, `\r\n` normalization) happens
- * internally.
+ * internally, exactly once, before {@link matchDependencyKeywordLine} is
+ * applied per line.
  */
 export function extractDependencyReferences(
   body: string,
@@ -261,35 +329,15 @@ export function extractDependencyReferences(
     htmlComments: 'mask',
   });
   const lines = masked.split('\n');
-  const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}:?[ \\t]+(${TOKEN_START}.*)$`,
-    'i',
-  );
   const numbers: number[] = [];
   const unresolvable: DependencyGrammarUnresolvedToken[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index]?.match(linePattern);
-    if (!match) {
+    const result = matchDependencyKeywordLine(lines, index, keyword, options);
+    if (!result) {
       continue;
     }
-    const lineResult = consumeDependencyReferenceList(match[1], options);
-    numbers.push(...lineResult.numbers);
-    unresolvable.push(...lineResult.unresolvable);
-    // #2441's line-wrap sweep only applies when the keyword line's own
-    // reference list is the *entire* rest of the line -- trailing prose
-    // (`Blocked by #10.`) means the next line is unrelated text, not a
-    // GitHub-wrapped continuation, so sweeping it in would over-capture.
-    // Mirrors the same guard `discover-roadmap-graph.mts`'s dependency
-    // handling already applies at its own match position.
-    if (lineResult.remaining.trim() === '') {
-      const continuation = consumeDependencyContinuationRefLines(
-        lines,
-        index + 1,
-        options,
-      );
-      numbers.push(...continuation.numbers);
-      unresolvable.push(...continuation.unresolvable);
-    }
+    numbers.push(...result.numbers);
+    unresolvable.push(...result.unresolvable);
   }
   return { numbers, unresolvable };
 }
