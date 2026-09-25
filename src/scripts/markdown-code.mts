@@ -1572,12 +1572,26 @@ export function findHtmlCommentRanges(
   // has fenced ranges (see computeLineListContentIndents's own doc
   // comment) can pass them through rather than triggering a second
   // findFencedCodeRanges scan here.
-  fencedRanges?: MarkdownCodeRange[],
+  fencedRanges: MarkdownCodeRange[] = findFencedCodeRanges(text),
   // Copilot review round 6, same PR: same reasoning, for a caller that
   // already has {@link findHtmlBlockRanges}'s own result (e.g.
   // {@link maskMarkdownForScan} when `htmlBlocks: 'mask'` is also
-  // requested).
-  htmlBlockRanges?: MarkdownCodeRange[],
+  // requested). Copilot review round 7, same PR: also read directly
+  // below (not only threaded into computeLineListContentIndents) -- an
+  // unterminated opener sitting anywhere inside an ALREADY-open
+  // raw/generic HTML block (e.g. "<div><!-- trigger", the "<!--" not
+  // itself at a fresh block-start position, but already inside the
+  // "<div>" block's own extent) is real, opaque content per CommonMark
+  // regardless of its own position, since that block's content is never
+  // reparsed once open. `gh api markdown` confirms this exact shape
+  // ("<div><!-- trigger\nAfter") swallows the rest of the document (an
+  // empty "<div></div>" is all that renders); the position-only check
+  // alone can never recognize this, since "<!--" here is not opening
+  // anything of its own -- it is unrelated, already-covered content.
+  htmlBlockRanges: MarkdownCodeRange[] = findHtmlBlockRanges(
+    text,
+    fencedRanges,
+  ),
 ): MarkdownCodeRange[] {
   const ranges: MarkdownCodeRange[] = [];
   const lineListContentIndents = computeLineListContentIndents(
@@ -1601,9 +1615,13 @@ export function findHtmlCommentRanges(
       continue;
     }
     const closeIndex = text.indexOf('-->', openIndex + 4);
+    const isInsideExistingHtmlBlock = htmlBlockRanges.some(
+      (range) => range.start <= openIndex && openIndex < range.end,
+    );
     if (
       closeIndex === -1 &&
-      !isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents)
+      !isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents) &&
+      !isInsideExistingHtmlBlock
     ) {
       openPattern.lastIndex = openIndex + 4;
       openMatch = openPattern.exec(text);

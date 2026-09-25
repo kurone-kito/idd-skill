@@ -1708,3 +1708,32 @@ test("findHtmlCommentRanges does not let a raw HTML block's own list-marker-shap
     '<div>\n- example\n\n     <!-- trigger\nAfter, Maintainer decision here.\n';
   assert.deepEqual(findHtmlCommentRanges(body), []);
 });
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" sitting anywhere inside an already-open raw HTML block (Copilot review round 7, PR #3413)', () => {
+  // "<div><!-- trigger" -- the "<!--" is not itself at a fresh
+  // block-start position (it follows "<div>" mid-line), but it is
+  // already inside the "<div>" block's own extent, and raw HTML block
+  // content is never reparsed once open. `gh api markdown` confirms
+  // this swallows the rest of the document (renders as an empty
+  // "<div></div>"). The position-only opener check alone can never
+  // recognize this shape, since the "<!--" here opens nothing of its
+  // own -- it is unrelated content already covered by the "<div>"
+  // block findHtmlBlockRanges itself already detects.
+  const body = '<div><!-- trigger\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" inside an open raw HTML block even across a blank line', () => {
+  // Confirms the existing "extend to end-of-text" simplification for an
+  // unterminated comment (established since the first #3282 fix, and
+  // already verified past a blockquote's own blank line) also holds
+  // for this new shape: `gh api markdown` confirms
+  // "<div><!-- trigger\n\nAfter" still renders as an empty "<div></div>",
+  // not stopping at the blank line.
+  const body = '<div><!-- trigger\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
+});
