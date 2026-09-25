@@ -34,6 +34,14 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import {
   resolveTrustedActors,
   runMinimize,
@@ -408,7 +416,9 @@ export function parseArgs(argv: string[]): LocalValidationEvidenceArgs {
 
   if (!parsed.help) {
     if (!parsed.prNumber) {
-      throw new Error('missing required --pr <number> argument');
+      throw markCliUsageError(
+        new Error('missing required --pr <number> argument'),
+      );
     }
     if (!/^[0-9a-f]{40}$/.test(parsed.headSha)) {
       throw new Error(
@@ -873,14 +883,31 @@ Options:
 
 export async function main(
   argv: string[] = process.argv.slice(2),
-): Promise<void> {
+): Promise<number> {
   const result = await runLocalValidationEvidence({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  return result.exitCode;
 }
 
 if (import.meta.main) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`Error: ${(error as Error).message}\n`);
-    process.exit(1);
-  });
+  const run = (): Promise<HelperCliResult> =>
+    main().then(
+      (exitCode) => exitCode,
+      (error: unknown) => {
+        process.stderr.write(`Error: ${(error as Error).message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      },
+    );
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('local-validation-evidence', run);
+  } else {
+    run().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

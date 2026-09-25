@@ -37,6 +37,12 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
@@ -765,11 +771,36 @@ export function applyDispositionPlan(plan, deps) {
   }
   return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
 }
+function exitClassified(code, kind, message) {
+  if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
+    process.stderr.write(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('disposition-non-review-notices', code, {
+          kind,
+          message,
+          httpStatus: null,
+        }),
+      )}\n`,
+    );
+  }
+  process.exit(code);
+}
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('disposition-non-review-notices', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !Number.isInteger(args.pr) || (args.pr ?? 0) <= 0) {
     process.stdout.write(USAGE);
-    process.exit(args.help ? 0 : 1);
+    exitClassified(
+      args.help ? 0 : 1,
+      'usage',
+      'missing required --pr <number>',
+    );
   }
   // Fail closed: --apply mutates PR state, so the active-claim revalidation is
   // mandatory. Missing/invalid claim inputs must abort before any read or write
@@ -783,7 +814,11 @@ if (import.meta.main) {
     process.stderr.write(
       '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation',
+    );
   }
   const pr = args.pr;
   const owner =
@@ -897,7 +932,11 @@ if (import.meta.main) {
     process.stderr.write(
       `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}\n`,
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'gate',
+      `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}`,
+    );
   }
   // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
   // re-posts a disposition that raced in since the dry-run.
@@ -950,5 +989,13 @@ if (import.meta.main) {
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
-  process.exit(claimLost || failed.length > 0 ? 1 : 0);
+  exitClassified(
+    claimLost || failed.length > 0 ? 1 : 0,
+    'gate',
+    claimLost
+      ? 'claim lost during apply'
+      : failed.length > 0
+        ? 'one or more dispositions failed'
+        : '',
+  );
 }

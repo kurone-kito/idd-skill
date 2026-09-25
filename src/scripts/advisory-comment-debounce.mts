@@ -27,6 +27,13 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 import {
   classifyReviewCommentOrigin,
@@ -133,10 +140,16 @@ const ADVISORY_COMMENT_DEBOUNCE_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3344: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('advisory-comment-debounce', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     ADVISORY_COMMENT_DEBOUNCE_FLAG_SPEC,
@@ -211,6 +224,7 @@ function runCli(): void {
   if (githubOutput) {
     appendFileSync(githubOutput, `skip=${result.skip ? 'true' : 'false'}\n`);
   }
+  return 0;
 }
 
 function parseDurationOrMsToken(token: string): number | null {
@@ -295,6 +309,20 @@ function ghPaginatedJson(args: string[]): unknown[] {
 
 function fail_(message: string): never {
   console.error(`error: ${message}`);
+  // #3344: keep exit 2. The runner never sees this path because
+  // process.exit returns control to the OS, so write the envelope here
+  // when it is enabled. Argument failures only -- gh failures throw.
+  if (isHelperErrorEnvelopeEnabled()) {
+    process.stderr.write(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('advisory-comment-debounce', 2, {
+          kind: 'usage',
+          message,
+          httpStatus: null,
+        }),
+      )}\n`,
+    );
+  }
   process.exit(2);
 }
 

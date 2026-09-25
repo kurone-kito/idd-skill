@@ -128,6 +128,13 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   digestExternalCheckWaiverMarkerBody,
@@ -2856,7 +2863,9 @@ export function runAdvisoryConvergence(
     return { verdict: null, exitCode: 0, help: true };
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
 
   const { inputs, options } = deps.collect(args);
@@ -4649,6 +4658,19 @@ export function writeAdvisoryConvergenceCliOutput(
 // Guarded behind `import.meta.main` so importing this module (for unit
 // tests) never parses process.argv, prints usage, or makes a `gh` call.
 if (import.meta.main) {
+  // #3344: call main() directly when the envelope is disabled so a
+  // non-zero --assert verdict still exits with the same code and the
+  // same stdout JSON. The CLI body was inline before this migration, so
+  // an uncaught usage throw gains one `at main` frame when the envelope
+  // is unset -- the same residual #3342 documented for extracted bodies.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('advisory-convergence', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const { pollIntervalMs, maxWaitMs } = readCopilotReviewPollPolicy();
   const { verdict, exitCode, help } = runAdvisoryConvergenceWithPoll(
     process.argv.slice(2),
@@ -4662,5 +4684,5 @@ if (import.meta.main) {
       emitGuidance: exitCode !== 0,
     });
   }
-  process.exit(exitCode);
+  return exitCode;
 }

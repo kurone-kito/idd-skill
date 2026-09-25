@@ -9,6 +9,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
@@ -112,7 +118,13 @@ const CI_WAIT_POLICY_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3344: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('ci-wait-policy', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export function parseDurationToMs(value: unknown): number | null {
@@ -451,7 +463,7 @@ function fetchSiblingWorkflowRuns(
   );
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -545,6 +557,7 @@ function runCli(): void {
   }
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 /**

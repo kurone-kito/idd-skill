@@ -8,6 +8,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
@@ -61,7 +66,13 @@ const CI_WAIT_POLICY_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3344: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('ci-wait-policy', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 export function parseDurationToMs(value) {
   const text = String(value ?? '').trim();
@@ -400,6 +411,7 @@ function runCli() {
     });
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 /**
  * Validate `token` as a canonical positive-integer string (same format and

@@ -33,6 +33,13 @@ import {
   safeGhText,
 } from './gh-exec.mjs';
 import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import {
   resolveTrustedActors,
   runMinimize,
 } from './minimize-superseded-markers.mjs';
@@ -308,7 +315,9 @@ export function parseArgs(argv) {
   };
   if (!parsed.help) {
     if (!parsed.prNumber) {
-      throw new Error('missing required --pr <number> argument');
+      throw markCliUsageError(
+        new Error('missing required --pr <number> argument'),
+      );
     }
     if (!/^[0-9a-f]{40}$/.test(parsed.headSha)) {
       throw new Error(
@@ -706,11 +715,28 @@ Options:
 }
 export async function main(argv = process.argv.slice(2)) {
   const result = await runLocalValidationEvidence({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  return result.exitCode;
 }
 if (import.meta.main) {
-  main().catch((error) => {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exit(1);
-  });
+  const run = () =>
+    main().then(
+      (exitCode) => exitCode,
+      (error) => {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      },
+    );
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('local-validation-evidence', run);
+  } else {
+    run().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

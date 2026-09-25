@@ -17,6 +17,14 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
 import { combineOwnerRepoFlags, ghText } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
@@ -280,7 +288,13 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
 const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 
 if (import.meta.main) {
-  await main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('audit-pr-cleanup', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 
 // The CLI body. Guarded behind `import.meta.main` so importing this
@@ -288,7 +302,7 @@ if (import.meta.main) {
 // `gh` call. This one stays async
 // because it retains a pre-existing await (buildReport) from before the
 // guard was added.
-async function main(): Promise<void> {
+async function main(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
@@ -326,7 +340,7 @@ async function main(): Promise<void> {
   try {
     repository = combineOwnerRepoFlags(args) ?? detectRepository();
   } catch (error) {
-    fail((error as Error).message);
+    fail((error as Error).message, error);
   }
   const [owner, repo] = parseRepository(repository);
 
@@ -361,8 +375,9 @@ async function main(): Promise<void> {
   }
 
   if (anyFailed) {
-    process.exit(1);
+    return 1;
   }
+  return 0;
 }
 
 /**
@@ -2041,7 +2056,7 @@ function parseArgs(argv: string[]): CleanupArgs {
   try {
     parsed = parseCliArgs(argv, AUDIT_PR_CLEANUP_FLAG_SPEC);
   } catch (error) {
-    fail((error as Error).message);
+    fail((error as Error).message, error);
   }
   const { values, help } = parsed;
 
@@ -2137,7 +2152,22 @@ Environment:
 `);
 }
 
-function fail(message: string): never {
+function fail(message: string, error?: unknown): never {
   console.error(`error: ${message}`);
+  // #3344: keep exit 2 for every fail() path. process.exit never returns
+  // to runHelperCli, so classify and write the envelope here. A bare
+  // message is an argument error; a passed error keeps its real kind
+  // (a gh failure stays transport, not usage).
+  if (isHelperErrorEnvelopeEnabled()) {
+    const classified =
+      error === undefined
+        ? { kind: 'usage' as const, message, httpStatus: null }
+        : classifyHelperError(error);
+    process.stderr.write(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('audit-pr-cleanup', 2, classified),
+      )}\n`,
+    );
+  }
   process.exit(2);
 }

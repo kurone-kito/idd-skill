@@ -12,6 +12,11 @@
 // operational marker still can.
 import { appendFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { isIddOriginatedReply } from './marker-helpers.mjs';
 import {
@@ -80,34 +85,40 @@ export function resolveMarkerPrefix(flagValue) {
     : undefined;
 }
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('review-comment-origin', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseCliArgs(
     process.argv.slice(2),
     REVIEW_COMMENT_ORIGIN_FLAG_SPEC,
   );
   if (args.help) {
     process.stdout.write(USAGE);
-    process.exitCode = 0;
-  } else {
-    const flaggedBody =
-      typeof args.values.body === 'string' ? args.values.body : '';
-    const body =
-      flaggedBody.length > 0 ? flaggedBody : (process.env.COMMENT_BODY ?? '');
-    const verdict = classifyReviewCommentOrigin(
-      body,
-      resolveMarkerPrefix(
-        typeof args.values['marker-prefix'] === 'string'
-          ? args.values['marker-prefix']
-          : '',
-      ),
-    );
-    process.stdout.write(`${JSON.stringify(verdict)}\n`);
-    const githubOutput = process.env.GITHUB_OUTPUT;
-    if (githubOutput) {
-      appendFileSync(
-        githubOutput,
-        `idd_originated=${verdict.iddOriginated ? 'true' : 'false'}\n`,
-      );
-    }
-    process.exitCode = 0;
+    return 0;
   }
+  const flaggedBody =
+    typeof args.values.body === 'string' ? args.values.body : '';
+  const body =
+    flaggedBody.length > 0 ? flaggedBody : (process.env.COMMENT_BODY ?? '');
+  const verdict = classifyReviewCommentOrigin(
+    body,
+    resolveMarkerPrefix(
+      typeof args.values['marker-prefix'] === 'string'
+        ? args.values['marker-prefix']
+        : '',
+    ),
+  );
+  process.stdout.write(`${JSON.stringify(verdict)}\n`);
+  const githubOutput = process.env.GITHUB_OUTPUT;
+  if (githubOutput) {
+    appendFileSync(
+      githubOutput,
+      `idd_originated=${verdict.iddOriginated ? 'true' : 'false'}\n`,
+    );
+  }
+  return 0;
 }

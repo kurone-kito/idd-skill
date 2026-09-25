@@ -6,6 +6,13 @@
 // never the generated .mjs. See docs/typescript-sources.md.
 
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 // Tolerate a single interior punctuation char `[.!:]` before the closing `**`
 // (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
@@ -68,6 +75,14 @@ const REVIEW_DISPOSITION_VERIFY_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('review-disposition-verify', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -75,7 +90,7 @@ if (import.meta.main) {
   }
 
   if (args.items === null) {
-    throw new Error('--items is required');
+    throw markCliUsageError(new Error('--items is required'));
   }
 
   let rawItems: unknown[];
@@ -90,25 +105,30 @@ if (import.meta.main) {
     ) {
       const itemsField = (parsed as { items?: unknown }).items;
       if (itemsField === null) {
-        throw new Error(
-          "--items JSON object has 'items: null'; expected an array",
+        throw markCliUsageError(
+          new Error("--items JSON object has 'items: null'; expected an array"),
         );
       }
       rawItems = (itemsField ?? []) as unknown[];
     } else {
-      throw new Error("--items JSON object must have an 'items' key");
+      throw markCliUsageError(
+        new Error("--items JSON object must have an 'items' key"),
+      );
     }
   } catch (err) {
     if ((err as Error).message.includes('--items')) {
       throw err;
     }
-    throw new Error(
-      "--items must be a valid JSON array or object with an 'items' key",
+    throw markCliUsageError(
+      new Error(
+        "--items must be a valid JSON array or object with an 'items' key",
+      ),
     );
   }
 
   const result = verifyDispositions(rawItems);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return 0;
 }
 
 /**

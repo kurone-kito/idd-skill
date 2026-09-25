@@ -14,6 +14,13 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
@@ -85,7 +92,13 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
 // complete.
 const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 if (import.meta.main) {
-  await main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('audit-pr-cleanup', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
@@ -123,7 +136,7 @@ async function main() {
   try {
     repository = combineOwnerRepoFlags(args) ?? detectRepository();
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const [owner, repo] = parseRepository(repository);
   const prNumbers = parsePrNumbers(args);
@@ -154,8 +167,9 @@ async function main() {
     }
   }
   if (anyFailed) {
-    process.exit(1);
+    return 1;
   }
+  return 0;
 }
 /**
  * Rejects a claim-gated `--apply` batch (#2224, CodeRabbit review on PR
@@ -1512,7 +1526,7 @@ function parseArgs(argv) {
   try {
     parsed = parseCliArgs(argv, AUDIT_PR_CLEANUP_FLAG_SPEC);
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const { values, help } = parsed;
   // The pre-migration readValue() used `!value` (not `=== undefined`), so
@@ -1590,7 +1604,20 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
-function fail(message) {
+function fail(message, error) {
   console.error(`error: ${message}`);
+  // #3344: keep exit 2 for every fail() path. process.exit never returns
+  // to runHelperCli, so classify and write the envelope here. A bare
+  // message is an argument error; a passed error keeps its real kind
+  // (a gh failure stays transport, not usage).
+  if (isHelperErrorEnvelopeEnabled()) {
+    const classified =
+      error === undefined
+        ? { kind: 'usage', message, httpStatus: null }
+        : classifyHelperError(error);
+    process.stderr.write(
+      `${JSON.stringify(buildHelperErrorEnvelope('audit-pr-cleanup', 2, classified))}\n`,
+    );
+  }
   process.exit(2);
 }

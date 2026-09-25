@@ -22,6 +22,13 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
@@ -406,7 +413,28 @@ export function activeOwnedClaim(
   }
   return active;
 }
+function exitClassified(code, kind, message, httpStatus = null) {
+  if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
+    process.stderr.write(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('resolve-review-thread', code, {
+          kind,
+          message,
+          httpStatus,
+        }),
+      )}\n`,
+    );
+  }
+  process.exit(code);
+}
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resolve-review-thread', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (
     args.help ||
@@ -416,7 +444,11 @@ if (import.meta.main) {
     (args.commentId ?? 0) <= 0
   ) {
     process.stdout.write(USAGE);
-    process.exit(args.help ? 0 : 1);
+    exitClassified(
+      args.help ? 0 : 1,
+      'usage',
+      'missing required --pr <number> or --comment-id <id>',
+    );
   }
   // #2616: --claimless (mirroring pre-merge-readiness.mjs's #2017 flag)
   // is mutually exclusive with --claim-issue / --claim-id -- both name
@@ -431,7 +463,11 @@ if (import.meta.main) {
     process.stderr.write(
       '--claimless cannot be combined with --claim-issue or --claim-id\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--claimless cannot be combined with --claim-issue or --claim-id',
+    );
   }
   // Fail closed: --apply mutates PR state, so a reply body is always
   // mandatory, and the active-claim revalidation is mandatory unless
@@ -439,7 +475,7 @@ if (import.meta.main) {
   // read or write rather than silently bypassing the gate.
   if (args.apply && !args.body) {
     process.stderr.write('--apply requires --body\n');
-    process.exit(1);
+    exitClassified(1, 'usage', '--apply requires --body');
   }
   if (
     args.apply &&
@@ -451,7 +487,11 @@ if (import.meta.main) {
     process.stderr.write(
       '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless',
+    );
   }
   // Fail closed before any network call: --apply must never post a --body
   // the F2/F3 disposition-evidence gate (hasFreshDisposition) won't
@@ -463,7 +503,11 @@ if (import.meta.main) {
     process.stderr.write(
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}`,
+    );
   }
   const pr = args.pr;
   const commentId = args.commentId;
@@ -501,7 +545,11 @@ if (import.meta.main) {
     process.stderr.write(
       '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'gate',
+      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
+    );
   }
   const match = findThreadForComment(
     toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
@@ -522,7 +570,7 @@ if (import.meta.main) {
     }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     // A missing thread is informational in dry-run but a hard failure in apply.
-    process.exit(args.apply ? 1 : 0);
+    exitClassified(args.apply ? 1 : 0, 'gate', report.error);
   }
   if (!args.apply) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -535,7 +583,7 @@ if (import.meta.main) {
     report.status = 'failed';
     report.error = `review thread ${match.threadId} exposes no top-level comment id to reply to`;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    process.exit(1);
+    exitClassified(1, 'gate', report.error);
   }
   // #2616: this claim-only setup is unneeded (and un-skippable) network/
   // identity work for --claimless -- a credential that can read/update
@@ -661,8 +709,14 @@ if (import.meta.main) {
     if (postedReplyId !== undefined) {
       report.replyId = postedReplyId;
     }
+    const classified = classifyHelperError(error);
     report.error = error.message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    process.exit(1);
+    exitClassified(
+      1,
+      classified.kind,
+      classified.message,
+      classified.httpStatus,
+    );
   }
 }

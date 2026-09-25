@@ -14,6 +14,12 @@
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -303,7 +309,9 @@ const defaultDeps = {
 export function runMergeExecute(argv, deps = defaultDeps) {
   const args = parseArgs(argv);
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   // #3252: required BEFORE any collection or merge call -- an --apply run
   // with no claim binding at all (no --claim-id/--expected-claim-id and
@@ -312,8 +320,10 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   // whether a SUPPLIED --claim-id matches the active claim, never whether
   // one was supplied at all.
   if (!args.claimless && !args.claimIdProvided) {
-    throw new Error(
-      'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+    throw markCliUsageError(
+      new Error(
+        'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+      ),
     );
   }
   // #3252: --now overrides every merge-gate clock (claim staleness,
@@ -818,6 +828,13 @@ function printHelp() {
 }
 // CLI: print the verdict as JSON and exit with the gate/merge status.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-merge-execute', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running
@@ -828,5 +845,5 @@ if (import.meta.main) {
     );
   }
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  process.exit(exitCode);
+  return exitCode;
 }

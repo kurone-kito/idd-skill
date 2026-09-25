@@ -28,7 +28,7 @@ const ENVELOPE_LINE_PREFIX = '{"iddHelperError":';
 
 interface RunExpectation {
   exitCode: number;
-  kind: string;
+  kind: string | null;
 }
 
 interface BinTableEntry {
@@ -206,17 +206,33 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: exactly the six first-batch bins are marked migrated', () => {
+test('helper-cli-contract fixture: the first batch and the review/merge batch are marked migrated', () => {
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
   assert.deepEqual(migratedBins, [
+    'idd-advisory-comment-debounce.mjs',
+    'idd-advisory-convergence.mjs',
+    'idd-advisory-wait-state.mjs',
+    'idd-audit-pr-cleanup.mjs',
     'idd-authoring-owner-provenance.mjs',
+    'idd-branch-conflict-state.mjs',
+    'idd-ci-wait-policy.mjs',
     'idd-ci-wait-state.mjs',
     'idd-discover-readiness-check.mjs',
     'idd-discover-viability-gate.mjs',
+    'idd-disposition-non-review-notices.mjs',
+    'idd-external-check-waiver.mjs',
+    'idd-local-validation-evidence.mjs',
+    'idd-merge-execute.mjs',
+    'idd-merged-pr-feedback-sweep.mjs',
     'idd-pre-merge-readiness.mjs',
+    'idd-rerun-advisory-convergence.mjs',
+    'idd-resolve-review-thread.mjs',
     'idd-resume-claim-routing.mjs',
+    'idd-review-activity-snapshot.mjs',
+    'idd-review-comment-origin.mjs',
+    'idd-review-disposition-verify.mjs',
   ]);
 });
 

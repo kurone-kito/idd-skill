@@ -22,6 +22,13 @@ import {
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
@@ -1948,7 +1955,9 @@ export function parseArgs(argv) {
   };
   if (!parsed.help) {
     if (!parsed.prNumber) {
-      throw new Error('missing required --pr <number> argument');
+      throw markCliUsageError(
+        new Error('missing required --pr <number> argument'),
+      );
     }
     if (!parsed.checkSelector) {
       throw new Error('missing required --check <selector> argument');
@@ -2068,11 +2077,28 @@ Options:
 }
 export async function main(argv = process.argv.slice(2)) {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  return result.exitCode;
 }
 if (import.meta.main) {
-  main().catch((error) => {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exit(1);
-  });
+  const run = () =>
+    main().then(
+      (exitCode) => exitCode,
+      (error) => {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      },
+    );
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('external-check-waiver', run);
+  } else {
+    run().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
