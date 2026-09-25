@@ -21,6 +21,7 @@ import {
   safeGhText,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadTrustedActorConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -29,6 +30,7 @@ import {
 import {
   buildEffectiveTrustedMarkerLogins,
   classifyPrLoopMembership,
+  composeGateTrustedMarkerLogins,
   digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
@@ -685,11 +687,12 @@ export async function runExternalCheckWaiver(options = {}) {
       rawConfig,
       // Auto-bootstrap has no human "viewer" identity to add as an extra
       // trusted login for resolving the linked issue's OWN claim markers
-      // (`buildTrustedMarkerLogins` always trusts `viewerLogin` alongside
-      // the repo owner and configured `trustedMarkerActors`) -- passing
-      // the bot login here would be a no-op in practice (it never posts
-      // issue claim markers) but is semantically wrong, so pass `''`.
+      // (the shared builder trusts `viewerLogin` alongside configured
+      // `trustedMarkerActors`, and never an implicit repository owner) --
+      // passing the bot login here would be a no-op in practice (it never
+      // posts issue claim markers) but is semantically wrong, so pass `''`.
       viewerLogin: args.autoBootstrap ? '' : actor,
+      baseRefName: String(pr.baseRefName ?? ''),
       linkedIssues: pr.closingIssuesReferences,
       issueNumber: args.issueNumber,
       expectedClaimId: args.claimId,
@@ -853,15 +856,20 @@ export async function runExternalCheckWaiver(options = {}) {
       closingIssuesReferences: pr.closingIssuesReferences,
       issueCandidates,
       prComments,
-      trustedMarkerLogins: [
-        ...buildTrustedMarkerLogins({
-          owner,
-          repo: name,
+      trustedMarkerLogins: trustedLoginsForLinkedIssueClaims({
+        viewerLogin: args.autoBootstrap ? '' : actor,
+        config:
+          rawConfig !== null && typeof rawConfig === 'object'
+            ? rawConfig
+            : null,
+        envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+        collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
           rawConfig,
-          viewerLogin: args.autoBootstrap ? '' : actor,
-          issueComments: prComments,
-        }),
-      ],
+          process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+        )
+          ? resolveTrustedCollaboratorMarkerLogins(owner, name, prComments)
+          : [],
+      }),
     });
     loopMembership = classified.membership;
     loopMembershipReason = classified.reason;
@@ -1107,9 +1115,8 @@ export async function runExternalCheckWaiver(options = {}) {
           // reconcile would miss exactly the duplicate it exists to find.
           // kurone-kito/idd-skill#3250: built from the shared
           // `buildEffectiveTrustedMarkerLogins` (no implicit owner entry),
-          // matching the gates -- distinct from `buildTrustedMarkerLogins`
-          // (this file's own AUTHORING-side self-authorization check,
-          // still used unchanged by `resolveLinkedIssueCandidates`).
+          // matching the gates. #3251 uses the same composition for
+          // linked-issue claim markers via `composeGateTrustedMarkerLogins`.
           trustedMarkerLogins: buildEffectiveTrustedMarkerLogins({
             viewerLogin: actor,
             configuredTrustedActors: resolveTrustedMarkerActors({
@@ -1273,6 +1280,7 @@ export async function runExternalCheckWaiver(options = {}) {
             repo: name,
             rawConfig,
             viewerLogin: actor,
+            baseRefName: String(pr.baseRefName ?? ''),
             linkedIssues: pr.closingIssuesReferences,
             issueNumber: args.issueNumber,
             expectedClaimId: '',
@@ -1702,11 +1710,33 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
   }
   return new Date(now.getTime() + (durationMs ?? 0)).toISOString();
 }
+/**
+ * Trusted logins for a linked issue's claim markers. Same composition
+ * `pre-merge-readiness` uses ({@link composeGateTrustedMarkerLogins}):
+ * viewer, then flag, then env, then config, plus collaborator-marker
+ * logins the caller already resolved. No implicit repository owner.
+ */
+export function trustedLoginsForLinkedIssueClaims({
+  viewerLogin,
+  config,
+  flagValue = '',
+  envValue = '',
+  collaboratorMarkerLogins = [],
+}) {
+  return composeGateTrustedMarkerLogins({
+    viewerLogin,
+    flagValue,
+    envValue,
+    config,
+    collaboratorMarkerLogins,
+  });
+}
 function resolveLinkedIssueCandidates({
   owner,
   repo,
   rawConfig,
   viewerLogin,
+  baseRefName = '',
   linkedIssues,
   issueNumber,
   expectedClaimId,
@@ -1731,12 +1761,21 @@ function resolveLinkedIssueCandidates({
       ],
       true,
     );
-    const trustedMarkerLogins = buildTrustedMarkerLogins({
+    const trustConfig = loadTrustedActorConfig({
       owner,
       repo,
-      rawConfig,
+      baseRefName,
+    });
+    const trustedMarkerLogins = trustedLoginsForLinkedIssueClaims({
       viewerLogin,
-      issueComments: comments,
+      config: trustConfig,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
+        trustConfig,
+        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+      )
+        ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
+        : [],
     });
     const forcedHandoffAuthorityPolicy =
       normalizePolicyConfig(rawConfig).forcedHandoff.authorityPolicy;
@@ -1810,7 +1849,7 @@ function fetchPullRequest({ owner, repo, prNumber }) {
     '--repo',
     `${owner}/${repo}`,
     '--json',
-    'number,state,url,headRefName,headRefOid,statusCheckRollup,closingIssuesReferences',
+    'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences',
   ]);
 }
 /**
@@ -1880,56 +1919,6 @@ export function resolveCollaboratorAuthority({ owner, repo, actor }) {
       .toLowerCase(),
     error: '',
   };
-}
-export function buildTrustedMarkerLogins({
-  owner,
-  repo,
-  rawConfig,
-  viewerLogin,
-  issueComments,
-}) {
-  const trusted = new Set(
-    [
-      owner,
-      viewerLogin,
-      ...readTrustedMarkerActors(rawConfig),
-      ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
-    ]
-      .filter(Boolean)
-      .map((login) => login.toLowerCase()),
-  );
-  if (
-    !resolveCollaboratorMarkerTrust(
-      rawConfig,
-      process.env.IDD_TRUST_COLLABORATOR_MARKERS,
-    )
-  ) {
-    return trusted;
-  }
-  // #1693: marker-authors-first -- only comment authors whose comment is
-  // itself operational-marker-shaped are permission-checked, matching
-  // pre-merge-readiness.mts / advisory-convergence.mts /
-  // advisory-wait-state.mts (and force-handoff.mts as of this change).
-  // Checking every unique comment author (the prior local loop here)
-  // over-trusted ordinary commenters.
-  for (const login of resolveTrustedCollaboratorMarkerLogins(
-    owner,
-    repo,
-    issueComments ?? [],
-  )) {
-    trusted.add(login);
-  }
-  return trusted;
-}
-function readTrustedMarkerActors(rawConfig) {
-  const actors = rawConfig?.trustedMarkerActors;
-  if (!Array.isArray(actors)) {
-    return [];
-  }
-  return actors
-    .map(String)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 function readJsonFile(path) {
   try {
@@ -2156,12 +2145,6 @@ function parsePositiveInteger(value, flag) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
   return Number(raw);
-}
-function splitCsv(value) {
-  return String(value ?? '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 function printUsage() {
   process.stdout.write(`usage: node scripts/external-check-waiver.mjs --pr <number> --check <selector> --reason <text> (--expires <iso8601> | --expires-in <duration>) [options]

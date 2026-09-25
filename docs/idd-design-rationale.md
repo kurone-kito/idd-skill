@@ -1352,6 +1352,13 @@ merges, other-bot fixes) — this trigger does not touch those.
 - Distribute as an opt-in policy key with default `off`; this
   repository opts in to `low-and-medium` as a local dogfood policy
   (`AGENTS.md`).
+- A follow-up filed by either trigger carries the
+  `review-fix-loop-cutoff` defer-source marker. The issue-authoring
+  skill's Stage 2 narrow auto-release exception releases that hold
+  immediately, so the deferred issue does not wait for a human
+  release request. Observed 2026-09-25, issues `#3372` and `#3426`:
+  both stayed under `status:authoring` until a human asked for
+  release, because the phase files stopped at the Stage 1 hold.
 
 ### review-ack worked example
 

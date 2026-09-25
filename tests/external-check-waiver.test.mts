@@ -8,7 +8,6 @@ import {
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
-  buildTrustedMarkerLogins,
   collectValidWaiverComments,
   deriveGhApiStatusFromError,
   findReusableWaiverComment,
@@ -16,13 +15,17 @@ import {
   planExternalCheckWaiver,
   resolveActorLogin,
   runExternalCheckWaiver,
+  trustedLoginsForLinkedIssueClaims,
 } from '../src/scripts/external-check-waiver.mts';
+import { resolveHelperActiveClaim } from '../src/scripts/forced-handoff-marker.mts';
 import {
   digestExternalCheckWaiverMarkerBody,
   operationalMarkerPrefix,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
+  composeGateTrustedMarkerLogins,
+  DEFAULT_STALE_AGE_MS,
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
@@ -687,48 +690,73 @@ test('planExternalCheckWaiver fails closed when expiry exceeds max validity', ()
   assert.match(report.blockingReasons.join('\n'), /maxValidity/);
 });
 
-test('buildTrustedMarkerLogins always trusts the repository owner', () => {
-  const trusted = buildTrustedMarkerLogins({
-    owner: 'repo-owner',
-    repo: 'example',
-    rawConfig: normalizePolicyConfig({}),
-    viewerLogin: 'maintainer-user',
-    issueComments: [],
-  });
+function ownerClaimComment() {
+  return {
+    body:
+      '<!-- claimed-by: repo-owner claim-1 supersedes: none 2026-09-25T00:00:00Z branch: issue/1-task -->\n\n' +
+      '_repo-owner: issue claim — IDD automation marker. Do not edit._',
+    created_at: '2026-09-25T00:00:00Z',
+    user: { login: 'repo-owner' },
+  };
+}
 
-  assert.ok(trusted.has('repo-owner'));
-  assert.ok(trusted.has('maintainer-user'));
+test('a repository owner absent from trustedMarkerActors and not the viewer is not trusted for a linked-issue claim marker', () => {
+  const logins = trustedLoginsForLinkedIssueClaims({
+    viewerLogin: 'maintainer-user',
+    config: { trustedMarkerActors: ['listed-bot'] },
+  });
+  assert.ok(!logins.includes('repo-owner'));
+  assert.ok(logins.includes('maintainer-user'));
+  assert.equal(
+    resolveHelperActiveClaim([ownerClaimComment()], logins, {
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
+    }),
+    null,
+  );
 });
 
-// #1693: buildTrustedMarkerLogins previously permission-checked every
-// unique comment author (not just marker-shaped ones) whenever collaborator
-// marker trust is enabled, over-trusting an ordinary write+ commenter who
-// never posted an operational marker. Collaborator-marker-trust widening
-// requires a live gh collaborator-permission lookup with no injection seam
-// here, and #1212 forbids mocking the `gh` subprocess -- so this regresses
-// against the disabled-widening path instead: with collaborator marker
-// trust left at its default (disabled), no comment author is ever
-// permission-checked regardless of shape, proving the widening loop no
-// longer runs unconditionally over every comment author the way the prior
-// implementation did (the buildTrustedMarkerLogins/resolveTrustedCollaboratorMarkerLogins
-// unit coverage in tests/force-handoff.test.mts and
-// tests/collaborator-permission.test.mts exercises the enabled marker-shape
-// filter itself via cache-seeding).
-test('buildTrustedMarkerLogins does not trust a non-marker-shaped comment author (collaborator trust disabled by default)', () => {
-  const trusted = buildTrustedMarkerLogins({
-    owner: 'repo-owner',
-    repo: 'example',
-    rawConfig: normalizePolicyConfig({}),
+test('a repository owner listed in trustedMarkerActors is trusted for a linked-issue claim marker', () => {
+  const logins = trustedLoginsForLinkedIssueClaims({
     viewerLogin: 'maintainer-user',
-    issueComments: [
-      {
-        body: 'just an ordinary comment',
-        user: { login: 'random-write-actor' },
-      },
-    ],
+    config: { trustedMarkerActors: ['repo-owner'] },
   });
+  assert.ok(logins.includes('repo-owner'));
+  const claim = resolveHelperActiveClaim([ownerClaimComment()], logins, {
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  });
+  assert.equal(claim?.claimId, 'claim-1');
+});
 
-  assert.ok(!trusted.has('random-write-actor'));
+// #1693: the previous builder permission-checked every unique comment
+// author whenever collaborator marker trust is enabled. With that trust
+// left off, the shared builder adds no comment author.
+test('linked-issue claim trust does not include a non-marker comment author when collaborator trust is off', () => {
+  const logins = trustedLoginsForLinkedIssueClaims({
+    viewerLogin: 'maintainer-user',
+    config: {},
+    collaboratorMarkerLogins: [],
+  });
+  assert.ok(!logins.includes('random-write-actor'));
+  assert.ok(!logins.includes('repo-owner'));
+});
+
+test('linked-issue claim trust matches the gate trusted-marker composition', () => {
+  const config = { trustedMarkerActors: ['listed-bot', 'repo-owner'] };
+  const fromHelper = trustedLoginsForLinkedIssueClaims({
+    viewerLogin: 'viewer',
+    config,
+    collaboratorMarkerLogins: ['collab-writer'],
+  });
+  const fromGate = composeGateTrustedMarkerLogins({
+    viewerLogin: 'viewer',
+    config,
+    collaboratorMarkerLogins: ['collab-writer'],
+  });
+  assert.deepEqual(fromHelper, fromGate);
+  assert.ok(fromHelper.includes('repo-owner'));
+  assert.ok(fromHelper.includes('viewer'));
+  assert.ok(fromHelper.includes('collab-writer'));
+  assert.ok(fromHelper.includes('listed-bot'));
 });
 
 // #1693: exit-code-never-surfaces-as-HTTP-status + JSON-body status

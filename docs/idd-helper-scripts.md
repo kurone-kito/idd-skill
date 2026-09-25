@@ -1703,6 +1703,14 @@ default `instructions-only` profile keep using the written shell /
     failure reports `reconcileInconclusive` and still renders the applied
     result with its comment url. Only the pre-write read fails closed, where
     an unreadable list could actually cause the duplicate.
+  - linked-issue claim markers are trusted with the same set the gates
+    build (`pre-merge-readiness`, `advisory-convergence`): the viewer
+    login, then an explicit flag, then `IDD_TRUSTED_MARKER_ACTORS`, then
+    `trustedMarkerActors` from `.github/idd/config.json` at the PR's base
+    ref (the live default branch when that ref is empty), plus the
+    gates' collaborator-marker trust rule. The repository owner is not
+    trusted unless listed or is the viewer. That config is never read
+    from the local worktree.
 
 ### External-check waiver contract
 
@@ -2309,7 +2317,11 @@ still fails closed:
     so a post-recovery sweep can re-request its advisory review.
     `--apply` refuses when no declaration is active for `--service`.
   - `--list-advanced`: lists every recorded advancement from trusted
-    markers on the declaration-target issue. Entries are **HEAD-pinned**
+    markers on the declaration-target issue. The trusted set matches
+    the gates: viewer login, then flag, then `IDD_TRUSTED_MARKER_ACTORS`,
+    then `trustedMarkerActors` from the live default branch, plus the
+    gates' collaborator-marker trust rule, with no implicit repository
+    owner. Entries are **HEAD-pinned**
     -- a later push to the same pull request produces a distinct entry
     rather than overwriting the earlier one, so the sweep re-requests
     review per recorded HEAD.
@@ -2437,7 +2449,12 @@ still fails closed:
     ([above](#provider-outage-declaration-helper)) exists for
     `--service` (default `ci-actions`). Recency is measured from the
     marker comment's own `created_at` against `localValidationEvidence.maxAge`
-    (default `PT4H`), never an embedded timestamp.
+    (default `PT4H`), never an embedded timestamp. Actor trust for those
+    markers matches the gates: viewer login, then `--trusted-marker-logins`,
+    then `IDD_TRUSTED_MARKER_ACTORS`, then `trustedMarkerActors` from the
+    PR's base ref, plus the gates' collaborator-marker trust rule, with
+    no implicit repository owner. That config is never read from the
+    local worktree.
   - `--record --covers <names> --outcome <pass|fail>`: renders and (with
     `--apply`) posts the evidence marker to the pull request.
 - **Hide-at-post-time (#2755).** After a successful `--record --apply`
