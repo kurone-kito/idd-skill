@@ -22,6 +22,12 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { resolveEffectiveCritiqueLoopTelemetryHookFromEnv } from './idd-config.mts';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -305,7 +311,11 @@ process.stdin.on('end', () => {
 `;
 
 if (import.meta.main) {
-  runCli();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-critique-telemetry-hook', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export interface CritiqueTelemetryHookReport {
@@ -1313,16 +1323,16 @@ interface ParsedArgs {
   help: boolean;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
 
   if (args.invoke) {
     runInvoke(args);
-    return;
+    return 0;
   }
 
   const report = buildCritiqueTelemetryHookReport(
@@ -1330,6 +1340,7 @@ function runCli(): void {
     args.noUserGlobal,
   );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 
 /**

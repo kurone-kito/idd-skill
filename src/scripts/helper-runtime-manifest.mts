@@ -9,6 +9,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { inspectHelperRuntimeConfig } from './policy-helpers.mts';
 
 // Resolve the package/bundle root via the shared resolveBundleRoot (issue
@@ -723,11 +729,19 @@ const HELPER_RUNTIME_MANIFEST_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('helper-runtime-manifest', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
 
   const manifest = buildHelperRuntimeManifest({
@@ -739,6 +753,7 @@ if (import.meta.main) {
   });
 
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
+  return 0;
 }
 
 /**

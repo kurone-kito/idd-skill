@@ -21,6 +21,11 @@ import {
 import { parseCliArgs } from './cli-args.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
@@ -3925,10 +3930,17 @@ function sameMembers(left, right) {
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-doctor', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
   const report = runDoctor({
     root: resolve(args.root),
@@ -3944,5 +3956,5 @@ if (import.meta.main) {
   } else {
     printHumanReport(report);
   }
-  process.exit(report.errors.length > 0 ? 1 : 0);
+  return report.errors.length > 0 ? 1 : 0;
 }

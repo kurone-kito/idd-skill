@@ -15,6 +15,11 @@
 // exists so a lite-profile session never has to restate that contract in
 // prose, per `idd-work-lite.instructions.md` C1.
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { resolveEffectiveCritiqueLoopDelegateFromEnv } from './idd-config.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -40,7 +45,11 @@ const NO_DELEGATE_REASONS = {
   none: 'not-configured',
 };
 if (import.meta.main) {
-  runCli();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-critique-delegate', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * `docs/idd-workflow.md`'s "User-global critique delegate default" contract
@@ -100,13 +109,14 @@ function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   const report = buildCritiqueDelegateReport(
     args.policy ? { localPolicyPath: args.policy } : undefined,
     args.noUserGlobal,
   );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, IDD_CRITIQUE_DELEGATE_FLAG_SPEC);

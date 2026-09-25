@@ -22,6 +22,12 @@
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 // ---------------------------------------------------------------------------
 // Aggregation (pure -- offline fixture-testable, no network)
@@ -388,20 +394,31 @@ Read-only: performs no write or mutating GitHub call of any kind.
 }
 
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-suggest-untrusted-labelers', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     IDD_SUGGEST_UNTRUSTED_LABELERS_FLAG_SPEC,
   );
   if (help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   const format = values.format as string;
   if (format !== 'table' && format !== 'json') {
-    process.stderr.write(
-      `idd-suggest-untrusted-labelers: --format must be table or json, got: ${format}\n`,
-    );
-    process.exit(2);
+    const message = `--format must be table or json, got: ${format}`;
+    process.stderr.write(`idd-suggest-untrusted-labelers: ${message}\n`);
+    return {
+      exitCode: 2,
+      kind: 'usage',
+      message: `idd-suggest-untrusted-labelers: ${message}`,
+    };
   }
   const { owner, repo } = resolveOwnerRepo(
     values.owner as string,
@@ -413,4 +430,5 @@ if (import.meta.main) {
       ? `${JSON.stringify({ owner, repo, ...result }, null, 2)}\n`
       : `${renderTable(result)}\n`,
   );
+  return 0;
 }

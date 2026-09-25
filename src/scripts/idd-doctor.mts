@@ -22,6 +22,12 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
@@ -4554,11 +4560,19 @@ function sameMembers(left: string[], right: string[]): boolean {
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-doctor', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
 
   const report = runDoctor({
@@ -4577,5 +4591,5 @@ if (import.meta.main) {
     printHumanReport(report);
   }
 
-  process.exit(report.errors.length > 0 ? 1 : 0);
+  return report.errors.length > 0 ? 1 : 0;
 }
