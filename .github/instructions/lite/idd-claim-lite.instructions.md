@@ -447,6 +447,8 @@ A matching `{claim-id}` re-acquires as a read-only check. A different
 
 No release step (F4 `git worktree remove` deletes it).
 
-Then continue to `idd-work-lite.instructions.md` — except on
-`instructions-only`, where that file declines the profile in its own
-header; use `idd-work.instructions.md` instead.
+Then continue to `idd-work-lite.instructions.md` when pre-check (d)
+matched no inherited open PR — except on `instructions-only`, where
+that file declines the profile in its own header; use
+`idd-work.instructions.md` instead. When it did, continue at
+`idd-resume-lite.instructions.md` Step 2.

@@ -90,7 +90,11 @@ or configured needs-decision label from `labels.needsDecisionLabelName`
   represents novel work
 - **Fail**: Issue duplicates an existing open or closed issue, is
   superseded by newer work, or the work was already completed or is in
-  progress (including draft PRs)
+  progress (including draft PRs). An open or draft PR whose head branch
+  matches an inheritable claim branch from A5(d) — the stale active
+  claim, the latest released claim, or verified forced-handoff evidence
+  — is this issue's own work, not a duplicate. Any other open or draft
+  PR still fails
 - **Outcome on fail**: `duplicate`
 
 #### High-confidence tier (#1484)
