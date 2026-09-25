@@ -385,22 +385,23 @@ condition below accounts for this.
   regardless of which form blocked the wait — track elapsed time and
   apply its rerun-or-hold
   decision if a watch outlasts it. Issue that blocking call with an
-  execution-timeout override set at or near the calling tool's own
-  execution-timeout ceiling, not the tool's default, which can
+  execution-timeout override — the calling tool's own per-invocation
+  timeout control, not a timeout utility run inside the command
+  (Claude Code's Bash `timeout` parameter is one example, not a
+  requirement for every harness; issue `#3449`) — set at or near the
+  calling tool's own execution-timeout ceiling, not the tool's
+  default, which can
   hard-kill the wait well short of `ciWait.runningTimeout`; a
   tool-timeout kill of the watch call is not a CI verdict — re-issue
   the same blocking watch, keep accumulating elapsed time against the
   bound above, and do not fall back to `run_in_background` or another
   detached/backgrounded mechanism just because of the kill. This
   reissue-on-timeout guidance is scoped to an idempotent, read-only
-  remote poll like the watch call above. The same preventive override
-  applies before issuing a heavy local command (a full build, test,
-  lint, or doctor run) expected to run long: set an explicit
-  execution-timeout override at or near the calling tool's own
-  execution-timeout ceiling before the command starts, rather than
-  relying on the tool's default and discovering the auto-background
-  only after the fact — this has repeatedly stalled a session's turn
-  in practice (issue `#2933`). Never blindly re-issue a
+  remote poll like the watch call above. The same override applies
+  before a heavy local command (a full build, test, lint, or doctor
+  run) expected to run long, rather than discovering the
+  auto-background only after the fact (issue `#2933`). Never blindly
+  re-issue a
   heavy local command (a full build, test, or lint run) that
   auto-backgrounds past the tool's default timeout — being idempotent
   does not make it safe to run twice at once; two concurrent instances

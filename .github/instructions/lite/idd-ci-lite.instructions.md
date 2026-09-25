@@ -174,8 +174,11 @@ CI-polling shared helper file), never this one. Read
 Schedule one wake at the expected completion interval, or background
 the wait only when the topology is confirmed to route completion back
 to this turn; otherwise wait synchronously. Before a heavy local
-command expected to run long, set an execution-timeout override near
-the tool's ceiling, not its default (`#2933`). Never blindly re-issue
+command expected to run long, set an execution-timeout override — the
+tool's own per-invocation timeout (e.g. Claude Code's Bash
+`timeout` parameter), not an in-command utility (issue `#3449`) —
+near the tool's ceiling, not its default (`#2933`). Never blindly
+re-issue
 an already-backgrounded heavy command — check first if it's still
 running, then await or reuse it. Batch every post-wait
 action (disposition, replies, marker, next gate) into one turn. Do not
