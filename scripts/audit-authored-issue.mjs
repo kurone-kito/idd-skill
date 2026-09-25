@@ -1512,6 +1512,24 @@ function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
           );
         }
       }
+      // A bare token that matches the reference shape but resolves to a
+      // non-positive/non-integer number (e.g. `#0`) is silently dropped
+      // from `numbers` with no other record -- unlike a cross-repository
+      // token, it never lands in `unresolvable` either. Unconditional
+      // (no `currentRepo` gate): unlike the cross-repository case, this
+      // is never a matter of missing repo context -- `#0` is invalid
+      // regardless. A line mixing a valid and an invalid token, e.g.
+      // "Blocked by #0, #12", must still fail here even though `#12`
+      // alone is perfectly valid (#3285 final review round, Copilot) --
+      // Discover's own runtime resolution is intentionally unaffected
+      // and still resolves #12 from that same line.
+      if (result.invalidTokens.length > 0) {
+        for (const token of result.invalidTokens) {
+          issues.push(
+            `line ${lineNo}: "${token}" is not a valid issue reference (the number must be a positive integer) -- remove it or fix the number`,
+          );
+        }
+      }
     }
   }
   for (let index = 0; index < nearMissScanLines.length; index += 1) {

@@ -179,6 +179,7 @@ test('consumeDependencyReferenceList stops at the first non-token, non-separator
     unresolvable: [],
     remaining: '(see other/repo#20)',
     consumedTokenEnd: 3,
+    invalidTokens: [],
   });
 });
 
@@ -193,6 +194,7 @@ test('consumeDependencyReferenceList reports a qualified token unresolvable when
     ],
     remaining: '',
     consumedTokenEnd: 24,
+    invalidTokens: [],
   });
 });
 
@@ -202,7 +204,13 @@ test('consumeDependencyReferenceList resolves a full GitHub issue URL for the cu
       'https://github.com/kurone-kito/idd-skill/issues/42',
       { currentRepo: CURRENT_REPO },
     ),
-    { numbers: [42], unresolvable: [], remaining: '', consumedTokenEnd: 50 },
+    {
+      numbers: [42],
+      unresolvable: [],
+      remaining: '',
+      consumedTokenEnd: 50,
+      invalidTokens: [],
+    },
   );
 });
 
@@ -211,6 +219,7 @@ test('consumeDependencyContinuationRefLines stops at a blank line', () => {
   assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
     numbers: [2, 3],
     unresolvable: [],
+    invalidTokens: [],
   });
 });
 
@@ -286,14 +295,19 @@ test('matchDependencyKeywordLine returns numbers plus the same-line unconsumed r
       0,
       'Blocked by',
     ),
-    { numbers: [12], unresolvable: [], remaining: '. Depends on #13' },
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '. Depends on #13',
+      invalidTokens: [],
+    },
   );
 });
 
 test('matchDependencyKeywordLine returns an empty remaining string when the reference list consumes the rest of the line', () => {
   assert.deepEqual(
     matchDependencyKeywordLine(['Blocked by #12'], 0, 'Blocked by'),
-    { numbers: [12], unresolvable: [], remaining: '' },
+    { numbers: [12], unresolvable: [], remaining: '', invalidTokens: [] },
   );
 });
 
@@ -326,6 +340,24 @@ test('matchDependencyKeywordLine still returns a defined result for a cross-repo
         { token: 'other/repo#5', reason: 'cross_repository_reference' },
       ],
       remaining: '',
+      invalidTokens: [],
     },
+  );
+});
+
+test('consumeDependencyReferenceList records an invalid bare token without dropping the valid ones around it (#3285 final review round, Copilot: "#0, #12")', () => {
+  assert.deepEqual(consumeDependencyReferenceList('#0, #12'), {
+    numbers: [12],
+    unresolvable: [],
+    remaining: '',
+    consumedTokenEnd: 7,
+    invalidTokens: ['#0'],
+  });
+});
+
+test('matchDependencyKeywordLine still returns a defined result with numbers when an invalid token is mixed in, but reports it in invalidTokens', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by #0, #12'], 0, 'Blocked by'),
+    { numbers: [12], unresolvable: [], remaining: '', invalidTokens: ['#0'] },
   );
 });
