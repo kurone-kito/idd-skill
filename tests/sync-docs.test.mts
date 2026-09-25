@@ -23,6 +23,7 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 const SYNC_DOCS_DEPS = [
   'consistency-helpers.mjs',
+  'markdown-code.mjs',
   'markdown-link-audit.mjs',
   'node-runtime-guard.mjs',
   'policy-helpers.mjs',
