@@ -937,12 +937,16 @@ own `roadmap-tracks-parse` check already follows for an unverifiable
 qualified reference). A real
 `<!-- <marker-prefix>-blocked-by: ... -->` roadmap marker (see
 [Required dependency encoding](#required-dependency-encoding)) is never
-mistaken for a near-miss: nothing that looks like an issue reference
-follows the marker's own roadmap-id value, so the
-required-trailing-reference test simply does not match. Unlike
-`prose-dependency` below, `dependency-line-grammar` is not advisory: it
-flips `passed` to `false` and the linter's exit code the same as any
-other structural check above.
+mistaken for a near-miss, even when its own value happens to look like
+an issue reference (e.g. `<!-- idd-skill-blocked-by: #12 -->` — the
+extractor behind this marker accepts any non-whitespace value, with no
+format restriction): the check masks every well-formed marker of this
+shape out of its near-miss scan before running it, using the same
+pattern the marker's own extractor matches against, so the marker's
+value is never read as the required trailing reference in the first
+place. Unlike `prose-dependency` below, `dependency-line-grammar` is
+not advisory: it flips `passed` to `false` and the linter's exit code
+the same as any other structural check above.
 
 For the `orphan` and `child` shapes, the linter also runs the same A4
 viability and A4.5 suitability evaluators the IDD discover phase runs
