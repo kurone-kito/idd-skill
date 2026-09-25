@@ -213,6 +213,19 @@ collapse both to `write`, so consumers should prefer role-aware fields
 such as `role_name`; if the runtime cannot prove owner, Maintain, or
 Admin authority, it must fail closed.
 
+kurone-kito/idd-skill#3250: this policy is enforced on both sides of a
+waiver's lifecycle, not only when it is authored. The gates that consume
+an already-posted waiver (`pre-merge-readiness` and
+`advisory-convergence`) apply the SAME `authorityPolicy` at consume time,
+resolving each waiver author's live collaborator-permission outcome
+independently of whether that author was admitted to the trusted-marker
+set via the configured `trustedMarkerActors` list or via
+`markerTrust.allowCollaboratorMarkers`. A waiver whose author is trusted
+to post markers but does not satisfy `authorityPolicy` is never `valid`
+at either gate; a caller that evaluates authority with no resolver at
+all fails every such waiver closed rather than treating an unresolved
+authority as trusted.
+
 The canonical waiver proof is a trusted PR comment whose GitHub author
 metadata proves the issuer and whose GitHub `created_at` timestamp is
 the issuance time. The HTML marker body carries only the IDD-specific

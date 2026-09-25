@@ -54,6 +54,7 @@ import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   LIVE_STATUS_DIGEST_MARKER,
   summarizeClaimValidation,
+  summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -108,6 +109,17 @@ function baseOptions(
     waiverMode: 'disabled',
     waiverMaxValidity: 'PT24H',
     waiverCheckSelector: 'idd-advisory-convergence',
+    // kurone-kito/idd-skill#3250: the consume-time authority check always
+    // runs (resolving an empty policy to the schema default
+    // `owners-and-maintainers-only`); every waiver fixture in this test
+    // file is authored by TRUSTED, so an authorized resolver keeps these
+    // tests exercising the SAME dimensions they did before this check
+    // existed. A test that specifically exercises the new bucket overrides
+    // this via `overrides`.
+    resolveWaiverAuthority: () => ({
+      outcome: 'found' as const,
+      roleName: 'admin',
+    }),
     ...overrides,
   };
 }
@@ -676,6 +688,84 @@ test('reviewPolicy external-bot: keeps the configured primaryBotLogin path', () 
   assert.equal(verdict.ready, false);
 });
 
+test('#3262: an external primary bot review is found across the REST/GraphQL login-spelling split, both directions', () => {
+  // GraphQL-shaped: bare `author.login` with a `Bot` __typename -- matches
+  // a `[bot]`-suffixed configured login only because the type proves it is
+  // a genuine bot.
+  const bareLoginVerdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai[bot]' }),
+  );
+  assertValidVerdict(bareLoginVerdict);
+  assert.equal(bareLoginVerdict.review.found, true);
+  assert.equal(bareLoginVerdict.review.matchesHead, true);
+  assert.equal(bareLoginVerdict.converged, true);
+
+  // Configured bare, observed `[bot]`-suffixed: matches unconditionally.
+  const suffixedLoginVerdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: 'coderabbitai[bot]', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai' }),
+  );
+  assertValidVerdict(suffixedLoginVerdict);
+  assert.equal(suffixedLoginVerdict.review.found, true);
+  assert.equal(suffixedLoginVerdict.review.matchesHead, true);
+  assert.equal(suffixedLoginVerdict.converged, true);
+});
+
+test('#3262: a reply-only review from the external primary bot does not mask an earlier full on-HEAD review (PR #3160 shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          id: 'PRR_full',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+        // The reply-only review is fetch-order-latest (as on PR #3160,
+        // 2026-09-20T07:17:35Z) but must never win Clause 1's "latest"
+        // selection over the full review above.
+        {
+          id: 'PRR_reply_only',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 1,
+          body: '',
+          replyOnly: true,
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai[bot]' }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.reviewId, 'PRR_full');
+  assert.equal(verdict.ready, true);
+});
+
 test('reviewPolicy human-required wins under idd-claimed with a matching claim (hybrid PR)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
@@ -1022,6 +1112,46 @@ test('deadline-passed-with-waiver: an edited idd-advisory-convergence waiver doe
       headCommittedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('deadline-passed-with-waiver: a Write-only collaborator waiver does not count toward validCount under the default owners-and-maintainers-only policy (kurone-kito/idd-skill#3250)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Copilot review API outage, maintainer verified the diff manually',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- the primary bot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      waiverAuthorityPolicy: 'owners-and-maintainers-only',
+      // TRUSTED is only admitted to the trusted-marker-actor set here (via
+      // this file's own trustedMarkerLogins fixture), not proven to hold
+      // Maintain/Admin -- the authority check now evaluates that live
+      // collaborator-permission outcome independently.
+      resolveWaiverAuthority: () => ({ outcome: 'found', roleName: 'write' }),
     }),
   );
   assert.equal(verdict.waiver.validCount, 0);
@@ -2353,6 +2483,92 @@ test('#3337: an untrusted author comment produces the same disposition-evidence 
     digestShaped.sameHeadReroll.ineligibleReasons,
     ordinary.sameHeadReroll.ineligibleReasons,
   );
+});
+
+// #3269: the required check (computeAdvisoryConvergenceVerdict, via its own
+// reused summarizeDispositionEvidenceForGate call) must reach the SAME
+// verdict as F2's own summarizeDispositionEvidenceForGate call
+// (buildPreMergeReadinessSummary, protocol-helpers.mts) for an identical
+// enriched thread -- otherwise the two merge gates could disagree about
+// whether a verified-cosmetic advisory-bot edit re-blocks. The fixture is
+// the real PR #3160 thread PRRT_kwDOSWpaqs6kHP8I / comment 4056226337 (see
+// tests/pre-merge-readiness.test.mts's identical fixture for the full
+// citation): 3 real revisions where the only post-disposition changes are
+// an "Addressed in commit" append and CodeRabbit's own comment-to-reply
+// marker rewrite, both verified cosmetic, so the finding dates by its
+// createdAt (well before the disposition) rather than its post-cleanup
+// updatedAt.
+test('#3269: dispositionEvidence.missingThreadCount agrees with F2 for the real PRRT_kwDOSWpaqs6kHP8I fixture', () => {
+  const findingText =
+    '**Security & Privacy**: the CLI integration fixture never exercises the unauthorized-contributor rejection path.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T07:17:38Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated reply by CodeRabbit -->\n\n✅ Addressed in commit 28c18a9`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:01Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated comment by CodeRabbit -->\n\n✅ Addressed in commit 28c18a9`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated comment by CodeRabbit -->`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6kHP8I',
+    isResolved: true,
+    comments: {
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs7xxRoh',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T12:00:11Z',
+          lastEditedAt: '2026-09-20T07:17:38Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: TRUSTED },
+          createdAt: '2026-09-20T07:17:35Z',
+          updatedAt: '2026-09-20T07:17:35Z',
+          body: '**Accepted** — Fixed in 28c18a9.',
+        },
+      ],
+    },
+  };
+
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ threads: [thread] }),
+    baseOptions({ advisoryBotLogins: ['coderabbitai[bot]'] }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.dispositionEvidence.missingThreadCount, 0);
+
+  // F2's own call site (buildPreMergeReadinessSummary,
+  // protocol-helpers.mts), replicated here against the SAME thread. A
+  // snapshotBoundaryAt well before this PR's own activity keeps the
+  // separate "resolved thread predates the snapshot boundary" carve-out
+  // from independently clearing the thread, so a passing assertion here
+  // demonstrates the SAME verified-cosmetic dating fix, not an unrelated
+  // boundary short-circuit.
+  const f2Summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: [TRUSTED],
+      trustedMarkerLogins: [TRUSTED],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-09-19T00:00:00Z',
+    },
+  );
+  assert.equal(f2Summary.missingThreadCount, 0);
 });
 
 test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {
@@ -5966,6 +6182,36 @@ test('collectFromGitHub resolves the provider-outage declaration at the SAME inj
     /resolveProviderOutageDeclaration\(\{[^}]*now:\s*new Date\(resolvedNow\),?[^}]*\}\)/s,
   );
   assert.match(source, /options:\s*\{\s*now:\s*resolvedNow,/);
+});
+
+test('collectFromGitHub selects, fetches, and attaches userContentEdits history before threads reaches inputs.threads (#3269: pins the call-site forwarding shape)', () => {
+  // Same "pin the call site" spirit as the #1810/#1906/#2137/#2353 tests
+  // above: the enrichment pipeline is proven correct in isolation
+  // (protocol-helpers.mts's own selectAdvisoryThreadCommentIdsEditedAfterDisposition
+  // / attachReviewThreadCommentEditHistories tests, plus
+  // pre-merge-readiness.mts's two dedicated fake-port tests for its own
+  // identical wiring), so the one remaining risk at THIS real call site
+  // is someone re-inlining `baseThreads` directly into `inputs.threads`
+  // (dropping the enrichment silently) or using a candidate-selection
+  // predicate that disagrees with this gate's own `iddAgentLogins:
+  // trustedMarkerLogins` convention just below.
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /selectAdvisoryThreadCommentIdsEditedAfterDisposition\(baseThreads, \{\s*isDispositionAuthor: \(login\) => trustedMarkerLoginSet\.has\(login\),\s*advisoryBotLogins,\s*\}\);/,
+  );
+  assert.match(
+    source,
+    /try \{\s*editHistories = port\.getReviewThreadCommentUserContentEdits\(/,
+  );
+  assert.match(
+    source,
+    /const threads = attachReviewThreadCommentEditHistories\(\s*baseThreads,\s*editHistories,\s*\)/,
+  );
+  assert.match(source, /inputs:\s*\{[^}]*\bthreads,[^}]*\}/s);
 });
 
 // --- parseArgs ---------------------------------------------------------------

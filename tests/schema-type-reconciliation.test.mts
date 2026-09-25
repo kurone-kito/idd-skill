@@ -1410,6 +1410,7 @@ const preMergeReadinessFixture = {
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
     identityUnresolvedRequiredCheckNames: [],
+    nonTargetEventRequiredCheckNames: [],
     preDowngradeStatus: 'success',
     checks: [
       {
@@ -1441,6 +1442,7 @@ const preMergeReadinessFixture = {
     wrongHead: [],
     wrongClaim: [],
     unauthorized: [],
+    insufficientAuthority: [],
     malformed: [],
     notConfigured: [],
     modeDisabled: [],

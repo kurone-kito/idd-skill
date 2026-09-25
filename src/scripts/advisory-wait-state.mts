@@ -115,6 +115,9 @@ function resolveOutageDeclarationActiveForConvergenceSelector({
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
   login?: string | null;
+  /** REST `user.type` ("Bot"/"User"/...). `listReviews` returns the raw
+   * payload, and `findLastCopilotReviewCommit` reads this field (#3262). */
+  type?: string | null;
 }
 
 /** PR review payload fields consumed by the advisory-wait summary. */

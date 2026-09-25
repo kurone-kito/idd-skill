@@ -830,6 +830,7 @@
         "sourcePinnedRequiredCheckNames",
         "sourcePinnedUnresolved",
         "identityUnresolvedRequiredCheckNames",
+        "nonTargetEventRequiredCheckNames",
         "preDowngradeStatus",
         "checks"
       ],
@@ -967,9 +968,17 @@
             "minLength": 1
           }
         },
+        "nonTargetEventRequiredCheckNames": {
+          "type": "array",
+          "description": "kurone-kito/idd-skill#3256: required check names whose green state was downgraded to `unknown` (via `status` above) because this collection pass resolved every live instance's producer identity AND triggering event cleanly, but found no pass-equivalent instance triggered by `pull_request_target` among them -- a same-repository PR can still reintroduce a `pull_request` trigger to its own copy of `.github/workflows/idd-advisory-convergence.yml` post-#2764 Phase 2, and that instance's own pass must never satisfy this required check. A DISTINCT cause from `identityUnresolvedRequiredCheckNames` above: this one only ever fires once the producer identity resolved cleanly (an unresolved identity downgrades via that other field instead), so the two are mutually exclusive in practice. Lets a caller's blocker detail name this cause explicitly instead of a generic \"CI is not all-passing\" message. Empty (never omitted) when no such downgrade occurred.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "preDowngradeStatus": {
           "type": "string",
-          "description": "kurone-kito/idd-skill#2919 (round 5): the dedup+waiver-adjusted classification `status` BEFORE the source-pinned/identity-unresolved downgrades above could narrow it -- `success` here means every required check was already fully resolved as passing through `classifyCiChecks`'s own dedup/waiver logic, so any non-success final `status` can only be attributed to those two named downgrades. Lets a caller (`computePreMergeReadinessBlockers`) determine, exactly, whether a genuinely separate concurrent CI cause exists alongside a pinned/identity-unresolved cause, without re-deriving per-check pass/fail evidence itself. `unknown` when no required checks are configured, mirroring `status`'s own initial default in that case.",
+          "description": "kurone-kito/idd-skill#2919 (round 5; kurone-kito/idd-skill#3256 added the third downgrade): the dedup+waiver-adjusted classification `status` BEFORE the source-pinned/identity-unresolved/non-target-event downgrades above could narrow it -- `success` here means every required check was already fully resolved as passing through `classifyCiChecks`'s own dedup/waiver logic, so any non-success final `status` can only be attributed to those three named downgrades. Lets a caller (`computePreMergeReadinessBlockers`) determine, exactly, whether a genuinely separate concurrent CI cause exists alongside a pinned/identity-unresolved/non-target-event cause, without re-deriving per-check pass/fail evidence itself. `unknown` when no required checks are configured, mirroring `status`'s own initial default in that case.",
           "enum": [
             "missing",
             "success",
@@ -1251,6 +1260,7 @@
         "wrongHead",
         "wrongClaim",
         "unauthorized",
+        "insufficientAuthority",
         "malformed",
         "notConfigured",
         "modeDisabled",
@@ -1440,6 +1450,33 @@
               "expiresAt": {
                 "type": "string",
                 "description": "Waiver's recorded expiry timestamp."
+              }
+            }
+          }
+        },
+        "insufficientAuthority": {
+          "type": "array",
+          "description": "kurone-kito/idd-skill#3250: waivers whose author IS a trusted marker actor (so they pass unauthorized above) but whose live collaborator-permission outcome does not satisfy the configured ciGate.externalCheckWaivers.authorityPolicy -- for example a Write-only collaborator under the default owners-and-maintainers-only policy. Never populated for the #2657 self-referential-bootstrap-auto marker.",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "authority"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string",
+                "description": "Login of the waiver's author, normalized to lowercase."
+              },
+              "checkSelector": {
+                "type": "string",
+                "description": "Check-name selector the waiver targets."
+              },
+              "authority": {
+                "type": "string",
+                "description": "The observed roleName/permission (lowercased, whichever is non-empty, roleName preferred), 'none' for a resolved non-collaborator, or 'unknown' when the permission lookup errored or no resolver was supplied."
               }
             }
           }

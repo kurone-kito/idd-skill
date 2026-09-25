@@ -91,7 +91,52 @@ test('extractHeadingSlugs ignores a heading-shaped line inside a fenced code blo
   assert.deepEqual(extractHeadingSlugs(text), ['real-heading']);
 });
 
+test('extractHeadingSlugs ignores a heading-shaped line inside a tilde fence (#3283)', () => {
+  // Unlike a naive backtick-only toggle, the shared #3281 masking entry
+  // point recognizes tilde fences too, so a heading that appears only
+  // inside one must not produce a slug.
+  const text = '## Real Heading\n\n~~~\n## Not A Heading\n~~~\n';
+  assert.deepEqual(extractHeadingSlugs(text), ['real-heading']);
+});
+
 // --- extractLinkOccurrences -----------------------------------------------
+
+// #3283's four-row CommonMark fence/span table: extractLinkOccurrences
+// must find the real link in the first two rows and not find the code
+// one in the last two.
+test('extractLinkOccurrences finds a real link after a backtick fence whose content has a tilde-fence-shaped line', () => {
+  const text = [
+    '```',
+    'inside content',
+    '~~~',
+    'nested-looking line',
+    '~~~',
+    '```',
+    '[real](./a.md)',
+  ].join('\n');
+  const occurrences = extractLinkOccurrences(text);
+  assert.deepEqual(occurrences, [
+    { line: 7, target: './a.md', suppressed: false },
+  ]);
+});
+
+test('extractLinkOccurrences finds a real link on the line after a 4-space-indented backtick-shaped line (indented code, not a fence)', () => {
+  const text = ['paragraph', '', '    ```', '[real](./a.md)'].join('\n');
+  const occurrences = extractLinkOccurrences(text);
+  assert.deepEqual(occurrences, [
+    { line: 4, target: './a.md', suppressed: false },
+  ]);
+});
+
+test('extractLinkOccurrences ignores a link inside a tilde fence', () => {
+  const text = ['~~~', '[fake](./missing.md)', '~~~'].join('\n');
+  assert.deepEqual(extractLinkOccurrences(text), []);
+});
+
+test('extractLinkOccurrences ignores a link inside a double-backtick code span', () => {
+  const text = '``[fake](./missing.md)``';
+  assert.deepEqual(extractLinkOccurrences(text), []);
+});
 
 test('extractLinkOccurrences finds inline links and ignores link-shaped text inside inline code', () => {
   const text =

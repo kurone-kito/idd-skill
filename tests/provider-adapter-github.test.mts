@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   createGithubProviderAdapter,
   fetchLastEditedAtByNodeId,
+  fetchReviewThreadCommentUserContentEdits,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
 
@@ -1623,6 +1624,238 @@ test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #3269: getReviewThreadCommentUserContentEdits /
+// fetchReviewThreadCommentUserContentEdits.
+// ---------------------------------------------------------------------------
+
+test('getReviewThreadCommentUserContentEdits: selects editedAt, diff, editor, deletedAt and maps totalCount (#3269)', () => {
+  let capturedQuery: string | undefined;
+  let capturedIds: string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedQuery = args.find((arg) => arg.startsWith('query=query($ids'));
+        capturedIds = args
+          .filter((arg) => arg.startsWith('ids[]='))
+          .map((arg) => arg.slice('ids[]='.length));
+        return JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_1',
+                userContentEdits: {
+                  totalCount: 2,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body after the edit',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                    {
+                      editedAt: '2026-09-20T05:37:59Z',
+                      diff: 'body at creation',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        });
+      },
+    }),
+  );
+  const result = port.getReviewThreadCommentUserContentEdits(['PRRC_1']);
+  assert.match(
+    capturedQuery ?? '',
+    /editedAt diff editor \{ login \} deletedAt/,
+  );
+  assert.match(capturedQuery ?? '', /\.\.\. on PullRequestReviewComment/);
+  assert.deepEqual(capturedIds, ['PRRC_1']);
+  assert.deepEqual(result, [
+    {
+      commentId: 'PRRC_1',
+      totalCount: 2,
+      edits: [
+        {
+          editedAt: '2026-09-20T07:17:38Z',
+          diff: 'body after the edit',
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+        {
+          editedAt: '2026-09-20T05:37:59Z',
+          diff: 'body at creation',
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+      ],
+    },
+  ]);
+});
+
+test('getReviewThreadCommentUserContentEdits: an incomplete history reports totalCount above edits.length verbatim, never truncated or padded (#3269)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_incomplete',
+                userContentEdits: {
+                  totalCount: 25,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'newest fetched revision',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  const result = port.getReviewThreadCommentUserContentEdits([
+    'PRRC_incomplete',
+  ]);
+  assert.equal(result[0].totalCount, 25);
+  assert.equal(result[0].edits.length, 1);
+});
+
+test('getReviewThreadCommentUserContentEdits: throws when a revision is missing the deletedAt key entirely (Copilot review, PR #3430)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_missing_key',
+                userContentEdits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body',
+                      editor: { login: 'coderabbitai' },
+                      // deletedAt key entirely absent.
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getReviewThreadCommentUserContentEdits(['PRRC_missing_key']),
+    /malformed userContentEdits entry/,
+  );
+});
+
+test('getReviewThreadCommentUserContentEdits: throws when deletedAt is present but neither null nor a string (Copilot review, PR #3430, round 2)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_wrong_type',
+                userContentEdits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body',
+                      editor: { login: 'coderabbitai' },
+                      // A malformed/partial response could plausibly
+                      // return something other than null/string here --
+                      // a number, an object, or a boolean -- for a
+                      // present key. This must never be silently
+                      // coerced to the same `null` a genuine "not
+                      // deleted" answer produces.
+                      deletedAt: 12345,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getReviewThreadCommentUserContentEdits(['PRRC_wrong_type']),
+    /non-string, non-null deletedAt/,
+  );
+});
+
+test('fetchReviewThreadCommentUserContentEdits: chunks a 101-id batch into two requests of 100 and 1', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `PRRC_${i}`);
+  const calls: string[][] = [];
+  const ghTextStub = (args: string[]): string => {
+    calls.push(args);
+    const idArgs = args.filter((arg) => arg.startsWith('ids[]='));
+    return JSON.stringify({
+      data: {
+        nodes: idArgs.map((arg) => ({
+          id: arg.slice('ids[]='.length),
+          userContentEdits: { totalCount: 0, nodes: [] },
+        })),
+      },
+    });
+  };
+  const result = fetchReviewThreadCommentUserContentEdits(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    nodeIds,
+  );
+  assert.equal(calls.length, 2, 'expected exactly two chunked requests');
+  assert.equal(
+    calls[0].filter((arg) => arg.startsWith('ids[]=')).length,
+    100,
+    'first request carries 100 ids',
+  );
+  assert.equal(
+    calls[1].filter((arg) => arg.startsWith('ids[]=')).length,
+    1,
+    'second request carries the remaining 1 id',
+  );
+  assert.equal(result.length, 101);
+  for (const entry of result) {
+    assert.deepEqual(entry.edits, []);
+    assert.equal(entry.totalCount, 0);
+  }
+});
+
+test('fetchReviewThreadCommentUserContentEdits: an empty id list makes no request', () => {
+  const ghTextStub = (): string => {
+    throw new Error('ghText must not be called for an empty id list');
+  };
+  const result = fetchReviewThreadCommentUserContentEdits(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    [],
+  );
+  assert.deepEqual(result, []);
+});
+
+// ---------------------------------------------------------------------------
 // searchOpenWorkItems (#2266): discover-roadmap-graph.mts's
 // buildSearchIssuesRunner, previously never directly tested (only exercised
 // through live production wiring) -- net-new coverage.
@@ -1799,6 +2032,10 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
                 comments: {
                   nodes: [
                     {
+                      // #3269: proves the comment's own node id is
+                      // selected and mapped, not merely tolerated when
+                      // absent.
+                      id: 'PRRC_1',
                       body: 'hello',
                       url: 'https://example.invalid/c/1',
                       createdAt: '2026-01-01T00:00:00Z',
@@ -1839,6 +2076,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
       isResolved: true,
       comments: [
         {
+          id: 'PRRC_1',
           body: 'hello',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
@@ -2446,6 +2684,10 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         commitId: 'deadbeef',
         commentCount: 2,
         body: 'first page review',
+        // #3262: no `comments.nodes` in this fixture (only `totalCount`),
+        // so the connection reads as truncated (2 comments claimed, 0
+        // nodes fetched) -- fails closed to `replyOnly: false`.
+        replyOnly: false,
       },
       {
         id: 'PRR_2',
@@ -2455,11 +2697,101 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         commitId: 'deadbeef',
         commentCount: 0,
         body: null,
+        replyOnly: false,
       },
     ],
     headCommittedAt: '2026-01-01T00:00:00Z',
   });
   assert.equal(call, 2);
+});
+
+test('#3262: getChangeRequestReviewsWithHeadCommitDate derives replyOnly from the comments.nodes replyTo selection', () => {
+  const page = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviews: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'PRR_full',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:00:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 2,
+                  nodes: [{ replyTo: null }, { replyTo: null }],
+                },
+                body: 'full review',
+              },
+              {
+                id: 'PRR_reply_only',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:17:35Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 1,
+                  nodes: [{ replyTo: { id: 'RT_1' } }],
+                },
+                body: '',
+              },
+              {
+                // No comments at all: never reply-only.
+                id: 'PRR_empty',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:18:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: { totalCount: 0, nodes: [] },
+                body: '',
+              },
+              {
+                // Truncated connection (more comments than fetched nodes):
+                // fails closed to `replyOnly: false`.
+                id: 'PRR_truncated',
+                commit: { oid: 'deadbeef' },
+                submittedAt: '2026-09-20T07:19:00Z',
+                author: { login: 'coderabbitai', __typename: 'Bot' },
+                comments: {
+                  totalCount: 3,
+                  nodes: [{ replyTo: { id: 'RT_2' } }],
+                },
+                body: '',
+              },
+            ],
+          },
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-09-20T06:00:00Z' } }],
+          },
+        },
+      },
+    },
+  });
+  let capturedArgs: readonly unknown[] = [];
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return page;
+      },
+    }),
+  );
+  const { reviews } = port.getChangeRequestReviewsWithHeadCommitDate(3160);
+  assert.deepEqual(
+    reviews.map((review) => ({ id: review.id, replyOnly: review.replyOnly })),
+    [
+      { id: 'PRR_full', replyOnly: false },
+      { id: 'PRR_reply_only', replyOnly: true },
+      { id: 'PRR_empty', replyOnly: false },
+      { id: 'PRR_truncated', replyOnly: false },
+    ],
+  );
+  const queryArg = capturedArgs.find(
+    (arg): arg is string => typeof arg === 'string' && arg.startsWith('query='),
+  );
+  assert.match(queryArg ?? '', /comments\(first:\s*100\)/);
+  assert.match(queryArg ?? '', /replyTo\s*\{\s*id\s*\}/);
 });
 
 test('getChangeRequestAuthor maps login/__typename, and null when absent', () => {
@@ -2506,6 +2838,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
                 comments: {
                   nodes: [
                     {
+                      id: 'PRRC_1',
                       body: 'hi',
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
@@ -2543,6 +2876,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
       isResolved: false,
       comments: [
         {
+          id: 'PRRC_1',
           body: 'hi',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
@@ -2632,7 +2966,7 @@ test('getWorkflowRunJobs calls the jobs sub-path and preserves a string runId ab
 });
 
 // kurone-kito/idd-skill#2926
-test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variables and flattens checkSuites.nodes[].checkRuns.nodes[] into {detailsUrl, workflowPath}, resolving workflowPath from checkSuite.workflowRun.file.path (never detailsUrl)', () => {
+test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variables and flattens checkSuites.nodes[].checkRuns.nodes[] into {detailsUrl, workflowPath, event}, resolving both workflowPath and event from checkSuite.workflowRun (never detailsUrl)', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(
     'o',
@@ -2650,6 +2984,8 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
                       // A suite whose workflow run resolves cleanly.
                       workflowRun: {
                         file: { path: '.github/workflows/real.yml' },
+                        // kurone-kito/idd-skill#3256
+                        event: 'pull_request_target',
                       },
                       checkRuns: {
                         nodes: [
@@ -2680,6 +3016,7 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
                       // contributes an entry.
                       workflowRun: {
                         file: { path: '.github/workflows/unrelated.yml' },
+                        event: 'pull_request_target',
                       },
                       checkRuns: { nodes: [] },
                     },
@@ -2702,10 +3039,12 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/real.yml',
+      event: 'pull_request_target',
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: null,
+      event: null,
     },
   ]);
   assert.ok(
@@ -2721,6 +3060,15 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
   assert.ok(
     !capturedArgs?.some((arg) => arg.includes('detailsUrl:')),
     'workflowPath resolution must never reference detailsUrl in the query itself',
+  );
+  // kurone-kito/idd-skill#3256: the GraphQL query itself must request
+  // `event` alongside `file{path}` on `workflowRun` -- a regression here
+  // would silently fall back to `event: undefined` on every live suite.
+  assert.ok(
+    capturedArgs?.some(
+      (arg) => arg.includes('workflowRun{') && arg.includes('event'),
+    ),
+    `expected the workflowRun selection to request event, got: ${capturedArgs?.join(' ')}`,
   );
 });
 
@@ -2801,6 +3149,10 @@ test('listCheckRunWorkflowPaths skips a null checkSuite list item instead of thr
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/real.yml',
+      // kurone-kito/idd-skill#3256: the mock `workflowRun` above carries no
+      // `event`, so it resolves to `null` -- same absence convention as
+      // `workflowPath`.
+      event: null,
     },
   ]);
 });
@@ -2855,6 +3207,10 @@ test('listCheckRunWorkflowPaths treats a null checkRun entry alongside a real on
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: null,
+      // kurone-kito/idd-skill#3256: the same suite-ambiguity nulling as
+      // `workflowPath` -- see `checkRunWorkflowPathsFromSuiteNodes`'s own
+      // doc comment.
+      event: null,
     },
   ]);
 });
@@ -2935,14 +3291,19 @@ test('listCheckRunWorkflowPaths reports workflowPath null for EVERY check-run in
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: null,
+      // kurone-kito/idd-skill#3256: same same-suite-ambiguity nulling as
+      // `workflowPath`.
+      event: null,
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: null,
+      event: null,
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/3/job/1',
       workflowPath: '.github/workflows/other.yml',
+      event: null,
     },
   ]);
 });
@@ -2973,6 +3334,7 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
                       {
                         workflowRun: {
                           file: { path: '.github/workflows/a.yml' },
+                          event: 'pull_request_target',
                         },
                         checkRuns: {
                           nodes: [
@@ -3000,6 +3362,7 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
                     {
                       workflowRun: {
                         file: { path: '.github/workflows/b.yml' },
+                        event: 'pull_request',
                       },
                       checkRuns: {
                         nodes: [
@@ -3031,10 +3394,12 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/a.yml',
+      event: 'pull_request_target',
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: '.github/workflows/b.yml',
+      event: 'pull_request',
     },
   ]);
   assert.ok(
@@ -3674,7 +4039,11 @@ test('postWorkItemComment retries once after a transient failure and returns the
           // (#3275) and covered by its own dedicated test below.
           throw new Error('transient: (HTTP 502)');
         }
-        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body',
+        });
       },
       // No matching comment exists yet -- the prior attempt genuinely
       // failed, so the retry-then-dedupe-check path must fall through to
@@ -3704,7 +4073,11 @@ test('postWorkItemComment retries and succeeds on a no-derivable-status failure 
         if (ghTextCalls === 1) {
           throw new Error('ETIMEDOUT');
         }
-        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body',
+        });
       },
       ghApiJson: () => [],
     }),
@@ -3730,7 +4103,11 @@ test('postWorkItemComment parses the id/html_url from a real `gh api --include` 
           'content-type: application/json; charset=utf-8',
           'x-ratelimit-remaining: 4999',
           '',
-          JSON.stringify({ id: 42, html_url: 'https://example/42' }),
+          JSON.stringify({
+            id: 42,
+            html_url: 'https://example/42',
+            body: 'marker body',
+          }),
         ].join('\r\n'),
     }),
   );
@@ -3777,7 +4154,11 @@ test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never 
           // (#3275).
           throw new Error('transient: (HTTP 502)');
         }
-        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body',
+        });
       },
       // A stray `null` entry must not throw out of the best-effort dedupe
       // scan and abort the whole retry -- it should be skipped like any
@@ -3853,7 +4234,11 @@ test('postWorkItemComment honors a Retry-After header before retrying', () => {
           error.stderr = 'gh: HTTP 403\nretry-after: 2';
           throw error;
         }
-        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body',
+        });
       },
       ghApiJson: () => [],
       sleepSync: (ms: number) => {
@@ -3921,7 +4306,11 @@ test('postWorkItemComment derives a rate-limit-reset wait from x-ratelimit-reset
           ].join('\n');
           throw error;
         }
-        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body',
+        });
       },
       ghApiJson: () => [],
       sleepSync: (ms: number) => {
@@ -3972,6 +4361,33 @@ test('postWorkItemComment does not retry a malformed successful response (Copilo
   assert.throws(
     () => port.postWorkItemComment(9, 'marker body'),
     /malformed POST response/,
+  );
+  assert.equal(ghTextCalls, 1);
+});
+
+test('postWorkItemComment throws and does not retry when the stored body differs from the body sent (#3435)', () => {
+  // A successful POST whose stored body was mutated (for example by an
+  // environment that appends an attribution footer) must fail loudly.
+  // Retrying cannot undo the mutation, and the exact-body duplicate
+  // scan would not recognize the mutated comment.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        return JSON.stringify({
+          id: 42,
+          html_url: 'https://example/42',
+          body: 'marker body\n\n---\n_Generated by Claude Code_',
+        });
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /repos\/o\/r\/issues\/9[\s\S]*comment id 42[\s\S]*https:\/\/example\/42/,
   );
   assert.equal(ghTextCalls, 1);
 });

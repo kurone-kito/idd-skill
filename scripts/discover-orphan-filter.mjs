@@ -28,6 +28,12 @@ import {
   buildClaimStateResolution,
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
@@ -162,7 +168,16 @@ const QUOTE_CHAR_PAIRS = {
 // quote-vs-apostrophe adjacency check.
 const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 if (import.meta.main) {
-  await runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-orphan-filter', runCli);
+  } else {
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 /**
  * Collect the visible `Blocked by #N` references in `body`. Delegates to the
@@ -1070,6 +1085,7 @@ async function runCli() {
     ...result,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 // Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
 // is an optional-value flag -- it may appear bare or take a following
@@ -1114,7 +1130,9 @@ function parseArgs(rawArgv) {
     if (token === '--pr') {
       const parsedNumber = Number.parseInt(String(value ?? ''), 10);
       if (!Number.isInteger(parsedNumber) || parsedNumber <= 0) {
-        throw new Error(`invalid --pr value: ${value ?? ''}`);
+        throw markCliUsageError(
+          new Error(`invalid --pr value: ${value ?? ''}`),
+        );
       }
       parsed.pr = parsedNumber;
       index += 1;
@@ -1150,7 +1168,7 @@ function parseArgs(rawArgv) {
       parsed.help = true;
       continue;
     }
-    throw new Error(`unknown argument: ${token}`);
+    throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
   return parsed;
 }

@@ -1,0 +1,467 @@
+{
+  "description": "Per-bin CLI contract fixture for #3342's opt-in JSON error envelope. Discovered bins (every bin/idd-*.mjs) are cross-checked against this table's `bins` keys by tests/helper-cli-contract.test.mts -- a bin missing here fails the test, and deleting any single row does too. For a migrated bin, runs.unknownFlag / runs.noArgs record the documented exitCode/kind for the two standard contract runs (an unknown flag, and no arguments at all) against a fake gh that always fails; the unknownFlag run must be kind usage. A migrated: false bin has no runs entry -- the test only asserts that bin completes within the per-run timeout. extraScenarios lists additional named, bin-specific runs beyond the two standard ones, each with valid arguments that let the helper reach a (fake, always-failing) gh call: pre-merge-readiness's ghTransportFailure503 (the #2806 case, asserting its existing {\"error\": ...} stdout JSON and exit code 1 stay unchanged while its envelope kind is now transport), and discover-readiness-check / discover-viability-gate / authoring-owner-provenance / resume-claim-routing's ghTransportFailure503ViaProviderPort (a regression case, #3342: none of these four call gh-exec.mts directly for their issue lookup -- they go through ProviderPort.getWorkItem(), whose non-404 failure path wraps the original gh-exec.mts-tagged error as `.cause` on a brand-new Error, so classifyHelperError must walk the cause chain to classify it as transport instead of losing it to internal -- observed against the built bins before that walk existed: the same args against a fake `gh: HTTP 503` reported `kind: internal`). resume-claim-routing's own row additionally sets `ghScript` (see tests/helper-cli-contract.test.mts's ExtraScenario.ghScript doc comment): its runCli calls resolveViewerLogin and listWorkItemComments before getWorkItem -- both ProviderPort methods that pass gh-exec.mts's tagged error straight through unwrapped, unlike getWorkItem's own toProviderError re-wrap -- so the shared always-fails stub would fail on one of those first and never actually exercise the .cause-wrapped path this scenario exists to cover; this row's own gh script lets both succeed and fails only the issue lookup.",
+  "bins": {
+    "idd-advisory-comment-debounce.mjs": {
+      "migrated": false
+    },
+    "idd-advisory-convergence.mjs": {
+      "migrated": false
+    },
+    "idd-advisory-wait-state.mjs": {
+      "migrated": false
+    },
+    "idd-audit-authored-issue.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-audit-pr-cleanup.mjs": {
+      "migrated": false
+    },
+    "idd-authoring-owner-provenance.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-branch-conflict-state.mjs": {
+      "migrated": false
+    },
+    "idd-branch-name.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-ci-wait-policy.mjs": {
+      "migrated": false
+    },
+    "idd-ci-wait-state.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-claim-approval-gate.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-claim-lock.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-clone-lock.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-critique-delegate.mjs": {
+      "migrated": false
+    },
+    "idd-critique-telemetry-hook.mjs": {
+      "migrated": false
+    },
+    "idd-discover-orphan-filter.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "transport"
+        }
+      }
+    },
+    "idd-discover-readiness-check.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-discover-roadmap-graph.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-discover-shared-file-overlap.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-discover-viability-gate.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-disposition-non-review-notices.mjs": {
+      "migrated": false
+    },
+    "idd-doctor.mjs": {
+      "migrated": false
+    },
+    "idd-emit-marker.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-external-check-waiver.mjs": {
+      "migrated": false
+    },
+    "idd-force-handoff.mjs": {
+      "migrated": false
+    },
+    "idd-forced-handoff-marker.mjs": {
+      "migrated": false
+    },
+    "idd-helper-bundle-manifest.mjs": {
+      "migrated": false
+    },
+    "idd-live-status-digest.mjs": {
+      "migrated": false
+    },
+    "idd-local-validation-evidence.mjs": {
+      "migrated": false
+    },
+    "idd-merge-execute.mjs": {
+      "migrated": false
+    },
+    "idd-merged-pr-feedback-sweep.mjs": {
+      "migrated": false
+    },
+    "idd-minimize-superseded-markers.mjs": {
+      "migrated": false
+    },
+    "idd-onboard.mjs": {
+      "migrated": false
+    },
+    "idd-phase-id-resolver.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-post-idd-marker.mjs": {
+      "migrated": false
+    },
+    "idd-pre-merge-readiness.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-provider-health.mjs": {
+      "migrated": false
+    },
+    "idd-provider-outage-declaration.mjs": {
+      "migrated": false
+    },
+    "idd-provider-outage-park.mjs": {
+      "migrated": false
+    },
+    "idd-rerun-advisory-convergence.mjs": {
+      "migrated": false
+    },
+    "idd-resolve-review-thread.mjs": {
+      "migrated": false
+    },
+    "idd-resume-claim-routing.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-resume-route-selection.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-review-activity-snapshot.mjs": {
+      "migrated": false
+    },
+    "idd-review-comment-origin.mjs": {
+      "migrated": false
+    },
+    "idd-review-disposition-verify.mjs": {
+      "migrated": false
+    },
+    "idd-roadmap-audit-execute.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-select-desynced-index.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-stalled-session-quiet-check.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-suggest-untrusted-labelers.mjs": {
+      "migrated": false
+    },
+    "idd-suitability-close-execute.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-suitability-triage.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-sweep-authoring-markers.mjs": {
+      "migrated": false
+    }
+  },
+  "extraScenarios": {
+    "idd-pre-merge-readiness.mjs": [
+      {
+        "name": "ghTransportFailure503",
+        "args": [
+          "--pr",
+          "1",
+          "--claimless",
+          "--repo",
+          "kurone-kito/idd-skill"
+        ],
+        "exitCode": 1,
+        "kind": "transport",
+        "httpStatus": 503,
+        "stdoutIsErrorJson": true
+      }
+    ],
+    "idd-discover-readiness-check.mjs": [
+      {
+        "name": "ghTransportFailure503ViaProviderPort",
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
+        "exitCode": 1,
+        "kind": "transport",
+        "httpStatus": 503
+      }
+    ],
+    "idd-discover-viability-gate.mjs": [
+      {
+        "name": "ghTransportFailure503ViaProviderPort",
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
+        "exitCode": 1,
+        "kind": "transport",
+        "httpStatus": 503
+      }
+    ],
+    "idd-authoring-owner-provenance.mjs": [
+      {
+        "name": "ghTransportFailure503ViaProviderPort",
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
+        "exitCode": 1,
+        "kind": "transport",
+        "httpStatus": 503
+      }
+    ],
+    "idd-resume-claim-routing.mjs": [
+      {
+        "name": "ghTransportFailure503ViaProviderPort",
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
+        "exitCode": 1,
+        "kind": "transport",
+        "httpStatus": 503,
+        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('/comments')) { process.exit(0); } process.stderr.write('gh: HTTP 503'); process.exit(1);"
+      }
+    ]
+  }
+}

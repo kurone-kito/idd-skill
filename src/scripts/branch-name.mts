@@ -15,6 +15,13 @@
 // fallback; this helper only removes the hand-tracing error surface.
 
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS: ReadonlySet<string> = new Set([
@@ -53,7 +60,13 @@ const BRANCH_NAME_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('branch-name', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 /**
@@ -116,21 +129,24 @@ interface ParsedArgs {
   help: boolean;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.number === null) {
-    throw new Error('--number is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--number is required and must be a positive integer'),
+    );
   }
   if (args.title === null) {
-    throw new Error('--title is required');
+    throw markCliUsageError(new Error('--title is required'));
   }
   process.stdout.write(
     `${computeBranchName(args.number as number, args.title)}\n`,
   );
+  return 0;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

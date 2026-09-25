@@ -309,6 +309,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                       comments: {
                         nodes: [
                           {
+                            id: 'PRRC_resolved',
                             body: '**Accepted** — fixed.',
                             createdAt: '2026-01-01T00:00:00Z',
                             updatedAt: '2026-01-01T00:00:00Z',
@@ -327,6 +328,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                       comments: {
                         nodes: [
                           {
+                            id: 'PRRC_open',
                             body: 'Please fix this too.',
                             createdAt: '2026-01-01T01:00:00Z',
                             updatedAt: '2026-01-01T01:00:00Z',
@@ -357,6 +359,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
           isResolved: true,
           comments: [
             {
+              id: 'PRRC_resolved',
               body: '**Accepted** — fixed.',
               createdAt: '2026-01-01T00:00:00Z',
               updatedAt: '2026-01-01T00:00:00Z',
@@ -371,6 +374,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
           isResolved: false,
           comments: [
             {
+              id: 'PRRC_open',
               body: 'Please fix this too.',
               createdAt: '2026-01-01T01:00:00Z',
               updatedAt: '2026-01-01T01:00:00Z',
@@ -442,6 +446,84 @@ test('listWorkflowRuns: GitHub and fake adapters agree on the normalized shape, 
   assert.deepEqual(fakePort.listWorkflowRuns('o', 'r', 'CI', 10), githubResult);
 });
 
+// kurone-kito/idd-skill#3256: `listCheckRunWorkflowPaths` had no parity
+// case at all before this issue -- added alongside the new `event` field
+// (kurone-kito/idd-skill#2926 shipped `workflowPath` with no parity
+// coverage either). One live check-suite carrying both `workflowPath` and
+// `event` through `checkSuite.workflowRun`.
+test('listCheckRunWorkflowPaths: GitHub and fake adapters agree on the normalized shape, including the event field', () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              object: {
+                checkSuites: {
+                  nodes: [
+                    {
+                      workflowRun: {
+                        file: {
+                          path: '.github/workflows/idd-advisory-convergence.yml',
+                        },
+                        event: 'pull_request_target',
+                      },
+                      checkRuns: {
+                        nodes: [
+                          {
+                            detailsUrl:
+                              'https://github.com/o/r/actions/runs/1/job/1',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    checkRunWorkflowPaths: {
+      'o/r/deadbeef/idd-advisory-convergence': [
+        {
+          detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+          workflowPath: '.github/workflows/idd-advisory-convergence.yml',
+          event: 'pull_request_target',
+        },
+      ],
+    },
+  });
+
+  const githubResult = githubPort.listCheckRunWorkflowPaths(
+    'o',
+    'r',
+    'deadbeef',
+    'idd-advisory-convergence',
+  );
+  assert.deepEqual(githubResult, [
+    {
+      detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
+      workflowPath: '.github/workflows/idd-advisory-convergence.yml',
+      event: 'pull_request_target',
+    },
+  ]);
+  assert.deepEqual(
+    fakePort.listCheckRunWorkflowPaths(
+      'o',
+      'r',
+      'deadbeef',
+      'idd-advisory-convergence',
+    ),
+    githubResult,
+  );
+});
+
 // --- freshness ---------------------------------------------------------
 
 test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree on the normalized shape', () => {
@@ -490,6 +572,10 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
             commitId: 'abc123',
             commentCount: 1,
             body: 'LGTM with one comment.',
+            // #3262: the GitHub adapter's fixture above has no
+            // `comments.nodes`, so its derived `replyOnly` fails closed to
+            // `false` (a truncated connection) -- match it here for parity.
+            replyOnly: false,
           },
         ],
         headCommittedAt: '2026-01-01T01:00:00Z',

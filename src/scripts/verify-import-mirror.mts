@@ -112,7 +112,16 @@
 //    `findMarkdownCodeRanges` from `markdown-code.mts` -- this
 //    repository's own CommonMark-compliant, container/list-aware code-
 //    region detector, already proven across many review rounds on its
-//    own PR.
+//    own PR. Outside code ranges, a genuine Markdown list-item boundary
+//    (a line matching `markdown-code.mts`'s own `parseListItemMatch`
+//    shape) is ALSO preserved as significant, non-reflowable structure,
+//    rather than collapsed into the surrounding prose the way an
+//    ordinary wrapped line is: a Copilot review on PR #3225 pointed out
+//    that flattening `- parent\n  - child` to `- parent - child` -- a
+//    real structural edit to a vendored file's list nesting, not a mere
+//    line-wrap -- normalized identically under the original whole-
+//    paragraph whitespace collapse and so passed as a tolerated reflow
+//    (issue #3233).
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path`, mode/content/existence
@@ -175,7 +184,13 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
-import { findMarkdownCodeRanges } from './markdown-code.mts';
+import {
+  findMarkdownCodeRanges,
+  indentationColumns,
+  isInterruptingListMarker,
+  parseListItemContainer,
+  parseListItemMatch,
+} from './markdown-code.mts';
 
 /** Hardcoded scoping constants (module-level, not CLI flags -- mirrors
  * verify-workshop-integrity.mts's own WORKSHOP_ROOTS/WORKSHOP_ASSET_DIRS
@@ -444,6 +459,10 @@ export function isProseExtension(path: string): boolean {
  * already proven across many review rounds on its own PR. Only the text
  * OUTSIDE every detected code range gets paragraph/whitespace
  * normalization; every code range's own bytes pass through unchanged.
+ *
+ * Within that non-code text, a genuine Markdown list-item boundary is
+ * ALSO kept significant rather than reflow-collapsed -- see
+ * {@link normalizeParagraphPreservingListStructure} (issue #3233).
  */
 export function normalizeProseWhitespace(content: string): string {
   const unified = content.replace(/\r\n/g, '\n');
@@ -470,9 +489,235 @@ function normalizeProseSegment(content: string): string {
     .join('\n');
   const paragraphs = unified
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .map(normalizeParagraphPreservingListStructure)
     .filter((paragraph) => paragraph.length > 0);
   return paragraphs.join('\n\n');
+}
+
+/**
+ * Normalizes one blank-line-delimited paragraph block (no internal blank
+ * lines -- {@link normalizeProseSegment} already split on those) the same
+ * way rule 3 always has -- collapsing internal whitespace, including an
+ * ordinary line-wrap newline, to a single space -- EXCEPT across a
+ * genuine Markdown list-item boundary, which stays a hard, non-collapsible
+ * line break with its own leading indent and marker preserved verbatim.
+ * Without this, `- parent\n  - child` and its flattened
+ * `- parent - child` both normalize to the exact same string under a
+ * single whole-paragraph whitespace collapse -- silently tolerating a
+ * real structural edit to a vendored file's list nesting as a mere reflow
+ * (Copilot review, PR #3225; issue #3233).
+ *
+ * Reuses `markdown-code.mts`'s own already-reviewed per-line list-item
+ * detector ({@link parseListItemMatch}) rather than hand-rolling a
+ * second, narrower block parser here. A line matching it only counts as
+ * a genuine boundary in one of three cases: (1) nothing is currently
+ * open (the start of this paragraph) -- any marker (any ordered number,
+ * any bullet char) genuinely opens a list here; (2) the current chunk is
+ * a list item AND the new marker's own indent is SHALLOWER than that
+ * item's content indent -- the new line falls outside that item's
+ * content zone entirely, so the item (and the list it belongs to) has
+ * already ended, and unrestricted parsing resumes where, again, any
+ * marker opens a fresh list; or (3) the marker itself satisfies
+ * {@link isInterruptingListMarker}, CommonMark's own restriction on which
+ * markers may interrupt an ALREADY-OPEN paragraph (only a bullet, or an
+ * ordered marker numbered exactly `1`) -- this is the only route left
+ * once case (2) doesn't apply, whether the currently open paragraph is
+ * plain prose or is itself INSIDE a list item's own content zone: a
+ * marker at or past that item's own content indent is still trying to
+ * interrupt that item's own open paragraph, and CommonMark's
+ * interruption restriction applies there exactly as it does at the top
+ * level (verified against `gh api /markdown`: `- costs about\n  5. that
+ * is fine\n` renders as ONE list item with `5. that is fine` as literal
+ * continuation text, not a nested ordered list -- Copilot review, PR
+ * #3417). Without case (3)'s gate, a line like `5. more text` appearing
+ * after ordinary prose (case 3 with no list open at all) OR nested
+ * inside a still-open list item's own content (case 3 applying
+ * recursively) would be misread as a list-item boundary even though
+ * CommonMark reads it as continuation text, turning a legitimate reflow
+ * into a false `content-mismatch`.
+ *
+ * A boundary line starts a fresh chunk carrying that item's raw
+ * `markerIndent` + `marker` verbatim, followed by the marker's own
+ * separating whitespace re-derived from `markdown-code.mts`'s own
+ * {@link parseListItemContainer} -- NOT canonicalized to a single space.
+ * An earlier version of this function both (a) approximated the new
+ * chunk's own content-indent as `markerIndent columns + marker length +
+ * 1` (disagreeing with `parseListItemContainer`'s CommonMark-correct
+ * handling of a 2-4-column separating gap, where 5+ collapses to one
+ * column of padding) and (b) always emitted exactly one canonical space
+ * in the PREFIX regardless of the real separating width (Copilot review,
+ * PR #3417, then a CodeRabbit review the same round). (b) is the more
+ * serious of the two: the real separating width can itself decide
+ * whether a LATER marker nests under this item or falls outside its
+ * zone: `1.` followed by exactly one separating space before `parent`
+ * nests a following `   - child` line under it, but `1.` followed by TWO
+ * separating spaces before `parent` does not (verified via `gh api
+ * /markdown`) -- so canonicalizing that width away let two
+ * structurally different documents normalize to the identical string, a
+ * false PASS rather than merely an overly strict false rejection.
+ * Deriving both the prefix's own padding and the tracked content-indent
+ * from the same `parseListItemContainer` call keeps them consistent by
+ * construction. A line that is not a boundary instead extends the
+ * CURRENT chunk (list item or plain paragraph text alike), so ordinary
+ * reflow -- rewrapping a list item's own continuation lines, or plain
+ * prose with no list items at all -- still collapses exactly as before.
+ *
+ * `markerIndent` is compared verbatim (raw column count) only when
+ * deciding whether a line is a genuine boundary at all (case 2 above);
+ * once a boundary IS established, its own indent is then kept verbatim
+ * in the emitted prefix rather than canonicalized to a CommonMark
+ * nesting LEVEL -- a 2-space- and a 3-space-indented child under the
+ * same `- ` parent both render as the same single nesting level, but
+ * this rule deliberately still treats their differing raw indent as a
+ * genuine difference once each is already recognized as its own item,
+ * rather than folding them together. That is a conservative choice, not
+ * a logical necessity of correctness -- consistent with rule 3's
+ * existing default of failing toward `content-mismatch` (a false
+ * rejection, the safe direction for a fidelity check like this one)
+ * whenever tolerance is not clearly warranted, rather than risking a
+ * false pass.
+ *
+ * Deliberately narrower than full CommonMark list-content-zone tracking
+ * (`markdown-code.mts`'s own `findEnclosingListContentZone`, built for a
+ * different question): {@link parseListItemMatch} only recognizes a
+ * marker at 0-3 RAW leading columns, so a marker nested 4+ columns deep
+ * (a third list level, or a wide marker's own nested child) is not
+ * distinguished from ordinary wrapped prose and still gets reflow-
+ * collapsed into its enclosing chunk -- no worse than before this change,
+ * just not yet covered by it. This bounded fix targets the concrete,
+ * acceptance-criteria case (a single level of ordinary list nesting);
+ * extending to fully general nested-zone tracking is left as a follow-up
+ * rather than folded into this change's scope.
+ */
+/**
+ * One line's resolved list-item-opener shape for
+ * {@link normalizeParagraphPreservingListStructure}'s own boundary
+ * decision: the raw indent and marker (kept verbatim in the emitted
+ * prefix), the item's own first-line content, and the content-indent
+ * used both to decide whether a LATER line still falls inside this
+ * item's zone and to size the prefix's own separating padding.
+ */
+interface ListItemOpener {
+  markerIndent: string;
+  marker: string;
+  content: string;
+  contentIndent: number;
+}
+
+/**
+ * A marker with NOTHING after it at all -- not even the separating
+ * whitespace `parseListItemMatch`'s own `LIST_ITEM_PATTERN` requires.
+ * CommonMark still treats this as a valid, empty list item (Copilot
+ * review, PR #3417): upstream `- parent\n-\n` (a genuine second, empty
+ * sibling item) and its flattened `- parent -\n` (one item whose own
+ * text ends in a literal `-`) are structurally different documents --
+ * verified via `gh api /markdown` -- but `parseListItemMatch` alone
+ * cannot tell them apart, since it requires at least one separating
+ * character after the marker before content (even empty content).
+ * Matched here with a narrow, LOCAL pattern rather than widening
+ * `parseListItemMatch`'s own shared regex, which many other consumers
+ * throughout `markdown-code.mts` also rely on in its exact current
+ * shape -- keeping this bounded fix's blast radius limited to this one
+ * call site.
+ */
+const BARE_LIST_MARKER_PATTERN = /^([ \t]{0,3})([-+*]|\d{1,9}[.)])$/u;
+
+/**
+ * Resolves `line`'s list-item-opener shape, if any, via
+ * {@link parseListItemMatch} (the common case) first and
+ * {@link BARE_LIST_MARKER_PATTERN} as a fallback for the empty-marker
+ * gap above -- both paths report the same {@link ListItemOpener} shape
+ * so the caller's boundary logic never needs to special-case either one.
+ * `contentIndent` is `markdown-code.mts`'s own
+ * {@link parseListItemContainer} result for the common case (an empty
+ * first line uses CommonMark's own special-cased width -- marker width
+ * plus one column -- the same fallback `parseListItemContainer` itself
+ * is guaranteed never to need here, since it only returns `null` when
+ * `parseListItemMatch` also returns `null`, which cannot happen for a
+ * `line` that already matched above).
+ */
+function detectListItemOpener(line: string): ListItemOpener | null {
+  const listItem = parseListItemMatch(line);
+  if (listItem !== null) {
+    const markerEndColumns =
+      indentationColumns(listItem.markerIndent) + listItem.marker.length;
+    const contentIndent = parseListItemContainer(line) ?? markerEndColumns + 1;
+    return {
+      markerIndent: listItem.markerIndent,
+      marker: listItem.marker,
+      content: listItem.content,
+      contentIndent,
+    };
+  }
+  const bareMatch = BARE_LIST_MARKER_PATTERN.exec(line);
+  if (bareMatch === null) {
+    return null;
+  }
+  const markerIndent = bareMatch[1] ?? '';
+  const marker = bareMatch[2] ?? '';
+  if (indentationColumns(markerIndent) >= 4) {
+    return null;
+  }
+  return {
+    markerIndent,
+    marker,
+    content: '',
+    contentIndent: indentationColumns(markerIndent) + marker.length + 1,
+  };
+}
+
+function normalizeParagraphPreservingListStructure(paragraph: string): string {
+  const lines = paragraph.split('\n');
+  const chunks: string[] = [];
+  let currentPrefix = '';
+  let currentContentLines: string[] = [];
+  let currentChunkContentIndent: number | null = null;
+  let hasCurrentChunk = false;
+
+  const flushCurrentChunk = (): void => {
+    if (!hasCurrentChunk) {
+      return;
+    }
+    const collapsedContent = currentContentLines
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    chunks.push(currentPrefix + collapsedContent);
+    currentContentLines = [];
+    hasCurrentChunk = false;
+  };
+
+  for (const line of lines) {
+    const listItem = detectListItemOpener(line);
+    const exitsCurrentListZone =
+      listItem !== null &&
+      currentChunkContentIndent !== null &&
+      indentationColumns(listItem.markerIndent) < currentChunkContentIndent;
+    const isGenuineListBoundary =
+      listItem !== null &&
+      (!hasCurrentChunk ||
+        exitsCurrentListZone ||
+        isInterruptingListMarker(listItem.marker));
+    if (isGenuineListBoundary && listItem !== null) {
+      flushCurrentChunk();
+      const markerEndColumns =
+        indentationColumns(listItem.markerIndent) + listItem.marker.length;
+      const paddingColumns = listItem.contentIndent - markerEndColumns;
+      currentPrefix = `${listItem.markerIndent}${listItem.marker}${' '.repeat(paddingColumns)}`;
+      currentChunkContentIndent = listItem.contentIndent;
+      currentContentLines = [listItem.content];
+      hasCurrentChunk = true;
+    } else if (hasCurrentChunk) {
+      currentContentLines.push(line);
+    } else {
+      currentPrefix = '';
+      currentChunkContentIndent = null;
+      currentContentLines = [line];
+      hasCurrentChunk = true;
+    }
+  }
+  flushCurrentChunk();
+  return chunks.join('\n');
 }
 
 /** Content-only classification (rules 1-3), ignoring mode entirely. */

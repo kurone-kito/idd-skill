@@ -70,6 +70,12 @@ import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 
 const CLONE_LOCK_FILE_NAME = 'idd-clone.lock';
 /** How long a waiter blocks (retrying) before giving up. */
@@ -363,7 +369,9 @@ function parseArgs(argv) {
   if (typeof rawTimeout === 'string') {
     const parsed = Number(rawTimeout);
     if (!Number.isInteger(parsed) || parsed <= 0) {
-      throw new Error('--timeout-ms must be a positive integer');
+      throw markCliUsageError(
+        new Error('--timeout-ms must be a positive integer'),
+      );
     }
     timeoutMs = parsed;
   }
@@ -384,18 +392,20 @@ async function runCli() {
     process.exit(0);
   }
   if (args.exec === args.check) {
-    throw new Error('exactly one of --exec or --check is required');
+    throw markCliUsageError(
+      new Error('exactly one of --exec or --check is required'),
+    );
   }
   const repo = args.repo ?? process.cwd();
   if (args.check) {
     process.stdout.write(`${JSON.stringify(checkCloneLock(repo))}\n`);
-    return;
+    return 0;
   }
   if (args.agentId === null) {
-    throw new Error('--agent-id is required for --exec');
+    throw markCliUsageError(new Error('--agent-id is required for --exec'));
   }
   if (args.command.length === 0) {
-    throw new Error('--exec requires a command after `--`');
+    throw markCliUsageError(new Error('--exec requires a command after `--`'));
   }
   const [command, ...commandArgs] = args.command;
   try {
@@ -406,12 +416,11 @@ async function runCli() {
       commandArgs,
       args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     );
-    process.exitCode = status ?? 1;
+    return status ?? 1;
   } catch (error) {
     if (error instanceof CloneLockTimeoutError) {
       process.stderr.write(`${error.message}\n`);
-      process.exitCode = 3;
-      return;
+      return 3;
     }
     throw error;
   }
@@ -452,5 +461,14 @@ running (diagnostic only). Neither case is ever auto-recovered.
 // would throw a `ReferenceError` on any `--exec` timeout instead of the
 // documented message and exit code 3.
 if (import.meta.main) {
-  await runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('clone-lock', runCli);
+  } else {
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

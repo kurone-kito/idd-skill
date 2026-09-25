@@ -11,6 +11,32 @@ import { extractShapedCliParseErrorMessage } from '../scripts/cli-args.mjs';
 // Bounds the best-effort `--help` re-invocation used to fetch a usage line
 // below -- this must never hang the primary error-reporting path.
 const HELP_REINVOKE_TIMEOUT_MS = 5_000;
+// #3342: the fixed prefix of the one-line JSON error envelope a migrated
+// helper's `runHelperCli` appends as the LAST stderr line when
+// `IDD_HELPER_ERROR_ENVELOPE=1` is set. Recognized here so the shaped-
+// parse-error branch below -- which otherwise replaces the whole captured
+// stderr with just the shaped message plus usage -- can still re-append
+// this line afterward, keeping it the LAST line rather than silently
+// dropping it.
+const ENVELOPE_LINE_PREFIX = '{"iddHelperError":';
+/**
+ * Find the envelope line (see {@link ENVELOPE_LINE_PREFIX}) in `stderrText`
+ * -- always the last non-empty line when a migrated helper both opted into
+ * the envelope AND exited non-zero, per `runHelperCli`'s own contract.
+ * Returns `null` when no such line is present (envelope disabled, or a
+ * not-yet-migrated helper).
+ */
+function extractTrailingEnvelopeLine(stderrText) {
+  const lines = stderrText.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === '') {
+      continue;
+    }
+    return line.startsWith(ENVELOPE_LINE_PREFIX) ? line : null;
+  }
+  return null;
+}
 // How long, after the child's *first* stderr chunk arrives, run-helper keeps
 // buffering (instead of forwarding live) to give a shaped parse error --
 // always an instant, synchronous crash right after startup -- a chance to
@@ -139,6 +165,13 @@ export function runHelper(relativeScriptPath) {
     const usage = fetchUsageLine(scriptPath);
     if (usage !== null) {
       process.stderr.write(`${usage}\n`);
+    }
+    // #3342: re-append the error envelope line, if the child emitted one,
+    // so it stays the LAST stderr line even though everything else the
+    // child wrote is being replaced by the shaped message + usage above.
+    const envelopeLine = extractTrailingEnvelopeLine(capturedStderr);
+    if (envelopeLine !== null) {
+      process.stderr.write(`${envelopeLine}\n`);
     }
     process.exitCode = exitCode;
   });

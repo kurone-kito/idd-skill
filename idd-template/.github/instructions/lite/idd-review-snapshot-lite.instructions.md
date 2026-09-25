@@ -1,10 +1,10 @@
 # IDD — Review Snapshot Phase (Lite) (E1-E3)
 
 Lite profile for helper-enabled weak/local models. Same semantics as
-`idd-review-snapshot.instructions.md`. Use only for this session's
-claimed issue, with an open PR whose CI has passed or that already has
-reviews. If the repository is `instructions-only`, use the standard
-review-snapshot instructions instead.
+`idd-review-snapshot.instructions.md`. Use only for the claimed
+issue's open PR once CI passes or reviews exist. If
+`instructions-only`, use the standard review-snapshot instructions
+instead.
 
 ## Helper runtime contract
 
@@ -65,15 +65,15 @@ GitHub side effect, confirm all of the following:
 ### CI-completion precondition (before Step 1)
 
 Before taking the Step 1 snapshot, confirm every CI run counting toward
-the merge gate has completed, including any opt-in or label-triggered
-job enabled at this quiescent point. If the primary advisory bot
-already reviewed an earlier head, an automatic same-head re-review is
-expected — run the advisory-wait-state helper and check its
-`lastCopilotCommit == prHeadSha` fast-path fields (from
+the merge gate has completed, including any opt-in/label-triggered job
+enabled here. If the primary advisory bot already reviewed an earlier
+head, expect an automatic same-head re-review — run the
+advisory-wait-state helper and check its `lastCopilotCommit ==
+prHeadSha` fast-path fields (from
 `idd-advisory-wait-lite.instructions.md`; read fresh from the helper,
-not Step 1's `{head-SHA}` below, not yet captured here), and wait for
-that re-review, bounded by that file's advisory-wait windows if it
-never lands. Only then continue to Step 1.
+not Step 1's `{head-SHA}` below, not yet captured here), and wait,
+bounded by that file's advisory-wait windows if it never lands. Only
+then continue to Step 1.
 
 ### Step 1 — Snapshot the activity universe
 
@@ -85,7 +85,7 @@ never lands. Only then continue to Step 1.
    `{latest-ci-completed-at}`: `node scripts/review-activity-snapshot.mjs
    --pr {pr-number} --trusted-marker-logins
    "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
-   equivalent (resolve from `docs/idd-helper-scripts.md`) — this is
+   equivalent — this is
    Step 2's watermark data source, not a triage tool. The helper emits
    both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
    `{latest-ci-completed-at}` is always the latter — the latest
@@ -102,12 +102,19 @@ never lands. Only then continue to Step 1.
 
    - `<!-- review-watermark:`
    - `<!-- review-baseline:`
+   - `<!-- zero-accepted-path-a-gate:`
    - `<!-- claimed-by:`
    - `<!-- unclaimed-by:`
    - `advisory-wait:`
    - `advisory-wait-recovery:`
    - `<!-- advisory-wait:`
    - `advisory-reroll:`
+   - `review-ack:`
+   - `copilot-unavailable:`
+   - `<!-- idd-external-check-waiver:` (also from
+     `github-actions[bot]` when that login is not configured)
+   - `<!-- idd-local-validation-evidence:`
+   - the live-status digest (any form)
 
    Never exclude an untrusted-author marker-shaped comment; flag it as
    suspicious if it affects a decision.
@@ -149,17 +156,16 @@ the token with no note, makes the whole comment unrecognized as a live
 watermark.
 
 On resume or restart, read the latest trusted same-claim
-`review-watermark` comment to restore all six values. Ignore
-watermarks from any other claim or untrusted
-author; a legacy watermark with no `{claim-id}` is not resumable. If no
-trusted same-claim watermark exists, rerun E1 from scratch. After a
-forced handoff, all prior-claim watermarks are foreign restore markers
-— ignore them, never hide or delete them, and rerun E1 under the
-successor claim.
+`review-watermark` to restore all six values. Ignore watermarks from
+any other claim or untrusted author; a legacy watermark with no
+`{claim-id}` isn't resumable. If no trusted same-claim watermark
+exists, rerun E1 from scratch. After a forced handoff, prior-claim
+watermarks are foreign restore markers — ignore, never hide or
+delete, and rerun E1 under the successor claim.
 
-After the new watermark is verified to exist, minimize every strictly
-older trusted same-claim `review-watermark` / `review-baseline` comment
-as `OUTDATED`: `node scripts/minimize-superseded-markers.mjs
+After the new watermark is verified, minimize every strictly older
+trusted same-claim `review-watermark`/`review-baseline` comment as
+`OUTDATED`: `node scripts/minimize-superseded-markers.mjs
 --subject-ids "<id1>,<id2>,..." --classifier OUTDATED
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`.
 Skip this cleanup (not a stop condition) when the new watermark isn't
@@ -182,8 +188,7 @@ record each item's source URL:
   author with no reviewer reply since; keep it active anyway when the
   reviewer reopened it after that reply (even with no new text), or an
   agent reply starts with `**Awaiting maintainer decision**` (blocks
-  regardless of
-  maintainer response).
+  regardless of reply).
 - **Review bodies** whose reviewer's latest state is
   `CHANGES_REQUESTED` — exclude any already replied-to and
   re-review-requested in a prior E13/E14 pass.
@@ -197,15 +202,15 @@ record each item's source URL:
 
 Also carry, from the same Step 1 thread set, a light
 **resolved-thread index** (`isResolved=true`): each entry's file/area,
-a short claim summary, source URL, and any recorded `**Accepted**` /
-`**Rejected**` marker. Do not add resolved threads back into
-ReviewItems_snapshot — a routing hint only for E5's duplicate pre-check
-in `idd-review-triage.instructions.md`, not a conclusion.
+claim summary, source URL, and any `**Accepted**` /
+`**Rejected**` marker. Never add resolved threads back into
+ReviewItems_snapshot — a hint only for E5's duplicate pre-check in
+`idd-review-triage.instructions.md`, not a conclusion.
 
 ## E2 — Critique pass
 
-Run one critique pass on the branch's changes every E1-E3 pass (always
-— not a judgment call). Add any newly found issues to
+Run one critique pass on the branch's changes every E1-E3 pass (always).
+Add any newly found issues to
 ReviewItems_snapshot.
 
 Apply these lenses when they fit (composing when both do):
@@ -248,11 +253,10 @@ follow the note here either.
 ## E3 — Empty/non-empty routing
 
 - **ReviewItems_snapshot is empty** → proceed to
-  `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision). Do
-  not route this case directly to the excluded
-  `idd-review-triage.instructions.md`.
-- **ReviewItems_snapshot is non-empty** → this lite session's job ends
-  here (see Triage hand-off boundary above); hand off to
+  `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
+  Never route this to the excluded `idd-review-triage.instructions.md`.
+- **ReviewItems_snapshot is non-empty** → this session's job ends here
+  (see Triage hand-off boundary); hand off to
   `idd-review-triage.instructions.md` (E4) for a stronger session or a
   human to run.
 

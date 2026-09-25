@@ -140,8 +140,13 @@ import {
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
-import type { PrCommitPayload } from './protocol-helpers.mts';
+import type {
+  ExternalCheckWaiverAuthorityLookup,
+  PrCommitPayload,
+} from './protocol-helpers.mts';
 import {
+  attachReviewThreadCommentEditHistories,
+  buildEffectiveTrustedMarkerLogins,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -149,6 +154,7 @@ import {
   resolveAdvisoryBotLogins,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
+  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
@@ -165,6 +171,7 @@ import {
 import type {
   ProviderComment,
   ProviderPort,
+  ProviderReviewThreadCommentEditHistory,
   ProviderReviewThreadWithAuthorType,
 } from './provider-port.mts';
 // #1806: the latest-review Clause 1 evidence (types + pure evaluator + the
@@ -651,11 +658,17 @@ interface IssueCommentPayload {
 
 /** Review-thread reply node (GraphQL `reviewThreads` comment). */
 interface ThreadCommentPayload {
+  id?: string | null;
   body?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   author?: GhAuthorPayload | null;
   pullRequestReview?: { id?: string | null } | null;
+  /** #3269: see `IssueCommentPayload.lastEditedAt`'s #3246 doc comment
+   * above for the three-state contract. Always populated here -- the
+   * review-thread query is already GraphQL, unlike the REST issue-
+   * comments read that field is opt-in for. */
+  lastEditedAt?: string | null;
 }
 
 /** Review thread (GraphQL `reviewThreads` node). */
@@ -1118,6 +1131,24 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  // kurone-kito/idd-skill#3250: `ciGate.externalCheckWaivers.authorityPolicy`,
+  // threaded to the consume-side authority check on the PRIMARY (non-auto)
+  // waiver evidence call only -- the auto-waiver evidence call below stays
+  // untouched, since every marker it can ever validate is exempt from this
+  // check by construction (the #2657 self-referential-bootstrap-auto reason
+  // token). Omitted by direct/unit callers resolves to the check's own
+  // schema default (`owners-and-maintainers-only`) -- unlike `waiverMode`
+  // above, there is no "off" state at this layer either;
+  // `collectFromGitHub` always sources the real policy value.
+  waiverAuthorityPolicy?: string;
+  // kurone-kito/idd-skill#3250: resolves one waiver author's live
+  // collaborator-permission outcome for the authority check above. No
+  // default: omitting it while a marker reaches the check fails that
+  // marker closed to `insufficientAuthority`; `collectFromGitHub` always
+  // supplies `(login) => port.getCollaboratorPermission(login)`.
+  resolveWaiverAuthority?: (
+    authorLogin: string,
+  ) => ExternalCheckWaiverAuthorityLookup | null;
   /** kurone-kito/idd-skill#2657: the current repository's `owner/repo`
    * full name, e.g. `kurone-kito/idd-skill`. Used only to verify a
    * candidate `self-referential-bootstrap-auto` waiver's `run-id:`
@@ -2268,6 +2299,15 @@ export function computeAdvisoryConvergenceVerdict(
       // silently reopen this call's own mode gate. Matches the
       // auto-waiver call below, which already passes this explicitly.
       mode: waiverMode,
+      // kurone-kito/idd-skill#3250: NOT threaded into the auto-waiver call
+      // below -- every marker it can validate carries the #2657
+      // self-referential-bootstrap-auto reason token, which the check
+      // exempts by construction, so wiring it there would only add a
+      // pointless permission lookup.
+      authorityPolicy: String(
+        options.waiverAuthorityPolicy ?? 'owners-and-maintainers-only',
+      ),
+      resolveAuthority: options.resolveWaiverAuthority,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -3293,7 +3333,7 @@ export function collectFromGitHub(
     Number(args.prNumber),
     port,
   );
-  const threads = fetchReviewThreads(port, Number(args.prNumber));
+  const baseThreads = fetchReviewThreads(port, Number(args.prNumber));
 
   // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
   // BEFORE computing `trustedMarkerLogins`, so collaborator-marker trust
@@ -3333,16 +3373,69 @@ export function collectFromGitHub(
   // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any
   // claim/forced-handoff parsing -- an untrusted-author's marker never
   // even reaches the authorization check.
-  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+  // kurone-kito/idd-skill#3250: the shared composition -- see
+  // `buildEffectiveTrustedMarkerLogins`'s own doc comment for why the
+  // collaborator-marker-trust discovery itself stays file-local
+  // (loop-safety wrapped) while only the final combine step is shared.
+  const trustedMarkerLogins = buildEffectiveTrustedMarkerLogins({
     viewerLogin,
-    ...configuredTrustedActors,
-    ...(collaboratorTrustEnabled
+    configuredTrustedActors,
+    collaboratorMarkerLogins: collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimCandidates.flat(),
         ])
-      : []),
-  ]);
+      : [],
+  });
+  // #3269: bounded second-pass GraphQL fetch, scoped to only advisory-bot
+  // thread comments edited after their thread's latest IDD disposition
+  // (see `selectAdvisoryThreadCommentIdsEditedAfterDisposition`'s own doc
+  // comment) -- so the disposition-evidence check below (reusing
+  // `summarizeDispositionEvidenceForGate`, `computeAdvisoryConvergenceVerdict`)
+  // can verify a cosmetic edit (e.g. CodeRabbit's own comment-to-reply
+  // marker rewrite) and date it by content activity instead of
+  // `updatedAt`, which also moves on IDD's own hide-on-supersede
+  // minimization (kurone-kito/idd-skill#3173). `isDispositionAuthor` here
+  // is `trustedMarkerLogins` alone, matching this gate's own
+  // `iddAgentLogins: trustedMarkerLogins` option below (this gate has no
+  // separate "IDD agent" notion from "trusted marker actor") -- candidate
+  // selection and freshness evaluation must agree on which comment
+  // anchors "the disposition", or the two merge gates (this one and F2's
+  // pre-merge-readiness.mts) could disagree. A fetch failure degrades to
+  // no enrichment (today's `updatedAt` dating) rather than failing this
+  // whole collection.
+  const trustedMarkerLoginSet = new Set(trustedMarkerLogins);
+  const editHistoryCandidateIds =
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(baseThreads, {
+      isDispositionAuthor: (login) => trustedMarkerLoginSet.has(login),
+      advisoryBotLogins,
+    });
+  let editHistories: ProviderReviewThreadCommentEditHistory[] = [];
+  if (editHistoryCandidateIds.length > 0) {
+    try {
+      editHistories = port.getReviewThreadCommentUserContentEdits(
+        editHistoryCandidateIds,
+      );
+    } catch {
+      // Fail closed to no enrichment -- every affected comment keeps
+      // today's `updatedAt` dating (see
+      // `resolveThreadCommentRevisionDatingOutcome`'s own "unverifiable"
+      // outcome for an absent/incomplete history, protocol-helpers.mts).
+    }
+  }
+  // Called unconditionally: returns `baseThreads` UNCHANGED (same
+  // reference) when there is nothing to attach, matching
+  // `pre-merge-readiness.mts`'s own identical pattern. The cast back to
+  // `ReviewThreadPayload[]` is safe: `attachReviewThreadCommentEditHistories`
+  // is deliberately typed over protocol-helpers.mts's generic `ThreadLike`
+  // (the wider structural contract every review-thread consumer already
+  // satisfies), but it only ever adds a `userContentEdits` property onto
+  // an unchanged `baseThreads` comment or returns a thread verbatim --
+  // never drops or narrows a field `ReviewThreadPayload` itself requires.
+  const threads = attachReviewThreadCommentEditHistories(
+    baseThreads,
+    editHistories,
+  ) as ReviewThreadPayload[];
 
   // #1810: delegates to `resolveClaimEvidence` (below `hasTrustedClaimMarker-
   // History`'s definition) instead of calling `pickResolvingClaimEvents` /
@@ -3888,6 +3981,14 @@ export function collectFromGitHub(
         policy?.ciGate?.externalCheckWaivers?.maxValidity ?? 'PT24H',
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waiverAuthorityPolicy: String(
+        policy?.ciGate?.externalCheckWaivers?.authorityPolicy ??
+          'owners-and-maintainers-only',
+      ),
+      resolveWaiverAuthority: (
+        login: string,
+      ): ExternalCheckWaiverAuthorityLookup =>
+        port.getCollaboratorPermission(login),
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
       helperRuntimeProfile,
@@ -4268,7 +4369,13 @@ function fetchPrAuthor(
  * already expect and are directly tested against) -- same shim strategy as
  * {@link toIssueCommentPayload}. `pageInfo.hasNextPage` is always `false`:
  * the port's `fetchReviewThreadsGeneric` already fully paginates every
- * thread's comments before returning. */
+ * thread's comments before returning. Each comment's own `id` and
+ * `lastEditedAt` (#3269) are threaded through too -- `id` lets
+ * `selectAdvisoryThreadCommentIdsEditedAfterDisposition` name a candidate
+ * comment for the bounded `userContentEdits` fetch, and `lastEditedAt`
+ * (already returned by the port since #3246, but never mapped into this
+ * shape until #3269) is what `effectiveThreadCommentActivityAt` reads to
+ * tell a genuinely unedited comment from an edited one at all. */
 function toReviewThreadPayload(
   node: ProviderReviewThreadWithAuthorType,
 ): ReviewThreadPayload {
@@ -4278,6 +4385,7 @@ function toReviewThreadPayload(
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: node.comments.map((comment) => ({
+        id: comment.id,
         body: comment.body,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
@@ -4286,6 +4394,7 @@ function toReviewThreadPayload(
           __typename: comment.authorTypename,
         },
         pullRequestReview: { id: comment.pullRequestReviewId },
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

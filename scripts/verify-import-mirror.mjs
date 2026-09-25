@@ -112,7 +112,16 @@
 //    `findMarkdownCodeRanges` from `markdown-code.mts` -- this
 //    repository's own CommonMark-compliant, container/list-aware code-
 //    region detector, already proven across many review rounds on its
-//    own PR.
+//    own PR. Outside code ranges, a genuine Markdown list-item boundary
+//    (a line matching `markdown-code.mts`'s own `parseListItemMatch`
+//    shape) is ALSO preserved as significant, non-reflowable structure,
+//    rather than collapsed into the surrounding prose the way an
+//    ordinary wrapped line is: a Copilot review on PR #3225 pointed out
+//    that flattening `- parent\n  - child` to `- parent - child` -- a
+//    real structural edit to a vendored file's list nesting, not a mere
+//    line-wrap -- normalized identically under the original whole-
+//    paragraph whitespace collapse and so passed as a tolerated reflow
+//    (issue #3233).
 // 4. Git file mode compared exactly (e.g. `100644` vs `100755`):
 //    identical bytes with a dropped executable bit still breaks a
 //    `bin/` entry point. For `--upstream-path`, mode/content/existence
@@ -174,7 +183,13 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
-import { findMarkdownCodeRanges } from './markdown-code.mjs';
+import {
+  findMarkdownCodeRanges,
+  indentationColumns,
+  isInterruptingListMarker,
+  parseListItemContainer,
+  parseListItemMatch,
+} from './markdown-code.mjs';
 
 /** Hardcoded scoping constants (module-level, not CLI flags -- mirrors
  * verify-workshop-integrity.mts's own WORKSHOP_ROOTS/WORKSHOP_ASSET_DIRS
@@ -383,6 +398,10 @@ export function isProseExtension(path) {
  * already proven across many review rounds on its own PR. Only the text
  * OUTSIDE every detected code range gets paragraph/whitespace
  * normalization; every code range's own bytes pass through unchanged.
+ *
+ * Within that non-code text, a genuine Markdown list-item boundary is
+ * ALSO kept significant rather than reflow-collapsed -- see
+ * {@link normalizeParagraphPreservingListStructure} (issue #3233).
  */
 export function normalizeProseWhitespace(content) {
   const unified = content.replace(/\r\n/g, '\n');
@@ -408,9 +427,120 @@ function normalizeProseSegment(content) {
     .join('\n');
   const paragraphs = unified
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .map(normalizeParagraphPreservingListStructure)
     .filter((paragraph) => paragraph.length > 0);
   return paragraphs.join('\n\n');
+}
+/**
+ * A marker with NOTHING after it at all -- not even the separating
+ * whitespace `parseListItemMatch`'s own `LIST_ITEM_PATTERN` requires.
+ * CommonMark still treats this as a valid, empty list item (Copilot
+ * review, PR #3417): upstream `- parent\n-\n` (a genuine second, empty
+ * sibling item) and its flattened `- parent -\n` (one item whose own
+ * text ends in a literal `-`) are structurally different documents --
+ * verified via `gh api /markdown` -- but `parseListItemMatch` alone
+ * cannot tell them apart, since it requires at least one separating
+ * character after the marker before content (even empty content).
+ * Matched here with a narrow, LOCAL pattern rather than widening
+ * `parseListItemMatch`'s own shared regex, which many other consumers
+ * throughout `markdown-code.mts` also rely on in its exact current
+ * shape -- keeping this bounded fix's blast radius limited to this one
+ * call site.
+ */
+const BARE_LIST_MARKER_PATTERN = /^([ \t]{0,3})([-+*]|\d{1,9}[.)])$/u;
+/**
+ * Resolves `line`'s list-item-opener shape, if any, via
+ * {@link parseListItemMatch} (the common case) first and
+ * {@link BARE_LIST_MARKER_PATTERN} as a fallback for the empty-marker
+ * gap above -- both paths report the same {@link ListItemOpener} shape
+ * so the caller's boundary logic never needs to special-case either one.
+ * `contentIndent` is `markdown-code.mts`'s own
+ * {@link parseListItemContainer} result for the common case (an empty
+ * first line uses CommonMark's own special-cased width -- marker width
+ * plus one column -- the same fallback `parseListItemContainer` itself
+ * is guaranteed never to need here, since it only returns `null` when
+ * `parseListItemMatch` also returns `null`, which cannot happen for a
+ * `line` that already matched above).
+ */
+function detectListItemOpener(line) {
+  const listItem = parseListItemMatch(line);
+  if (listItem !== null) {
+    const markerEndColumns =
+      indentationColumns(listItem.markerIndent) + listItem.marker.length;
+    const contentIndent = parseListItemContainer(line) ?? markerEndColumns + 1;
+    return {
+      markerIndent: listItem.markerIndent,
+      marker: listItem.marker,
+      content: listItem.content,
+      contentIndent,
+    };
+  }
+  const bareMatch = BARE_LIST_MARKER_PATTERN.exec(line);
+  if (bareMatch === null) {
+    return null;
+  }
+  const markerIndent = bareMatch[1] ?? '';
+  const marker = bareMatch[2] ?? '';
+  if (indentationColumns(markerIndent) >= 4) {
+    return null;
+  }
+  return {
+    markerIndent,
+    marker,
+    content: '',
+    contentIndent: indentationColumns(markerIndent) + marker.length + 1,
+  };
+}
+function normalizeParagraphPreservingListStructure(paragraph) {
+  const lines = paragraph.split('\n');
+  const chunks = [];
+  let currentPrefix = '';
+  let currentContentLines = [];
+  let currentChunkContentIndent = null;
+  let hasCurrentChunk = false;
+  const flushCurrentChunk = () => {
+    if (!hasCurrentChunk) {
+      return;
+    }
+    const collapsedContent = currentContentLines
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    chunks.push(currentPrefix + collapsedContent);
+    currentContentLines = [];
+    hasCurrentChunk = false;
+  };
+  for (const line of lines) {
+    const listItem = detectListItemOpener(line);
+    const exitsCurrentListZone =
+      listItem !== null &&
+      currentChunkContentIndent !== null &&
+      indentationColumns(listItem.markerIndent) < currentChunkContentIndent;
+    const isGenuineListBoundary =
+      listItem !== null &&
+      (!hasCurrentChunk ||
+        exitsCurrentListZone ||
+        isInterruptingListMarker(listItem.marker));
+    if (isGenuineListBoundary && listItem !== null) {
+      flushCurrentChunk();
+      const markerEndColumns =
+        indentationColumns(listItem.markerIndent) + listItem.marker.length;
+      const paddingColumns = listItem.contentIndent - markerEndColumns;
+      currentPrefix = `${listItem.markerIndent}${listItem.marker}${' '.repeat(paddingColumns)}`;
+      currentChunkContentIndent = listItem.contentIndent;
+      currentContentLines = [listItem.content];
+      hasCurrentChunk = true;
+    } else if (hasCurrentChunk) {
+      currentContentLines.push(line);
+    } else {
+      currentPrefix = '';
+      currentChunkContentIndent = null;
+      currentContentLines = [line];
+      hasCurrentChunk = true;
+    }
+  }
+  flushCurrentChunk();
+  return chunks.join('\n');
 }
 /** Content-only classification (rules 1-3), ignoring mode entirely. */
 export function classifyFileContent(params) {

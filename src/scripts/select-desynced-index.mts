@@ -16,6 +16,13 @@
 // `node -e` hand-transcription error surface that motivated this issue.
 
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { selectDesyncedIndex } from './policy-helpers.mts';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -36,7 +43,13 @@ const SELECT_DESYNCED_INDEX_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('select-desynced-index', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 interface ParsedArgs {
@@ -45,7 +58,7 @@ interface ParsedArgs {
   help: boolean;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -60,14 +73,17 @@ function runCli(): void {
   // otherwise it would silently degrade to the same output as `off`/no-tie
   // instead of surfacing the caller's mistake.
   if (args.token === null || args.token === '') {
-    throw new Error('--token is required');
+    throw markCliUsageError(new Error('--token is required'));
   }
   if (args.bandSize === null) {
-    throw new Error('--band-size is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--band-size is required and must be a positive integer'),
+    );
   }
   process.stdout.write(
     `${selectDesyncedIndex(args.token, args.bandSize as number)}\n`,
   );
+  return 0;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
