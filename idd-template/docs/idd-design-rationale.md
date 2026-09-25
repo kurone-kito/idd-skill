@@ -814,13 +814,17 @@ IDD classifies advisory-bot output (CodeRabbit, Copilot, Codex) by
 exact wording, and every classifier's own detection patterns were
 added one wording at a time, each after a separate field report —
 with no consistent evidence bar for how many real samples justified
-adding one. Some wordings were derived from many real samples; others
-were accepted on a single second-hand report, with the key sentence
-never even captured verbatim (matched structurally instead). No
-committed copy of any real bot body backed any of these decisions, so
-nothing would have noticed if live vendor output later drifted from
-what a matcher expected — a suppressed-comments parser going stale
-unnoticed is exactly that failure mode realized.
+adding one. `kurone-kito/idd-skill#2641` derived its courtesy-
+acknowledgment template from 18 of 18 real samples;
+`kurone-kito/idd-skill#2710` was closed as not planned on a 10-of-10
+sample that showed the proposed signal never appears on its own;
+`kurone-kito/idd-skill#3193` was accepted on a single second-hand
+report from a private repository, with the key sentence never even
+captured verbatim (matched structurally instead). No committed copy of
+any real bot body backed any of these decisions, so nothing would have
+noticed if live vendor output later drifted from what a matcher
+expected — a suppressed-comments parser going stale unnoticed is
+exactly that failure mode realized.
 
 A single rule resolves the inconsistency, applied going forward: a new
 wording enters the registered wording-classifier list only with at

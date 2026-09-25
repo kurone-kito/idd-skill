@@ -48,6 +48,22 @@
     }
   },
   {
+    "id": "coderabbit-courtesy-ack-2649",
+    "botLogin": "coderabbitai[bot]",
+    "source": {
+      "pr": 2649,
+      "reviewId": null,
+      "commentId": 3940768997,
+      "editedAt": null
+    },
+    "surface": "review-thread comment",
+    "body": "`@kurone-kito`, confirmed. The optional `CODERABBIT_AUTO_GENERATED_REPLY_MARKER` prefix permits the marker-first reply form before the addressed-user mention. The regression test covers the reported case.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->",
+    "note": "A third real courtesy-ack sample from a second distinct PR (clearing the 3-sample/2-PR evidence bar for coderabbit-courtesy-ack alongside the two PR #2895 samples).",
+    "expectedLabels": {
+      "coderabbit-courtesy-ack": true
+    }
+  },
+  {
     "id": "coderabbit-courtesy-ack-2895-reply1",
     "botLogin": "coderabbitai[bot]",
     "source": {
@@ -77,6 +93,22 @@
     "note": "A second, distinct 'acknowledged'-opening reply on the same PR (different review thread).",
     "expectedLabels": {
       "coderabbit-courtesy-ack": true
+    }
+  },
+  {
+    "id": "coderabbit-in-progress-2039",
+    "botLogin": "coderabbitai[bot]",
+    "source": {
+      "pr": 2039,
+      "reviewId": null,
+      "commentId": 5288254321,
+      "editedAt": "2026-08-14T01:57:40Z"
+    },
+    "surface": "pr comment",
+    "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- review_stack_entry_start -->\n\n[![Review Change Stack](https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui.svg)](https://app.coderabbit.ai/change-stack/kurone-kito/idd-skill/pull/2039?utm_source=github_walkthrough&utm_medium=github&utm_campaign=change_stack)\n\n<!-- review_stack_entry_end -->\n<!-- This is an auto-generated comment: review in progress by coderabbit.ai -->\n\n> [!NOTE]\n> Currently processing new changes in this PR. This may take a few minutes, please wait...\n> \n> <details>\n> <summary>⚙️ Run configuration</summary>\n> \n> **Configuration used**: Path: .coderabbit.yaml\n> \n> **Review profile**: CHILL\n> \n> **Plan**: Pro Plus\n> \n> **Run ID**: `8d32b9f1-43f2-4070-a7b0-3c7609e9043a`\n> \n> </details>\n> \n> <details>\n> <summary>📥 Commits</summary>\n> \n> Reviewing files that changed from the base of the PR and between ec18d34fe08f1992ff85504f2cee60f62121b307 and a0aaf2feb0a28ad576ffef3d5fa18ad9e468629e.\n> \n> </details>\n> \n> <details>\n> <summary>📒 Files selected for processing (3)</summary>\n> \n> * `scripts/suitability-triage.mjs`\n> * `src/scripts/suitability-triage.mts`\n> * `tests/suitability-triage.test.mts`\n> \n> </details>\n> \n> ```ascii\n>  _________________________________________________\n> < This code is so clever it forgot to be correct. >\n>  -------------------------------------------------\n>   \\\n>    \\   \\\n>         \\ /\\\n>         ( )\n>       .( o ).\n> ```\n\n<!-- end of auto-generated comment: review in progress by coderabbit.ai -->\n\n<!-- finishing_touch_checkbox_start -->\n\n<details>\n<summary>✨ Finishing Touches</summary>\n\n<details>\n<summary>📝 Generate docstrings</summary>\n\n- [ ] <!-- {\"checkboxId\": \"7962f53c-55bc-4827-bfbf-6a18da830691\"} --> Create stacked PR\n- [ ] <!-- {\"checkboxId\": \"3e1879ae-f29b-4d0d-8e06-d12b7ba33d98\"} --> Commit on current branch\n\n</details>\n<details>\n<summary>🧪 Generate unit tests (beta)</summary>\n\n- [ ] <!-- {\"checkboxId\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\", \"radioGroupId\": \"utg-output-choice-group-unknown_comment_id\"} -->   Create PR with unit tests\n- [ ] <!-- {\"checkboxId\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"radioGroupId\": \"utg-output-choice-group-unknown_comment_id\"} -->   Commit unit tests in branch `issue/2024-fix-suitability-triage-check-3-policy`\n\n</details>\n\n</details>\n\n<!-- finishing_touch_checkbox_end -->\n> [!WARNING]\n> Billing warning: we have not been able to collect payment for this subscription for more than 72 hours. Please update the payment method or pay any pending invoices in Billing to avoid service interruption.\n<!-- tips_start -->\n\n---\n\nThanks for using [CodeRabbit](https://coderabbit.ai?utm_source=oss&utm_medium=github&utm_campaign=kurone-kito/idd-skill&utm_content=2039)! It's free for OSS, and your support helps us grow. If you like it, consider giving us a shout-out.\n\n<details>\n<summary>❤️ Share</summary>\n\n- [X](https://twitter.com/intent/tweet?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A&url=https%3A//coderabbit.ai)\n- [Mastodon](https://mastodon.social/share?text=I%20just%20used%20%40coderabbitai%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20the%20proprietary%20code.%20Check%20it%20out%3A%20https%3A%2F%2Fcoderabbit.ai)\n- [Reddit](https://www.reddit.com/submit?title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&text=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code.%20Check%20it%20out%3A%20https%3A//coderabbit.ai)\n- [LinkedIn](https://www.linkedin.com/sharing/share-offsite/?url=https%3A%2F%2Fcoderabbit.ai&mini=true&title=Great%20tool%20for%20code%20review%20-%20CodeRabbit&summary=I%20just%20used%20CodeRabbit%20for%20my%20code%20review%2C%20and%20it%27s%20fantastic%21%20It%27s%20free%20for%20OSS%20and%20offers%20a%20free%20trial%20for%20proprietary%20code)\n\n</details>\n\n\n<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>\n\n<!-- tips_end -->",
+    "note": "A third real in-progress sample from a third distinct PR, clearing the 3-sample/2-PR evidence bar for coderabbit-review-in-progress (isCodeRabbitReviewInProgressSummary postdates d04f5a55 -- added by the sibling #3260 fix -- so it does not qualify for d04f5a55-based grandfathering).",
+    "expectedLabels": {
+      "coderabbit-review-in-progress": true
     }
   },
   {
@@ -236,7 +268,7 @@
       "pr": 2722,
       "reviewId": null,
       "commentId": 5581026726,
-      "editedAt": "2026-09-08T07:26:18Z"
+      "editedAt": "2026-09-08T08:09:10Z"
     },
     "surface": "pr comment",
     "body": "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\nThis comment shows the latest Codex review activity on this pull request.\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-09-08T08:09:10.263161Z\">2026-09-08T08:09:10.263161Z</relative-time> | `50d3c86` | New commits |\n\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\" or \"@codex security review\".\n\nCodex reacts with 👀 while any review is running, comments if it has suggestions, and reacts with 👍 once all reviews finish with no findings.\n\n</details>",
@@ -317,6 +349,25 @@
     }
   },
   {
+    "id": "copilot-legacy-clean-3108",
+    "botLogin": "copilot-pull-request-reviewer[bot]",
+    "source": {
+      "pr": 3108,
+      "reviewId": 5236276059,
+      "commentId": null,
+      "editedAt": null
+    },
+    "surface": "review body",
+    "body": "### 🟢 Approval recommended\n\nThe functional changes are small, consistent with existing hostname-resolution logic, and are covered by targeted regression tests; only a minor comment wording nit was noted.\n\n<details>\n<summary>Pull request overview</summary>\n\nThis PR closes a remaining GitHub Enterprise Server (GHES) host-targeting gap by ensuring `ghText(['api', ...])` calls resolve and apply the correct `--hostname` (consistent with existing `ghApiJson()`/`ghGraphql()` behavior), and by updating a raw `gh api` invocation in the distributed workflow template to respect GHES host resolution.\n\n**Changes:**\n- Add `withResolvedApiHostname()` and wire it into `ghText()` so `ghText(['api', ...])` targets the correct GHES host when `GITHUB_SERVER_URL` indicates a non-`github.com` instance.\n- Add regression tests covering hostname insertion (including the `--method POST`-before-endpoint argv shape) and no-op cases.\n- Update `idd-template/.github/workflows/idd-advisory-convergence.yml` to pass `--hostname` for the raw `gh api` call when appropriate on GHES.\n</details>\n\n<details>\n<summary>File summaries</summary>\n\n| File | Description |\r\n| ---- | ----------- |\r\n| tests/gh-exec.test.mts | Adds regression tests validating `ghText()` hostname injection behavior under GHES vs `github.com`, plus edge-case argv ordering. |\r\n| src/scripts/gh-exec.mts | Introduces `withResolvedApiHostname()` and applies it in `ghText()` to fix GHES host targeting for `gh api` calls. |\r\n| scripts/gh-exec.mjs | Updates the generated JS mirror of `src/scripts/gh-exec.mts` with the same hostname-injection logic. |\r\n| idd-template/.github/workflows/idd-advisory-convergence.yml | Fixes a raw workflow `gh api` call to honor GHES host targeting by deriving/passing `--hostname` when needed. |\n</details>\n\n<details>\n<summary>Review details</summary>\n\n- **Files reviewed:** 4/4 changed files\n- **Comments generated:** 1\n- **Review effort level:** Lite\n</details>\n\n---\n\n💡 <a href=\"/kurone-kito/idd-skill/new/main?filename=.github/skills/code-review/SKILL.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add a `code-review` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn more in the docs.</a>",
+    "note": "Legacy Pull request overview shape with no Suppressed comments section -- a clean sample (suppressedCount: 0), required by this issue's own Step 1 minimum coverage alongside the legacy samples that do carry suppressed findings. A different review on the same PR (#3108) as copilot-legacy-suppressed3-nested-3108.",
+    "expectedLabels": {
+      "copilot-review-body": {
+        "shape": "overview-legacy",
+        "suppressedCount": 0
+      }
+    }
+  },
+  {
     "id": "copilot-legacy-suppressed1-3095",
     "botLogin": "copilot-pull-request-reviewer[bot]",
     "source": {
@@ -389,6 +440,25 @@
       "copilot-review-body": {
         "shape": "overview-legacy",
         "suppressedCount": 2
+      }
+    }
+  },
+  {
+    "id": "copilot-v2-clean-3245",
+    "botLogin": "copilot-pull-request-reviewer[bot]",
+    "source": {
+      "pr": 3245,
+      "reviewId": 5295881406,
+      "commentId": null,
+      "editedAt": null
+    },
+    "surface": "review body",
+    "body": "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n### 🟡 Changes recommended\n\nFive moderate findings remain unresolved.\n\n*Get a fresh assessment by requesting another Copilot review.*\n\n**Review effort:** Lite  \n**Findings:** 1 <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture>\n\n<details open>\n<summary><strong>Open (1)</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve per-review findings and new-versus-carried status](#discussion_r4086537940) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nAdds a repository-local helper for reproducible Copilot review-wave, severity, disposition, and transition metrics.\n\n**Changes:**\n- Adds the TypeScript helper and generated JavaScript artifact.\n- Exports shared disposition regexes.\n- Adds tests, helper registrations, and baseline documentation.\n\n**Review findings:**\n- Add stub-`gh` integration coverage for pagination, comments, and Copilot filtering. *(Moderate, 1 vote)*\n- Sort merged PRs by `mergedAt` before applying `--limit`, with out-of-order coverage. *(Moderate, 1 vote)*\n- Treat v2 reviews without summary sections as unparsed and add a fixture. *(Moderate, 1 vote)*\n- Route CLI parsing failures through `fail()` with status 2. *(Moderate, 1 vote)*\n- Preserve per-review findings and `isNew` data in JSON and TSV output. *(Moderate, 2 votes)*\n\n| File | Summary |\r\n|---|---|\r\n| `tests/​helper-invocation-profile.test.mts` | Registers the source-only helper |\r\n| `tests/​help-text-flags.test.mts` | Covers CLI help flags |\r\n| `tests/​copilot-review-wave-audit.test.mts` | Tests parsing, aggregation, and CLI behavior |\r\n| `src/​scripts/​protocol-helpers.mts` | Exports disposition patterns |\r\n| `src/​scripts/​copilot-review-wave-audit.mts` | Implements the audit helper and CLI |\r\n| `scripts/​protocol-helpers.mjs` | Generated protocol-helper exports |\r\n| `scripts/​copilot-review-wave-audit.mjs` | Generated audit helper |\r\n| `docs/​critique-telemetry.md` | Documents usage and baseline metrics |\r\n| `.gitattributes` | Marks the generated script |\n</details>\n\n---\n\n💡 <a href=\"/kurone-kito/idd-skill/new/main?filename=.github/skills/code-review/SKILL.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add a `code-review` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn more in the docs.</a>",
+    "note": "ccr-overview-v2 shape with an Open finding but no Previously missed section -- a clean sample (suppressedCount: 0), required by this issue's own Step 1 minimum coverage alongside the two non-zero-suppressedCount v2 samples.",
+    "expectedLabels": {
+      "copilot-review-body": {
+        "shape": "overview-v2",
+        "suppressedCount": 0
       }
     }
   },

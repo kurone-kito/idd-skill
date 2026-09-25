@@ -77,23 +77,12 @@ const GRANDFATHERED_CLASSIFIER_IDS: Readonly<Record<string, string>> = {
     'limited"`), still under the 3-sample floor. The matcher already ' +
     'existed at d04f5a55 with fewer than 3 samples from 2 PRs, and #3193 ' +
     "is pre-approved on this issue's own grandfather list regardless.",
-  'coderabbit-courtesy-ack':
-    "#2641's own derivation surveyed 18/18 real replies but never " +
-    'committed them as fixtures; this corpus contributes 2 real samples ' +
-    '(PR #2895 comments 3984628336 and 3985825711), both from the same ' +
-    'PR (1 distinct PR, under the 2-PR floor). The matcher already ' +
-    'existed at d04f5a55 with fewer than 3 samples from 2 PRs.',
   'coderabbit-embedded-findings':
     '#2559/#2197: 2 real samples committed (PR #1871 review 4860403155, ' +
     'an outside-diff-range finding; PR #1897 review 4863787336, a ' +
     'nitpick finding -- the sibling embedded-findings section shape), ' +
     'still under the 3-sample floor. The matcher already existed at ' +
     'd04f5a55 with fewer than 3 samples from 2 PRs.',
-  'coderabbit-review-in-progress':
-    '#3260: 2 real samples committed (PR #3160 comment 5747892562, PR ' +
-    '#3196 comment 5789875341), still under the 3-sample floor. The ' +
-    'matcher already existed at d04f5a55 with fewer than 3 samples from ' +
-    '2 PRs.',
 };
 
 /**
