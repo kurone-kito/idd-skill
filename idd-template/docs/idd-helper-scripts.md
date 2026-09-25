@@ -4016,6 +4016,36 @@ reflexively as any other CLI option.
   additionally carries `route` / `blockingCount` / full missing-item lists
   for the F2 merge gate) — this gate's `dispositionEvidence` never gates
   anything by itself.
+- **Verified-cosmetic-edit dating (`#3269`)**: `hasFreshDisposition`, and
+  every diagnostic sharing `effectiveThreadCommentActivityAt`, dates a
+  review-thread comment by content activity rather than always
+  preferring `updatedAt` — `updatedAt` also moves without any real
+  content change (e.g. IDD's own hide-on-supersede minimization,
+  kurone-kito/idd-skill#3173). A comment with an explicit GraphQL
+  `lastEditedAt: null` dates by `createdAt`. An edited comment dates by
+  the time of its own last revision that is NOT a verified cosmetic
+  edit, falling back to `createdAt` when every revision was cosmetic. A
+  revision is verified cosmetic only when its editor is the comment's
+  own advisory-bot author; after stripping HTML comments its visible
+  text equals the previous revision's, optionally followed by one
+  appended `✅ Addressed in commit(s) <sha>…` resolution line; and the
+  only HTML-comment difference (if any) is CodeRabbit's own
+  `auto-generated comment`→`auto-generated reply` marker rewrite.
+  Anything else — a substantive text change, a deleted or `null`
+  revision, an incomplete `userContentEdits` page (`totalCount` above
+  what was fetched), a non-bot editor, or a failed fetch — keeps
+  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch this
+  needs runs ONLY in the two merge-gate collectors —
+  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's own
+  required-check collector — and only for advisory-bot thread comments
+  whose `lastEditedAt` postdates their thread's latest IDD disposition;
+  every other consumer (`review-activity-snapshot.mjs`, the merged-PR
+  feedback sweep, `audit-pr-cleanup.mjs`) never fetches it, so an edited
+  comment keeps `updatedAt` dating there, unchanged.
+  `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
+  separate, coarser, revision-content-blind heuristic
+  (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating
+  fix.
 - Reuses the existing evidence modules — `isCopilotReviewerLogin` /
   `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
   `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,

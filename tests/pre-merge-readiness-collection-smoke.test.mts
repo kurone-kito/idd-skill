@@ -147,17 +147,21 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
 });
 
 test('normalizeThread maps a ProviderPort review-thread node, including nested comments', () => {
+  // #3269: the comment's own `id` and `lastEditedAt` are threaded through
+  // too -- see `normalizeThread`'s own doc comment.
   assert.deepEqual(
     normalizeThread({
       id: 'RT_1',
       isResolved: false,
       comments: [
         {
+          id: 'PRRC_1',
           body: 'nit: rename this',
           createdAt: '2026-07-31T09:00:00Z',
           updatedAt: '',
           authorLogin: 'reviewer-user',
           pullRequestReviewId: 'PRR_1',
+          lastEditedAt: null,
         },
       ],
     }),
@@ -169,11 +173,13 @@ test('normalizeThread maps a ProviderPort review-thread node, including nested c
         pageInfo: { hasNextPage: false },
         nodes: [
           {
+            id: 'PRRC_1',
             author: { login: 'reviewer-user' },
             body: 'nit: rename this',
             createdAt: '2026-07-31T09:00:00Z',
             updatedAt: '2026-07-31T09:00:00Z',
             pullRequestReview: { id: 'PRR_1' },
+            lastEditedAt: null,
           },
         ],
       },

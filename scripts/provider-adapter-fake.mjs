@@ -372,6 +372,23 @@ export function createFakeProviderAdapter(fixture) {
     listChangeRequestReviewThreadCommentIds(number) {
       return fixture.reviewThreadCommentIds?.[number] ?? [];
     },
+    getReviewThreadCommentUserContentEdits(nodeIds) {
+      fixture.requestedReviewThreadCommentEditHistoryIds ??= [];
+      fixture.requestedReviewThreadCommentEditHistoryIds.push([...nodeIds]);
+      if (fixture.reviewThreadCommentUserContentEditsFails) {
+        throw new Error(
+          'fake provider: getReviewThreadCommentUserContentEdits configured to fail',
+        );
+      }
+      return nodeIds.map(
+        (id) =>
+          fixture.reviewThreadCommentUserContentEdits?.[id] ?? {
+            commentId: id,
+            totalCount: 0,
+            edits: [],
+          },
+      );
+    },
     listChangeRequestGraphqlComments(number) {
       return fixture.changeRequestGraphqlComments?.[number] ?? [];
     },
