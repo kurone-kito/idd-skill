@@ -333,22 +333,40 @@ export function fetchReviewThreadCommentUserContentEdits(
         typeof connection?.totalCount === 'number' ? connection.totalCount : 0;
       const rawEdits = Array.isArray(connection?.nodes) ? connection.nodes : [];
       const edits: ProviderReviewThreadCommentEdit[] = rawEdits.map((raw) => {
+        // Copilot review, PR #3430: a `null` VALUE for the explicitly
+        // selected `deletedAt` field is GitHub's genuine "not deleted"
+        // signal (matches every other selected field's own null-means-
+        // absent contract), but a raw node that is itself `null`, not an
+        // object, or missing the `deletedAt` KEY entirely means this
+        // specific entry never resolved as expected -- a partial/
+        // malformed response, not a real "not deleted" answer. Mapping
+        // that malformed case to the SAME `null` a genuine non-deletion
+        // produces would let
+        // `resolveThreadCommentRevisionDatingOutcome`'s `deletedAt !=
+        // null` fail-closed check silently miss it. Throw instead, so
+        // the collector's own try/catch around this whole fetch takes
+        // its documented fail-closed `updatedAt`-dating path.
+        if (raw == null || typeof raw !== 'object' || !('deletedAt' in raw)) {
+          throw new Error(
+            `fetchReviewThreadCommentUserContentEdits: node ${expectedId} has a malformed userContentEdits entry`,
+          );
+        }
         const typedEdit = raw as {
           editedAt?: unknown;
           diff?: unknown;
           editor?: { login?: unknown } | null;
           deletedAt?: unknown;
-        } | null;
+        };
         return {
           editedAt:
-            typeof typedEdit?.editedAt === 'string' ? typedEdit.editedAt : null,
-          diff: typeof typedEdit?.diff === 'string' ? typedEdit.diff : null,
+            typeof typedEdit.editedAt === 'string' ? typedEdit.editedAt : null,
+          diff: typeof typedEdit.diff === 'string' ? typedEdit.diff : null,
           editorLogin:
-            typedEdit?.editor?.login == null
+            typedEdit.editor?.login == null
               ? null
               : String(typedEdit.editor.login),
           deletedAt:
-            typeof typedEdit?.deletedAt === 'string'
+            typeof typedEdit.deletedAt === 'string'
               ? typedEdit.deletedAt
               : null,
         };

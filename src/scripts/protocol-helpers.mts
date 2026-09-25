@@ -12712,26 +12712,6 @@ function threadActivityAt(thread: ThreadLike): string | null | undefined {
 // entries rather than one span from the first `<!--` to the last `-->`.
 const THREAD_COMMENT_HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 
-/** #3269: `body` with every HTML comment removed -- the "visible text" a
- * verified-cosmetic edit's append-only check compares. Deliberately does
- * NOT trim/collapse the whitespace a removed comment leaves behind: the
- * append-only check below only ever compares a longer string's PREFIX
- * against a shorter one, so incidental blank-line noise from a stripped
- * comment lands inside the compared or the appended region either way,
- * never silently dropped from the comparison.
- *
- * Not an HTML/output sanitizer (CodeQL's `js/incomplete-sanitization`
- * flags this shape generically): the result is compared with `===` /
- * `String.prototype.startsWith` inside {@link isVisibleTextAppendOnly}
- * below and never rendered, concatenated into markup, or otherwise
- * reaches an HTML/DOM sink, so an unclosed `<!--` surviving a single
- * pass (the query's generic concern) carries no injection risk here --
- * it only ever changes which internal dating branch a GraphQL-fetched
- * bot comment's revision history takes. */
-function stripHtmlCommentsForVisibleText(body: string): string {
-  return String(body ?? '').replace(THREAD_COMMENT_HTML_COMMENT_RE, '');
-}
-
 // #3269: the ONLY allowlisted append onto an otherwise-unchanged visible
 // text -- CodeRabbit's own resolve-attempt line, singular or plural
 // commit-range form (real samples: kurone-kito/idd-skill PR #3160 comment
@@ -12742,26 +12722,65 @@ function stripHtmlCommentsForVisibleText(body: string): string {
 const APPENDED_RESOLUTION_SUFFIX_RE =
   /^(?:\r?\n)*✅ Addressed in commits? [0-9a-f]{7,40}(?: to [0-9a-f]{7,40})?(?:\r?\n)*$/;
 
+// #3269 (Copilot review, PR #3430): a single-byte placeholder standing in
+// for one whole HTML comment, used by `commentPositionSkeleton` below.
+// Fully REMOVING each comment (an earlier revision of this function did)
+// loses WHERE each comment sat relative to the surrounding visible text
+// and to every other comment; replacing each with this fixed token
+// instead preserves that position while still hiding the comment's own
+// (allowlisted-substitutable) content. `\u0000` cannot appear in a real
+// GitHub comment body, so it can never collide with genuine content.
+const HTML_COMMENT_POSITION_PLACEHOLDER = '\u0000';
+
+/** #3269: `body` with each HTML comment replaced by
+ * {@link HTML_COMMENT_POSITION_PLACEHOLDER} -- see
+ * {@link commentPositionSkeleton}'s own doc comment for why position is
+ * preserved rather than the comment being removed outright.
+ *
+ * Not an HTML/output sanitizer (CodeQL's `js/incomplete-sanitization`
+ * flagged an earlier, fully-removing revision of this function on PR
+ * #3430; the same reasoning applies to this replace-with-placeholder
+ * form): the result is compared with `===` / `String.prototype.
+ * startsWith` inside {@link isVisibleTextAppendOnly} below and never
+ * rendered, concatenated into markup, or otherwise reaches an HTML/DOM
+ * sink, so an unclosed `<!--` surviving a single pass carries no
+ * injection risk here -- it only ever changes which internal dating
+ * branch a GraphQL-fetched bot comment's revision history takes. */
+function commentPositionSkeleton(body: string): string {
+  return String(body ?? '').replace(
+    THREAD_COMMENT_HTML_COMMENT_RE,
+    HTML_COMMENT_POSITION_PLACEHOLDER,
+  );
+}
+
 /**
- * #3269: `true` when `currBody`'s visible text (HTML comments stripped)
- * either equals `prevBody`'s, or extends it with nothing but the
- * allowlisted resolution line above. Deliberately an exact-prefix
- * (`startsWith`) check, not a trimmed/normalized comparison: the issue's
- * own condition is "equals the previous revision's visible text,
- * optionally followed by ... one appended resolution line", and comparing
- * anything less exact would also accept a substantive mid-body edit that
- * happens to leave the same trailing bytes.
+ * #3269: `true` when `currBody`'s visible text either equals `prevBody`'s,
+ * or extends it with nothing but the allowlisted resolution line above.
+ * Deliberately an exact-prefix (`startsWith`) check, not a trimmed/
+ * normalized comparison: the issue's own condition is "equals the
+ * previous revision's visible text, optionally followed by ... one
+ * appended resolution line", and comparing anything less exact would
+ * also accept a substantive mid-body edit that happens to leave the same
+ * trailing bytes. Compares {@link commentPositionSkeleton} (HTML
+ * comments placeholder'd, not removed) rather than the fully-stripped
+ * text (Copilot review, PR #3430): a plain "strip everything" comparison
+ * cannot tell a comment that moved to a different position from one that
+ * did not, since removing every comment collapses both to the same
+ * result -- the placeholder preserves that position as part of THIS
+ * check, so {@link isOnlyAllowlistedMarkerCommentDiff}'s own by-position
+ * comment-content comparison can safely assume position alignment once
+ * this check has already passed.
  */
 function isVisibleTextAppendOnly(prevBody: string, currBody: string): boolean {
-  const prevVisible = stripHtmlCommentsForVisibleText(prevBody);
-  const currVisible = stripHtmlCommentsForVisibleText(currBody);
-  if (currVisible === prevVisible) {
+  const prevSkeleton = commentPositionSkeleton(prevBody);
+  const currSkeleton = commentPositionSkeleton(currBody);
+  if (currSkeleton === prevSkeleton) {
     return true;
   }
-  if (!currVisible.startsWith(prevVisible)) {
+  if (!currSkeleton.startsWith(prevSkeleton)) {
     return false;
   }
-  const remainder = currVisible.slice(prevVisible.length);
+  const remainder = currSkeleton.slice(prevSkeleton.length);
   return APPENDED_RESOLUTION_SUFFIX_RE.test(remainder);
 }
 
@@ -12838,12 +12857,15 @@ type ThreadCommentRevisionDatingOutcome =
  * (dating is that revision's own `editedAt`), or `'unverifiable'` when
  * the history itself cannot be trusted -- absent/empty, `totalCount`
  * disagreeing with the fetched page (an incomplete history), fewer than
- * two revisions for a comment GitHub reports as edited, a deleted or
- * `null`-body revision anywhere in the chain, or a non-cosmetic
- * transition with an unparseable `editedAt`. `'unverifiable'` always
- * means "keep today's `updatedAt` dating" to the caller -- never treated
- * as `'all-cosmetic'`, the same fail-closed direction
- * `classifyCommentEditState` documents for its own `'unknown'` state.
+ * two revisions for a comment GitHub reports as edited, ANY revision's
+ * `editedAt` failing to parse, a deleted or `null`-body revision anywhere
+ * in the chain, or the chronologically newest revision's own body not
+ * exactly matching the separately-fetched `comment.body` (the two reads
+ * can observe different instants -- Copilot review, PR #3430).
+ * `'unverifiable'` always means "keep today's `updatedAt` dating" to the
+ * caller -- never treated as `'all-cosmetic'`, the same fail-closed
+ * direction `classifyCommentEditState` documents for its own `'unknown'`
+ * state.
  */
 function resolveThreadCommentRevisionDatingOutcome(
   comment: ThreadCommentLike,
@@ -12880,6 +12902,23 @@ function resolveThreadCommentRevisionDatingOutcome(
     (left, right) =>
       Date.parse(String(left.editedAt)) - Date.parse(String(right.editedAt)),
   );
+  // Copilot review, PR #3430: `comment.body` and `comment.userContentEdits`
+  // come from two SEPARATE fetches (the thread-comments read and the
+  // bounded edit-history read) that are never guaranteed to observe the
+  // exact same instant -- if the comment was edited again between them,
+  // the fetched history's own newest revision could be stale relative to
+  // the CURRENT body this dating decision is actually about. Classifying
+  // a stale-but-internally-consistent history as all-cosmetic would then
+  // silently ignore a real edit neither fetch's snapshot alone reveals.
+  // Require the chronologically newest revision's own `diff` to exactly
+  // match the fetched `comment.body` before trusting the history at all.
+  const newestRevision = chronological[chronological.length - 1];
+  if (
+    typeof newestRevision?.diff !== 'string' ||
+    newestRevision.diff !== String(comment.body ?? '')
+  ) {
+    return { kind: 'unverifiable' };
+  }
   let prevBody: string | null = null;
   let lastNonCosmeticAt: string | null = null;
   for (const edit of chronological) {
