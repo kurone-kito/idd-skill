@@ -22,6 +22,7 @@ import { resolve } from 'node:path';
 import {
   ciWaitSummaryIsPreMergeCiPassing,
   collectCiWaitState,
+  latestPassingCompletedAt,
 } from './ci-wait-state.mjs';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -1669,6 +1670,7 @@ if (import.meta.main) {
     if (isWatermark) {
       let requiredChecksPassing = false;
       let ciHead = '';
+      let livePassingCompletedAt = 'none';
       try {
         const ciSummary = collectCiWaitState([
           '--pr',
@@ -1679,6 +1681,7 @@ if (import.meta.main) {
           args.repo,
         ]);
         ciHead = ciSummary.headRefOid.trim();
+        livePassingCompletedAt = latestPassingCompletedAt(ciSummary);
         requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(ciSummary);
       } catch (error) {
         process.stderr.write(
@@ -1699,6 +1702,13 @@ if (import.meta.main) {
       if (!requiredChecksPassing) {
         process.stderr.write(
           `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.\n`,
+        );
+        process.exit(1);
+      }
+      const snapshotPassingCompletedAt = args.fields['ci-completed-at'];
+      if (livePassingCompletedAt !== snapshotPassingCompletedAt) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s live passing completion ${livePassingCompletedAt} does not match the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. Re-run --from-pr.\n`,
         );
         process.exit(1);
       }

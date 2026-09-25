@@ -34,6 +34,7 @@ import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  classifyCiChecks,
   isPreMergeCiAllPassing,
   resolvePresentRunConclusion,
   selectLatestCheckInstance,
@@ -850,6 +851,25 @@ export function ciWaitSummaryIsPreMergeCiPassing(
   summary: CiWaitStateSummary,
 ): boolean {
   const rollup = summary.requiredChecks;
+  // The required rollup dedupes by check name, which matches GitHub's
+  // required-status-check gate. Pre-merge readiness classifies by producer
+  // instead, so a failure from one workflow can remain blocking beside a
+  // later success from another workflow that shares the display name.
+  // Require both: the rollup's own success (missing names, source-pinned,
+  // and unreadable stay on that status) and a producer-aware success.
+  const requiredNames = new Set(rollup.names);
+  const producerStatus = classifyCiChecks(
+    summary.checks
+      .filter((check) => requiredNames.has(check.checkName))
+      .map((check) => ({
+        name: check.checkName,
+        state: check.state,
+        completedAt: check.completedAt,
+        type: check.type,
+        workflowName: check.workflowName,
+        workflowPath: check.workflowPath ?? '',
+      })),
+  ).status;
   const presentRunConclusion = resolvePresentRunConclusion(
     summary.checks.map((check) => ({
       name: check.checkName,
@@ -861,15 +881,48 @@ export function ciWaitSummaryIsPreMergeCiPassing(
       workflowPath: check.workflowPath ?? '',
     })),
   );
+  const requiredChecksPassing =
+    rollup.names.length > 0 &&
+    rollup.status === 'success' &&
+    producerStatus === 'success';
   return isPreMergeCiAllPassing({
     protectionReadsUnreadable:
       rollup.protectionReadsUnreadable || rollup.status === 'unreadable',
-    requiredChecksPassing:
-      rollup.names.length > 0 && rollup.status === 'success',
-    status: rollup.status === 'success' ? 'success' : 'failed',
+    requiredChecksPassing,
+    // `isPreMergeCiAllPassing` treats `status === 'success'` as passing on
+    // its own, so this must stay failed whenever the producer-aware check
+    // disagrees with the name-only rollup.
+    status: requiredChecksPassing ? 'success' : 'failed',
     noRequiredChecksConfigured: rollup.status === 'no-required-checks',
     presentRunConclusion,
   });
+}
+
+const PASS_EQUIVALENT_STATES = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
+
+/**
+ * Latest completion among pass-equivalent checks, or `none`. Mirrors the
+ * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
+ * can refuse when the live read has moved past the snapshot it is about
+ * to record.
+ */
+export function latestPassingCompletedAt(summary: CiWaitStateSummary): string {
+  let latest = '';
+  for (const check of summary.checks) {
+    if (!PASS_EQUIVALENT_STATES.has(check.state.toUpperCase())) {
+      continue;
+    }
+    if (!check.completedAt || check.completedAt <= latest) {
+      continue;
+    }
+    latest = check.completedAt;
+  }
+  return latest || 'none';
 }
 
 /**

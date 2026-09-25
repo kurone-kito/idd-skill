@@ -1334,6 +1334,30 @@ test('#3465: pre-merge CI predicate follows required-check success, pending, fai
   );
 });
 
+test('#3465: a later success from another workflow does not hide a required failure', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          workflowName: 'push',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'lint',
+          workflowName: 'merge',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+});
+
 test('#3465: a raw required-check failure refuses without consulting waivers', () => {
   // collectCiWaitState does not read external-check waivers. A failing
   // required check stays non-passing for the watermark gate even when a

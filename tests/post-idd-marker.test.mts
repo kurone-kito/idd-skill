@@ -1395,6 +1395,34 @@ test('#3465: --from-pr watermark refuses when the required-check HEAD differs fr
   throw new Error('expected the CLI to exit non-zero');
 });
 
+test('#3465: --from-pr watermark refuses when the live passing completion moved past the snapshot', () => {
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [
+        {
+          ...PASSING_CHECK_RUN,
+          completedAt: '2026-06-25T12:00:00Z',
+        },
+      ],
+    }),
+  );
+  try {
+    runWatermarkFromPr(false);
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /live passing completion 2026-06-25T12:00:00Z does not match the activity snapshot ci-completed-at 2026-06-25T11:00:00Z/,
+    );
+    return;
+  } finally {
+    restore();
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
 test('#3465: a non-required failure does not refuse a passing required check', () => {
   const restore = stubExecutable(
     'gh',
