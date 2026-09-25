@@ -2247,7 +2247,15 @@ export function isCodexReviewSummaryCompleteForHeadSha(
     }
     latestStatus = row[statusColumn] ?? '';
   }
-  return latestStatus !== null && /completed/i.test(latestStatus);
+  // Copilot review (PR #3422): a bare `/completed/i` substring test accepts
+  // a hypothetical "Not Completed" / "Uncompleted" status cell, since both
+  // contain the substring "completed" -- now more consequential than
+  // before the #3261 move, since this return value directly gates
+  // settlement (not just a disposition-plan skip reason). Every observed
+  // real status cell wraps the status word in Markdown bold
+  // (`**Completed**`, `**Running**`), so anchor to that exact bolded word
+  // instead of a loose substring match -- fail-closed for any other shape.
+  return latestStatus !== null && /\*\*\s*completed\s*\*\*/i.test(latestStatus);
 }
 
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
@@ -4402,19 +4410,25 @@ export function dispositionNamesAdvisoryBot(
 //   `summarize by coderabbit.ai` wrapper alone cannot tell an in-progress
 //   revision apart from a genuine completed walkthrough; #2335's original
 //   full-window protection is unchanged for this case -- or (#3261) the
-//   LATEST matching comment simply is not a RECOGNIZED COMPLETED shape for
-//   this identity: a CodeRabbit reply that is not a summary walkthrough at
-//   all (e.g. a bare review-trigger acknowledgement), a Codex review-status
-//   comment whose own table still reads "Running" for this HEAD (the
-//   settlement classifier had no matching exclusion for this before #3261,
-//   even though #2695 already excludes it from AUTO-ACCEPT in
-//   `disposition-non-review-notices.mts`), or ANY comment at all from a
-//   secondary-bot identity this file has no completion recognizer for --
-//   only `coderabbitai` and `chatgpt-codex-connector` have one. Fail-closed
-//   by design (Background of #3261): an unrecognized identity or shape
-//   costs its siblings the full quiet window rather than the short settled
-//   buffer, which is safer than crediting a review this classifier cannot
-//   actually verify is finished.
+//   LATEST matching comment is a NON-TERMINAL, non-notice body that simply
+//   is not a RECOGNIZED COMPLETED shape for this identity: a CodeRabbit
+//   reply that is not a summary walkthrough at all (e.g. a bare
+//   review-trigger acknowledgement), a Codex review-status comment whose
+//   own table still reads "Running" for this HEAD (the settlement
+//   classifier had no matching exclusion for this before #3261, even
+//   though #2695 already excludes it from AUTO-ACCEPT in
+//   `disposition-non-review-notices.mts`), or any other non-terminal
+//   comment at all from a secondary-bot identity this file has no
+//   completion recognizer for -- only `coderabbitai` and
+//   `chatgpt-codex-connector` have one. This is "non-terminal" specifically
+//   because a TERMINAL notice (rate-limit/skip/paused,
+//   `isTerminalAdvisoryNonReviewNotice` above) is checked first,
+//   identity-agnostically, before any of this dispatch runs -- an
+//   unrecognized identity's terminal notice still correctly reports
+//   `declined: true`, not pending. Fail-closed by design (Background of
+//   #3261): an unrecognized identity or shape costs its siblings the full
+//   quiet window rather than the short settled buffer, which is safer than
+//   crediting a review this classifier cannot actually verify is finished.
 //
 // Only the single latest matching comment is examined -- a notice posted
 // BEFORE a later genuine comment (rate-limited, then recovered) reports

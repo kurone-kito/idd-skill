@@ -3538,11 +3538,15 @@ reflexively as any other CLI option.
   `coderabbitai` settles on a clean summary walkthrough carrying none of
   the in-progress, paused, or skip-review markers; `chatgpt-codex-connector`
   settles only when its review-status table's row for the current HEAD
-  reads Completed. Every other case reports pending, not settled — a
-  CodeRabbit reply that is not a summary walkthrough, a Codex status still
-  reading Running for this HEAD, and any comment at all from a
-  secondary-bot identity this classifier has no completion recognizer
-  for — so the full configured window still applies. This is a
+  reads Completed. Every other NON-TERMINAL case reports pending, not
+  settled — a CodeRabbit reply that is not a summary walkthrough, a Codex
+  status still reading Running for this HEAD, and any other comment at all
+  from a secondary-bot identity this classifier has no completion
+  recognizer for — so the full configured window still applies. A
+  terminal rate-limit/skip-review/paused notice still reports `declined`
+  regardless of identity, exactly as before this change; only the
+  previously-permissive fallback for a non-terminal, non-notice comment
+  is now fail-closed. This is a
   deliberate cost: an unrecognized identity or an in-progress review can
   never shortcut the wait, even though it also means one slow or
   unrecognized secondary bot delays the whole fold (every configured login
