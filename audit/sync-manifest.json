@@ -1082,11 +1082,18 @@
         "heading": "D2 — Verify claim, lint, test, push",
         "contains": "Run **pre-push-validate**."
       },
-      "lite": {
-        "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
-        "heading": "D1 — Sync main before first push",
-        "contains": "continue at D2 (claim re-read, **pre-push-validate**, then a"
-      }
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "D1 — Sync main before first push",
+          "contains": "continue at D2 (claim re-read, **pre-push-validate**, then a"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "D2 — Verify claim, lint, push",
+          "contains": "Run **pre-push-validate**. (E2E tests are verified by CI; do not run"
+        }
+      ]
     },
     {
       "id": "validation-exit-status",
