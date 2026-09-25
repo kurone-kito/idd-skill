@@ -289,6 +289,7 @@ export function deriveRerunCountFromRunAttempt(runAttempt) {
  * unexpectedly-interactive `gh` call here fails closed within a bounded
  * timeout instead of hanging this policy resolver indefinitely.
  */
+// audit:ignore-dead-export: no caller found anywhere by #3478's first repo-wide run, not even a test; left for follow-up triage rather than an unreviewed removal in this PR
 export function fetchRerunCountFromRunId(owner, repo, runId) {
   return deriveRerunCountFromRunAttempt(
     fetchWorkflowRun(owner, repo, runId).run_attempt,

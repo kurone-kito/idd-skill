@@ -1805,6 +1805,7 @@ function extractCodeRabbitEmbeddedFindingsFromSection(section) {
  * comparison. Never negative: a review whose threaded comments already
  * meet or exceed its embedded-finding count reports `0`.
  */
+// audit:ignore-dead-export: pending #3341's own expose-via-CLI decision for this export; do not duplicate that fix here
 export function countUncoveredCodeRabbitEmbeddedFindings(
   body,
   threadedCommentCount,
@@ -2104,6 +2105,7 @@ export function indexThreadsByReview(threads, options = {}) {
   }
   return index;
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function routeRejectedChangesRequestedReview(input) {
   const escalationPolicy = getReviewEscalationChangesRequestedPolicy(
     input?.policyConfig ?? {},
@@ -2695,6 +2697,7 @@ export function isRejectionConfirmedDisposition(comment) {
     (comment.body ?? '').trimStart(),
   );
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function isIddDispositionComment(comment) {
   const author = comment.author?.login ?? '';
   return isDispositionComment(comment) && !isKnownReviewBot(author);
@@ -3723,6 +3726,7 @@ export function isAdvisoryNonReviewNotice(body) {
  * count) with no natural per-fixture source, breaking the uniform
  * one-argument shape every other entry shares.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export const BOT_WORDING_CLASSIFIERS = [
   {
     id: 'copilot-review-body',
@@ -10555,6 +10559,7 @@ export function normalizeLinkedPrReference(value) {
   }
   return token.toLowerCase();
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function classifyResumeRoutingCase(input, options = {}) {
   const staleHours = Number.isFinite(options.staleHours)
     ? options.staleHours

@@ -607,6 +607,7 @@ export function evaluateStaleRequestRecoveryAction(input: {
  * must abort the current attempt without mutating or counting a cycle, and
  * restart evaluation fresh (return to E1) against the new HEAD.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function detectRecoveryHeadRace(
   expectedHeadSha: string,
   currentHeadSha: string,
@@ -652,6 +653,7 @@ interface RecoveryTimelineEventLike {
  * `false` (fails closed, do not post the marker or count a cycle) on missing
  * or ambiguous timeline evidence, exactly like the staleness check.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function verifyRecoveryRequestCoversHead(
   timelineEvents: RecoveryTimelineEventLike[],
   prHeadSha: string,

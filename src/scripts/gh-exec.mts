@@ -483,6 +483,7 @@ function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
  * silently degrading a compare-and-swap operation into an unconditional
  * mutation.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function ghApiJsonWithHeaders(
   path: string,
   options: GhApiJsonOptions = {},

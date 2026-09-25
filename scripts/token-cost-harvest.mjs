@@ -1386,9 +1386,11 @@ export function readEventLog(path) {
     openEvents: openEvents.sort(compareOpenEventDiagnostics),
   };
 }
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readEventWindows(path) {
   return readEventLog(path).windows;
 }
+// audit:ignore-dead-export: no caller found anywhere by #3478's first repo-wide run, not even a test; left for follow-up triage rather than an unreviewed removal in this PR
 export function readOpenEventDiagnostics(path) {
   return readEventLog(path).openEvents;
 }

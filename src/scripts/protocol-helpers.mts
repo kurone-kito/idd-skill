@@ -2909,6 +2909,7 @@ function extractCodeRabbitEmbeddedFindingsFromSection(
  * comparison. Never negative: a review whose threaded comments already
  * meet or exceed its embedded-finding count reports `0`.
  */
+// audit:ignore-dead-export: pending #3341's own expose-via-CLI decision for this export; do not duplicate that fix here
 export function countUncoveredCodeRabbitEmbeddedFindings(
   body: unknown,
   threadedCommentCount: number,
@@ -3270,6 +3271,7 @@ export function indexThreadsByReview(
   return index;
 }
 
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function routeRejectedChangesRequestedReview(input: {
   policyConfig?: unknown;
   reviewState?: string | null;
@@ -3965,6 +3967,7 @@ export function isRejectionConfirmedDisposition(comment: {
   );
 }
 
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function isIddDispositionComment(comment: CommentLike): boolean {
   const author = comment.author?.login ?? '';
   return isDispositionComment(comment) && !isKnownReviewBot(author);
@@ -5039,6 +5042,7 @@ export interface BotWordingClassifierEntry {
  * count) with no natural per-fixture source, breaking the uniform
  * one-argument shape every other entry shares.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export const BOT_WORDING_CLASSIFIERS: BotWordingClassifierEntry[] = [
   {
     id: 'copilot-review-body',
@@ -13088,6 +13092,7 @@ export function normalizeLinkedPrReference(value: unknown): string {
   return token.toLowerCase();
 }
 
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function classifyResumeRoutingCase(
   input: {
     displacedByForcedHandoff?: boolean;

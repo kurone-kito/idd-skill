@@ -1688,10 +1688,12 @@ export function readEventLog(path: string): EventLogReadResult {
   };
 }
 
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readEventWindows(path: string): Map<string, StageEventWindow> {
   return readEventLog(path).windows;
 }
 
+// audit:ignore-dead-export: no caller found anywhere by #3478's first repo-wide run, not even a test; left for follow-up triage rather than an unreviewed removal in this PR
 export function readOpenEventDiagnostics(path: string): OpenEventDiagnostic[] {
   return readEventLog(path).openEvents;
 }

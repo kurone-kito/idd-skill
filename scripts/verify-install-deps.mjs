@@ -93,6 +93,7 @@ export function parsePnpmVersionToken(versionOutput) {
  * below calls `parsePnpmVersionToken` directly so it can also report the
  * clean token as `detectedVersion`, rather than re-deriving it here.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function parsePnpmMajorFromVersionOutput(versionOutput) {
   const token = parsePnpmVersionToken(versionOutput);
   return token === null ? null : Number(token.split('.')[0]);

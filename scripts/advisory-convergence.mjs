@@ -2354,6 +2354,7 @@ export function runAdvisoryConvergenceWithPoll(
  * because it is directly unit-tested pure logic (no `gh` invocation of its
  * own) documenting the policy the adapter mirrors.
  */
+// audit:ignore-dead-export: no production caller found in this audit's first repo-wide run (#3478); left for follow-up triage rather than an unreviewed change to this file's own retry/backoff wiring
 export function viewerProbeGhOptions(env = process.env) {
   return {
     stdio:

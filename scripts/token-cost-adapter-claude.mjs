@@ -480,6 +480,7 @@ export function defaultClaudeProjectDir(cwd = process.cwd()) {
  * sample per worktree, not just one sample pinned to whichever cwd the
  * file happened to record first.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function scanClaudeSessions(options) {
   const projectDir = options?.projectDir ?? defaultClaudeProjectDir();
   const files = globSync('*.jsonl', {

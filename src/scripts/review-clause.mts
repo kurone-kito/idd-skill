@@ -150,6 +150,7 @@ export interface AdvisoryConvergenceReviewClause {
  * this exact detection logic, as happened on this PR's own #1884 Copilot
  * review) from being mistaken for a real section.
  */
+// audit:ignore-dead-export: no caller found anywhere by #3478's first repo-wide run, not even a test; left for follow-up triage rather than an unreviewed removal in this PR
 export function parseSuppressedCommentCount(
   body: string | null | undefined,
 ): number {

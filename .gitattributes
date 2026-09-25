@@ -14,6 +14,7 @@ scripts/advisory-wait-policy.mjs linguist-generated=true
 scripts/advisory-wait-state.mjs linguist-generated=true
 scripts/audit-authored-issue.mjs linguist-generated=true
 scripts/audit-code-span-wrap.mjs linguist-generated=true
+scripts/audit-dead-exports.mjs linguist-generated=true
 scripts/audit-docs.mjs linguist-generated=true
 scripts/audit-pr-cleanup-summary.mjs linguist-generated=true
 scripts/audit-pr-cleanup.mjs linguist-generated=true
