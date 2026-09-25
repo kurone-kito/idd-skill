@@ -2440,6 +2440,58 @@ test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_tar
   assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
 });
 
+// kurone-kito/idd-skill#3256 (round 5 -- live Copilot review finding, PR
+// #3425, rejected with primary-source evidence): a workflow_call-invoked
+// instance of idd-advisory-convergence.yml resolves checkSuite.workflowRun
+// to the CALLING run -- its own event and its own file path -- never a
+// literal "workflow_call" event or the called file's own path. Confirmed
+// live against this repository's own pnpm-boundary-node22-floor.yml
+// invoking pnpm-boundary.yml via `uses:`: that check-run's own
+// checkSuite.workflowRun reported
+// {event: "pull_request", file: {path: ".../pnpm-boundary-node22-floor.yml"}},
+// never a "workflow_call" event or pnpm-boundary.yml's own path. So a
+// pull_request_target-triggered caller of idd-advisory-convergence.yml
+// resolves event: 'pull_request_target' and this gate correctly accepts
+// it, even though the resolved workflowPath here is an adopter's own
+// wrapper file, not idd-advisory-convergence.yml itself -- workflowPath
+// is purely a grouping key for this gate (and for #2919's own dedup), not
+// an equality check against a specific expected path.
+test('collectPreMergeReadiness against a fake provider: #3256 a workflow_call-invoked instance resolves to its caller run, so a pull_request_target caller satisfies the check', () => {
+  const CALLER_PATH = '.github/workflows/adopter-wrapper.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91012/job/1',
+      },
+    ],
+    workflowRuns: {
+      // Mirrors the real pnpm-boundary-node22-floor.yml -> pnpm-boundary.yml
+      // shape: the resolved path is the CALLER's own file, and the event
+      // is the caller's own triggering event -- never "workflow_call".
+      'o/r/91012': { path: CALLER_PATH, event: 'pull_request_target' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected a pull_request_target-triggered workflow_call caller to satisfy the check, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
 // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding, PR
 // #3425, High): an OLDER pull_request_target pass followed by a NEWER
 // pull_request pass from the SAME real workflow file. classifyCiChecks

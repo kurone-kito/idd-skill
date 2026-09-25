@@ -3640,7 +3640,13 @@ reflexively as any other CLI option.
   `idd-advisory-convergence.yml` supports being called this way) records
   its OWN triggering event on the calling workflow run, not
   `pull_request_target` itself, so it counts toward this check only when
-  the CALLER was itself triggered by `pull_request_target`. Evidence only
+  the CALLER was itself triggered by `pull_request_target` (confirmed
+  against this source repository's own `pnpm-boundary-node22-floor.yml`
+  invoking `pnpm-boundary.yml` via `uses:`: the resulting check-run's own
+  `checkSuite.workflowRun` resolves to the CALLING run --
+  `{event: "pull_request", file: {path: ".github/workflows/pnpm-boundary-node22-floor.yml"}}`
+  -- never a separate `"workflow_call"` event or the called file's own
+  path). Evidence only
   (empty array, never omitted, when no such downgrade occurred) --
   `computePreMergeReadinessBlockers` uses it (alongside
   `ci.preDowngradeStatus` below) to name this cause in the `ci` blocker
