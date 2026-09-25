@@ -1821,6 +1821,12 @@ export function collectPreMergeReadiness(
       expectedAgentId: args.expectedAgentId,
       expectedNonce: args.nonce,
       claimless: args.claimless,
+      // kurone-kito/idd-skill#3330: the empty-closing-refs fast path is
+      // out-of-loop-claimless. A classified run forwards that verdict.
+      // Every other run omits it, so the consumer fails closed to in-loop.
+      loopMembership: args.claimless
+        ? (outOfLoopMembership?.membership ?? 'out-of-loop-claimless')
+        : undefined,
       includeDispositionEvidence: true,
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
