@@ -1650,10 +1650,13 @@ default `instructions-only` profile keep using the written shell /
     of resolving one, while still applying the same HEAD, live-check,
     selector, expiry, and authority checks as normal mode -- the helper
     blocks with a clear reason if the PR turns out to have a resolvable
-    active claim after all, since a `none` waiver only ever satisfies
-    the consumer-side gate (`summarizeExternalCheckWaivers` in
-    `protocol-helpers.mts`) when no claim resolves there, so posting one
-    against a claimed PR would just be rejected `wrongClaim`.
+    active claim after all. kurone-kito/idd-skill#3330: a `none` binding
+    is also blocked unless the PR is out of loop
+    (`out-of-loop-claimless` or `out-of-loop-authorized`). A PR that
+    closes an issue and has no active claim is in-loop; the dry-run
+    planner names that verdict and tells the operator to bind
+    `--issue` / `--claim-id`. A missing verdict fails closed the same
+    way. A PR with no closing references stays `out-of-loop-claimless`.
   - for the `idd-advisory-convergence` selector specifically (#2328), the
     report carries `advisoryConvergenceWaiverPrecondition`, built by the
     same shared function `pre-merge-readiness` publishes it from, and a
@@ -1761,12 +1764,16 @@ Interpretation rules:
   (kurone-kito/idd-skill#3173).
 - `claim-id` accepts the case-insensitive literal sentinel `none`
   (#1905) alongside an arbitrary claim id, declaring a deliberately
-  claimless waiver. It satisfies the claim-binding check only when the
-  gate independently confirms no claim resolves for the PR (an empty
-  active claim id) -- on a PR with a resolvable active claim, `none` is
-  never accepted and still fails closed to the same wrong-claim
-  rejection as any other mismatched claim id; this never weakens the
-  #1077 fail-closed-on-empty-claim guarantee for a non-`none` claim id.
+  claimless waiver. It satisfies the claim-binding check only when no
+  real active claim resolves (an empty id, or the synthetic claimless
+  id `none`) AND the PR is out of loop
+  (`out-of-loop-claimless` or `out-of-loop-authorized`,
+  kurone-kito/idd-skill#3330). An omitted membership verdict is
+  in-loop, so a released claim cannot keep a `none` waiver: that marker
+  is `wrongClaim`. On a PR with a real active claim, `none` is never
+  accepted. This never weakens the #1077 fail-closed-on-empty-claim
+  guarantee for a non-`none` claim id. The one-hop predecessor
+  exception (#2080) stays on the real-claim branch only.
 - A valid waiver can apply only to checks listed in
   `ciGate.externalChecks.waivable` and only when
   `ciGate.externalCheckWaivers.mode` enables maintainer authorization.
@@ -1908,10 +1915,14 @@ idd-external-check-waiver --pr 123 \
   `--claimless`, so a fully claimless allowlisted PR under the default
   `advisoryWait.convergenceScope: "all-prs"` (no linked issue, e.g. a
   human-authored checker-file edit outside IDD) would otherwise be
-  permanently unable to post this waiver. Safe because the consumer's own
-  `none`-sentinel match (below) only ever succeeds when it independently
-  finds no active claim either, so this can never paper over a genuine
-  claim mismatch. Restricted to the zero-candidate case specifically, not
+  permanently unable to post this waiver. That fallback now also
+  requires the PR to be out of loop (kurone-kito/idd-skill#3330). A PR
+  with no closing references stays `out-of-loop-claimless` and keeps
+  today's post. A PR that closes an issue and has no active claim is
+  in-loop, so the auto-waiver is not posted: under the default
+  `all-prs` scope, a human-authored PR that closes an issue, has no
+  claim, and edits a self-referential trigger file loses this bypass.
+  Restricted to the zero-candidate case specifically, not
   an AMBIGUOUS one (more than one candidate resolves, Copilot review, PR
   #2895): some claim genuinely exists there, just not uniquely
   identified from this input, and this file's own claim resolution

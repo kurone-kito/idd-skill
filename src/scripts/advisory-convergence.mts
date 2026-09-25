@@ -143,15 +143,19 @@ import {
 import type {
   ExternalCheckWaiverAuthorityLookup,
   PrCommitPayload,
+  PrLoopMembership,
 } from './protocol-helpers.mts';
 import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
+  classifyPrLoopMembership,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
+  resolveActiveClaim,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
@@ -932,6 +936,15 @@ export interface AdvisoryConvergenceInputs {
    * `Error` instead of silently coercing to `false`
    * (kurone-kito/idd-skill#1821). */
   claimCandidateAmbiguous: boolean;
+  /**
+   * kurone-kito/idd-skill#3330: loop membership for a `none` waiver.
+   * `collectFromGitHub` classifies it from the closing references, the
+   * closing issues' claim state, and the PR comments it already loaded.
+   * Omitted fails closed to in-loop inside `summarizeExternalCheckWaivers`.
+   * Do not infer this from `claimEvents`: an empty stream is both a
+   * genuinely claimless PR and an in-loop released claim.
+   */
+  loopMembership?: PrLoopMembership;
   /** #1906: `true` when the PR's own author resolves to a GitHub
    * Bot-typed account (`__typename === 'Bot'`), fetched via a small
    * dedicated GraphQL query in `collectFromGitHub` (the REST-shaped `gh
@@ -2308,6 +2321,7 @@ export function computeAdvisoryConvergenceVerdict(
         options.waiverAuthorityPolicy ?? 'owners-and-maintainers-only',
       ),
       resolveAuthority: options.resolveWaiverAuthority,
+      loopMembership: inputs.loopMembership,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -2377,6 +2391,7 @@ export function computeAdvisoryConvergenceVerdict(
     // independent run-id/event-type/HEAD/repository/changed-file
     // verification that follows.
     allowSelfReferentialBootstrapAuto: true,
+    loopMembership: inputs.loopMembership,
   });
   const autoWaiverRepositoryFullName = String(
     options.repositoryFullName ?? '',
@@ -3932,6 +3947,21 @@ export function collectFromGitHub(
   // the CODEOWNERS-pollution incident this split fixes), but this
   // specific allowlist check still needs it: a rename-shaped checker
   // repair away from an allowlisted path must still be recognized.
+  // kurone-kito/idd-skill#3330: computed outside the returned object.
+  // A call-site source pin matches `inputs: { ... prAuthorIsBot ... }`
+  // and rejects a `}` before that field.
+  const loopMembership = classifyCollectedLoopMembership({
+    port,
+    prNumber: Number(args.prNumber),
+    owner,
+    repo,
+    closingIssuesReferences,
+    claimCandidates,
+    explicitIssueNumber: args.claimIssueNumber,
+    prComments: comments,
+    trustedMarkerLogins,
+  });
+
   const changedFilePaths =
     autoWaiverRunIds.size > 0
       ? [
@@ -3954,6 +3984,7 @@ export function collectFromGitHub(
       claimEvents,
       claimMarkerHistoryPresent,
       claimCandidateAmbiguous,
+      loopMembership,
       prAuthorIsBot,
       autoWaiverRunLookups,
       autoWaiverRunJobLookups,
@@ -4072,6 +4103,68 @@ function fetchClaimEventCandidates(
   return candidateNumbers.map((issueNumber) =>
     fetchClaimComments(port, issueNumber),
   );
+}
+
+/**
+ * kurone-kito/idd-skill#3330: membership for a `none` waiver, from evidence
+ * `collectFromGitHub` already loaded. An explicit `--claim-issue` that does
+ * not cover every closing reference is re-fetched so a claim on an
+ * unlisted closing issue still fails closed to in-loop.
+ */
+function classifyCollectedLoopMembership({
+  port,
+  prNumber,
+  owner,
+  repo,
+  closingIssuesReferences,
+  claimCandidates,
+  explicitIssueNumber,
+  prComments,
+  trustedMarkerLogins,
+}: {
+  port: ProviderPort;
+  prNumber: number;
+  owner: string;
+  repo: string;
+  closingIssuesReferences: ClosingIssueRefPayload[] | null;
+  claimCandidates: IssueCommentPayload[][];
+  explicitIssueNumber: number | null;
+  prComments: IssueCommentPayload[];
+  trustedMarkerLogins: string[];
+}): PrLoopMembership {
+  const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  let closingIssueClaimState: 'present' | 'none' | 'unknown' = 'none';
+  if (closingIssueNumbers && closingIssueNumbers.length > 0) {
+    const explicitCovers =
+      explicitIssueNumber === null ||
+      (closingIssueNumbers.length === 1 &&
+        closingIssueNumbers[0] === explicitIssueNumber);
+    const streams = explicitCovers
+      ? claimCandidates
+      : fetchClaimEventCandidates(port, null, closingIssuesReferences);
+    const isTrusted = (login: string): boolean =>
+      trustedMarkerLogins.includes(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+    closingIssueClaimState = streams.some((stream) =>
+      Boolean(resolveActiveClaim(stream, isTrusted)),
+    )
+      ? 'present'
+      : 'none';
+  }
+  return classifyPrLoopMembership({
+    prNumber,
+    closingIssueNumbers,
+    closingIssueClaimState,
+    prComments,
+    trustedMarkerLogins,
+  }).membership;
 }
 
 /** Candidate claim-issue comment streams whose *active claim* actually

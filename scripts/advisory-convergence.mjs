@@ -137,11 +137,14 @@ import {
 import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
+  classifyPrLoopMembership,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
+  resolveActiveClaim,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
@@ -1579,6 +1582,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
         options.waiverAuthorityPolicy ?? 'owners-and-maintainers-only',
       ),
       resolveAuthority: options.resolveWaiverAuthority,
+      loopMembership: inputs.loopMembership,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -1647,6 +1651,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     // independent run-id/event-type/HEAD/repository/changed-file
     // verification that follows.
     allowSelfReferentialBootstrapAuto: true,
+    loopMembership: inputs.loopMembership,
   });
   const autoWaiverRepositoryFullName = String(
     options.repositoryFullName ?? '',
@@ -3042,6 +3047,20 @@ export function collectFromGitHub(
   // the CODEOWNERS-pollution incident this split fixes), but this
   // specific allowlist check still needs it: a rename-shaped checker
   // repair away from an allowlisted path must still be recognized.
+  // kurone-kito/idd-skill#3330: computed outside the returned object.
+  // A call-site source pin matches `inputs: { ... prAuthorIsBot ... }`
+  // and rejects a `}` before that field.
+  const loopMembership = classifyCollectedLoopMembership({
+    port,
+    prNumber: Number(args.prNumber),
+    owner,
+    repo,
+    closingIssuesReferences,
+    claimCandidates,
+    explicitIssueNumber: args.claimIssueNumber,
+    prComments: comments,
+    trustedMarkerLogins,
+  });
   const changedFilePaths =
     autoWaiverRunIds.size > 0
       ? [
@@ -3063,6 +3082,7 @@ export function collectFromGitHub(
       claimEvents,
       claimMarkerHistoryPresent,
       claimCandidateAmbiguous,
+      loopMembership,
       prAuthorIsBot,
       autoWaiverRunLookups,
       autoWaiverRunJobLookups,
@@ -3167,6 +3187,57 @@ function fetchClaimEventCandidates(port, explicitIssueNumber, refs) {
   return candidateNumbers.map((issueNumber) =>
     fetchClaimComments(port, issueNumber),
   );
+}
+/**
+ * kurone-kito/idd-skill#3330: membership for a `none` waiver, from evidence
+ * `collectFromGitHub` already loaded. An explicit `--claim-issue` that does
+ * not cover every closing reference is re-fetched so a claim on an
+ * unlisted closing issue still fails closed to in-loop.
+ */
+function classifyCollectedLoopMembership({
+  port,
+  prNumber,
+  owner,
+  repo,
+  closingIssuesReferences,
+  claimCandidates,
+  explicitIssueNumber,
+  prComments,
+  trustedMarkerLogins,
+}) {
+  const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  let closingIssueClaimState = 'none';
+  if (closingIssueNumbers && closingIssueNumbers.length > 0) {
+    const explicitCovers =
+      explicitIssueNumber === null ||
+      (closingIssueNumbers.length === 1 &&
+        closingIssueNumbers[0] === explicitIssueNumber);
+    const streams = explicitCovers
+      ? claimCandidates
+      : fetchClaimEventCandidates(port, null, closingIssuesReferences);
+    const isTrusted = (login) =>
+      trustedMarkerLogins.includes(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+    closingIssueClaimState = streams.some((stream) =>
+      Boolean(resolveActiveClaim(stream, isTrusted)),
+    )
+      ? 'present'
+      : 'none';
+  }
+  return classifyPrLoopMembership({
+    prNumber,
+    closingIssueNumbers,
+    closingIssueClaimState,
+    prComments,
+    trustedMarkerLogins,
+  }).membership;
 }
 /** Candidate claim-issue comment streams whose *active claim* actually
  * resolves (`summarizeClaimValidation`). Shared by

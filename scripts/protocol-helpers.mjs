@@ -670,6 +670,7 @@ export function summarizeExternalCheckWaivers(
     allowSelfReferentialBootstrapAuto = false,
     authorityPolicy = '',
     resolveAuthority = null,
+    loopMembership = undefined,
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -767,17 +768,18 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
-    // Fail closed on an empty active claim: when no claim resolves at the gate
-    // (`activeClaimLower === ''`), a waiver cannot be bound to an owner and is
-    // rejected rather than passing unbound. #1905's one narrow exception: the
-    // case-insensitive literal sentinel `none` in the marker's claimId field
-    // explicitly declares "this is a claimless waiver" -- it satisfies the
-    // claim-binding check ONLY when the gate independently confirms no claim
-    // resolves (`!activeClaimLower`). A non-empty `activeClaimLower` always
-    // requires an exact `claimId` match; `none` is never accepted there, so
-    // the sentinel can never route around a genuine claim mismatch. Every
-    // other combination is unchanged: a non-`none` claimId on an unclaimed PR
-    // still falls into `wrongClaim` -- the exact regression #1077 fixed.
+    // Fail closed on an empty active claim: when no real claim resolves at
+    // the gate, a waiver cannot be bound to an owner and is rejected rather
+    // than passing unbound. #1905's sentinel `none` is that claimless
+    // binding, and kurone-kito/idd-skill#3330 restricts it further: the
+    // synthetic id `none` (including `buildPreMergeReadinessSummary`'s
+    // claimless branch) is not a real claim, and a `none` waiver binds only
+    // when `loopMembership` is out of loop. An omitted verdict is in-loop,
+    // so a released-claim window cannot keep a `none` waiver. A real claim
+    // id still requires an exact match; `none` is never accepted there.
+    // Every other combination is unchanged: a non-`none` claimId on an
+    // unclaimed PR still falls into `wrongClaim` -- the exact regression
+    // #1077 fixed.
     //
     // #2080: one-hop takeover exception. A waiver bound to claim A remains
     // valid after an in-policy takeover installs claim B whose
@@ -793,10 +795,19 @@ export function summarizeExternalCheckWaivers(
     const predecessorClaimId = String(activeClaimSupersedes ?? '').trim();
     const predecessorIsBindable =
       predecessorClaimId !== '' && predecessorClaimId.toLowerCase() !== 'none';
-    const claimBindingSatisfied = activeClaimLower
+    // kurone-kito/idd-skill#3330: the claimless synthetic id `none` is not
+    // a real claim. A `none` waiver binds only when no real claim is
+    // passed and the PR is out of loop. An omitted verdict is in-loop.
+    const activeClaimToken = String(activeClaimLower ?? '').trim();
+    const activeClaimIsReal =
+      activeClaimToken !== '' && activeClaimToken.toLowerCase() !== 'none';
+    const noneBindingAllowed =
+      loopMembership === 'out-of-loop-claimless' ||
+      loopMembership === 'out-of-loop-authorized';
+    const claimBindingSatisfied = activeClaimIsReal
       ? parsed.claimId === activeClaimLower ||
         (predecessorIsBindable && parsed.claimId === predecessorClaimId)
-      : claimIdIsNoneSentinel;
+      : claimIdIsNoneSentinel && noneBindingAllowed;
     if (!claimBindingSatisfied) {
       wrongClaim.push({
         authorLogin,
@@ -8999,6 +9010,7 @@ export function buildPreMergeReadinessSummary(
     mode: options.externalCheckWaiverMode ?? '',
     authorityPolicy: options.externalCheckWaiverAuthorityPolicy ?? '',
     resolveAuthority: options.resolveWaiverAuthority,
+    loopMembership: options.loopMembership,
   });
   // kurone-kito/idd-skill#2911: a THIRD authorized `allowSelfReferential-
   // BootstrapAuto` call site -- see that option's own doc comment in this
@@ -9019,6 +9031,7 @@ export function buildPreMergeReadinessSummary(
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
     mode: options.externalCheckWaiverMode ?? '',
     allowSelfReferentialBootstrapAuto: true,
+    loopMembership: options.loopMembership,
   });
   // #1570: the caller-supplied terminal-unavailability verdict, reused below
   // both for the dedicated `copilot-terminal-unavailable` blocker and (#2021)
