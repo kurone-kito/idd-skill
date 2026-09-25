@@ -137,6 +137,12 @@ import {
 } from './ci-wait-policy.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
@@ -1815,7 +1821,9 @@ export function runRerunAdvisoryConvergence(argv, deps = defaultDeps) {
     return { plan: null, refreshLatestPlan: null, help: true, args };
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   const { input, options } = deps.collect(args);
   if (args.refreshLatest) {
@@ -2648,6 +2656,13 @@ function buildProductionApplyDeps(args) {
 // so importing this module (for unit tests) never parses process.argv,
 // prints usage, or makes a `gh` call.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('rerun-advisory-convergence', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const { plan, refreshLatestPlan, help, args } = runRerunAdvisoryConvergence(
     process.argv.slice(2),
   );
@@ -2808,7 +2823,10 @@ if (import.meta.main) {
   // per-instance failure -- this default must not clobber that back to
   // 0. Every other path never sets exitCode before reaching here, so
   // this preserves that path's existing always-0 behavior unchanged.
-  if (process.exitCode === undefined) {
-    process.exitCode = 0;
+  const code = process.exitCode;
+  if (typeof code === 'number') {
+    return code;
   }
+  process.exitCode = 0;
+  return 0;
 }

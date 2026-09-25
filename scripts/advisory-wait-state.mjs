@@ -21,6 +21,12 @@ import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
@@ -446,11 +452,18 @@ const ADVISORY_WAIT_STATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  main();
+  // #3344: call main() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('advisory-wait-state', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
-// `gh` call.
+// `gh` call. Returns 0 or throws -- `runHelperCli` (#3344) classifies a
+// thrown error when the opt-in JSON error envelope is enabled.
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -458,7 +471,9 @@ function main() {
     process.exit(0);
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
@@ -615,6 +630,7 @@ function main() {
       2,
     )}\n`,
   );
+  return 0;
 }
 /**
  * Restores this file's pre-#1450 permissive `Number.parseInt` contract:

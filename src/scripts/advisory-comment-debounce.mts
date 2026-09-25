@@ -19,7 +19,7 @@
 // data collection, mirroring `stalled-session-quiet-check.mts`'s shape,
 // so the decision is unit-testable without a live PR or a real wait.
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeSync } from 'node:fs';
 import { parseDurationToMs } from './ci-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -27,6 +27,13 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 import {
   classifyReviewCommentOrigin,
@@ -133,10 +140,16 @@ const ADVISORY_COMMENT_DEBOUNCE_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3344: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('advisory-comment-debounce', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     ADVISORY_COMMENT_DEBOUNCE_FLAG_SPEC,
@@ -211,6 +224,7 @@ function runCli(): void {
   if (githubOutput) {
     appendFileSync(githubOutput, `skip=${result.skip ? 'true' : 'false'}\n`);
   }
+  return 0;
 }
 
 function parseDurationOrMsToken(token: string): number | null {
@@ -293,8 +307,35 @@ function ghPaginatedJson(args: string[]): unknown[] {
   );
 }
 
+function writeStderrSync(text: string): void {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+
 function fail_(message: string): never {
-  console.error(`error: ${message}`);
+  const rendered = `error: ${message}\n`;
+  // #3344: keep exit 2. The runner never sees this path because
+  // process.exit returns control to the OS, so write the envelope here
+  // when it is enabled. Argument failures only -- gh failures throw.
+  // Both lines are synchronous: process.exit drops a pending async
+  // stderr write, which would truncate the envelope.
+  if (isHelperErrorEnvelopeEnabled()) {
+    writeStderrSync(rendered);
+    writeStderrSync(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('advisory-comment-debounce', 2, {
+          kind: 'usage',
+          message,
+          httpStatus: null,
+        }),
+      )}\n`,
+    );
+  } else {
+    console.error(`error: ${message}`);
+  }
   process.exit(2);
 }
 

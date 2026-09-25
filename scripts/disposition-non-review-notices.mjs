@@ -30,6 +30,7 @@
 //
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
+import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -37,6 +38,13 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
@@ -683,6 +691,7 @@ export function applyDispositionPlan(plan, deps) {
   const failed = [];
   const staleSkipped = [];
   let claimLost = false;
+  let postFailure = null;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
     if (!deps.revalidateClaim()) {
@@ -704,6 +713,7 @@ export function applyDispositionPlan(plan, deps) {
       advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
     let posted = null;
     let lastError = null;
+    let lastThrown = null;
     let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
       // #2695 (Codex review, P1 follow-up): re-checked immediately before
@@ -737,6 +747,7 @@ export function applyDispositionPlan(plan, deps) {
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
+        lastThrown = error;
         lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
@@ -761,15 +772,59 @@ export function applyDispositionPlan(plan, deps) {
         noticeId: item.noticeId,
         error: lastError ?? 'unknown error',
       });
+      if (postFailure === null) {
+        postFailure = lastThrown;
+      }
     }
   }
-  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
+  return {
+    applied,
+    failed,
+    staleSkipped,
+    claimLost,
+    knownViewerCommentIds,
+    postFailure,
+  };
+}
+function writeStderrSync(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+function exitClassified(code, kind, message, httpStatus = null) {
+  if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
+    // Synchronous: process.exit drops a pending async stderr write, which
+    // would truncate this envelope line.
+    writeStderrSync(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('disposition-non-review-notices', code, {
+          kind,
+          message,
+          httpStatus,
+        }),
+      )}\n`,
+    );
+  }
+  process.exit(code);
 }
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('disposition-non-review-notices', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !Number.isInteger(args.pr) || (args.pr ?? 0) <= 0) {
     process.stdout.write(USAGE);
-    process.exit(args.help ? 0 : 1);
+    exitClassified(
+      args.help ? 0 : 1,
+      'usage',
+      'missing required --pr <number>',
+    );
   }
   // Fail closed: --apply mutates PR state, so the active-claim revalidation is
   // mandatory. Missing/invalid claim inputs must abort before any read or write
@@ -780,10 +835,14 @@ if (import.meta.main) {
       (args.claimIssue ?? 0) <= 0 ||
       !args.claimId)
   ) {
-    process.stderr.write(
+    writeStderrSync(
       '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation',
+    );
   }
   const pr = args.pr;
   const owner =
@@ -894,10 +953,14 @@ if (import.meta.main) {
       staleAgeMs,
     );
   if (!revalidateClaim()) {
-    process.stderr.write(
+    writeStderrSync(
       `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}\n`,
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'gate',
+      `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}`,
+    );
   }
   // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
   // re-posts a disposition that raced in since the dry-run.
@@ -935,20 +998,37 @@ if (import.meta.main) {
     ]);
     return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
   };
-  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
-    plan,
-    {
+  const { applied, failed, staleSkipped, claimLost, postFailure } =
+    applyDispositionPlan(plan, {
       revalidateClaim,
       postDisposition: (body) => postDisposition(owner, repo, pr, body),
       recoverPostedDisposition: (body, knownIds) =>
         recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
       knownViewerCommentIds,
       revalidateCodexSummaryStillComplete,
-    },
-  );
+    });
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
-  process.exit(claimLost || failed.length > 0 ? 1 : 0);
+  const classified =
+    postFailure == null ? null : classifyHelperError(postFailure);
+  const ghFailure =
+    !claimLost &&
+    classified &&
+    (classified.kind === 'transport' || classified.kind === 'not-found')
+      ? classified
+      : null;
+  exitClassified(
+    claimLost || failed.length > 0 ? 1 : 0,
+    ghFailure ? ghFailure.kind : 'gate',
+    claimLost
+      ? 'claim lost during apply'
+      : ghFailure
+        ? ghFailure.message
+        : failed.length > 0
+          ? 'one or more dispositions failed'
+          : '',
+    ghFailure ? ghFailure.httpStatus : null,
+  );
 }

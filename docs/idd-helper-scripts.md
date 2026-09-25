@@ -255,15 +255,14 @@ call-site pattern described above.
 
 ### Migrated helpers (first batch)
 
-The helpers in the two tables below are migrated onto `runHelperCli`;
+The helpers in the tables below are migrated onto `runHelperCli`;
 every other packaged command is unaffected by the variable (it still
 crashes with a raw, unshaped stack trace on failure, exactly as
-before these tracks). Sibling tracks under the parent roadmap migrate
-the rest. For the six first-batch helpers, `exitCode` is `0` on
-success (including `--help`, which exits `0` before `runHelperCli`
-ever sees an outcome) and `1` on any failure; none of the six
-currently returns a non-zero exit code as its own verdict, so none of
-them produces `kind: "gate"` today.
+before these tracks). For the six first-batch helpers, `exitCode` is
+`0` on success (including `--help`, which exits `0` before
+`runHelperCli` ever sees an outcome) and `1` on any failure; none of
+the six currently returns a non-zero exit code as its own verdict, so
+none of them produces `kind: "gate"` today.
 
 | Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
 | -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
@@ -273,6 +272,36 @@ them produces `kind: "gate"` today.
 | `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
 | `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
 | `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                           | a `gh` failure resolving CI state                                                                                                        | an unexpected exception |
+
+### Migrated helpers (review and merge batch)
+
+Issue #3344 moves the 16 review and merge helpers onto the same
+runner. Documented domain exit codes stay as they were. `kind: "gate"`
+is a completed non-zero verdict (for example `advisory-convergence.mjs`
+under `--assert`, or `idd-merge-execute.mjs` refusing a merge). A
+`--help` exit stays `0` and writes no envelope. `ci-wait-policy.mjs`
+and `review-comment-origin.mjs` also exit `0` with no envelope when
+invoked with no arguments, because that invocation is a successful
+default run rather than a usage error.
+
+| Helper                               | `usage`                                                                                                                   | `not-found` / `transport`                          | `gate`                                         | `internal`              |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------- | ----------------------- |
+| `advisory-comment-debounce.mjs`      | unknown flag exits `1`; missing `--pr` or `--triggered-at` exits `2`                                                      | a `gh` failure collecting comment events           | —                                              | an unexpected exception |
+| `advisory-convergence.mjs`           | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review state              | `--assert` when the verdict is not ready       | an unexpected exception |
+| `advisory-wait-state.mjs`            | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
+| `ci-wait-policy.mjs`                 | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | a `gh` failure resolving a `--run-id`              | —                                              | an unexpected exception |
+| `rerun-advisory-convergence.mjs`     | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving rerun state               | `--apply` reports a per-instance failure       | an unexpected exception |
+| `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
+| `review-comment-origin.mjs`          | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | —                                                  | —                                              | an unexpected exception |
+| `review-disposition-verify.mjs`      | missing or invalid `--items`, or an unknown flag (exit `1`)                                                               | —                                                  | —                                              | an unexpected exception |
+| `resolve-review-thread.mjs`          | missing `--pr` or `--comment-id`, or an unknown flag (exit `1`)                                                           | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
+| `disposition-non-review-notices.mjs` | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving notices                   | `--apply` posts nothing or loses the claim     | an unexpected exception |
+| `branch-conflict-state.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving the pull request          | —                                              | an unexpected exception |
+| `idd-merge-execute.mjs`              | missing `--pr` or `--claim-id` (exit `1`); an unrecognized flag is ignored and that same missing-`--pr` check still fires | a `gh` failure during collection or merge          | a gate refuses the merge                       | an unexpected exception |
+| `audit-pr-cleanup.mjs`               | an unknown flag or a bad flag combination (exit `2`)                                                                      | a `gh` failure resolving the repository (exit `2`) | a batch report contains a failed PR (exit `1`) | an unexpected exception |
+| `merged-pr-feedback-sweep.mjs`       | an unknown flag (exit `1`)                                                                                                | a `gh` failure resolving the repository            | —                                              | an unexpected exception |
+| `external-check-waiver.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving waiver state              | the waiver verdict is not applicable           | an unexpected exception |
+| `local-validation-evidence.mjs`      | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving evidence                  | the evidence verdict is not applicable         | an unexpected exception |
 
 ### Migrated helpers (discover and claim batch)
 

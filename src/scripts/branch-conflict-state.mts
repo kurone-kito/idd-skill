@@ -9,6 +9,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 interface PrData {
   headRefOid?: unknown;
@@ -189,13 +196,29 @@ export function resolveFetchAttemptTimeoutMs(
 }
 
 if (import.meta.main) {
+  // #3344: the disabled path calls main() through .then so an uncaught
+  // rejection keeps the pre-migration crash text. This body was inline
+  // top-level await, so the extracted main adds one frame -- the same
+  // residual #3342 documented for discover-readiness-check.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('branch-conflict-state', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
+}
+
+async function main(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printUsage();
     process.exit(0);
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
 
   const owner =
@@ -209,6 +232,7 @@ if (import.meta.main) {
     repo,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return 0;
 }
 
 export async function classifyBranchConflictState(

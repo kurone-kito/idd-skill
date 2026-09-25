@@ -14,6 +14,13 @@
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -303,7 +310,9 @@ const defaultDeps = {
 export function runMergeExecute(argv, deps = defaultDeps) {
   const args = parseArgs(argv);
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   // #3252: required BEFORE any collection or merge call -- an --apply run
   // with no claim binding at all (no --claim-id/--expected-claim-id and
@@ -312,8 +321,10 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   // whether a SUPPLIED --claim-id matches the active claim, never whether
   // one was supplied at all.
   if (!args.claimless && !args.claimIdProvided) {
-    throw new Error(
-      'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+    throw markCliUsageError(
+      new Error(
+        'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
+      ),
     );
   }
   // #3252: --now overrides every merge-gate clock (claim staleness,
@@ -401,7 +412,9 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       verdict.ready = false;
     }
     verdict.mergeResult = revalidation.failure;
-    return { verdict, exitCode: 1 };
+    return revalidation.cause === undefined
+      ? { verdict, exitCode: 1 }
+      : { verdict, exitCode: 1, cause: revalidation.cause };
   }
   const revalidated = revalidation.report;
   // Always a merge commit — never squash/rebase. Bind to the validated head.
@@ -434,7 +447,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates);
     if (!eligibleByMergeEvidence) {
       verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeError };
     }
     let fallbackMode;
     try {
@@ -454,11 +467,11 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       );
     } catch (policyError) {
       verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${ghErrorText(policyError) || 'unknown error'}; no merge`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: policyError };
     }
     if (fallbackMode === 'hold-and-report') {
       verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeError };
     }
     // #1521 (Codex review on PR #1537): re-validate a SECOND time,
     // immediately before the --admin call, rather than trusting the
@@ -484,7 +497,9 @@ export function runMergeExecute(argv, deps = defaultDeps) {
         verdict.ready = false;
       }
       verdict.mergeResult = `admin-fallback aborted: ${adminRevalidation.failure}`;
-      return { verdict, exitCode: 1 };
+      return adminRevalidation.cause === undefined
+        ? { verdict, exitCode: 1 }
+        : { verdict, exitCode: 1, cause: adminRevalidation.cause };
     }
     const adminReviewerStates = asRecord(
       adminRevalidation.report.reviewerStates,
@@ -499,7 +514,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       mergeState = deps.fetchMergeState(args.prNumber, args.repoRef);
     } catch (mergeStateError) {
       verdict.mergeResult = `admin-fallback aborted: live merge state unreadable: ${ghErrorText(mergeStateError) || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeStateError };
     }
     if (
       !isSafeSoloCodeownerAdminMergeState(
@@ -528,7 +543,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       return { verdict, exitCode: 0 };
     } catch (adminMergeError) {
       verdict.mergeResult = `admin-fallback merge also failed: ${ghErrorText(adminMergeError) || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: adminMergeError };
     }
   }
 }
@@ -556,6 +571,7 @@ function revalidateImmediatelyBeforeMerge(
     return {
       ok: false,
       failure: `head re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+      cause: error,
     };
   }
   if (liveHeadSha !== prHeadSha) {
@@ -571,6 +587,7 @@ function revalidateImmediatelyBeforeMerge(
     return {
       ok: false,
       failure: `readiness re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+      cause: error,
     };
   }
   if (String(report.prHeadSha ?? '') !== prHeadSha) {
@@ -818,7 +835,14 @@ function printHelp() {
 }
 // CLI: print the verdict as JSON and exit with the gate/merge status.
 if (import.meta.main) {
-  const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-merge-execute', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
+  const { verdict, exitCode, cause } = runMergeExecute(process.argv.slice(2));
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running
     // --apply interactively should actually notice it, not just find it
@@ -828,5 +852,16 @@ if (import.meta.main) {
     );
   }
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  process.exit(exitCode);
+  if (exitCode !== 0 && cause !== undefined) {
+    const classified = classifyHelperError(cause);
+    if (classified.kind === 'transport' || classified.kind === 'not-found') {
+      return {
+        exitCode,
+        kind: classified.kind,
+        message: classified.message,
+        httpStatus: classified.httpStatus,
+      };
+    }
+  }
+  return exitCode;
 }

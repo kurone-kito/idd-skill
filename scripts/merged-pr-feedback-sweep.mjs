@@ -20,6 +20,11 @@ import {
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { classifyCopilotReviewBody } from './copilot-review-body.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
@@ -721,7 +726,12 @@ function main() {
       2,
     )}\n`,
   );
+  return 0;
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('merged-pr-feedback-sweep', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }

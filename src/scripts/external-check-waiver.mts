@@ -22,6 +22,14 @@ import {
   safeGhText,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
@@ -458,6 +466,13 @@ interface GhApiStatusResult {
     role_name?: unknown;
     user?: { role_name?: unknown } | null;
   };
+  /**
+   * The value `ghText` threw, on the catch path only. Absent for HTTP 200.
+   * A 404 from the collaborator permission API is a completed
+   * not-a-collaborator verdict and must not carry this onto the authority
+   * result.
+   */
+  cause?: unknown;
 }
 
 /** Options accepted by {@link runExternalCheckWaiver}. */
@@ -1510,8 +1525,16 @@ export async function runExternalCheckWaiver(
       return { exitCode: 0, report: skippedReport };
     }
     renderReport(report, args.format);
+    // A non-404 collaborator-permission failure is an incomplete lookup,
+    // not a completed authorization verdict. The blocking message stays
+    // the same; the tagged gh error rides along as cause so the envelope
+    // keeps transport. HTTP 404 stays the existing not-a-collaborator
+    // verdict and does not set lookupFailure.
+    const lookupFailure = (authority as { lookupFailure?: unknown })
+      .lookupFailure;
     throw new Error(
       `external-check waiver apply blocked: ${report.blockingReasons.join('; ')}`,
+      lookupFailure === undefined ? undefined : { cause: lookupFailure },
     );
   }
   if (!report.body) {
@@ -2634,13 +2657,24 @@ export function resolveCollaboratorAuthority({
     };
   }
   if (result.status !== 200) {
-    return {
+    const failed: CollaboratorAuthority = {
       known: false,
       authorized: false,
       permission: '',
       roleName: '',
       error: `authority lookup failed: ${result.status}`,
     };
+    // 404 is returned above as a known non-collaborator. Every other
+    // status still means the lookup did not finish: keep the tagged gh
+    // error off the enumerable result so reports stay unchanged, and let
+    // the --apply throw classify it.
+    if (result.cause !== undefined) {
+      Object.defineProperty(failed, 'lookupFailure', {
+        value: result.cause,
+        enumerable: false,
+      });
+    }
+    return failed;
   }
 
   return {
@@ -2708,7 +2742,7 @@ function ghApiJsonWithStatus(path: string): GhApiStatusResult {
       body: JSON.parse(ghText(['api', path])) as GhApiStatusResult['body'],
     };
   } catch (error) {
-    return deriveGhApiStatusFromError(error);
+    return { ...deriveGhApiStatusFromError(error), cause: error };
   }
 }
 
@@ -2818,7 +2852,9 @@ export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
 
   if (!parsed.help) {
     if (!parsed.prNumber) {
-      throw new Error('missing required --pr <number> argument');
+      throw markCliUsageError(
+        new Error('missing required --pr <number> argument'),
+      );
     }
     if (!parsed.checkSelector) {
       throw new Error('missing required --check <selector> argument');
@@ -2937,14 +2973,31 @@ Options:
 
 export async function main(
   argv: string[] = process.argv.slice(2),
-): Promise<void> {
+): Promise<number> {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  return result.exitCode;
 }
 
 if (import.meta.main) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`Error: ${(error as Error).message}\n`);
-    process.exit(1);
-  });
+  const run = (): Promise<HelperCliResult> =>
+    main().then(
+      (exitCode) => exitCode,
+      (error: unknown) => {
+        process.stderr.write(`Error: ${(error as Error).message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      },
+    );
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('external-check-waiver', run);
+  } else {
+    run().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

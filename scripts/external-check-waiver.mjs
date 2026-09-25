@@ -21,6 +21,13 @@ import {
   safeGhText,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedActorConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
@@ -1001,8 +1008,15 @@ export async function runExternalCheckWaiver(options = {}) {
       return { exitCode: 0, report: skippedReport };
     }
     renderReport(report, args.format);
+    // A non-404 collaborator-permission failure is an incomplete lookup,
+    // not a completed authorization verdict. The blocking message stays
+    // the same; the tagged gh error rides along as cause so the envelope
+    // keeps transport. HTTP 404 stays the existing not-a-collaborator
+    // verdict and does not set lookupFailure.
+    const lookupFailure = authority.lookupFailure;
     throw new Error(
       `external-check waiver apply blocked: ${report.blockingReasons.join('; ')}`,
+      lookupFailure === undefined ? undefined : { cause: lookupFailure },
     );
   }
   if (!report.body) {
@@ -1910,13 +1924,24 @@ export function resolveCollaboratorAuthority({ owner, repo, actor }) {
     };
   }
   if (result.status !== 200) {
-    return {
+    const failed = {
       known: false,
       authorized: false,
       permission: '',
       roleName: '',
       error: `authority lookup failed: ${result.status}`,
     };
+    // 404 is returned above as a known non-collaborator. Every other
+    // status still means the lookup did not finish: keep the tagged gh
+    // error off the enumerable result so reports stay unchanged, and let
+    // the --apply throw classify it.
+    if (result.cause !== undefined) {
+      Object.defineProperty(failed, 'lookupFailure', {
+        value: result.cause,
+        enumerable: false,
+      });
+    }
+    return failed;
   }
   return {
     known: true,
@@ -1979,7 +2004,7 @@ function ghApiJsonWithStatus(path) {
       body: JSON.parse(ghText(['api', path])),
     };
   } catch (error) {
-    return deriveGhApiStatusFromError(error);
+    return { ...deriveGhApiStatusFromError(error), cause: error };
   }
 }
 function renderReport(report, format) {
@@ -2079,7 +2104,9 @@ export function parseArgs(argv) {
   };
   if (!parsed.help) {
     if (!parsed.prNumber) {
-      throw new Error('missing required --pr <number> argument');
+      throw markCliUsageError(
+        new Error('missing required --pr <number> argument'),
+      );
     }
     if (!parsed.checkSelector) {
       throw new Error('missing required --check <selector> argument');
@@ -2193,11 +2220,28 @@ Options:
 }
 export async function main(argv = process.argv.slice(2)) {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  return result.exitCode;
 }
 if (import.meta.main) {
-  main().catch((error) => {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exit(1);
-  });
+  const run = () =>
+    main().then(
+      (exitCode) => exitCode,
+      (error) => {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      },
+    );
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('external-check-waiver', run);
+  } else {
+    run().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

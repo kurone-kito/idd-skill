@@ -16,12 +16,20 @@
 // claim against, mirroring `pre-merge-readiness.mjs`'s identical `--claimless`
 // (#2017). Reply first, resolve second — a failed reply never leaves a
 // silently-resolved thread with no disposition.
+import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
@@ -240,7 +248,9 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
  * PR-comment read failure -- fails closed to "not eligible" (`false`),
  * per the fail-closed default
  * (`idd-overview-core.instructions.md#fail-closed-default`), rather than
- * letting a partial read manufacture a false accept.
+ * letting a partial read manufacture a false accept. A tagged `gh`
+ * transport or not-found error is rethrown so the CLI envelope keeps
+ * that kind.
  */
 export function isClaimlessEligible(port, pr, options = {}) {
   const closingRefs =
@@ -314,7 +324,13 @@ export function isClaimlessEligible(port, pr, options = {}) {
       trustedMarkerLogins: trustedLogins,
     });
     return result.membership !== 'in-loop';
-  } catch {
+  } catch (error) {
+    const classified = classifyHelperError(error);
+    // A gh failure is not an eligibility verdict. Rethrow so the CLI can
+    // keep transport/not-found. Every other failure still fails closed.
+    if (classified.kind === 'transport' || classified.kind === 'not-found') {
+      throw error;
+    }
     return false;
   }
 }
@@ -406,7 +422,37 @@ export function activeOwnedClaim(
   }
   return active;
 }
+function writeStderrSync(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+function exitClassified(code, kind, message, httpStatus = null) {
+  if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
+    // Synchronous: process.exit drops a pending async stderr write, which
+    // would truncate this envelope line.
+    writeStderrSync(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('resolve-review-thread', code, {
+          kind,
+          message,
+          httpStatus,
+        }),
+      )}\n`,
+    );
+  }
+  process.exit(code);
+}
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resolve-review-thread', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (
     args.help ||
@@ -416,7 +462,11 @@ if (import.meta.main) {
     (args.commentId ?? 0) <= 0
   ) {
     process.stdout.write(USAGE);
-    process.exit(args.help ? 0 : 1);
+    exitClassified(
+      args.help ? 0 : 1,
+      'usage',
+      'missing required --pr <number> or --comment-id <id>',
+    );
   }
   // #2616: --claimless (mirroring pre-merge-readiness.mjs's #2017 flag)
   // is mutually exclusive with --claim-issue / --claim-id -- both name
@@ -428,18 +478,22 @@ if (import.meta.main) {
   // here instead of silently falling through to the claimless path
   // (Codex review on this PR).
   if (args.claimless && (args.claimIssue !== null || args.claimId)) {
-    process.stderr.write(
+    writeStderrSync(
       '--claimless cannot be combined with --claim-issue or --claim-id\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--claimless cannot be combined with --claim-issue or --claim-id',
+    );
   }
   // Fail closed: --apply mutates PR state, so a reply body is always
   // mandatory, and the active-claim revalidation is mandatory unless
   // --claimless opts out of it. Missing inputs must abort before any
   // read or write rather than silently bypassing the gate.
   if (args.apply && !args.body) {
-    process.stderr.write('--apply requires --body\n');
-    process.exit(1);
+    writeStderrSync('--apply requires --body\n');
+    exitClassified(1, 'usage', '--apply requires --body');
   }
   if (
     args.apply &&
@@ -448,10 +502,14 @@ if (import.meta.main) {
       (args.claimIssue ?? 0) <= 0 ||
       !args.claimId)
   ) {
-    process.stderr.write(
+    writeStderrSync(
       '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless\n',
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless',
+    );
   }
   // Fail closed before any network call: --apply must never post a --body
   // the F2/F3 disposition-evidence gate (hasFreshDisposition) won't
@@ -460,10 +518,14 @@ if (import.meta.main) {
   // not separately gate the "Rejection confirmed by maintainer" form on
   // the thread's pre-mutation resolution state.
   if (args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
-    process.stderr.write(
+    writeStderrSync(
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
     );
-    process.exit(1);
+    exitClassified(
+      1,
+      'usage',
+      `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}`,
+    );
   }
   const pr = args.pr;
   const commentId = args.commentId;
@@ -490,18 +552,30 @@ if (import.meta.main) {
   // #2616: fast fail-closed preview for both dry-run and --apply -- the
   // per-mutation re-check below (inside assertClaim) is the one that
   // actually gates the apply-mode mutations.
-  if (
-    args.claimless &&
-    !isClaimlessEligible(port, pr, {
-      owner,
-      repo,
-      trustedMarkerLogins: args.trustedMarkerLogins,
-    })
-  ) {
-    process.stderr.write(
-      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead\n',
-    );
-    process.exit(1);
+  if (args.claimless) {
+    const claimlessMessage =
+      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead';
+    try {
+      if (
+        !isClaimlessEligible(port, pr, {
+          owner,
+          repo,
+          trustedMarkerLogins: args.trustedMarkerLogins,
+        })
+      ) {
+        writeStderrSync(`${claimlessMessage}\n`);
+        exitClassified(1, 'gate', claimlessMessage);
+      }
+    } catch (error) {
+      const classified = classifyHelperError(error);
+      writeStderrSync(`${claimlessMessage}\n`);
+      exitClassified(
+        1,
+        classified.kind,
+        classified.message,
+        classified.httpStatus,
+      );
+    }
   }
   const match = findThreadForComment(
     toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
@@ -522,7 +596,7 @@ if (import.meta.main) {
     }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     // A missing thread is informational in dry-run but a hard failure in apply.
-    process.exit(args.apply ? 1 : 0);
+    exitClassified(args.apply ? 1 : 0, 'gate', report.error);
   }
   if (!args.apply) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -535,7 +609,7 @@ if (import.meta.main) {
     report.status = 'failed';
     report.error = `review thread ${match.threadId} exposes no top-level comment id to reply to`;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    process.exit(1);
+    exitClassified(1, 'gate', report.error);
   }
   // #2616: this claim-only setup is unneeded (and un-skippable) network/
   // identity work for --claimless -- a credential that can read/update
@@ -661,8 +735,20 @@ if (import.meta.main) {
     if (postedReplyId !== undefined) {
       report.replyId = postedReplyId;
     }
-    report.error = error.message;
+    const classified = classifyHelperError(error);
+    const message = error.message;
+    // Deliberate ownership denials are a completed gate. A tagged gh
+    // failure keeps transport/not-found.
+    const kind =
+      classified.kind === 'transport' || classified.kind === 'not-found'
+        ? classified.kind
+        : message.startsWith('claim revalidation failed:') ||
+            message.startsWith('claim/PR mismatch:') ||
+            message.startsWith('--claimless requires a PR')
+          ? 'gate'
+          : classified.kind;
+    report.error = message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    process.exit(1);
+    exitClassified(1, kind, classified.message, classified.httpStatus);
   }
 }

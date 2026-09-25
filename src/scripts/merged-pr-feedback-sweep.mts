@@ -20,6 +20,12 @@ import {
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { classifyCopilotReviewBody } from './copilot-review-body.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
@@ -839,7 +845,7 @@ function fetchMergedPr(
   };
 }
 
-function main(): void {
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -926,8 +932,13 @@ function main(): void {
       2,
     )}\n`,
   );
+  return 0;
 }
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('merged-pr-feedback-sweep', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }

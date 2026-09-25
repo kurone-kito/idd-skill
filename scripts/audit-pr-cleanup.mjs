@@ -4,7 +4,7 @@
 // The scripts/audit-pr-cleanup.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -14,6 +14,13 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
@@ -85,7 +92,13 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
 // complete.
 const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 if (import.meta.main) {
-  await main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('audit-pr-cleanup', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
@@ -123,7 +136,7 @@ async function main() {
   try {
     repository = combineOwnerRepoFlags(args) ?? detectRepository();
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const [owner, repo] = parseRepository(repository);
   const prNumbers = parsePrNumbers(args);
@@ -154,8 +167,9 @@ async function main() {
     }
   }
   if (anyFailed) {
-    process.exit(1);
+    return 1;
   }
+  return 0;
 }
 /**
  * Rejects a claim-gated `--apply` batch (#2224, CodeRabbit review on PR
@@ -1060,10 +1074,10 @@ function fetchRemainingThreadComments(threadId, firstPage, options) {
       options,
     );
     if (result.errors?.length) {
-      handleGraphqlFailure(
-        `GraphQL thread-comment continuation failed: ${formatGraphqlErrors(result.errors)}; thread=${threadId}`,
-        options,
-      );
+      const message = `GraphQL thread-comment continuation failed: ${formatGraphqlErrors(result.errors)}; thread=${threadId}`;
+      // A 200 body that still carries GraphQL errors is not a CLI argument
+      // mistake. Pass an error so fail() does not classify it as usage.
+      handleGraphqlFailure(message, options, new Error(message));
     }
     const nextComments = result.data?.node?.comments;
     if (!nextComments) {
@@ -1088,10 +1102,10 @@ function fetchConnection(query, baseVariables, pickConnection, options = {}) {
     }
     const result = ghGraphql(query, variables, options);
     if (result.errors?.length) {
-      handleGraphqlFailure(
-        `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`,
-        options,
-      );
+      const message = `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`;
+      // Same as the thread-comment continuation: a GraphQL errors array is
+      // not a usage error.
+      handleGraphqlFailure(message, options, new Error(message));
     }
     if (!result.data) {
       handleGraphqlFailure(
@@ -1397,19 +1411,27 @@ function ghGraphql(query, variables, options = {}) {
       handleGraphqlFailure(
         `GraphQL request failed: ${formatGraphqlErrors(response.errors)}; ${formatGraphqlContext(query, variables)}`,
         options,
+        error,
       );
     }
     handleGraphqlFailure(
       `gh api graphql failed: ${stderr || e.message}; ${formatGraphqlContext(query, variables)}`,
       options,
+      error,
     );
   }
 }
-function handleGraphqlFailure(message, options) {
+function handleGraphqlFailure(message, options, error) {
   if (options.throwOnError) {
-    throw new Error(message);
+    throw new Error(
+      message,
+      error === undefined ? undefined : { cause: error },
+    );
   }
-  fail(message);
+  // A bare message (PR missing from a successful payload, and the other
+  // domain failures below) stays kind usage. A gh failure keeps the
+  // tagged error so the envelope is transport/not-found, not usage.
+  fail(message, error);
 }
 function parseJsonOrNull(value) {
   try {
@@ -1512,7 +1534,7 @@ function parseArgs(argv) {
   try {
     parsed = parseCliArgs(argv, AUDIT_PR_CLEANUP_FLAG_SPEC);
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const { values, help } = parsed;
   // The pre-migration readValue() used `!value` (not `=== undefined`), so
@@ -1590,7 +1612,31 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
-function fail(message) {
-  console.error(`error: ${message}`);
+function writeStderrSync(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+function fail(message, error) {
+  const rendered = `error: ${message}\n`;
+  // #3344: keep exit 2 for every fail() path. process.exit never returns
+  // to runHelperCli, so classify and write the envelope here. A bare
+  // message is an argument error; a passed error keeps its real kind
+  // (a gh failure stays transport, not usage). Both lines are
+  // synchronous: process.exit drops a pending async stderr write.
+  if (isHelperErrorEnvelopeEnabled()) {
+    const classified =
+      error === undefined
+        ? { kind: 'usage', message, httpStatus: null }
+        : classifyHelperError(error);
+    writeStderrSync(rendered);
+    writeStderrSync(
+      `${JSON.stringify(buildHelperErrorEnvelope('audit-pr-cleanup', 2, classified))}\n`,
+    );
+  } else {
+    console.error(`error: ${message}`);
+  }
   process.exit(2);
 }
