@@ -358,6 +358,60 @@ test('dispositionNamesAdvisoryBot does not falsely match a bot identity equal to
   assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), true);
 });
 
+test('dispositionNamesAdvisoryBot requires an exact login match, not a substring of a lookalike/fork bot login -- #3466 (Copilot review, PR #3470)', () => {
+  // A disposition naming a real, configured bot must not also be read as
+  // naming a differently-configured lookalike whose login merely CONTAINS
+  // the real bot's identity token as a substring (a whole-span
+  // `.includes()` check would incorrectly return true for both).
+  const codexBody = buildDispositionBody(
+    'chatgpt-codex-connector[bot]',
+    'abc1234',
+    'usage limits',
+    999,
+  );
+  assert.equal(
+    dispositionNamesAdvisoryBot(codexBody, 'chatgpt-codex-connector-fork[bot]'),
+    false,
+  );
+  assert.equal(
+    dispositionNamesAdvisoryBot(codexBody, 'chatgpt-codex-connector[bot]'),
+    true,
+  );
+
+  const forkBody = buildDispositionBody(
+    'chatgpt-codex-connector-fork[bot]',
+    'abc1234',
+    'usage limits',
+    999,
+  );
+  // The reverse direction: a disposition naming the FORK must not be read
+  // as naming the real bot merely because the fork's login contains it.
+  assert.equal(
+    dispositionNamesAdvisoryBot(forkBody, 'chatgpt-codex-connector[bot]'),
+    false,
+  );
+  assert.equal(
+    dispositionNamesAdvisoryBot(forkBody, 'chatgpt-codex-connector-fork[bot]'),
+    true,
+  );
+});
+
+test('dispositionNamesAdvisoryBot still matches a login followed by a human-readable parenthetical product name', () => {
+  // A hand-authored disposition may append a readable product-name aside
+  // after the login for clarity ("coderabbitai[bot] (CodeRabbit)"). The
+  // exact-login-match fix above must extract just the leading login token
+  // rather than treating the whole segment (login plus aside) as one
+  // opaque string to compare.
+  const body =
+    '**Rejected** — coderabbitai[bot] (CodeRabbit) did not review HEAD ' +
+    'abc1234 (review limit reached); this is not a completed review';
+  assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), true);
+  assert.equal(
+    dispositionNamesAdvisoryBot(body, 'chatgpt-codex-connector[bot]'),
+    false,
+  );
+});
+
 test('dispositionNamesAdvisoryBot does not falsely match the #1482 source-notice-id suffix', () => {
   // #1482 appends "(source: #issuecomment-{id})" to every notice disposition.
   // A bot configured with an identity token equal to "issuecomment" must not

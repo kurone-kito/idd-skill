@@ -3975,6 +3975,19 @@ const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
 // contract at the call sites. Fail-closed: an empty token, or a disposition
 // body that does not structurally match either canonical template, names no
 // bot.
+// Splits a `dispositionNamesAdvisoryBot` login span into its individual
+// bot-login tokens. The span normally names exactly one bot, but #2475
+// established that a single disposition may structurally name several at
+// once, joined by `and` and/or a comma (`"A[bot] and B[bot]"`,
+// `"A[bot], B[bot], and C[bot]"`) -- this must keep splitting that shape
+// apart rather than treating it as one opaque string.
+const DISPOSITION_LOGIN_SPAN_SPLIT_RE = /\s*,\s*|\s+and\s+/i;
+// A GitHub login itself never contains whitespace or `(` -- so the LEADING
+// run of non-space, non-`(` characters in a (post-split) span segment is
+// exactly its login, whether or not a human-readable parenthetical product
+// name follows it (`"coderabbitai[bot] (CodeRabbit)"`, still a single
+// segment after the `and`/`,` split above).
+const DISPOSITION_LOGIN_TOKEN_RE = /^[^\s(]+/;
 export function dispositionNamesAdvisoryBot(
   dispositionBody,
   noticeAuthorLogin,
@@ -3990,7 +4003,23 @@ export function dispositionNamesAdvisoryBot(
   if (span === undefined) {
     return false;
   }
-  return span.toLowerCase().includes(token);
+  // #3466 (Copilot review, PR #3470): exact per-login match, not a
+  // substring/`.includes()` check on the whole span -- a lookalike or
+  // fork bot login that merely CONTAINS this bot's identity token as a
+  // substring (e.g. a configured `chatgpt-codex-connector-fork[bot]`
+  // alongside the real `chatgpt-codex-connector[bot]`) must never match
+  // it. Split the span into its individual per-bot segments (#2475's
+  // multi-bot shape), extract just the leading login token from each
+  // (tolerating a trailing human-readable parenthetical, as above), and
+  // require an exact match after the same `[bot]`-suffix normalization.
+  return span
+    .split(DISPOSITION_LOGIN_SPAN_SPLIT_RE)
+    .some(
+      (part) =>
+        advisoryBotIdentityToken(
+          DISPOSITION_LOGIN_TOKEN_RE.exec(part.trim())?.[0] ?? '',
+        ) === token,
+    );
 }
 // #2544/#2547: classifies the configured secondary advisory bot's current
 // standing for the CURRENT HEAD into exactly one of three outcomes --
