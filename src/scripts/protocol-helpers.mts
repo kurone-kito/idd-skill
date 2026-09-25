@@ -8947,7 +8947,7 @@ export function summarizeRequiredChecks(
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
 // real run conclusions instead.
-function resolvePresentRunConclusion(
+export function resolvePresentRunConclusion(
   normalizedChecks: {
     name: string;
     state: string;

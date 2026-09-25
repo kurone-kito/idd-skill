@@ -1307,4 +1307,29 @@ test('#3465: pre-merge CI predicate follows required-check success, pending, fai
     {},
   );
   assert.equal(ciWaitSummaryIsPreMergeCiPassing(staleFailureThenSuccess), true);
+
+  const otherProducerStillFailing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'ci',
+          workflowName: 'push',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'ci',
+          workflowName: 'merge',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing(otherProducerStillFailing),
+    false,
+  );
 });

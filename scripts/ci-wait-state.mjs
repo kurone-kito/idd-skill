@@ -33,6 +33,7 @@ import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
   isPreMergeCiAllPassing,
+  resolvePresentRunConclusion,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
@@ -584,21 +585,23 @@ function buildRequiredChecksRollup(
  * source-pinned or unreadable downgrade. `no-required-checks` falls
  * through to that predicate's present-run clause. A failing check that
  * is not in the required set does not change a `success` rollup.
+ * The no-required-checks fallback calls {@link resolvePresentRunConclusion}
+ * so a success from a different workflow cannot hide another producer's
+ * failure.
  */
 export function ciWaitSummaryIsPreMergeCiPassing(summary) {
   const rollup = summary.requiredChecks;
-  // #3465: the no-required-checks fallback must see the same name-keyed
-  // latest instance `selectLatestCheckEntryPerName` already uses for the
-  // required rollup. A raw `summary.checks` scan treats a stale FAILURE
-  // beside a later SUCCESS for the same check name as `some-failing`,
-  // while `resolvePresentRunConclusion` dedupes that pair to all-passing.
-  const latestChecks = selectLatestCheckEntryPerName(summary.checks);
-  const presentRunConclusion =
-    latestChecks.length === 0
-      ? 'none'
-      : latestChecks.every((check) => check.status === 'success')
-        ? 'all-passing'
-        : 'some-failing';
+  const presentRunConclusion = resolvePresentRunConclusion(
+    summary.checks.map((check) => ({
+      name: check.checkName,
+      state: check.state,
+      completedAt: check.completedAt,
+      coveredByWaiver: false,
+      type: check.type,
+      workflowName: check.workflowName,
+      workflowPath: check.workflowPath ?? '',
+    })),
+  );
   return isPreMergeCiAllPassing({
     protectionReadsUnreadable:
       rollup.protectionReadsUnreadable || rollup.status === 'unreadable',
