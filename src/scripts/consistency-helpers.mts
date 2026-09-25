@@ -2258,6 +2258,11 @@ function stripHeadingInlineMarkup(text: string): string {
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
 }
 
+/** Result of {@link extractHeadingSection}. */
+type HeadingSectionResult =
+  | { readonly found: true; readonly section: string }
+  | { readonly found: false; readonly reason: 'not-found' | 'ambiguous' };
+
 // Locates `heading`'s GitHub slug in `text` (reusing the exported
 // `githubHeadingSlug`, with the same fence-aware ATX scan and
 // duplicate-suffix counting `extractHeadingSlugs` applies) and returns the
@@ -2265,9 +2270,25 @@ function stripHeadingInlineMarkup(text: string): string {
 // shallower level (exclusive), or to end-of-file when none follows. A
 // separate walk from `extractHeadingSlugs` is required here (not a call to
 // it) because that function reports slugs only, never the line position a
-// section boundary needs. Returns `null` when no heading in `text` slugs to
-// `heading`.
-function extractHeadingSection(text: string, heading: string): string | null {
+// section boundary needs.
+//
+// `heading` is always plain ATX text (never a slug that already carries
+// a duplicate suffix, like `Gate-1`), so it can only ever describe the
+// *base* slug with no suffix -- which `extractHeadingSlugs`'s own
+// duplicate-suffix rule assigns exclusively to a document's *first*
+// occurrence of that heading text. When the document repeats the
+// identical heading text later (a genuine duplicate), that later
+// occurrence can never be reached through this scheme, and silently
+// resolving to the first occurrence would let a gate registered against
+// the wrong (or a since-renamed) section pass anyway (#3310 review).
+// Report `ambiguous` instead of guessing whenever more
+// than one heading in the document shares the requested base slug, even
+// though the *found* occurrence is always the first -- the registry
+// entry's heading needs to be unique within its file.
+function extractHeadingSection(
+  text: string,
+  heading: string,
+): HeadingSectionResult {
   const expectedSlug = githubHeadingSlug(stripHeadingInlineMarkup(heading));
   const lines = text.split(/\r?\n/);
   const counts = new Map<string, number>();
@@ -2294,9 +2315,12 @@ function extractHeadingSection(text: string, heading: string): string | null {
     headings.push({ level: match[1].length, slug, lineIndex: index });
   }
 
+  if ((counts.get(expectedSlug) ?? 0) > 1) {
+    return { found: false, reason: 'ambiguous' };
+  }
   const foundIndex = headings.findIndex((entry) => entry.slug === expectedSlug);
   if (foundIndex === -1) {
-    return null;
+    return { found: false, reason: 'not-found' };
   }
   const found = headings[foundIndex];
   let end = lines.length;
@@ -2306,7 +2330,7 @@ function extractHeadingSection(text: string, heading: string): string | null {
       break;
     }
   }
-  return lines.slice(found.lineIndex, end).join('\n');
+  return { found: true, section: lines.slice(found.lineIndex, end).join('\n') };
 }
 
 // Validates one `standard`/`lite`/`omittedByDesign.lite` location: file
@@ -2358,13 +2382,20 @@ function validateLiteGateParityLocation(
     return;
   }
 
-  const section = extractHeadingSection(text, heading);
-  if (section === null) {
-    violations.push(
-      `${label}: ${role} location heading ${JSON.stringify(heading)} has no matching GitHub slug in ${file}`,
-    );
+  const sectionResult = extractHeadingSection(text, heading);
+  if (!sectionResult.found) {
+    if (sectionResult.reason === 'ambiguous') {
+      violations.push(
+        `${label}: ${role} location heading ${JSON.stringify(heading)} matches more than one heading in ${file}; only a heading unique within its file can be resolved`,
+      );
+    } else {
+      violations.push(
+        `${label}: ${role} location heading ${JSON.stringify(heading)} has no matching GitHub slug in ${file}`,
+      );
+    }
     return;
   }
+  const section = sectionResult.section;
 
   const hasContains =
     typeof loc.contains === 'string' && loc.contains.length > 0;

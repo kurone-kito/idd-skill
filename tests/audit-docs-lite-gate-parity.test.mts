@@ -200,6 +200,33 @@ test('fails when a heading has no matching GitHub slug', () => {
   assert.match(violations[0], /has no matching GitHub slug/);
 });
 
+test('fails closed on a heading that repeats in its own file (#3310 review)', () => {
+  const files = {
+    ...FILES,
+    'duplicate-heading.instructions.md': [
+      '# Doc',
+      '',
+      '## The Gate',
+      '',
+      'First occurrence: confirm the closing set matches exactly.',
+      '',
+      '## The Gate',
+      '',
+      'Second occurrence: confirm the closing set matches exactly.',
+      '',
+    ].join('\n'),
+  };
+  const entry = baseEntry();
+  (entry.standard as Record<string, unknown>).file =
+    'duplicate-heading.instructions.md';
+  const violations = collectLiteGateParityViolations(
+    [entry],
+    fakeReader(files),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /matches more than one heading/);
+});
+
 test('fails when a location carries both contains and pattern', () => {
   const entry = baseEntry();
   (entry.standard as Record<string, unknown>).pattern = 'closing set';

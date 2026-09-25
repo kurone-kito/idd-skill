@@ -327,7 +327,13 @@ including any fenced code blocks the section contains — many lite
 gates live inside a fenced example. The heading is resolved with
 GitHub's own heading-slug algorithm (the same one
 [Markdown Link/Anchor Audit](#markdown-linkanchor-audit) above uses),
-so a renamed heading fails the same way a dead anchor would.
+so a renamed heading fails the same way a dead anchor would. `heading`
+must be unique within its own file: since it is always plain text
+(never a pre-suffixed slug like `Gate-1`), it can only ever describe a
+document's _first_ occurrence of that heading, so a location whose
+file repeats the identical heading text elsewhere fails closed as
+ambiguous rather than silently resolving to the first occurrence
+(#3310 review).
 
 `helperGate: { source, gate }` marks a `lite` entry whose lite
 location delegates the actual gate decision to a helper's verdict
@@ -342,7 +348,8 @@ helper-side rename of the gate id is caught too.
 (`src/scripts/consistency-helpers.mts`) reports an error for: an entry
 carrying neither or both of `lite`/`omittedByDesign`; an empty
 `omittedByDesign.reason`; a duplicate `id`; a location's file that
-does not exist; a heading with no matching GitHub slug in its file; a
+does not exist; a heading with no matching GitHub slug in its file, or
+one that matches more than one heading there; a
 location carrying both or neither of `contains`/`pattern`; a
 `contains` substring or `pattern` match missing from its heading's
 section; a `standard` location under `lite/`, or a `lite` location
