@@ -74,6 +74,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
+  writeStderrSync,
 } from './helper-cli-runner.mjs';
 import {
   buildCommandCatalog,
@@ -3154,8 +3155,12 @@ function isSameExistingFile(pathA, pathB) {
  * `audit-pr-cleanup.mts`'s established `fail(message, error?)` pattern.
  */
 function exitRecordPolicy(exitCode, kind) {
+  // Uses the exported writeStderrSync (a raw synchronous fd write), not
+  // process.stderr.write: process.exit() right below can truncate a
+  // still-pending asynchronous stdio write (#3346 review finding), the
+  // same hazard runHelperCli's own crash path already guards against.
   if (isHelperErrorEnvelopeEnabled()) {
-    process.stderr.write(
+    writeStderrSync(
       `${JSON.stringify(
         buildHelperErrorEnvelope('idd-onboard', exitCode, {
           kind,

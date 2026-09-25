@@ -24,6 +24,7 @@ import {
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
+  writeStderrSync,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
@@ -1703,13 +1704,17 @@ function fail(message, error) {
   // runHelperCli, so classify and write the envelope here -- copies
   // audit-pr-cleanup.mts's established fail(message, error?) pattern. A
   // bare message is a usage/argument error; a passed error keeps its real
-  // kind (a gh failure stays transport, not usage).
+  // kind (a gh failure stays transport, not usage). Uses the exported
+  // writeStderrSync (a raw synchronous fd write), not process.stderr.write:
+  // process.exit() right below can truncate a still-pending asynchronous
+  // stdio write (#3346 review finding), the same hazard runHelperCli's own
+  // crash path already guards against.
   if (isHelperErrorEnvelopeEnabled()) {
     const classified =
       error === undefined
         ? { kind: 'usage', message, httpStatus: null }
         : classifyHelperError(error);
-    process.stderr.write(
+    writeStderrSync(
       `${JSON.stringify(buildHelperErrorEnvelope('live-status-digest', 2, classified))}\n`,
     );
   }

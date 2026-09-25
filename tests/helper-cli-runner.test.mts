@@ -105,6 +105,9 @@ function createFakeIo(envelopeEnabled: boolean): FakeIo {
     writeStderr: (text) => {
       stderrWrites.push(text);
     },
+    writeStderrQueued: (text) => {
+      stderrWrites.push(text);
+    },
     setExitCode: (code) => {
       exitCode = code;
     },
