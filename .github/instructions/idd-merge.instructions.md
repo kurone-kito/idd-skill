@@ -546,9 +546,25 @@ Before any mutating action in F3, apply the
    Before each `git worktree remove`, `cd` to the surviving primary
    worktree; keep that cwd for every removal and remaining F4 work
    (branch/remote deletion, digest, revalidation, unclaim, and
-   `gh`/helper calls). Before each removal, revalidate the claim and
-   worktree lock (`idd-claim.instructions.md`); stop if either is not
-   ours. A shell in the removed worktree fails a `node` call with
+   `gh`/helper calls). Before each removal, while the issue worktree
+   still exists, revalidate from that primary checkout:
+
+   ```sh
+   node scripts/resume-claim-routing.mjs --issue <issue-number> \
+     --claim-id <claim-id> --nonce <nonce> \
+     --worktree <issue-worktree-path>
+   ```
+
+   `keep` / `already_owned`, plus a claim lock on that path whose
+   holder matches this session, means the worktree is ours. A result
+   of `owner_evidence_required` with reason
+   `claim-id-match-without-independent-owner-evidence` from a call
+   that omitted `--worktree` is an incomplete check, not claim loss:
+   re-run with the flag before stopping. A `stop` that remains after
+   that re-run means the claim is not ours; do not remove the
+   worktree. Also revalidate the worktree lock
+   (`idd-claim.instructions.md`); stop if it is not ours. A shell in
+   the removed worktree fails a `node` call with
    `ENOENT` on `uv_cwd`, or — even after `git worktree remove`/`git
    branch -d` succeeded — `gh`/`git` with "Unable to read current
    working directory", skipping `unclaimed-by`; rerun from the

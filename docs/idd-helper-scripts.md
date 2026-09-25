@@ -3359,8 +3359,12 @@ still fails closed:
   branch) from `<path>` instead of `process.cwd()`. Use this from the
   primary checkout, before the claimed branch's own worktree exists as the
   current directory; the occupancy probe must still report the claimed
-  branch as occupied only by that same (canonicalized) path. Omitting it
-  keeps reading from `process.cwd()` unchanged.
+  branch as occupied only by that same (canonicalized) path. F4 removal
+  is another caller of the same flag: the current directory is the
+  primary checkout, and `<path>` is the issue worktree about to be
+  removed (observed 2026-09-25, issue `#3436`, PR `#3451`). Omitting it
+  keeps reading from `process.cwd()` unchanged. The helper still reads
+  owner evidence only from `--worktree` or `process.cwd()`.
 - `--trusted-marker-logins` (kurone-kito/idd-skill#3272): trusted actors now
   resolve through the same ladder `pre-merge-readiness.mts` uses
   (`resolveTrustedMarkerActors`: flag, then `IDD_TRUSTED_MARKER_ACTORS`,
