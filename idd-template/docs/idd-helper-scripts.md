@@ -1739,8 +1739,11 @@ needs a live per-marker run lookup no other consumer needs):
 4. that same response's `event` field is exactly `pull_request_target`,
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
-   run of it during a `pull_request`/`pull_request_target` migration
-   window (kurone-kito/idd-skill#2764 Phase 1);
+   run of it: the workflow's own `on:` block declares only
+   `pull_request_target` (kurone-kito/idd-skill#2764 Phase 2), but a PR
+   can still reintroduce a `pull_request` trigger to its own copy of that
+   YAML, and this condition rejects a marker citing a run from that
+   reintroduced trigger the same way it always did;
 5. the PR's own changed files (fetched independently at consume time,
    never trusted from the posting job's own internal check) include at
    least one path from the trigger-file allowlist above
@@ -3495,18 +3498,40 @@ reflexively as any other CLI option.
   omitted, when no such downgrade occurred) -- `computePreMergeReadinessBlockers`
   uses it (alongside `ci.preDowngradeStatus` below) to name the
   identity-unresolved cause in the `ci` blocker detail.
-- `ci.preDowngradeStatus` (kurone-kito/idd-skill#2919, round 5) is the
-  dedup+waiver-adjusted `ci.status` classification captured BEFORE either
-  the source-pinned or identity-unresolved downgrade above could narrow
-  it -- `"success"` here means every OTHER required check was already
-  fully resolved as passing, so any non-success final `ci.status` can only
-  be attributed to those two named downgrades. `computePreMergeReadinessBlockers`
+- `ci.nonTargetEventRequiredCheckNames` (kurone-kito/idd-skill#3256) is a
+  DISTINCT downgrade from `ci.identityUnresolvedRequiredCheckNames` above,
+  for the same `idd-advisory-convergence` check name: required check names
+  whose green state was downgraded to `ci.status: "unknown"` because this
+  collection pass resolved every live instance's producer identity AND
+  triggering event (`checkSuite.workflowRun.event`) cleanly, but found no
+  pass-equivalent instance triggered by `pull_request_target` among them.
+  This is what makes a same-repository PR's own reintroduced `pull_request`
+  trigger (see condition 4 of the self-referential-bootstrap-auto waiver
+  above) unable to satisfy the required check even when its own instance
+  passes -- it can still BLOCK the check (GitHub's own branch-protection
+  Ruleset requires every same-named live instance to pass), it just never
+  SATISFIES it. A `workflow_call` caller (the template's own
+  `idd-advisory-convergence.yml` supports being called this way) records
+  its OWN triggering event on the calling workflow run, not
+  `pull_request_target` itself, so it counts toward this check only when
+  the CALLER was itself triggered by `pull_request_target`. Evidence only
+  (empty array, never omitted, when no such downgrade occurred) --
+  `computePreMergeReadinessBlockers` uses it (alongside
+  `ci.preDowngradeStatus` below) to name this cause in the `ci` blocker
+  detail.
+- `ci.preDowngradeStatus` (kurone-kito/idd-skill#2919, round 5;
+  kurone-kito/idd-skill#3256 added the third downgrade) is the
+  dedup+waiver-adjusted `ci.status` classification captured BEFORE the
+  source-pinned, identity-unresolved, or non-target-event downgrade above
+  could narrow it -- `"success"` here means every OTHER required check was
+  already fully resolved as passing, so any non-success final `ci.status`
+  can only be attributed to those three named downgrades. `computePreMergeReadinessBlockers`
   reads this to decide whether a genuinely separate, concurrent CI failure
   (an unrelated required check that is actually failing/pending/missing)
   also needs naming in the `ci` blocker detail, rather than letting a
-  pinned/identity-unresolved cause's own detail text silently replace it.
-  `"unknown"` when no required checks are configured, mirroring
-  `ci.status`'s own initial default in that case.
+  pinned/identity-unresolved/non-target-event cause's own detail text
+  silently replace it. `"unknown"` when no required checks are configured,
+  mirroring `ci.status`'s own initial default in that case.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
