@@ -10,11 +10,13 @@ import {
   isUpstreamEscalationEnabled,
   loadIddConfig,
   loadPolicyConfig,
+  loadTrustedActorConfig,
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
   resolveUserGlobalConfigPath,
+  selectTrustedConfigRef,
 } from '../src/scripts/idd-config.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -822,5 +824,75 @@ test('isUpstreamEscalationEnabled resolves to true for explicit enabled: true', 
   assert.equal(
     isUpstreamEscalationEnabled({ upstreamEscalation: { enabled: true } }),
     true,
+  );
+});
+
+// --- selectTrustedConfigRef / loadTrustedActorConfig (#3454) ------------
+
+test('a non-empty base ref is fetched and the live default branch is not consulted', () => {
+  assert.equal(selectTrustedConfigRef('develop', 'main'), 'develop');
+  let defaultReads = 0;
+  const fetches: string[] = [];
+  const config = loadTrustedActorConfig({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'develop',
+    readDefaultBranch: () => {
+      defaultReads += 1;
+      return 'main';
+    },
+    fetchEncodedConfig: (_owner, _repo, ref) => {
+      fetches.push(ref);
+      return toEncodedConfig({ trustedMarkerActors: ['ada'] });
+    },
+  });
+  assert.equal(defaultReads, 0);
+  assert.deepEqual(fetches, ['develop']);
+  assert.deepEqual(config, { trustedMarkerActors: ['ada'] });
+});
+
+test('an empty base ref fetches the live default branch', () => {
+  assert.equal(selectTrustedConfigRef('', 'main'), 'main');
+  assert.equal(selectTrustedConfigRef('   ', 'main'), 'main');
+  const fetches: string[] = [];
+  const config = loadTrustedActorConfig({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: '   ',
+    readDefaultBranch: (owner, repo) => {
+      assert.equal(owner, 'o');
+      assert.equal(repo, 'r');
+      return 'main';
+    },
+    fetchEncodedConfig: (_owner, _repo, ref) => {
+      fetches.push(ref);
+      return toEncodedConfig({});
+    },
+  });
+  assert.deepEqual(fetches, ['main']);
+  assert.deepEqual(config, {});
+});
+
+test('an empty base ref and an unavailable default branch throw', () => {
+  assert.throws(
+    () => selectTrustedConfigRef('', null),
+    /no base ref was supplied/,
+  );
+  assert.throws(
+    () => selectTrustedConfigRef('  ', '   '),
+    /no base ref was supplied/,
+  );
+  assert.throws(
+    () =>
+      loadTrustedActorConfig({
+        owner: 'o',
+        repo: 'r',
+        baseRefName: '',
+        readDefaultBranch: () => null,
+        fetchEncodedConfig: () => {
+          throw new Error('should not fetch');
+        },
+      }),
+    /no base ref was supplied/,
   );
 });

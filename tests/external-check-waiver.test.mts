@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -14,6 +20,7 @@ import {
   parseArgs,
   planExternalCheckWaiver,
   resolveActorLogin,
+  resolveLinkedIssueCandidates,
   runExternalCheckWaiver,
   trustedLoginsForLinkedIssueClaims,
 } from '../src/scripts/external-check-waiver.mts';
@@ -4039,4 +4046,128 @@ test('operationalMarkerPrefix still recognizes an ordinary external-check-waiver
     operationalMarkerPrefix(body),
     '<!-- idd-external-check-waiver:',
   );
+});
+
+test('resolveLinkedIssueCandidates skips the trusted-config read when no linked issues remain (#3454)', () => {
+  const stubGhScript = `
+process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' ') + '\\n');
+process.exit(1);
+`;
+  const restore = stubExecutable('gh', stubGhScript);
+  try {
+    assert.deepEqual(
+      resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'ada',
+        baseRefName: '',
+        linkedIssues: [],
+        issueNumber: 0,
+        expectedClaimId: '',
+        headRefName: 'issue/3454-example',
+        enforceBranchMatch: true,
+        prNumber: 99,
+      }),
+      [],
+    );
+    assert.deepEqual(
+      resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'ada',
+        baseRefName: '',
+        linkedIssues: [{ number: 11, url: 'https://example.test/11' }],
+        issueNumber: 99,
+        expectedClaimId: '',
+        headRefName: 'issue/3454-example',
+        enforceBranchMatch: true,
+        prNumber: 99,
+      }),
+      [],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('resolveLinkedIssueCandidates loads trusted actor config once for two linked issues (#3454)', () => {
+  const logPath = join(
+    mkdtempSync(join(tmpdir(), 'idd-waiver-trust-load-')),
+    'gh.log',
+  );
+  writeFileSync(logPath, '');
+  const encoded = Buffer.from(JSON.stringify({}), 'utf8').toString('base64');
+  const stubGhScript = `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.IDD_GH_LOG, args.join(' ') + '\\n');
+const joined = args.join(' ');
+if (joined.includes('contents/.github/idd/config.json')) {
+  process.stdout.write(process.env.IDD_GH_CONFIG_B64);
+  process.exit(0);
+}
+if (joined.includes('/issues/') && joined.includes('/comments')) {
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + joined + '\\n');
+process.exit(1);
+`;
+  const previousLog = process.env.IDD_GH_LOG;
+  const previousConfig = process.env.IDD_GH_CONFIG_B64;
+  process.env.IDD_GH_LOG = logPath;
+  process.env.IDD_GH_CONFIG_B64 = encoded;
+  const restore = stubExecutable('gh', stubGhScript);
+  try {
+    const candidates = resolveLinkedIssueCandidates({
+      owner: 'acme',
+      repo: 'widgets',
+      rawConfig: {},
+      viewerLogin: 'ada',
+      baseRefName: 'develop',
+      linkedIssues: [
+        { number: 11, url: 'https://example.test/11' },
+        { number: 12, url: 'https://example.test/12' },
+      ],
+      issueNumber: 0,
+      expectedClaimId: '',
+      headRefName: 'issue/3454-example',
+      enforceBranchMatch: true,
+      prNumber: 99,
+    });
+    const lines = readFileSync(logPath, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+    const configReads = lines.filter((line) =>
+      line.includes('contents/.github/idd/config.json'),
+    );
+    const commentReads = lines.filter(
+      (line) => line.includes('/issues/') && line.includes('/comments'),
+    );
+    assert.equal(configReads.length, 1);
+    assert.match(configReads[0] ?? '', /ref=develop/);
+    assert.equal(commentReads.length, 2);
+    assert.equal(
+      lines.some((line) => line.includes('default_branch')),
+      false,
+    );
+    assert.deepEqual(
+      candidates.map((candidate) => candidate.number),
+      [11, 12],
+    );
+  } finally {
+    restore();
+    if (previousLog === undefined) {
+      delete process.env.IDD_GH_LOG;
+    } else {
+      process.env.IDD_GH_LOG = previousLog;
+    }
+    if (previousConfig === undefined) {
+      delete process.env.IDD_GH_CONFIG_B64;
+    } else {
+      process.env.IDD_GH_CONFIG_B64 = previousConfig;
+    }
+    rmSync(join(logPath, '..'), { recursive: true, force: true });
+  }
 });
