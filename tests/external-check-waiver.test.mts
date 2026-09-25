@@ -620,6 +620,93 @@ test('runExternalCheckWaiver dry-run classifies a none binding before apply (kur
   );
 });
 
+test('runExternalCheckWaiver: --auto-bootstrap none fallback classifies a closing PR with no active claim (kurone-kito/idd-skill#3463)', async () => {
+  const pr = {
+    number: 3463,
+    state: 'OPEN',
+    url: 'https://github.com/kurone-kito/idd-skill/pull/3463',
+    headRefName: 'issue/3463-test-waiver-cover-auto-bootstrap-none',
+    headRefOid: 'b'.repeat(40),
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'idd-advisory-convergence',
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+      },
+    ],
+    closingIssuesReferences: [{ number: 3463 }],
+  };
+  const shared = {
+    pr,
+    issueCandidates: [
+      {
+        number: 3463,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/3463',
+        activeClaim: null,
+      },
+    ],
+    headCommittedAt: '2026-05-17T00:00:00Z',
+    headObservedAt: '2026-05-17T00:00:00Z',
+    now: new Date('2026-05-17T06:00:00Z'),
+    isTTY: false,
+  };
+  const args = {
+    ...parseArgs([
+      '--pr',
+      '3463',
+      '--check',
+      'idd-advisory-convergence',
+      '--reason',
+      SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+      '--run-id',
+      '123456789',
+      '--auto-bootstrap',
+    ]),
+    repo: 'kurone-kito/idd-skill',
+  };
+  const inLoop = await runExternalCheckWaiver({
+    ...shared,
+    args,
+    prComments: [],
+  });
+  assert.equal(inLoop.exitCode, 0);
+  assert.equal(inLoop.report?.canApply, false);
+  assert.match(
+    inLoop.report?.blockingReasons.join('\n') ?? '',
+    /none-claim waiver requires an out-of-loop PR/,
+  );
+  assert.match(
+    inLoop.report?.blockingReasons.join('\n') ?? '',
+    /no valid out-of-loop marker was found/,
+  );
+
+  const authorized = await runExternalCheckWaiver({
+    ...shared,
+    args,
+    prComments: [
+      {
+        body: '<!-- idd-out-of-loop: cursor-test pr:3463 reason:bootstrap at:2026-05-17T00:00:00Z -->',
+        created_at: '2026-05-17T01:00:00Z',
+        author: { login: 'kurone-kito' },
+        lastEditedAt: null,
+      },
+    ],
+  });
+  assert.equal(
+    authorized.report?.blockingReasons.some(
+      (reason) =>
+        reason.includes('out-of-loop') || reason.includes('none-claim waiver'),
+    ) ?? false,
+    false,
+  );
+  assert.equal(authorized.report?.canApply, true);
+  assert.match(
+    authorized.report?.body ?? '',
+    /idd-external-check-waiver: github-actions\[bot\] none /,
+  );
+});
+
 test('planExternalCheckWaiver fails closed for unauthorized write-only actors', () => {
   const input = buildBaseInput();
   input.actor = 'write-collaborator';
