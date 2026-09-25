@@ -565,13 +565,12 @@ ascending issue-number order:
   `docs/policy-constants.md`), run
   `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
   fallback) with `--worktree`=own cwd and that `--claim-id`:
-  plain `present: true` routes to
-  `idd-resume.instructions.md` when `record.agentId`
-  equals this `{agent-id}`; any other result is **ineligible**.
-  Also **ineligible** when a stale or released
+  `present: true` (not malformed) routes to
+  `idd-resume.instructions.md` and stops, and any other result
+  is **ineligible**. Also **ineligible** when a stale or released
   claim's same-clone worktree probe finds a live match or is
   unreadable without verified owner resume or authorized handoff
-  (#3141). Otherwise it **remains eligible**.
+  (#3141, Round 21 report). Otherwise it **remains eligible**.
 
 After scanning the current batch:
 

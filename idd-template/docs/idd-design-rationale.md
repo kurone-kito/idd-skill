@@ -146,6 +146,57 @@ candidate at the same second, then race the same-second tie-break;
 the pre-scan moves the resolution earlier in the pipeline so most
 sessions never touch the same issue.
 
+**Own-orphaned-claim near miss (#3322).** Observed 2026-09-23/24 in a
+public adopter run (`kurone-kito/vpm`, field-feedback gist round 40): a
+session's own Discover pass read its own orphaned claim's `claimed-by`
+comment as a non-stale foreign claim and moved on to the next
+candidate, per the pre-scan rule above, exactly as the rule is
+designed to behave for two genuinely different sessions. Only a
+follow-up review of the transcript caught it; a manual
+`claim-lock.mjs --read-tokens` check found a recorded token matching
+the "foreign" claim-id, prompting the operator to resume it correctly
+by hand.
+
+The fix checks `idd-claim.instructions.md`'s `--read-tokens` form
+against Discover's **own current cwd** — the primary worktree, since
+Discover has no per-issue implementation worktree of its own yet —
+never an explicit different worktree's path, so it needs no exception
+to the existing `--read-tokens` scope contract (`claim-lock.mts`'s own
+"Scope of the ownership proof" header comment, #2879 review, Codex P1;
+`docs/idd-helper-scripts.md`'s matching note). A fresh `A5` claim
+always records its token into the primary worktree's admin directory
+before any sibling worktree exists, so this check reaches the same
+recovery evidence the original incident found by hand, without probing
+a worktree Discover isn't running from. That same header comment is
+also explicit that a hit is corroborating bootstrap evidence only, not
+sole proof of current-session ownership by itself — when several
+sessions share one clone, a different, still-live sibling session's
+own A5 claim can leave an indistinguishable record at that same shared
+path. `{agent-id}` is shared across sessions of the same agent type
+and never proves ownership (`idd-overview-core.instructions.md`), so
+Step 1.5 does **not** gate this route on `record.agentId`. It does
+**not** adopt the recorded pair outright; it stops silently discarding
+the candidate as an ordinary foreign claim and routes a well-formed
+`present: true` result to `idd-resume.instructions.md`, so that file's
+GitHub-authoritative claim-state rules — not a local file or agent-id
+equality — make the ownership call. Resume's own Step 1 table already
+treats an active non-stale claim from another session as "STOP — not
+inheritable even if agent-id matches," and only continues with the
+same `{claim-id}` once independently verified as this session's own.
+Until `#3273` closes its own gap, Resume's mechanized path does not
+yet consume this session's on-disk record either, so a genuine
+same-machine recovery surfaces as a reported stop rather than a silent
+auto-resume. This keeps the original pre-scan mitigation intact for
+two genuinely different sessions, while replacing today's silent skip
+with a GitHub-authoritative investigation for the same-machine case.
+
+This finding is upstream of `#3273` (Resume Step 1 not threading an
+already-known claim-id through to `resume-claim-routing.mjs`) and
+`#3274` (operator recovery for a stale/released claim whose local
+worktree is still occupied). `#3273`'s gap means the route above still
+depends on Resume's written-table fallback — left for `#3273` to
+close, not duplicated here.
+
 ### A4 Step 2 — Rationale: concurrent-selection desync
 
 A4 Step 1.5 (active-claim pre-scan) and A5(e) (collision detection plus
