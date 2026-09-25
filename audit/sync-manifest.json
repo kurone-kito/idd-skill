@@ -1103,11 +1103,23 @@
         "heading": "Project commands",
         "contains": "Judge a command-set run by exit status"
       },
-      "lite": {
-        "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
-        "heading": "B3 — Implement",
-        "contains": "check `${PIPESTATUS[0]}` or use `set -o pipefail`"
-      }
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+          "heading": "B3 — Implement",
+          "contains": "check `${PIPESTATUS[0]}` or use `set -o pipefail`"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Helper runtime contract",
+          "contains": "Judge each run by exit status (Bash"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+          "heading": "Helper runtime contract",
+          "contains": "Judge each run by exit status (Bash"
+        }
+      ]
     },
     {
       "id": "awaiting-decision-regular-comment",
@@ -1197,6 +1209,21 @@
           "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
           "heading": "Pre-mutation guard",
           "contains": "The active claim still uses this session's `{claim-id}`. If it is"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
         }
       ]
     },
@@ -1216,6 +1243,21 @@
         },
         {
           "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
           "heading": "Pre-mutation guard",
           "contains": "If this session posted an activation nonce for the current claim,"
         }
