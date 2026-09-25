@@ -1260,6 +1260,7 @@
         "wrongHead",
         "wrongClaim",
         "unauthorized",
+        "insufficientAuthority",
         "malformed",
         "notConfigured",
         "modeDisabled",
@@ -1449,6 +1450,33 @@
               "expiresAt": {
                 "type": "string",
                 "description": "Waiver's recorded expiry timestamp."
+              }
+            }
+          }
+        },
+        "insufficientAuthority": {
+          "type": "array",
+          "description": "kurone-kito/idd-skill#3250: waivers whose author IS a trusted marker actor (so they pass unauthorized above) but whose live collaborator-permission outcome does not satisfy the configured ciGate.externalCheckWaivers.authorityPolicy -- for example a Write-only collaborator under the default owners-and-maintainers-only policy. Never populated for the #2657 self-referential-bootstrap-auto marker.",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "authority"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string",
+                "description": "Login of the waiver's author, normalized to lowercase."
+              },
+              "checkSelector": {
+                "type": "string",
+                "description": "Check-name selector the waiver targets."
+              },
+              "authority": {
+                "type": "string",
+                "description": "The observed roleName/permission (lowercased, whichever is non-empty, roleName preferred), 'none' for a resolved non-collaborator, or 'unknown' when the permission lookup errored or no resolver was supplied."
               }
             }
           }

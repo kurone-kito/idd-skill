@@ -469,6 +469,8 @@ export function summarizeExternalCheckWaivers(
     maxValidity = '',
     mode = '',
     allowSelfReferentialBootstrapAuto = false,
+    authorityPolicy = '',
+    resolveAuthority = null,
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -476,11 +478,16 @@ export function summarizeExternalCheckWaivers(
   const headShaLower = String(prHeadSha).toLowerCase();
   const activeClaimLower = String(activeClaimId);
   const maxValidityMs = parseIsoDurationToMs(maxValidity);
+  const effectiveAuthorityPolicy =
+    authorityPolicy === 'all-write-permission-actors'
+      ? authorityPolicy
+      : 'owners-and-maintainers-only';
   const valid = [];
   const expired = [];
   const wrongHead = [];
   const wrongClaim = [];
   const unauthorized = [];
+  const insufficientAuthority = [];
   const malformed = [];
   const notConfigured = [];
   const modeDisabled = [];
@@ -518,6 +525,14 @@ export function summarizeExternalCheckWaivers(
     ) {
       continue;
     }
+    // kurone-kito/idd-skill#3250: the consume-time authority check below is
+    // exempt for this same reason token (only reachable here when
+    // `allowSelfReferentialBootstrapAuto` is true) -- that marker's trust
+    // comes from the run-id/event-type/HEAD/repository verification the
+    // dedicated auto-waiver evidence caller performs separately, not from a
+    // human collaborator's role, so there is no authority to check.
+    const isSelfReferentialBootstrapAuto =
+      parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON;
     // kurone-kito/idd-skill#3246: a body-edited (or edit-state-unresolved)
     // marker is never trust evidence, regardless of author, HEAD, claim,
     // or expiry -- GitHub lets any Write-role collaborator or App rewrite
@@ -664,6 +679,62 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+    // kurone-kito/idd-skill#3250: consume-time authority check. Every
+    // check above proves the author is on the TRUSTED-SET list
+    // (`unauthorized`) and that the marker itself is otherwise fully
+    // valid; it says nothing about whether that author's actual GitHub
+    // collaborator role satisfies the configured
+    // `ciGate.externalCheckWaivers.authorityPolicy` -- under the default
+    // `owners-and-maintainers-only`, a Write-only collaborator admitted to
+    // the trusted set only via collaborator-marker trust must still not
+    // author a binding waiver. Placed last (after the cheaper
+    // selector/mode checks) so a marker rejected on those grounds never
+    // triggers a live permission lookup. Skipped for the #2657
+    // self-referential-bootstrap-auto marker (see
+    // `isSelfReferentialBootstrapAuto` above).
+    if (!isSelfReferentialBootstrapAuto) {
+      const lookup = resolveAuthority ? resolveAuthority(authorLogin) : null;
+      const roleName =
+        lookup?.outcome === 'found'
+          ? String(lookup.roleName ?? '')
+              .trim()
+              .toLowerCase()
+          : '';
+      const permission =
+        lookup?.outcome === 'found'
+          ? String(lookup.permission ?? '')
+              .trim()
+              .toLowerCase()
+          : '';
+      // Same rules `isAuthorizedForcedHandoffActor`
+      // (`collaborator-permission.mts`) applies -- duplicated here (rather
+      // than imported) so this pure façade file never pulls in that
+      // module's live GitHub adapter dependency.
+      const authorized =
+        lookup?.outcome === 'found' &&
+        (effectiveAuthorityPolicy === 'all-write-permission-actors'
+          ? roleName === 'admin' ||
+            roleName === 'maintain' ||
+            roleName === 'write' ||
+            permission === 'admin' ||
+            permission === 'write'
+          : roleName === 'admin' ||
+            roleName === 'maintain' ||
+            permission === 'admin');
+      if (!authorized) {
+        insufficientAuthority.push({
+          authorLogin,
+          checkSelector: parsed.checkSelector,
+          authority:
+            lookup?.outcome === 'found'
+              ? roleName || permission || 'unknown'
+              : lookup?.outcome === 'not-collaborator'
+                ? 'none'
+                : 'unknown',
+        });
+        continue;
+      }
+    }
     valid.push({
       authorLogin,
       checkSelector: parsed.checkSelector,
@@ -679,6 +750,7 @@ export function summarizeExternalCheckWaivers(
     wrongHead,
     wrongClaim,
     unauthorized,
+    insufficientAuthority,
     malformed,
     notConfigured,
     modeDisabled,
@@ -4500,6 +4572,42 @@ export function resolveTrustedMarkerActors({
     return { actors: fromConfig, source: 'config' };
   }
   return { actors: [], source: 'none' };
+}
+/**
+ * kurone-kito/idd-skill#3250: the single trusted-marker-login composition
+ * every waiver-authority-consuming caller (`pre-merge-readiness.mts`,
+ * `advisory-convergence.mts`, `external-check-waiver.mts`'s waiver reuse
+ * scan and post-write reconcile) must build its
+ * `summarizeExternalCheckWaivers` `trustedMarkerLogins` from, so the set is
+ * computed in exactly one place instead of three near-identical inline
+ * compositions. Combines the viewer login, the already flag/env/config-
+ * resolved actors (`resolveTrustedMarkerActors`), and an already-resolved
+ * collaborator-marker-trust login list. Each caller still resolves that
+ * last list itself -- `resolveTrustedCollaboratorMarkerLogins` stays
+ * file-local per its own doc comment (different files apply different
+ * `gh`-call loop-safety wrappers) -- and passes the result in here rather
+ * than this function reaching for a port/comments itself.
+ *
+ * Adds no implicit repository-owner entry. This differs deliberately from
+ * `external-check-waiver.mts`'s `buildTrustedMarkerLogins` (the
+ * AUTHORING-side self-authorization check, a different consumer with
+ * different semantics: it decides whether the CURRENT actor may post a
+ * waiver at all, and always trusts the owner for that decision). A gate
+ * consuming an ALREADY-POSTED waiver must not extend that same leniency:
+ * an owner who authors waivers must be explicitly listed in
+ * `trustedMarkerActors`, exactly as the gates already required before this
+ * change.
+ */
+export function buildEffectiveTrustedMarkerLogins({
+  viewerLogin,
+  configuredTrustedActors,
+  collaboratorMarkerLogins = [],
+}) {
+  return normalizeTrustedMarkerLogins([
+    viewerLogin,
+    ...configuredTrustedActors,
+    ...collaboratorMarkerLogins,
+  ]);
 }
 function trustedMarkerActorTokens(value) {
   return Array.isArray(value) ? value : String(value ?? '').split(',');
@@ -8659,6 +8767,8 @@ export function buildPreMergeReadinessSummary(
     waivableSelectors: waivableCheckSelectors,
     maxValidity: options.externalCheckWaiverMaxValidity ?? '',
     mode: options.externalCheckWaiverMode ?? '',
+    authorityPolicy: options.externalCheckWaiverAuthorityPolicy ?? '',
+    resolveAuthority: options.resolveWaiverAuthority,
   });
   // kurone-kito/idd-skill#2911: a THIRD authorized `allowSelfReferential-
   // BootstrapAuto` call site -- see that option's own doc comment in this
