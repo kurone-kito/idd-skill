@@ -135,7 +135,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
-  compareIsoTimestamps,
+  hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
@@ -1967,79 +1967,26 @@ function summarizeSameHeadRerollMarkers(
   }
   return { count, latestAt };
 }
-// #2050 / #2056: requires the FULL canonical `review-ack:` marker shape --
-// a valid trailing ISO-8601 timestamp, end-anchored -- matching the
-// `review-ack:` entry in `OPERATIONAL_MARKERS` (marker-helpers.mts)
-// exactly, same reasoning as `summarizeSameHeadRerollMarkers`'s own
-// pattern above: a malformed or truncated comment must never count as a
-// valid ack. Kept as a fixed module-level constant: group 1 is the
-// embedded HEAD SHA (compared to the current PR HEAD in
-// `resolveHasValidReviewAck`) and group 2 is the embedded timestamp
-// (validated with `isValidIsoTimestamp` -- the bare digit-shape match
-// alone accepts a syntactically-digit-shaped but semantically invalid
-// calendar date/time, e.g. `2026-99-99T99:99:99Z`).
-const REVIEW_ACK_MARKER_PATTERN =
-  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
-/**
- * #2050 / #2056: disposition-aware Clause 1 escape hatch -- true when a
- * trusted `review-ack:` marker exists on the PR whose OWN GitHub-assigned
- * `created_at` (never an embedded, agent-supplied timestamp -- the same
- * "clock anchor is marker created_at, not embedded text" trust boundary
- * `hasFreshDisposition` (protocol-helpers.mts) and
- * `summarizeSameHeadRerollMarkers` above both already apply) is strictly
- * after the latest primary-bot review's own `submittedAt`, AND whose
- * embedded HEAD SHA equals the current PR HEAD (the same same-HEAD
- * filter `summarizeSameHeadRerollMarkers` already applies to
- * `advisory-reroll` markers).
- *
- * The `createdAt > submittedAt` ordering still invalidates a pre-existing
- * ack when a later review lands (same HEAD or not, e.g. an AW6 same-HEAD
- * reroll). The SHA check closes the delayed-POST race the ordering
- * check cannot: a marker that embedded HEAD A can still receive a
- * GitHub `createdAt` after review B's `submittedAt` if the PR advanced
- * between render and POST.
- *
- * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
- * invalid, or when `prHeadSha` is empty, since there is then no anchor
- * to compare an ack against.
- */
+// kurone-kito/idd-skill#3259: the `review-ack:` marker validity check
+// (previously `REVIEW_ACK_MARKER_PATTERN` + this function's own body, #2050
+// / #2056) now lives in `protocol-helpers.mts` as the exported
+// `hasTrustedReviewAckAfter`, so a second caller
+// (`merged-pr-feedback-sweep.mts`) can reuse the exact same check instead of
+// a second ad-hoc implementation. This thin wrapper keeps the existing call
+// site below and this file's `prHeadSha`-shaped parameter name unchanged --
+// Clause 1 behavior is unaffected by the move.
 function resolveHasValidReviewAck(
   comments,
   trustedMarkerLogins,
   reviewSubmittedAt,
   prHeadSha,
 ) {
-  if (!isValidIsoTimestamp(reviewSubmittedAt) || !prHeadSha) {
-    return false;
-  }
-  const trusted = new Set(trustedMarkerLogins);
-  return comments.some((comment) => {
-    const body = String(comment.body ?? '').trimEnd();
-    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
-    // Group 1 = embedded HEAD SHA, group 2 = embedded timestamp.
-    // The timestamp is otherwise never trusted for the
-    // createdAt-vs-submittedAt comparison below, but a marker whose OWN
-    // digit-shaped field is not a real calendar date/time is malformed --
-    // reject it here the same way `detectMalformedOperationalMarker`
-    // (marker-helpers.mts) rejects other structurally-invalid markers.
-    if (!match || match[1] !== prHeadSha || !isValidIsoTimestamp(match[2])) {
-      return false;
-    }
-    const login = String(comment.author?.login ?? comment.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (!trusted.has(login)) {
-      return false;
-    }
-    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
-    // embedded (agent-supplied) timestamp field, same anchor rule AW2
-    // already states for `advisory-wait:`.
-    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
-    return (
-      isValidIsoTimestamp(createdAt) &&
-      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
-    );
-  });
+  return hasTrustedReviewAckAfter(
+    comments,
+    trustedMarkerLogins,
+    reviewSubmittedAt,
+    prHeadSha,
+  );
 }
 /** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --
  * matching `minutesBetweenIso` (protocol-helpers.mts) exactly, so a clock-

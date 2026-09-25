@@ -3245,7 +3245,7 @@ export function createGithubProviderAdapter(
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       reviews(first:100,after:$cursor){
-        nodes { body url state submittedAt author { login } }
+        nodes { body url state submittedAt author { login } commit { oid } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -3285,6 +3285,7 @@ export function createGithubProviderAdapter(
                     state?: unknown;
                     submittedAt?: unknown;
                     author?: { login?: unknown } | null;
+                    commit?: { oid?: unknown } | null;
                   }[];
                   pageInfo?: {
                     hasNextPage?: boolean;
@@ -3319,6 +3320,8 @@ export function createGithubProviderAdapter(
             submittedAt:
               node.submittedAt == null ? null : String(node.submittedAt),
             authorLogin: String(node.author?.login ?? ''),
+            commitOid:
+              node.commit?.oid == null ? null : String(node.commit.oid),
           });
         }
         const pageInfo = connection.pageInfo;

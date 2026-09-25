@@ -16,6 +16,8 @@ import {
 } from '../src/scripts/disposition-non-review-notices.mts';
 import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
+  CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
+  CODERABBIT_REVIEW_PAUSED_MARKER,
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
@@ -148,6 +150,53 @@ const CODERABBIT_SKIP_REVIEW =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
   '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
   '> [!WARNING]\n> ## Review skipped\nReview was skipped due to path filters.';
+// #3260: fixtures trimmed (exact marker HTML comments + minimal surrounding
+// structure) from the live comments the issue cites, verified against their
+// GraphQL `userContentEdits` revision history on 2026-09-24. PR #3196
+// comment `5789875341`'s HEAD `a5a56e57` committed at 2026-09-23T07:12:24Z;
+// the 07:13:25Z revision is CodeRabbit's in-progress state (no "No
+// actionable comments" text), the 07:20:35Z revision is the completed
+// review (with that sentence), and the 06:10:19Z revision is a genuine
+// completed walkthrough without that sentence. PR #3154 comment
+// `5743189569` is one of 23 (of 48 total) paused revisions, still trailing
+// the "No actionable comments were generated" sentence retained from the
+// prior completed review. PR #3160 comment `5747892562`'s
+// 2026-09-20T11:13:47Z revision carries the in-progress marker AND that
+// same stale sentence retained beneath it.
+const CODERABBIT_IN_PROGRESS =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+  '> [!NOTE]\n' +
+  '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+  '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->';
+const CODERABBIT_COMPLETED_NO_ACTIONABLE =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- recent_review_start -->\n\n' +
+  'No actionable comments were generated in the recent review. 🎉';
+// PR #3160 comment `5747892562`, 2026-09-20T11:13:47Z: the in-progress
+// marker AND a stale "No actionable comments" sentence retained beneath it
+// from the review it superseded -- the exact shape that makes the ordering
+// of buildDispositionPlan's two skip checks load-bearing.
+const CODERABBIT_IN_PROGRESS_WITH_STALE_SENTENCE =
+  `${CODERABBIT_IN_PROGRESS}\n\n` +
+  '<!-- recent_review_start -->\n\n' +
+  'No actionable comments were generated in the recent review. 🎉';
+const CODERABBIT_COMPLETED_WALKTHROUGH =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- walkthrough_start -->\n\n' +
+  '<details>\n<summary>📝 Walkthrough</summary>\n\n## Walkthrough\n\n' +
+  'The policy now accepts one or more secondary advisory bot logins.\n' +
+  '</details>';
+const CODERABBIT_PAUSED =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  `${CODERABBIT_REVIEW_PAUSED_MARKER}\n\n` +
+  '> [!NOTE]\n> ## Reviews paused\n> \n' +
+  '> It looks like this branch is under active development. To avoid ' +
+  'overwhelming you with review comments due to an influx of new ' +
+  'commits, CodeRabbit has automatically paused this review.\n\n' +
+  '<!-- end of auto-generated comment: review paused by coderabbit.ai -->\n' +
+  '<!-- recent_review_start -->\n\n' +
+  'No actionable comments were generated in the recent review. 🎉';
 // #2695: chatgpt-codex-connector[bot]'s own recurring review-status comment,
 // edited in place on every push -- a status table against the current commit
 // that cycles through "Running" and "Completed" states, analogous to
@@ -1150,6 +1199,104 @@ test('buildDispositionPlan does not auto-dispose a "no actionable comments" summ
   assert.deepEqual(
     plan.skipped.map((entry) => entry.reason),
     ['summary-resolved-no-actionable-comments'],
+  );
+});
+
+test('#3260: buildDispositionPlan skips the PR #3196 in-progress revision with reason coderabbit-review-in-progress, never Accepted', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+      comments: [notice(1, CODERABBIT, CODERABBIT_IN_PROGRESS)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(plan.skipped, [
+    {
+      noticeId: 1,
+      botLogin: CODERABBIT,
+      reason: 'coderabbit-review-in-progress',
+    },
+  ]);
+});
+
+// C1 critique follow-up: the two tests above never combine both markers in
+// one fixture, so neither alone proves the in-progress check actually runs
+// BEFORE the "No actionable comments" check (swapping their order would not
+// change either test's outcome). This fixture -- PR #3160 comment
+// `5747892562`'s real shape -- carries both, making the ordering
+// load-bearing: were the "No actionable comments" check to run first, this
+// would wrongly report `summary-resolved-no-actionable-comments` instead.
+test('#3260: buildDispositionPlan reports coderabbit-review-in-progress, not summary-resolved-no-actionable-comments, for the PR #3160 fixture that carries both', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_IN_PROGRESS_WITH_STALE_SENTENCE),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(plan.skipped, [
+    {
+      noticeId: 1,
+      botLogin: CODERABBIT,
+      reason: 'coderabbit-review-in-progress',
+    },
+  ]);
+});
+
+test('#3260: buildDispositionPlan keeps the existing skip reason for the PR #3196 completed revision (07:20:35Z, "No actionable comments")', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+      comments: [notice(1, CODERABBIT, CODERABBIT_COMPLETED_NO_ACTIONABLE)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.reason),
+    ['summary-resolved-no-actionable-comments'],
+  );
+});
+
+test('#3260: buildDispositionPlan still plans an Accepted summary walkthrough for the PR #3196 completed revision without the "No actionable" sentence (06:10:19Z)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+      comments: [notice(1, CODERABBIT, CODERABBIT_COMPLETED_WALKTHROUGH)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODERABBIT);
+  assert.ok(entry.body.startsWith('**Accepted**'));
+  assert.match(entry.body, /summary walkthrough/);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('#3260: buildDispositionPlan plans a Rejected notice with the paused noticeReason for the PR #3154 paused revision, never Accepted', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_PAUSED)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODERABBIT);
+  assert.ok(entry.body.startsWith('**Rejected**'));
+  assert.doesNotMatch(entry.body, /\*\*Accepted\*\*/);
+  assert.match(entry.body, /did not review HEAD abc1234/);
+  assert.match(entry.body, /reviews paused by the bot; a resume is needed/);
+  assert.equal(plan.skipped.length, 0);
+  assert.equal(
+    noticeReason(CODERABBIT_PAUSED),
+    'reviews paused by the bot; a resume is needed',
   );
 });
 

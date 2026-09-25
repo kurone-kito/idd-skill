@@ -1277,6 +1277,17 @@ The adopted helper boundaries are intentionally narrow:
   their own threads, gated independently. The body names the bot by its login
   (never the standalone word "CodeRabbit") so per-HEAD re-disposition is
   preserved.
+- **CodeRabbit in-progress / paused revisions (#3260)**: CodeRabbit edits its
+  summary comment in place, so a revision can carry a `review in progress by
+  coderabbit.ai` or `review paused by coderabbit.ai` marker instead of a
+  completed walkthrough — even while an older "No actionable comments were
+  generated" sentence from the review it superseded is still present in the
+  body. An in-progress revision is skipped with reason
+  `coderabbit-review-in-progress` (the CodeRabbit analog of Codex's own
+  in-progress "Running" state, never `**Accepted**`); a paused revision is a
+  terminal non-review notice —
+  routed through the same `**Rejected**` path as a rate-limit notice, with
+  its own `noticeReason` label, never `**Accepted**`.
 - **Fail-closed**: only classifier-recognized notices are dispositioned;
   real reviews and review threads are never touched. `--apply`
   re-validates the active claim and retries once on a transient post
@@ -1294,8 +1305,10 @@ The adopted helper boundaries are intentionally narrow:
   (dry-run); add `--body "<disposition>" --apply --claim-issue <n>
   --claim-id <id>` to post the reply and resolve the thread. Optional
   `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`. For a
-  claimless PR (`closingIssuesReferences` empty), pass `--claimless`
-  instead of `--claim-issue`/`--claim-id` (#2616, mirrors
+  claimless PR (`closingIssuesReferences` empty), or one carrying a
+  valid out-of-loop marker (kurone-kito/idd-skill#3328 -- see the
+  [Out-of-loop marker contract](#out-of-loop-marker-contract)), pass
+  `--claimless` instead of `--claim-issue`/`--claim-id` (#2616, mirrors
   `pre-merge-readiness.mjs`'s `--claimless`, #2017).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
@@ -1323,7 +1336,8 @@ The adopted helper boundaries are intentionally narrow:
   resolve (scoped to trusted marker authors, aborting on a targeting
   `forced-handoff`), and binds the mutation to the claimed PR by requiring
   the active claim's branch to equal the PR's head branch. `--claimless`
-  itself fails closed against a non-empty `closingIssuesReferences`.
+  itself fails closed against a non-empty `closingIssuesReferences`
+  unless a valid out-of-loop marker applies (kurone-kito/idd-skill#3328).
   GraphQL `errors` fail fast rather than masquerading as a missing thread,
   and a partial apply (reply posted, resolve not confirmed) still reports
   the posted `replyId`.
@@ -1849,6 +1863,126 @@ described above. For the residual case, the
 this repository already configures is the documented human off-ramp
 for precisely this situation, not a gap this mechanism itself needs to
 close.
+
+### Out-of-loop marker contract
+
+kurone-kito/idd-skill#3328 unifies the two definitions of "does this PR
+run outside the IDD claim loop" that `pre-merge-readiness.mjs`'s
+`--claimless` (#2017) and `resolve-review-thread.mjs`'s
+`isClaimlessEligible` (#2616) each used to answer independently: a PR
+with a closing issue reference, but no resolvable active claim on it,
+was refused outright by both, wrongly blocking the documented
+issue-mediated bootstrap PR
+(`idd-template/docs/onboarding/issue-mediated-bootstrap.md`), which
+closes its bootstrap issue but is never claimed. A Groom-hearing
+ruling recorded a maintainer decision: recognize the bootstrap PR as
+out-of-loop-authorized only with explicit, dedicated marker evidence,
+never merely an absent claim.
+
+`classifyPrLoopMembership()` (`protocol-helpers.mts`) is the single
+shared classifier both consumers now call. It returns one of three
+verdicts:
+
+- `in-loop` -- an ordinary claimed-loop PR (or a fail-closed default:
+  unreadable closing references, or an unresolvable/active claim on any
+  closing issue).
+- `out-of-loop-claimless` -- the PR has no closing issue references at
+  all (#2017, unchanged).
+- `out-of-loop-authorized` -- the PR has closing references, none of
+  them carries a resolvable active claim, and the PR's own comments
+  include a valid marker (below).
+
+The marker itself, posted as a PR conversation comment:
+
+```md
+<!-- idd-out-of-loop: {agent-id} pr:{pr-number} reason:bootstrap at:{iso8601} -->
+
+_{agent-id}: this PR runs outside the IDD claim loop -- IDD automation marker. Do not edit._
+```
+
+A marker is **valid** only when **all** of the following hold -- any
+other case leaves the PR `in-loop`:
+
+- Its first line matches the grammar exactly, **including
+  `reason:bootstrap`** -- the grammar accepts no other `reason:` token;
+  the ruling authorizes this marker only for the documented bootstrap
+  PR, not as a general-purpose claim-loop opt-out.
+- It is a comment on **that PR's own** conversation (`pr:` equals the
+  PR number the classifier is evaluating).
+- Its GitHub author login is in the caller's already-resolved trusted
+  marker login set -- never the embedded `{agent-id}` text, which is
+  untrusted marker-body content like any other field.
+- It passes `isTrustEvidenceComment` (`protocol-helpers.mts`,
+  kurone-kito/idd-skill#3246): trusted author **and** edit state
+  `unedited`. An edited comment, or one whose edit state is unknown
+  because the caller never resolved it (`lastEditedAt` absent), is
+  invalid -- fail closed, the same rule
+  `idd-external-check-waiver` evidence above already applies.
+
+Post it with the profile-selected `post-idd-marker` command -- see
+[Post operational markers](#post-operational-markers-write-side) above
+for the source-repo / package-manager / ephemeral-npx forms;
+source-repo example: `node scripts/post-idd-marker.mjs --type
+out-of-loop --target pr <n> --agent-id <id> --timestamp <iso8601>
+--apply`. `pr:` is derived from `--target pr <n>`'s own positional
+number, never a separately typed flag -- letting the operator type it
+twice would risk it silently disagreeing with the actual posting
+destination -- and `reason` is always the literal `bootstrap` the
+renderer hardcodes, never
+user-supplied.
+
+`MARKER_HIDE_POLICY` (`marker-helpers.mts`) classifies
+`<!-- idd-out-of-loop:` `excluded` -- it is live authorization
+evidence re-read on every `--claimless` call, like the
+`idd-external-check-waiver` marker above, so F4's generic
+hide-at-post-time sweep must never minimize it as `OUTDATED`. It is
+deliberately absent from `IDD_AGENT_DERIVED_MARKERS` for the same
+reason `idd-external-check-waiver` is: this is authorization evidence,
+not necessarily an IDD-agent-authored operational comment.
+
+**Widened `--claimless` eligibility.** Both consumers accept
+`out-of-loop-claimless` and `out-of-loop-authorized`; only `in-loop`
+still fails closed:
+
+- `pre-merge-readiness.mjs --claimless`, when the PR has closing
+  references, now reads each closing issue's comments to resolve its
+  claim state (`present`, `none`, or `unknown` on any read failure --
+  `unknown` fails closed the same way `present` does), resolves the
+  trusted marker login set the same way its claimed path does, and
+  reads the PR's own comments with edit state
+  (`listWorkItemComments(..., { includeEditState: true })`) before
+  classifying. An `out-of-loop-authorized` PR carries no claim-derived
+  deliberate closing set, so the `closingSet` gate's expected set
+  becomes the PR's own live `closingIssuesReferences` (same-repo
+  numbers only) instead of empty for that one path --
+  `extractSameRepoClosingIssueNumbers()` (`protocol-helpers.mts`)
+  shares the repository-matching rule `computeClosingSetEvidence`
+  (`supersession-detection.mts`) already implements, so neither
+  consumer re-derives it. `missing` is then structurally empty on that
+  path: the marker authorizes exactly the PR's own declared closes.
+- `resolve-review-thread.mjs`'s `isClaimlessEligible` keeps its
+  zero-closing-refs fast path exactly as `#2616` designed it -- no
+  viewer or trust resolution at all, preserving the guarantee for a
+  credential that cannot resolve a viewer identity. A non-empty
+  closing-reference set resolves trusted logins the same way its
+  claimed path does (falling back to this session's own viewer login)
+  before classifying; any failure on that branch -- an unresolvable
+  viewer identity, a closing-issue or PR-comment read failure -- fails
+  closed to "not eligible" rather than a partial read manufacturing a
+  false accept.
+- **The classifier's own `closingIssueNumbers` input is never the bare
+  same-repo extraction.** Both consumers derive it through
+  `resolveClosingIssueNumbersForClassifier()` (`protocol-helpers.mts`)
+  instead: a genuinely empty raw `closingIssuesReferences` still
+  reports `[]` (`out-of-loop-claimless`, unchanged), but a _non-empty_
+  raw array whose same-repo extraction comes back empty -- every entry
+  cross-repo or otherwise unparseable -- reports `null` (unreadable),
+  which the classifier fails closed to `in-loop` for. This reproduces
+  the pre-#3328 behavior exactly: both prior definitions refused ANY
+  non-empty raw `closingIssuesReferences` regardless of repository, so
+  a same-repo-only filter applied directly would otherwise silently
+  widen eligibility for a cross-repo-only (or all-malformed) closing
+  reference -- caught live during this issue's own C1 self-review pass.
 
 ### Provider health helper
 
@@ -3375,9 +3509,12 @@ reflexively as any other CLI option.
   compatible), and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
   `--claimless` (#2017) is the no-issue alternative: it cannot combine
-  with `--claim-issue` or `--claim-id`, and it is honored only when the
-  PR's `closingIssuesReferences` is empty (otherwise fail closed and
-  pass `--claim-issue`). It skips claim fetch/revalidation and emits
+  with `--claim-issue` or `--claim-id`, and it is honored when the PR's
+  `closingIssuesReferences` is empty, or (kurone-kito/idd-skill#3328)
+  when the PR carries a valid, trusted, unedited out-of-loop marker --
+  see the [Out-of-loop marker contract](#out-of-loop-marker-contract)
+  above (otherwise fail closed and pass `--claim-issue`). It skips
+  claim fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
   `idd-merge-execute` also requires `--claim-id` (or the deprecated
@@ -4461,7 +4598,23 @@ same as `AW4`/`AW5`.
     text, rather than as a normal inline review comment, when it targets a
     line the diff-hunk view cannot host; `N == 0` or an absent block is an
     ordinary walkthrough/summary review with nothing outside the diff and
-    stays unsurfaced. Trusted IDD operational markers, IDD
+    stays unsurfaced. A review from the _configured_ primary advisory bot
+    (`isCopilotReviewerLogin`, `advisoryWait.primaryBotLogin` /
+    `readAdvisoryPrimaryBotLogin`, Copilot by default) is also surfaced when
+    `classifyCopilotReviewBody` reports either a nonzero `suppressedCount`,
+    or — only under the Copilot default — shape `unrecognized`
+    (kurone-kito/idd-skill#3259): Copilot's reviews are always `COMMENTED`,
+    so a thread-less "Previously missed" / `Suppressed comments (N)` finding
+    embedded in the review body never reaches the `CHANGES_REQUESTED` rule
+    above. Unlike every other surfacing rule here, this one has its own
+    narrower escape hatch instead of the whole-PR disposition check: a
+    trusted `review-ack:` marker (`hasTrustedReviewAckAfter`,
+    protocol-helpers.mts — the same check `idd-advisory-convergence`'s own
+    Clause 1 uses) naming that SPECIFIC review's own reviewed commit,
+    posted after it, clears the finding; an unrelated later disposition
+    comment does not, since a thread-less body-embedded finding has no
+    discrete comment or thread an ordinary disposition reply could address.
+    Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
     automation such as `github-actions[bot]`), and a genuine CodeRabbit
@@ -4490,8 +4643,9 @@ same as `AW4`/`AW5`.
     configured `advisoryBotLogins` author) so the operator can prioritize human
     feedback over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
-  `advisoryBotLogins`, `iddAgentLogins`, `prs` (each entry has `number`,
-  `mergedAt`, `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`),
+  `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
+  entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
+  `unaddressedComments`),
   and `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
   `unaddressedCommentCount`).
 - Read-only boundary: the helper performs no minimization, no posting, and no
@@ -4601,6 +4755,61 @@ same as `AW4`/`AW5`.
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
+
+### F4 branch-failure routes
+
+Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
+(issue #3327), which quote only the message fragment each acceptance
+check greps for and point here for the rest. Step 4 fast-forwards
+`{development-branch}` before step 5 removes the issue worktree so
+WorkTrunk's merge-status check sees the branch as merged instead of
+reporting `branch_outcome: retained_unmerged` (issue #2331).
+
+- **`development-branch-in-use`** (step 4): the switch fails because
+  `{development-branch}` is checked out in a sibling worktree —
+  `fatal: '{development-branch}' is already used by worktree at
+  '<path>'`. Its `||` fallback then fails too (`a branch named
+  '{development-branch}' already exists`), so the compound command
+  exits non-zero; chaining the fast-forward behind `&&` instead of
+  running it as a separate command stops it from silently advancing
+  whatever branch the primary worktree happens to be on.
+  Message-independent check: `git worktree list --porcelain` shows the
+  branch's `worktree`/`branch` pair.
+- **`development-branch-diverged`** (step 4): the fast-forward refuses
+  because local `{development-branch}` holds a commit
+  `origin/{development-branch}` lacks — `fatal: Not possible to
+  fast-forward, aborting.`. Never reset or rebase it: `git reset
+  --hard` is on the baseline deny list (`docs/permissions.md`).
+  Message-independent check:
+  `git log origin/{development-branch}..{development-branch}` is
+  non-empty.
+- **`local-branch-unmerged-commits`** (step 5): `git branch -d
+  <branch-name>` still refuses `error: the branch '<branch-name>' is
+  not fully merged` after step 4's fast-forward — expected once the PR
+  merged as a squash or rebase (for example a human merge under
+  `human_merge`), since the squash commit is not an ancestor-of match
+  for the branch's own commits even though nothing is lost. Compare
+  `git rev-parse <branch-name>` against the merged PR's own head via
+  `gh pr view {pr-number} --json state,headRefOid` — the only check
+  that actually proves this; `git branch -vv` showing
+  `[origin/<branch-name>: gone]` is a corroborating symptom (the
+  upstream ref was deleted), never a substitute, since an unmerged or
+  closed PR can show the same marker. Equal tips with a `MERGED` PR
+  mean the branch holds nothing beyond what already merged, so F4
+  keeps it (never `-D`) and tells the operator they may delete it by
+  hand; unequal tips mean genuinely unmerged
+  local work, so F4 holds instead of discarding it.
+
+The two step 4 holds reuse the `primary-worktree-dirty` resume rule
+(#3192): once the hold clears, re-run F4 from step 4 through step 7.
+`local-branch-unmerged-commits` holds after step 5's worktree-removal
+bullet already succeeded, so its resume is narrower: once resolved,
+redo only the `git branch -d` bullet and continue through step 7 —
+re-running step 4 or the worktree-removal bullet is unnecessary and
+the latter would fail against the already-removed path. If step 6
+(remote branch delete) already ran before this hold fired, redoing it
+on resume is a harmless no-op (or a "ref does not exist" error), never
+a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 

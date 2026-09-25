@@ -219,7 +219,9 @@ the citation if it does not exist; stop and hold if unclear (`#2806`).
 4. Post the plan retroactively.
 5. Implement the plan.
 6. Critique the completed diff.
-7. Run `fix-validate` before each commit.
+7. Run `fix-validate` before each commit, judged by its own exit
+   status (in Bash, check `${PIPESTATUS[0]}` or use `set -o pipefail`)
+   — a `tail`/`head` filter cannot prove success (#3139).
 8. Keep commits atomic.
 9. If `fix-validate` changes files, stage and commit them before continuing.
 10. Verify a commit actually landed before trusting a subsequent push: a
@@ -382,11 +384,13 @@ telemetry record.
 
 ### C5 — Fix accepted issues
 
-1. Run `fix-validate`.
+1. Run `fix-validate`, judged by its own exit status (in Bash, check
+   `${PIPESTATUS[0]}` or use `set -o pipefail`) — a `tail`/`head`
+   filter cannot prove success (#3139).
 2. If the floor still has not passed and there are no accepted issues, stop
    and ask.
 3. Fix the accepted issues.
-4. Rerun `fix-validate`.
+4. Rerun `fix-validate`, judged the same way.
 5. If anything changed, commit atomically.
 
 ### C6 — Return to C1

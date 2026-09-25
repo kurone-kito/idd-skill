@@ -27,11 +27,16 @@ import {
 import { loadIddConfig } from './idd-config.mts';
 import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
+  classifyPrLoopMembership,
   isDispositionComment,
   isRejectionConfirmedDisposition,
+  normalizeTrustedMarkerLogins,
   type ParsedClaimMarker,
+  type PrClosingIssueClaimState,
   readClaimStaleAgeMs,
+  resolveActiveClaim,
   resolveActiveClaimForWriteGate,
+  resolveClosingIssueNumbersForClassifier,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -291,27 +296,127 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --agent-id <agent-id>          current session agent id (optional, tightens the claim check)
   --trusted-marker-logins a,b    logins whose claim markers are trusted
                                  (default: your gh login)
-  --claimless                    skip claim fetch/revalidation (#2616). Only for a PR with
-                                 no closingIssuesReferences; cannot combine with
-                                 --claim-issue / --claim-id
+  --claimless                    skip claim fetch/revalidation (#2616). For a PR with no
+                                 closingIssuesReferences, or (#3328) one that carries a
+                                 valid, trusted, unedited <!-- idd-out-of-loop: ...
+                                 reason:bootstrap ... --> marker naming this PR and whose
+                                 closing issue(s) have no active claim; cannot combine
+                                 with --claim-issue / --claim-id
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
 
 /**
  * #2616: `--claimless` scoping rule (mirrors `pre-merge-readiness.mjs`'s
- * #2017 flag) -- true only when the PR has no `closingIssuesReferences`.
- * Re-fetches live on every call rather than caching a single snapshot:
- * a caller (dry-run, then again before each `--apply` mutation) must see
- * a closing issue linked in the window between checks, matching the
- * existing per-mutation claim-revalidation pattern (Codex review on this
- * PR: a maintainer linking an issue between checks must not let a
- * `--claimless` mutation still proceed).
+ * #2017 flag, and shares its `classifyPrLoopMembership` definition,
+ * kurone-kito/idd-skill#3328) -- true when the PR has no
+ * `closingIssuesReferences` at all (the unchanged #2017 fast path, no
+ * viewer/trust resolution needed -- #2616's own Codex-review guarantee for
+ * an installation-token credential that cannot resolve a viewer identity),
+ * or when it does but carries a valid, trusted, unedited
+ * `<!-- idd-out-of-loop: ... reason:bootstrap ... -->` marker naming this
+ * PR and every closing issue has no active claim. Re-fetches live on every
+ * call rather than caching a single snapshot: a caller (dry-run, then
+ * again before each `--apply` mutation) must see a closing issue linked
+ * in the window between checks, matching the existing per-mutation
+ * claim-revalidation pattern (Codex review on this PR: a maintainer
+ * linking an issue between checks must not let a `--claimless` mutation
+ * still proceed).
+ *
+ * `options.trustedMarkerLogins` defaults to this session's own viewer
+ * login (`port.resolveViewerLogin()`), mirroring the claimed path further
+ * below in this file -- only reached on the non-empty-closing-refs branch,
+ * never the fast path, so the #2616 no-viewer-identity guarantee above
+ * still holds for the common (no closing references) case. Any failure
+ * on this branch -- an unresolvable viewer identity, a closing-issue or
+ * PR-comment read failure -- fails closed to "not eligible" (`false`),
+ * per the fail-closed default
+ * (`idd-overview-core.instructions.md#fail-closed-default`), rather than
+ * letting a partial read manufacture a false accept.
  */
-export function isClaimlessEligible(port: ProviderPort, pr: number): boolean {
+export function isClaimlessEligible(
+  port: ProviderPort,
+  pr: number,
+  options: {
+    owner?: string;
+    repo?: string;
+    trustedMarkerLogins?: string[];
+  } = {},
+): boolean {
   const closingRefs =
     port.getChangeRequestConvergenceView(pr).closingIssuesReferences;
-  return !(Array.isArray(closingRefs) && closingRefs.length > 0);
+  // Copilot review, PR #3421: only a PROVEN, genuinely empty array takes
+  // the fast eligible-without-classification path -- a non-array
+  // `closingRefs` (the field itself unreadable/malformed) must not
+  // silently read as "no closing references" the way coercing straight
+  // to `[]` and checking `.length === 0` would. It instead falls through
+  // to the try block below, where `resolveClosingIssueNumbersForClassifier`
+  // reports `null` for a non-array input, which the classifier fails
+  // closed to `in-loop` for.
+  if (Array.isArray(closingRefs) && closingRefs.length === 0) {
+    return true;
+  }
+  try {
+    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: a
+    // same-repo-only extraction fed straight to the classifier would
+    // silently read a cross-repo-only, partially-unresolvable, or
+    // unreadable closing reference as "no closing references", accepting
+    // --claimless with NO marker required for a PR the pre-#3328 code
+    // always refused (kurone-kito/idd-skill#3328).
+    // resolveClosingIssueNumbersForClassifier reports `null` (unreadable)
+    // for exactly those cases instead, which the classifier fails closed
+    // to `in-loop` for -- reproducing the original refusal. Pass the RAW
+    // `closingRefs` (not a pre-coerced array) so the function's own
+    // `Array.isArray` check sees the real shape.
+    const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
+      closingRefs,
+      options.owner ?? '',
+      options.repo ?? '',
+    );
+    const trustedLogins = normalizeTrustedMarkerLogins(
+      options.trustedMarkerLogins?.length
+        ? options.trustedMarkerLogins
+        : [port.resolveViewerLogin().toLowerCase()],
+    );
+    const isTrustedAuthor = (login: string): boolean =>
+      trustedLogins.includes(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+    let closingIssueClaimState: PrClosingIssueClaimState = 'none';
+    // No closing-issue reads needed when the classifier already fails
+    // closed to in-loop regardless of claim state (closingIssueNumbers is
+    // null).
+    for (const issueNumber of closingIssueNumbers ?? []) {
+      const events = port.listWorkItemComments(issueNumber).map((comment) => ({
+        body: comment.body,
+        createdAt: comment.createdAt,
+        author: { login: comment.authorLogin },
+      }));
+      if (resolveActiveClaim(events, isTrustedAuthor)) {
+        closingIssueClaimState = 'present';
+        break;
+      }
+    }
+    // No need to read the PR's own comments when a closing issue already
+    // makes this in-loop -- classifyPrLoopMembership never reaches the
+    // marker check in that case either.
+    const prComments =
+      closingIssueClaimState === 'none'
+        ? port.listWorkItemComments(pr, { includeEditState: true })
+        : [];
+    const result = classifyPrLoopMembership({
+      prNumber: pr,
+      closingIssueNumbers,
+      closingIssueClaimState,
+      prComments,
+      trustedMarkerLogins: trustedLogins,
+    });
+    return result.membership !== 'in-loop';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -499,9 +604,16 @@ if (import.meta.main) {
   // #2616: fast fail-closed preview for both dry-run and --apply -- the
   // per-mutation re-check below (inside assertClaim) is the one that
   // actually gates the apply-mode mutations.
-  if (args.claimless && !isClaimlessEligible(port, pr)) {
+  if (
+    args.claimless &&
+    !isClaimlessEligible(port, pr, {
+      owner,
+      repo,
+      trustedMarkerLogins: args.trustedMarkerLogins,
+    })
+  ) {
     process.stderr.write(
-      '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead\n',
+      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead\n',
     );
     process.exit(1);
   }
@@ -618,9 +730,15 @@ if (import.meta.main) {
         // this mutation and the last one must still abort, mirroring
         // the non-claimless path's own per-mutation claim recheck.
         if (args.claimless) {
-          if (!isClaimlessEligible(port, pr)) {
+          if (
+            !isClaimlessEligible(port, pr, {
+              owner,
+              repo,
+              trustedMarkerLogins: args.trustedMarkerLogins,
+            })
+          ) {
             throw new Error(
-              '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead',
+              '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
             );
           }
           return;

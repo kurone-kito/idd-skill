@@ -689,6 +689,54 @@ test('fails safe when blocked-by issue cannot be resolved', async () => {
   );
 });
 
+test('#3284: fails safe on a cross-repository "Blocked by" token, even alongside a closed local ref', async () => {
+  const issues = new Map([
+    [
+      211,
+      {
+        number: 211,
+        title: 'candidate',
+        state: 'OPEN',
+        body: 'Blocked by other/repo#5, #13',
+        labels: [],
+      },
+    ],
+    [
+      13,
+      {
+        number: 13,
+        title: 'closed dependency',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+  const summary = await evaluateDiscoverReadiness([211], {
+    includeUnresolvable: true,
+    currentRepo: 'kurone-kito/idd-skill',
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.match(
+    summary.filteredOut[0].reasons.join(','),
+    /unresolvable_blocked_by_issue/,
+  );
+  assert.deepEqual(
+    summary.unresolvable.filter((entry) => entry.issueNumber === 211),
+    [
+      {
+        issueNumber: 211,
+        kind: 'blocked_by_issue',
+        reference: 'other/repo#5',
+        reason: 'cross_repository_reference',
+      },
+    ],
+  );
+});
+
 test('filters issue blocked by open roadmap marker', async () => {
   const issues = new Map([
     [

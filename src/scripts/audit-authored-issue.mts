@@ -2200,8 +2200,8 @@ function checkProseOnlyDependency(
   // input for the sentence-proximity scan below, which needs
   // already-masked prose, not a self-masking extractor.
   const encoded = new Set([
-    ...extractBlockedByIssueNumbers(rawText),
-    ...extractDependencyIssueNumbers(rawText),
+    ...extractBlockedByIssueNumbers(rawText, currentRepo),
+    ...extractDependencyIssueNumbers(rawText, currentRepo),
     ...extractNonBlockingReferenceIssueNumbers(rawText),
   ]);
   const keywordPattern = new RegExp(

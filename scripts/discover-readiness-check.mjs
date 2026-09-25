@@ -13,6 +13,7 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import { extractDependencyReferences } from './dependency-grammar.mjs';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
@@ -30,19 +31,25 @@ import {
 } from './supersession-detection.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-// Leading-anchor source shared by the `Blocked by` / `Depends on` line parsers.
-// It tolerates optional indentation, nested blockquote (`>`) markers, and a
-// single list bullet (`-`/`*`/`+`) while staying line-anchored, so a dependency
-// written as `- Blocked by #55` or `> Depends on #66` is still recognized. The
-// extractors run `maskMarkdownForScan` over the body first (#3281; originally
-// `stripMarkdownCodeRegions`), so a dependency line merely quoted inside
-// inline code, a fenced block, or an indented code block is already masked
-// out — treating code-quoted markers as false positives, consistent with
-// the #1121 repo behavior; excluding backticks from this prefix is a second
-// line of defense for the inline-code case. This const is declared before the
-// `import.meta.main` CLI block on purpose so it is initialized when the CLI
-// path runs `extractBlockedByIssueNumbers` (a const declared after that block
-// would be in the temporal dead zone).
+// Leading-anchor source for `extractReviewFixLoopCutoffRefsIssueNumbers`'s
+// `Refs` line parser (below). #3284 moved the `Blocked by`/`Depends on`
+// grammar this const used to also serve into the shared
+// `dependency-grammar.mts` module -- `Refs` is one of the keywords the
+// issue explicitly keeps on its own, pre-existing parsing (closing
+// keywords, `Refs`, and sub-issue keywords), so this stays a local,
+// bare-`#N`-only prefix. It tolerates optional indentation, nested
+// blockquote (`>`) markers, and a single list bullet (`-`/`*`/`+`) while
+// staying line-anchored, so a reference written as `- Refs #55` or
+// `> Refs #66` is still recognized. `consumeDependencyRefList`'s caller
+// runs `maskMarkdownForScan` over the body first (#3281; originally
+// `stripMarkdownCodeRegions`), so a line merely quoted inside inline code,
+// a fenced block, or an indented code block is already masked out —
+// treating code-quoted markers as false positives, consistent with the
+// #1121 repo behavior; excluding backticks from this prefix is a second
+// line of defense for the inline-code case. This const is declared before
+// the `import.meta.main` CLI block on purpose so it is initialized when
+// the CLI path runs `evaluateDiscoverReadiness` (a const declared after
+// that block would be in the temporal dead zone).
 const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 // Declared here, above the `import.meta.main` CLI block, for the same
 // top-level-await TDZ reason as `DEPENDENCY_LINE_PREFIX` above: the block
@@ -124,6 +131,7 @@ if (import.meta.main) {
   });
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
+    currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
     loadIssue: buildIssueLoader(owner, repo),
     fetchCommentsByIssueNumber: buildIssueCommentsLoader(owner, repo),
     fetchTimelineByIssueNumber: buildIssueTimelineLoader(owner, repo),
@@ -177,6 +185,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     needsDecisionLabelName: rawNeedsDecisionLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
+    currentRepo,
     now = new Date(),
     fetchCommentsByIssueNumber,
     fetchTimelineByIssueNumber,
@@ -298,7 +307,29 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         warnings.push(warning);
       }
     }
-    for (const dependencyNumber of extractDependencyIssueNumbers(issue.body)) {
+    // #3284: a cross-repository `Depends on`/`Blocked by` token (or any
+    // qualified token when `currentRepo` is unknown) never resolves to a
+    // local number, so it can never appear in `extractDependencyIssueNumbers`
+    // / `extractBlockedByIssueNumbers`'s output below -- report it here,
+    // directly from the shared grammar's `unresolvable` list, the same
+    // fail-safe way an inaccessible/not-found local reference already is.
+    for (const unresolvedDependency of extractDependencyReferences(
+      issue.body,
+      'Depends on',
+      { currentRepo },
+    ).unresolvable) {
+      reasons.add('unresolvable_dependency_issue');
+      unresolvable.push({
+        issueNumber: issue.number,
+        kind: 'dependency',
+        reference: unresolvedDependency.token,
+        reason: unresolvedDependency.reason,
+      });
+    }
+    for (const dependencyNumber of extractDependencyIssueNumbers(
+      issue.body,
+      currentRepo,
+    )) {
       const dependencyIssue = await getIssue(
         dependencyNumber,
         issueCache,
@@ -324,7 +355,23 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`open_dependency_issue:#${dependencyNumber}`);
       }
     }
-    for (const blockedNumber of extractBlockedByIssueNumbers(issue.body)) {
+    for (const unresolvedBlocker of extractDependencyReferences(
+      issue.body,
+      'Blocked by',
+      { currentRepo },
+    ).unresolvable) {
+      reasons.add('unresolvable_blocked_by_issue');
+      unresolvable.push({
+        issueNumber: issue.number,
+        kind: 'blocked_by_issue',
+        reference: unresolvedBlocker.token,
+        reason: unresolvedBlocker.reason,
+      });
+    }
+    for (const blockedNumber of extractBlockedByIssueNumbers(
+      issue.body,
+      currentRepo,
+    )) {
       const blockedIssue = await getIssue(blockedNumber, issueCache, loadIssue);
       if (!blockedIssue || isInaccessibleIssue(blockedIssue)) {
         const blockedReason = isInaccessibleIssue(blockedIssue)
@@ -528,41 +575,6 @@ export function parseSwarmFloorArg(value) {
   return floor;
 }
 /**
- * Collect the `#N` references declared on a dependency-keyword line.
- *
- * A line is a dependency declaration when, after the shared
- * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
- * begins with `keyword`, an optional `:` (#1311 — a natural bulleted phrasing
- * such as `- Blocked by: #123` is tolerated the same as `- Blocked by #123`,
- * aligned with the colon-tolerant `extractKeywordReferenceTargets` edge
- * extractor in `discover-roadmap-graph.mts`), then horizontal whitespace and
- * at least one `#N`. From there `consumeDependencyRefList` collects the
- * contiguous dependency-ref list, so `Blocked by #A, #B, #C` (comma- or
- * space-separated) yields `[A, B, C]`. The keyword-to-ref gap is `[ \t]+`
- * (not `\s+`) so it cannot span a newline and swallow a bare `#N` on the
- * following line, and the `.*$` capture plus the `m` flag (no `s` flag)
- * keeps the match on the single keyword line. Callers pass a
- * code-region-stripped body, so a quoted example line is already masked (see
- * `DEPENDENCY_LINE_PREFIX`).
- */
-function extractKeywordLineRefs(body, keyword) {
-  const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}:?[ \\t]+(#\\d+.*)$`,
-    'gim',
-  );
-  const numbers = [];
-  for (const lineMatch of body.matchAll(linePattern)) {
-    numbers.push(...consumeDependencyRefList(lineMatch[1]).numbers);
-    numbers.push(
-      ...consumeContinuationRefLines(
-        body,
-        (lineMatch.index ?? 0) + lineMatch[0].length,
-      ),
-    );
-  }
-  return numbers;
-}
-/**
  * Consume the contiguous dependency-ref list at the start of `segment`: bare
  * local `#N` entries separated by commas, "and", and/or whitespace. Parsing
  * stops at the first token that is neither a bare local ref nor such a
@@ -628,9 +640,21 @@ function consumeContinuationRefLines(body, afterIndex) {
   }
   return numbers;
 }
-export function extractBlockedByIssueNumbers(body) {
+/**
+ * #3284: delegates to the shared `dependency-grammar.mts` parser instead
+ * of this file's own (line-anchored, bare-`#N`-only)
+ * `extractKeywordLineRefs`, so `Blocked by` gains ordered-list-marker
+ * tolerance, qualified `owner/repo#N`/URL token recognition, and
+ * fail-safe cross-repository handling -- shared with the orphan filter
+ * and (for the resolved-number outcome) `discover-roadmap-graph.mts`.
+ * `currentRepo` (`"owner/repo"`) is optional for backward compatibility
+ * with existing single-argument callers (e.g. `audit-authored-issue.mts`);
+ * omitting it means a qualified/URL token can never resolve, matching
+ * this file's own historical bare-`#N`-only behavior.
+ */
+export function extractBlockedByIssueNumbers(body, currentRepo) {
   return dedupeNumbers(
-    extractKeywordLineRefs(maskMarkdownForScan(body), 'Blocked by'),
+    extractDependencyReferences(body, 'Blocked by', { currentRepo }).numbers,
   );
 }
 export function extractBlockedByRoadmapMarkers(
@@ -657,9 +681,17 @@ export function extractBlockedByRoadmapMarkers(
   );
   return [...new Set([...matches].map((match) => match[1]))];
 }
-export function extractDependencyIssueNumbers(body) {
+/**
+ * #3284: the explicit `Depends on` half now shares the same
+ * `dependency-grammar.mts` parser `extractBlockedByIssueNumbers` uses --
+ * see that function's doc comment. The task-list half (`- [ ] #N`) is
+ * unchanged: it has no keyword grammar of its own to unify.
+ */
+export function extractDependencyIssueNumbers(body, currentRepo) {
   const stripped = maskMarkdownForScan(body);
-  const explicitDependencies = extractKeywordLineRefs(stripped, 'Depends on');
+  const explicitDependencies = extractDependencyReferences(body, 'Depends on', {
+    currentRepo,
+  }).numbers;
   const taskListDependencies = [
     ...stripped.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
   ];
