@@ -47,6 +47,7 @@ import type {
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
+  classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
@@ -853,6 +854,12 @@ export interface ApplyDispositionPlanResult {
   staleSkipped: SkippedNotice[];
   /** `true` when the claim was lost mid-loop, stopping further posts. */
   claimLost: boolean;
+  /**
+   * The thrown value from the first post that failed after recovery
+   * returned null. Not printed in the apply JSON. The CLI uses it so a
+   * tagged gh failure stays transport/not-found instead of gate.
+   */
+  postFailure: unknown;
   /** Every viewer-authored comment id known by the end of the run: the
    * `deps.knownViewerCommentIds` seed plus every id posted or recovered
    * this run. */
@@ -885,6 +892,7 @@ export function applyDispositionPlan(
   const failed: FailedDisposition[] = [];
   const staleSkipped: SkippedNotice[] = [];
   let claimLost = false;
+  let postFailure: unknown = null;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
     if (!deps.revalidateClaim()) {
@@ -906,6 +914,7 @@ export function applyDispositionPlan(
       advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
     let posted: { id: number } | null = null;
     let lastError: string | null = null;
+    let lastThrown: unknown = null;
     let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
       // #2695 (Codex review, P1 follow-up): re-checked immediately before
@@ -939,6 +948,7 @@ export function applyDispositionPlan(
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
+        lastThrown = error;
         lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
@@ -963,9 +973,19 @@ export function applyDispositionPlan(
         noticeId: item.noticeId,
         error: lastError ?? 'unknown error',
       });
+      if (postFailure === null) {
+        postFailure = lastThrown;
+      }
     }
   }
-  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
+  return {
+    applied,
+    failed,
+    staleSkipped,
+    claimLost,
+    knownViewerCommentIds,
+    postFailure,
+  };
 }
 
 function writeStderrSync(text: string): void {
@@ -980,6 +1000,7 @@ function exitClassified(
   code: number,
   kind: IddHelperErrorKind,
   message: string,
+  httpStatus: number | null = null,
 ): never {
   if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
     // Synchronous: process.exit drops a pending async stderr write, which
@@ -989,7 +1010,7 @@ function exitClassified(
         buildHelperErrorEnvelope('disposition-non-review-notices', code, {
           kind,
           message,
-          httpStatus: null,
+          httpStatus,
         }),
       )}\n`,
     );
@@ -1201,29 +1222,38 @@ function main(): HelperCliResult {
     ]);
     return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
   };
-  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
-    plan,
-    {
+  const { applied, failed, staleSkipped, claimLost, postFailure } =
+    applyDispositionPlan(plan, {
       revalidateClaim,
       postDisposition: (body) => postDisposition(owner, repo, pr, body),
       recoverPostedDisposition: (body, knownIds) =>
         recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
       knownViewerCommentIds,
       revalidateCodexSummaryStillComplete,
-    },
-  );
+    });
 
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
+  const classified =
+    postFailure == null ? null : classifyHelperError(postFailure);
+  const ghFailure =
+    !claimLost &&
+    classified &&
+    (classified.kind === 'transport' || classified.kind === 'not-found')
+      ? classified
+      : null;
   exitClassified(
     claimLost || failed.length > 0 ? 1 : 0,
-    'gate',
+    ghFailure ? ghFailure.kind : 'gate',
     claimLost
       ? 'claim lost during apply'
-      : failed.length > 0
-        ? 'one or more dispositions failed'
-        : '',
+      : ghFailure
+        ? ghFailure.message
+        : failed.length > 0
+          ? 'one or more dispositions failed'
+          : '',
+    ghFailure ? ghFailure.httpStatus : null,
   );
 }

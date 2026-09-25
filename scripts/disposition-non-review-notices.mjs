@@ -41,6 +41,7 @@ import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
+  classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mjs';
@@ -690,6 +691,7 @@ export function applyDispositionPlan(plan, deps) {
   const failed = [];
   const staleSkipped = [];
   let claimLost = false;
+  let postFailure = null;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
     if (!deps.revalidateClaim()) {
@@ -711,6 +713,7 @@ export function applyDispositionPlan(plan, deps) {
       advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
     let posted = null;
     let lastError = null;
+    let lastThrown = null;
     let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
       // #2695 (Codex review, P1 follow-up): re-checked immediately before
@@ -744,6 +747,7 @@ export function applyDispositionPlan(plan, deps) {
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
+        lastThrown = error;
         lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
@@ -768,9 +772,19 @@ export function applyDispositionPlan(plan, deps) {
         noticeId: item.noticeId,
         error: lastError ?? 'unknown error',
       });
+      if (postFailure === null) {
+        postFailure = lastThrown;
+      }
     }
   }
-  return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
+  return {
+    applied,
+    failed,
+    staleSkipped,
+    claimLost,
+    knownViewerCommentIds,
+    postFailure,
+  };
 }
 function writeStderrSync(text) {
   const buffer = Buffer.from(text, 'utf8');
@@ -779,7 +793,7 @@ function writeStderrSync(text) {
     written += writeSync(2, buffer, written, buffer.length - written);
   }
 }
-function exitClassified(code, kind, message) {
+function exitClassified(code, kind, message, httpStatus = null) {
   if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
     // Synchronous: process.exit drops a pending async stderr write, which
     // would truncate this envelope line.
@@ -788,7 +802,7 @@ function exitClassified(code, kind, message) {
         buildHelperErrorEnvelope('disposition-non-review-notices', code, {
           kind,
           message,
-          httpStatus: null,
+          httpStatus,
         }),
       )}\n`,
     );
@@ -984,28 +998,37 @@ function main() {
     ]);
     return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
   };
-  const { applied, failed, staleSkipped, claimLost } = applyDispositionPlan(
-    plan,
-    {
+  const { applied, failed, staleSkipped, claimLost, postFailure } =
+    applyDispositionPlan(plan, {
       revalidateClaim,
       postDisposition: (body) => postDisposition(owner, repo, pr, body),
       recoverPostedDisposition: (body, knownIds) =>
         recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
       knownViewerCommentIds,
       revalidateCodexSummaryStillComplete,
-    },
-  );
+    });
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, staleSkipped, skipped: plan.skipped }, null, 2)}\n`,
   );
+  const classified =
+    postFailure == null ? null : classifyHelperError(postFailure);
+  const ghFailure =
+    !claimLost &&
+    classified &&
+    (classified.kind === 'transport' || classified.kind === 'not-found')
+      ? classified
+      : null;
   exitClassified(
     claimLost || failed.length > 0 ? 1 : 0,
-    'gate',
+    ghFailure ? ghFailure.kind : 'gate',
     claimLost
       ? 'claim lost during apply'
-      : failed.length > 0
-        ? 'one or more dispositions failed'
-        : '',
+      : ghFailure
+        ? ghFailure.message
+        : failed.length > 0
+          ? 'one or more dispositions failed'
+          : '',
+    ghFailure ? ghFailure.httpStatus : null,
   );
 }

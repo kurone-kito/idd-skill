@@ -14,6 +14,7 @@ import {
   parseArgs,
   resolveClaimStillActive,
 } from '../src/scripts/disposition-non-review-notices.mts';
+import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
@@ -1738,6 +1739,7 @@ test('applyDispositionPlan: an empty plan is a no-op that touches no dep', () =>
     staleSkipped: [],
     claimLost: false,
     knownViewerCommentIds: new Set([7]),
+    postFailure: null,
   });
   assert.deepEqual(calls, []);
 });
@@ -1859,6 +1861,28 @@ test('applyDispositionPlan: reports the LAST attempt error when both attempts an
   assert.deepEqual(result.failed, [
     { noticeId: 601, error: 'attempt 2 failed' },
   ]);
+  assert.ok(result.postFailure instanceof Error);
+});
+
+test('applyDispositionPlan: keeps a tagged gh post failure for transport classification', () => {
+  const plan = fakePlan([602]);
+  const ghError = new Error('gh: HTTP 503');
+  Object.defineProperty(ghError, 'ghCommand', { value: true });
+  Object.defineProperty(ghError, 'stderr', { value: 'gh: HTTP 503' });
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      throw ghError;
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(plan, deps);
+  assert.equal(result.postFailure, ghError);
+  assert.equal(result.failed[0]?.error, 'gh: HTTP 503');
+  const classified = classifyHelperError(result.postFailure);
+  assert.equal(classified.kind, 'transport');
+  assert.equal(classified.httpStatus, 503);
 });
 
 test('applyDispositionPlan: preserves a non-Error thrown value instead of collapsing to "unknown error"', () => {
