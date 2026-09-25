@@ -46,7 +46,8 @@ author is a trusted marker actor per
 - `advisory-reroll:`
 - `review-ack:`
 - `copilot-unavailable:`
-- `<!-- idd-external-check-waiver:`
+- `<!-- idd-external-check-waiver:` (also from
+  `github-actions[bot]` when that login is not configured)
 - `<!-- idd-local-validation-evidence:`
 - the live-status digest (any form)
 

@@ -218,7 +218,28 @@ export function classifyIddPrComment(comment, options = {}) {
     ...normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
   ]);
   const isTrustedAuthor = trustedLogins.has(authorLogin);
-  if (isTrustedAuthor) {
+  // #3267 (Copilot review, PR #3437): dispatch the github-actions[bot]
+  // narrow-trust check FIRST, unconditionally -- never fold into the
+  // `isTrustedAuthor` branch below. That account can be posted as by ANY
+  // same-repository GitHub Actions workflow via `GITHUB_TOKEN`, so it must
+  // never gain the FULL trusted-marker-actor grant just because some
+  // caller's `trustedMarkerLogins`/`iddAgentLogins` set happens to also
+  // include it for an unrelated reason (for example,
+  // `idd-doctor.mts`'s `readCleanupEvidenceTrustedLogins` always unions it
+  // in for its own cleanup-evidence check). Checking `isTrustedAuthor`
+  // first here would let a general-purpose marker (e.g. `<!-- claimed-by:`)
+  // slip through as `idd-operational` from that shared identity, contrary
+  // to the issue's "no other operational-marker family is trusted from
+  // github-actions[bot]" rule -- true regardless of trust configuration.
+  if (authorLogin === GITHUB_ACTIONS_BOT_LOGIN) {
+    const trimmedBody = body.trimStart();
+    if (
+      trimmedBody.startsWith(IDD_CLEANUP_EVIDENCE_PREFIX) ||
+      trimmedBody.startsWith(GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX)
+    ) {
+      return 'idd-operational';
+    }
+  } else if (isTrustedAuthor) {
     const markerPrefix = operationalMarkerPrefixByStart(body);
     if (
       markerPrefix !== null &&
@@ -236,14 +257,6 @@ export function classifyIddPrComment(comment, options = {}) {
       return 'idd-operational';
     }
     if (body.trimStart().startsWith(IDD_CLEANUP_EVIDENCE_PREFIX)) {
-      return 'idd-operational';
-    }
-  } else if (authorLogin === GITHUB_ACTIONS_BOT_LOGIN) {
-    const trimmedBody = body.trimStart();
-    if (
-      trimmedBody.startsWith(IDD_CLEANUP_EVIDENCE_PREFIX) ||
-      trimmedBody.startsWith(GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX)
-    ) {
       return 'idd-operational';
     }
   }

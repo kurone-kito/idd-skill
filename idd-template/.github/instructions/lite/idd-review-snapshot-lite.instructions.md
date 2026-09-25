@@ -85,7 +85,7 @@ then continue to Step 1.
    `{latest-ci-completed-at}`: `node scripts/review-activity-snapshot.mjs
    --pr {pr-number} --trusted-marker-logins
    "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
-   equivalent (resolve from `docs/idd-helper-scripts.md`) — this is
+   equivalent — this is
    Step 2's watermark data source, not a triage tool. The helper emits
    both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
    `{latest-ci-completed-at}` is always the latter — the latest
@@ -111,7 +111,8 @@ then continue to Step 1.
    - `advisory-reroll:`
    - `review-ack:`
    - `copilot-unavailable:`
-   - `<!-- idd-external-check-waiver:`
+   - `<!-- idd-external-check-waiver:` (also from
+     `github-actions[bot]` when that login is not configured)
    - `<!-- idd-local-validation-evidence:`
    - the live-status digest (any form)
 
@@ -208,8 +209,8 @@ ReviewItems_snapshot — a hint only for E5's duplicate pre-check in
 
 ## E2 — Critique pass
 
-Run one critique pass on the branch's changes every E1-E3 pass (always
-— not a judgment call). Add any newly found issues to
+Run one critique pass on the branch's changes every E1-E3 pass (always).
+Add any newly found issues to
 ReviewItems_snapshot.
 
 Apply these lenses when they fit (composing when both do):

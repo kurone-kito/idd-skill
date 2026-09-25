@@ -588,6 +588,43 @@ test('classifyIddPrComment trusts github-actions[bot] only for the two named CI-
   );
 });
 
+test('classifyIddPrComment keeps github-actions[bot] narrow-trusted even when that login is itself present in trustedMarkerLogins or iddAgentLogins (Copilot review, PR #3437)', () => {
+  // #3267: a general-purpose marker from github-actions[bot] must stay
+  // `review` even when a caller's trusted-set happens to also name that
+  // login (e.g. idd-doctor.mts's readCleanupEvidenceTrustedLogins always
+  // unions it in for an unrelated cleanup-evidence check) -- the narrow
+  // scoping must not silently widen into full trusted-marker-actor status.
+  const claimedByBody = markerHelpers.renderClaimedByMarker({
+    agentId: GITHUB_ACTIONS_LOGIN,
+    claimId: CLAIM,
+    supersedes: 'none',
+    timestamp: TS,
+    branch: 'issue/1-test',
+  });
+  assert.equal(
+    classify(claimedByBody, GITHUB_ACTIONS_LOGIN, {
+      trustedMarkerLogins: [GITHUB_ACTIONS_LOGIN],
+    }),
+    'review',
+  );
+  assert.equal(
+    classify(claimedByBody, GITHUB_ACTIONS_LOGIN, {
+      trustedMarkerLogins: [],
+      iddAgentLogins: [GITHUB_ACTIONS_LOGIN],
+    }),
+    'review',
+  );
+  // The two named narrow shapes still work when the login is also trusted.
+  const cleanupEvidenceBody =
+    '<!-- idd-cleanup-evidence: complete applied:1 failed:0 skipped:0 viewer-cannot-minimize:0 retry-attempts:0 retry-bound-exhausted:false -->';
+  assert.equal(
+    classify(cleanupEvidenceBody, GITHUB_ACTIONS_LOGIN, {
+      trustedMarkerLogins: [GITHUB_ACTIONS_LOGIN],
+    }),
+    'idd-operational',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // buildActivitySnapshotSummary (acceptance criteria bullet 2).
 // ---------------------------------------------------------------------------
