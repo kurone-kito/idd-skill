@@ -22,6 +22,12 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
@@ -92,14 +98,24 @@ const CI_WAIT_STATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  main();
+  // #3342: call main() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('ci-wait-state', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
-// `gh` call.
+// `gh` call. Returns 0 (success) or throws -- `runHelperCli` (#3342)
+// classifies a thrown error and, when the opt-in JSON error envelope is
+// enabled, reports it; with the envelope unset this is byte-identical to
+// the pre-migration `main(): void` shape.
 function main() {
   const summary = collectCiWaitState(process.argv.slice(2));
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  return 0;
 }
 /**
  * Collect the CI-wait-state snapshot for `--pr <number>`: resolve owner/
@@ -134,7 +150,9 @@ export function collectCiWaitState(
     // parseArgs normalizes both an absent --pr and an invalid one (e.g.
     // `--pr 0` or `--pr foo`) to null, so "missing" alone would misreport an
     // invalid value as absent.
-    throw new Error('missing or invalid --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing or invalid --pr <number> argument'),
+    );
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();

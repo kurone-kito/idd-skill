@@ -12,6 +12,13 @@ import {
   type CollaboratorPermissionCache,
   collaboratorPermission,
 } from './collaborator-permission.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
@@ -330,14 +337,35 @@ const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
+  // #3342: call main() directly (chained via .then(), not awaited through
+  // runHelperCli) when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-viability-gate', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
+}
+
+// The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,
+// #3342) so importing this module (for unit tests) does not parse
+// process.argv, fail, or make a `gh` call. Returns 0 (success) or throws
+// -- with the opt-in JSON error envelope unset, this is byte-identical to
+// the pre-migration top-level-await block.
+async function main(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.issueNumbers.length === 0) {
-    throw new Error(
-      'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+    throw markCliUsageError(
+      new Error(
+        'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+      ),
     );
   }
 
@@ -367,6 +395,7 @@ if (import.meta.main) {
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
+  return 0;
 }
 
 export async function evaluateDiscoverViability(

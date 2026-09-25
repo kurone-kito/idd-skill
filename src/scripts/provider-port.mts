@@ -280,6 +280,11 @@ export interface ProviderReviewThreadComment {
    * always populated: the review-thread queries are already GraphQL, so
    * selecting one more field costs nothing extra. */
   lastEditedAt?: string | null;
+  /** #3269: the comment's own GraphQL node id (`PullRequestReviewComment.id`),
+   * optional so pre-#3269 fixtures keep compiling. Lets a caller batch-fetch
+   * {@link ProviderPort.getReviewThreadCommentUserContentEdits} for exactly
+   * this comment without a separate lookup. */
+  id?: string;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments} --
@@ -314,6 +319,38 @@ export interface ProviderReviewThreadCommentIds {
   threadId: string;
   isResolved: boolean | null;
   commentDatabaseIds: number[];
+}
+
+/** One GraphQL `PullRequestReviewComment.userContentEdits` revision -- see
+ * {@link ProviderPort.getReviewThreadCommentUserContentEdits}. `diff` is
+ * GitHub's own field name, but its value is the FULL rendered body as it
+ * stood immediately after this edit (verified empirically against live
+ * `userContentEdits` data on kurone-kito/idd-skill#3160/#3154/#3196 while
+ * authoring #3269), not a line-level delta -- a caller reconstructs each
+ * transition's before/after text from consecutive revisions' `diff`
+ * values, not from this field alone. `null` for `diff`/`editorLogin`/
+ * `deletedAt` (`deletedAt` stays `null` unless the revision was itself
+ * deleted) matches GraphQL's own nullable fields; a `null` `diff` means
+ * the revision's content is unavailable and must be treated as
+ * unverifiable, never as an empty body. */
+export interface ProviderReviewThreadCommentEdit {
+  editedAt: string | null;
+  diff: string | null;
+  editorLogin: string | null;
+  deletedAt: string | null;
+}
+
+/** Backs {@link ProviderPort.getReviewThreadCommentUserContentEdits} -- one
+ * entry per requested comment node id. */
+export interface ProviderReviewThreadCommentEditHistory {
+  /** Echoes the requested node id back, so a caller can re-associate this
+   * entry with the comment it fetched history for. */
+  commentId: string;
+  /** The `userContentEdits` connection's own `totalCount` -- see
+   * {@link ProviderPort.getReviewThreadCommentUserContentEdits}'s doc
+   * comment for why a caller must compare this against `edits.length`. */
+  totalCount: number;
+  edits: ProviderReviewThreadCommentEdit[];
 }
 
 /** Backs {@link ProviderPort.listChangeRequestGraphqlComments}. */
@@ -388,6 +425,8 @@ export interface ProviderReviewThreadCommentWithAuthorType {
    * three-state contract. Always populated, like
    * {@link ProviderReviewThreadComment.lastEditedAt}. */
   lastEditedAt?: string | null;
+  /** #3269: see {@link ProviderReviewThreadComment.id}'s doc comment. */
+  id?: string;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
@@ -407,15 +446,21 @@ export interface ProviderReviewThreadWithAuthorType {
  * treated as evidence here. `workflowPath` is sourced from
  * `checkSuite.workflowRun.file.path`, GitHub's own check-suite-to-workflow-
  * run association, `null` when that association (or its `file`) is absent.
- * A caller must fail closed (never silently proceed) whenever `detailsUrl`
- * repeats across the returned entries, or across the rollup entries it is
- * matched against -- see `pre-merge-readiness.mts`'s call site for why an
- * attacker copying a genuine check-run's own `detailsUrl` verbatim makes
- * this the only safe outcome.
+ * `event` (kurone-kito/idd-skill#3256) is sourced from the same
+ * `checkSuite.workflowRun.event` association -- the triggering event GitHub
+ * recorded for that run (e.g. `pull_request`, `pull_request_target`), `null`
+ * under the identical absence condition as `workflowPath`. A caller must
+ * fail closed (never silently proceed) whenever `detailsUrl` repeats across
+ * the returned entries, or across the rollup entries it is matched
+ * against -- see `pre-merge-readiness.mts`'s call site for why an attacker
+ * copying a genuine check-run's own `detailsUrl` verbatim makes this the
+ * only safe outcome. The same repeated-`detailsUrl` fail-closed rule
+ * protects `event` too, since it is resolved from the identical join.
  */
 export interface ProviderCheckRunWorkflowPath {
   detailsUrl: string;
   workflowPath: string | null;
+  event: string | null;
 }
 
 /**
@@ -1154,6 +1199,40 @@ export interface ProviderPort {
   listChangeRequestReviewThreadCommentIds(
     number: number,
   ): ProviderReviewThreadCommentIds[];
+
+  /**
+   * reviews-and-threads. #3269: bounded batch fetch of GraphQL
+   * `PullRequestReviewComment.userContentEdits` for the given comment node
+   * ids ONLY, via `nodes(ids:)` -- never every thread comment. The two
+   * merge-gate collectors (`pre-merge-readiness.mts`'s F2 evidence
+   * collector and `advisory-convergence.mts`'s required-check collector)
+   * scope `nodeIds` to advisory-bot thread comments whose `lastEditedAt`
+   * postdates their thread's latest IDD disposition -- see
+   * `protocol-helpers.mts`'s `selectAdvisoryThreadCommentIdsEditedAfterDisposition`.
+   * Every other review-thread consumer (`review-activity-snapshot.mts`,
+   * the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this method,
+   * so an edited thread comment keeps `updatedAt` dating there.
+   *
+   * Returns one entry per requested id, `commentId` echoing it back.
+   * `totalCount` is the comment's FULL edit-history size, which can exceed
+   * `edits.length` when the fetched page did not reach the start of the
+   * connection -- the caller (`resolveThreadCommentRevisionDatingOutcome`
+   * in protocol-helpers.mts) MUST fail closed (treat the history as
+   * unverifiable, keeping `updatedAt` dating) whenever `totalCount` does
+   * not equal `edits.length`. `edits` is in the connection's own order
+   * (newest edit first); a caller must sort by `editedAt` itself rather
+   * than trust that order. A missing/mismatched node in the response, or
+   * any other transport failure, throws -- mirrors
+   * `fetchLastEditedAtByNodeId`'s fail-fast contract (every requested id
+   * was selected from an already-successful thread-comments read, so a
+   * missing node here indicates a malformed response). There is no
+   * partial-per-id failure mode; a caller that wants "no edit history
+   * available" to degrade gracefully rather than throw must catch this
+   * method's own failure (both merge-gate collectors do).
+   */
+  getReviewThreadCommentUserContentEdits(
+    nodeIds: string[],
+  ): ProviderReviewThreadCommentEditHistory[];
 
   /**
    * reviews-and-threads. Full-walk paginated GraphQL `comments(first:100)`

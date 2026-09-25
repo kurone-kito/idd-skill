@@ -57,6 +57,8 @@ import type {
   ProviderRequiredCheck,
   ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
+  ProviderReviewThreadCommentEdit,
+  ProviderReviewThreadCommentEditHistory,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
   ProviderReviewThreadWithAuthorType,
@@ -246,6 +248,145 @@ export function fetchLastEditedAtByNodeId(
         );
       }
       result.set(expectedId, mapped);
+    });
+  }
+  return result;
+}
+
+/** Bounds the single unpaginated `last:N` page {@link
+ * fetchReviewThreadCommentUserContentEdits} reads per comment -- the two
+ * merge-gate collectors that call it already scope `nodeIds` to a small,
+ * bounded set (advisory-bot thread comments edited after their thread's
+ * disposition), and a comment whose real edit history exceeds this page
+ * is reported with `totalCount > edits.length`, which the caller treats
+ * as an incomplete/unverifiable history (fails closed to `updatedAt`
+ * dating, `protocol-helpers.mts`'s
+ * `resolveThreadCommentRevisionDatingOutcome`) rather than a reason to
+ * paginate further. */
+const REVIEW_THREAD_COMMENT_EDITS_PAGE_SIZE = 20;
+
+/**
+ * #3269: batch-resolve GraphQL `PullRequestReviewComment.userContentEdits`
+ * for the given comment node ids via `nodes(ids:)`, chunked to 100 ids per
+ * request (matching {@link fetchLastEditedAtByNodeId}'s own convention).
+ * Backs {@link ProviderPort.getReviewThreadCommentUserContentEdits} -- see
+ * that method's doc comment for the full contract (bounded page size,
+ * `totalCount` vs. `edits.length`, connection order, fail-fast on a
+ * missing/mismatched node).
+ */
+export function fetchReviewThreadCommentUserContentEdits(
+  ghTextFn: typeof ghText,
+  nodeIds: string[],
+): ProviderReviewThreadCommentEditHistory[] {
+  const result: ProviderReviewThreadCommentEditHistory[] = [];
+  if (nodeIds.length === 0) {
+    return result;
+  }
+  const query = `query($ids:[ID!]!){
+  nodes(ids:$ids) {
+    id
+    ... on PullRequestReviewComment {
+      userContentEdits(last:${REVIEW_THREAD_COMMENT_EDITS_PAGE_SIZE}) {
+        totalCount
+        nodes { editedAt diff editor { login } deletedAt }
+      }
+    }
+  }
+}`;
+  const chunkSize = 100;
+  for (let start = 0; start < nodeIds.length; start += chunkSize) {
+    const chunk = nodeIds.slice(start, start + chunkSize);
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      ...chunk.flatMap((id) => ['-f', `ids[]=${id}`]),
+    ];
+    const parsed = JSON.parse(ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'fetchReviewThreadCommentUserContentEdits');
+    const nodes = (parsed as { data?: { nodes?: unknown[] } })?.data?.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      throw new Error(
+        `fetchReviewThreadCommentUserContentEdits: expected ${chunk.length} node(s), got ${
+          Array.isArray(nodes) ? nodes.length : 'none'
+        }`,
+      );
+    }
+    nodes.forEach((node, index) => {
+      const expectedId = chunk[index];
+      const typed = node as {
+        id?: unknown;
+        userContentEdits?: {
+          totalCount?: unknown;
+          nodes?: unknown[];
+        } | null;
+      } | null;
+      if (typed == null || String(typed.id ?? '') !== expectedId) {
+        throw new Error(
+          `fetchReviewThreadCommentUserContentEdits: node ${expectedId} missing or mismatched in response`,
+        );
+      }
+      const connection = typed.userContentEdits;
+      const totalCount =
+        typeof connection?.totalCount === 'number' ? connection.totalCount : 0;
+      const rawEdits = Array.isArray(connection?.nodes) ? connection.nodes : [];
+      const edits: ProviderReviewThreadCommentEdit[] = rawEdits.map((raw) => {
+        // Copilot review, PR #3430: a `null` VALUE for the explicitly
+        // selected `deletedAt` field is GitHub's genuine "not deleted"
+        // signal (matches every other selected field's own null-means-
+        // absent contract), but a raw node that is itself `null`, not an
+        // object, or missing the `deletedAt` KEY entirely means this
+        // specific entry never resolved as expected -- a partial/
+        // malformed response, not a real "not deleted" answer. Mapping
+        // that malformed case to the SAME `null` a genuine non-deletion
+        // produces would let
+        // `resolveThreadCommentRevisionDatingOutcome`'s `deletedAt !=
+        // null` fail-closed check silently miss it. Throw instead, so
+        // the collector's own try/catch around this whole fetch takes
+        // its documented fail-closed `updatedAt`-dating path.
+        if (raw == null || typeof raw !== 'object' || !('deletedAt' in raw)) {
+          throw new Error(
+            `fetchReviewThreadCommentUserContentEdits: node ${expectedId} has a malformed userContentEdits entry`,
+          );
+        }
+        const typedEdit = raw as {
+          editedAt?: unknown;
+          diff?: unknown;
+          editor?: { login?: unknown } | null;
+          deletedAt?: unknown;
+        };
+        // Copilot review, PR #3430 (round 2): the key-presence check above
+        // only rules out an ENTIRELY missing `deletedAt` field -- it says
+        // nothing about the VALUE once the key exists. GraphQL's `DateTime`
+        // type is either `null` or a string for a well-formed response, so
+        // any OTHER type (a number, object, boolean, or an explicit
+        // `undefined` value on an otherwise-present key) is just as
+        // malformed as a missing key, and mapping it to the same `null` a
+        // genuine "not deleted" answer produces would be exactly the bug
+        // this whole check exists to close. Reject it explicitly rather
+        // than silently coercing.
+        if (
+          typedEdit.deletedAt !== null &&
+          typeof typedEdit.deletedAt !== 'string'
+        ) {
+          throw new Error(
+            `fetchReviewThreadCommentUserContentEdits: node ${expectedId} has a non-string, non-null deletedAt value`,
+          );
+        }
+        return {
+          editedAt:
+            typeof typedEdit.editedAt === 'string' ? typedEdit.editedAt : null,
+          diff: typeof typedEdit.diff === 'string' ? typedEdit.diff : null,
+          editorLogin:
+            typedEdit.editor?.login == null
+              ? null
+              : String(typedEdit.editor.login),
+          deletedAt: typedEdit.deletedAt,
+        };
+      });
+      result.push({ commentId: expectedId, totalCount, edits });
     });
   }
   return result;
@@ -507,6 +648,13 @@ function fetchChangeRequestBranchAndChecks(
  * first let `[validCheckRun, null]` look like a trusted singleton even
  * though a second, unidentifiable check-run could be hiding behind the
  * `null`.
+ *
+ * kurone-kito/idd-skill#3256: `event` (the check suite's
+ * `workflowRun.event`) follows the identical same-suite ambiguity rule as
+ * `workflowPath` above -- a suite with more than one matching check-run
+ * reports `event: null` for every one of them too, never the suite's real
+ * triggering event for any of them, for the same forged-check-run reason
+ * `workflowPath` already documents.
  */
 function checkRunWorkflowPathsFromSuiteNodes(
   suiteNodes: unknown,
@@ -516,7 +664,7 @@ function checkRunWorkflowPathsFromSuiteNodes(
     return out;
   }
   for (const suite of suiteNodes as ({
-    workflowRun?: { file?: { path?: unknown } | null } | null;
+    workflowRun?: { file?: { path?: unknown } | null; event?: unknown } | null;
     checkRuns?: { nodes?: ({ detailsUrl?: unknown } | null)[] } | null;
   } | null)[]) {
     // GraphQL can return a `null` list item for a nullable type under a
@@ -527,6 +675,8 @@ function checkRunWorkflowPathsFromSuiteNodes(
     if (!suite) continue;
     const path = suite.workflowRun?.file?.path;
     const workflowPath = path == null ? null : String(path);
+    const event = suite.workflowRun?.event;
+    const workflowEvent = event == null ? null : String(event);
     const checkRunNodes = suite.checkRuns?.nodes;
     if (!Array.isArray(checkRunNodes)) continue;
     // kurone-kito/idd-skill#2926 (round 3 -- Copilot review, PR #2930):
@@ -536,6 +686,9 @@ function checkRunWorkflowPathsFromSuiteNodes(
     // `[validCheckRun, null]` must be treated exactly like two live
     // check-runs (unresolved), never silently trusted as a singleton.
     const suiteWorkflowPath = checkRunNodes.length > 1 ? null : workflowPath;
+    // kurone-kito/idd-skill#3256: same ambiguity rule as `suiteWorkflowPath`
+    // -- see this function's own doc comment.
+    const suiteWorkflowEvent = checkRunNodes.length > 1 ? null : workflowEvent;
     const liveCheckRuns = checkRunNodes.filter(
       (checkRun): checkRun is { detailsUrl?: unknown } => !!checkRun,
     );
@@ -543,6 +696,7 @@ function checkRunWorkflowPathsFromSuiteNodes(
       out.push({
         detailsUrl: String(checkRun.detailsUrl ?? ''),
         workflowPath: suiteWorkflowPath,
+        event: suiteWorkflowEvent,
       });
     }
   }
@@ -580,7 +734,7 @@ function fetchCheckRunWorkflowPathsPage(
       ... on Commit {
         checkSuites(first:100, after:$after){
           nodes{
-            workflowRun{ file{ path } }
+            workflowRun{ file{ path } event }
             checkRuns(first:50, filterBy:{checkName:$name}){
               nodes{ detailsUrl }
             }
@@ -1107,6 +1261,16 @@ function findRecentExactBodyMatch(
 class MalformedPostWorkItemCommentResponseError extends Error {}
 
 /**
+ * #3435: a successful POST whose stored `body` differs from the body this
+ * process sent is an environment mutation, not a transient failure.
+ * Retrying cannot undo it, and {@link findRecentExactBodyMatch}'s exact
+ * match can never recognize the mutated comment, so a retry would post
+ * another mismatched duplicate. Fail once, with the created comment's
+ * coordinates, and do not strip or normalize the stored text.
+ */
+class PostWorkItemCommentBodyMismatchError extends Error {}
+
+/**
  * #3275: thrown instead of retrying when a possibly-landed POST failure's
  * outcome could not be confirmed -- either the duplicate-body re-read
  * itself failed (so neither "it landed" nor "it didn't" can be proven), or
@@ -1198,7 +1362,11 @@ function deriveRetryAfterMs(error: unknown, nowMs: number): number | null {
  * into re-posting the same marker (code review, #3275). Also validates the
  * response shape before treating the marker as posted (catches a
  * 200-with-malformed-body edge case a bare retry would not -- see
- * {@link MalformedPostWorkItemCommentResponseError}).
+ * {@link MalformedPostWorkItemCommentResponseError}). A usable
+ * id/`html_url` whose stored `body` differs from the argument fails the
+ * same way, via {@link PostWorkItemCommentBodyMismatchError} (#3435) --
+ * checked only after the malformed-shape test, so a missing id stays
+ * that error.
  */
 function postWorkItemCommentWithRetry(
   deps: GithubProviderAdapterDeps,
@@ -1256,6 +1424,7 @@ function postWorkItemCommentWithRetry(
       const parsed = JSON.parse(responseBody) as {
         id?: unknown;
         html_url?: unknown;
+        body?: unknown;
       };
       const id = Number(parsed.id);
       const htmlUrl = String(parsed.html_url ?? '');
@@ -1264,9 +1433,20 @@ function postWorkItemCommentWithRetry(
           `postWorkItemComment: malformed POST response for ${repoPath}/issues/${number} (missing id/html_url)`,
         );
       }
+      // #3435: compare only after id/html_url are usable. A missing
+      // `body` is `''` and therefore a mismatch, matching a stored
+      // comment that does not equal the payload this process sent.
+      if (String(parsed.body ?? '') !== body) {
+        throw new PostWorkItemCommentBodyMismatchError(
+          `postWorkItemComment: stored body does not match the body sent for ${repoPath}/issues/${number} (comment id ${id}, ${htmlUrl})`,
+        );
+      }
       return { id, htmlUrl };
     } catch (error) {
-      if (error instanceof MalformedPostWorkItemCommentResponseError) {
+      if (
+        error instanceof MalformedPostWorkItemCommentResponseError ||
+        error instanceof PostWorkItemCommentBodyMismatchError
+      ) {
         throw error;
       }
       const status = deriveGhHttpStatus(error);
@@ -1354,6 +1534,9 @@ interface RawThreadCommentNode {
   databaseId?: unknown;
   /** #3246: present only when the caller's own fragment selects it. */
   lastEditedAt?: unknown;
+  /** #3269: the comment's own GraphQL node id, present only when the
+   * caller's own fragment selects `id`. */
+  id?: unknown;
 }
 
 /** Raw GraphQL review-thread node, as {@link fetchReviewThreadsGeneric}
@@ -3081,12 +3264,17 @@ export function createGithubProviderAdapter(
         owner,
         repo,
         number,
-        'body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
+        // #3269: `id` added -- the comment's own GraphQL node id, needed to
+        // batch-fetch getReviewThreadCommentUserContentEdits for exactly
+        // the qualifying advisory-bot comments (see that method's doc
+        // comment on provider-port.mts).
+        'id body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
         isResolved: node.isResolved,
         comments: node.comments.map((comment) => ({
+          id: comment.id == null ? undefined : String(comment.id),
           body: String(comment.body ?? ''),
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),
@@ -3141,6 +3329,12 @@ export function createGithubProviderAdapter(
           .map((comment) => comment.databaseId)
           .filter((id): id is number => typeof id === 'number'),
       }));
+    },
+
+    getReviewThreadCommentUserContentEdits(
+      nodeIds: string[],
+    ): ProviderReviewThreadCommentEditHistory[] {
+      return fetchReviewThreadCommentUserContentEdits(deps.ghText, nodeIds);
     },
 
     listChangeRequestGraphqlComments(number: number): ProviderGraphqlComment[] {
@@ -3641,12 +3835,15 @@ export function createGithubProviderAdapter(
         owner,
         repo,
         number,
-        'body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
+        // #3269: `id` added -- see the identical addition and doc comment
+        // on `listChangeRequestReviewThreadsWithComments` above.
+        'id body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
         isResolved: node.isResolved,
         comments: node.comments.map((comment) => ({
+          id: comment.id == null ? undefined : String(comment.id),
           body: String(comment.body ?? ''),
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),

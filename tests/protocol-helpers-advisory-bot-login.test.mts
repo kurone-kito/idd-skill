@@ -39,6 +39,35 @@ const CODERABBIT_RATE_LIMITED_ACK =
   '> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits.\n' +
   'This command is applicable only when automatic reviews are paused.\n\n' +
   '</details>';
+// #3261: an ordinary CodeRabbit auto-generated reply that is NOT a summary
+// walkthrough at all -- e.g. a bare acknowledgement of an invoked review
+// command, with no "Action not completed" wrapper (so it is neither the
+// already-reviewed ack nor the rate-limited ack above). Settlement must
+// never credit this as a completed review.
+const CODERABBIT_NON_SUMMARY_REPLY =
+  '<!-- This is an auto-generated reply by CodeRabbit -->\n' +
+  '<!-- CodeRabbit review command invocation: v2:ghi789 -->\n' +
+  'Sure, on it!';
+// A full 40-char head SHA, matching the `^[0-9a-f]{40}$` schema constraint
+// `isCodexReviewSummaryCompleteForHeadSha`'s real callers validate against
+// (tests/disposition-non-review-notices.test.mts's own `HEAD_SHA`).
+const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
+// #2695/#3261: Codex's own recurring review-status comment shape, modeled on
+// the real comment body the same way
+// tests/disposition-non-review-notices.test.mts's CODEX_SUMMARY_RUNNING/
+// CODEX_SUMMARY_COMPLETED are.
+const CODEX_SUMMARY_RUNNING =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  `| 📝 **Code Review** | 🔄 **Running** | \`${HEAD_SHA.slice(0, 7)}\` | PR opened |\n`;
+const CODEX_SUMMARY_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  `| 📝 **Code Review** | ✅ **Completed** | \`${HEAD_SHA.slice(0, 7)}\` | PR opened |\n`;
 const HEAD_COMMITTED_AT = '2026-09-02T12:00:00Z';
 
 function comment(login: string, body: string, createdAt: string) {
@@ -368,13 +397,160 @@ test('computeSecondaryAdvisoryReviewSettlement: matches REST-raw comments (user.
   });
 });
 
+// #3261: settlement now requires a RECOGNIZED COMPLETED shape, not merely
+// "not a known notice" -- the tests below cover each of the acceptance
+// criteria's pending cases plus the one new settled case (Codex Completed).
+// The pre-existing test above already covers "a clean CodeRabbit summary
+// with none of the in-progress/paused/skip-review markers is still settled"
+// (it already uses `CODERABBIT_SUMMARY`), so it needs no new test here.
+
+test('computeSecondaryAdvisoryReviewSettlement: a CodeRabbit auto-generated reply that is NOT a summary walkthrough -> pending, never settled (#3261)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'coderabbitai[bot]',
+        CODERABBIT_NON_SUMMARY_REPLY,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: a Codex status comment whose HEAD row reads Running -> pending, never settled (#3261)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'chatgpt-codex-connector[bot]',
+        CODEX_SUMMARY_RUNNING,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: a plain-prose comment from an identity with no recognized completion shape -> pending, never settled (#3261)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'my-custom-bot[bot]',
+        'Looks fine to me.',
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'my-custom-bot[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: a Codex status comment whose HEAD row reads Completed -> settled at that comment activity time (#3261)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'chatgpt-codex-connector[bot]',
+        CODEX_SUMMARY_COMPLETED,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:05:00Z',
+    declined: false,
+  });
+});
+
+test('computeSecondaryAdvisoryReviewSettlement: a Codex Completed status for a DIFFERENT commit -> pending, never settled (#3261)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'chatgpt-codex-connector[bot]',
+        CODEX_SUMMARY_COMPLETED,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: 'fedcba9876543210fedcba9876543210fedcba98',
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
+// Copilot review (PR #3422): isCodexReviewSummaryCompleteForHeadSha is a
+// pure table parser with no identity check of its own -- an ordinary
+// Codex-authored comment that merely happens to embed a matching-shaped
+// Markdown table (same Status/Commit columns, a Completed row for this
+// HEAD) must NOT be credited as settled unless the comment also carries
+// the identity-pinned CODEX_SUMMARY_MARKER.
+test('computeSecondaryAdvisoryReviewSettlement: a Codex-authored comment with a matching Completed table but NO summary marker -> pending, never settled (#3261, Copilot review PR #3422)', () => {
+  const lookalikeTable =
+    '## Just a regular comment, not the review-status summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    `| 📝 **Code Review** | ✅ **Completed** | \`${HEAD_SHA.slice(0, 7)}\` | PR opened |\n`;
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'chatgpt-codex-connector[bot]',
+        lookalikeTable,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
 // #3186: foldSecondaryAdvisoryReviewSettlements -- folds each configured
 // secondary login's own computeSecondaryAdvisoryReviewSettlement result
 // into the single { settledAt, declined } shape buildSecondaryQuietWindowStatus
 // consumes.
 
 const DECLINE_NOTICE = '## Review limit reached\n\nRate limited for this HEAD.';
-const GENUINE_REVIEW = 'Looks fine to me.';
 
 test('foldSecondaryAdvisoryReviewSettlements: empty login list -> unconfigured shape', () => {
   assert.deepEqual(
@@ -411,7 +587,7 @@ test('foldSecondaryAdvisoryReviewSettlements: single declined login -> declined'
 
 test('foldSecondaryAdvisoryReviewSettlements: single settled login -> anchors on its own settledAt', () => {
   const comments = [
-    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:01:00Z'),
   ];
   assert.deepEqual(
     foldSecondaryAdvisoryReviewSettlements(comments, {
@@ -424,10 +600,10 @@ test('foldSecondaryAdvisoryReviewSettlements: single settled login -> anchors on
 
 test('foldSecondaryAdvisoryReviewSettlements: two settled logins -> anchors on the LATEST settledAt', () => {
   const comments = [
-    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:01:00Z'),
     comment(
       'chatgpt-codex-connector[bot]',
-      GENUINE_REVIEW,
+      CODEX_SUMMARY_COMPLETED,
       '2026-09-02T12:03:00Z',
     ),
   ];
@@ -435,6 +611,7 @@ test('foldSecondaryAdvisoryReviewSettlements: two settled logins -> anchors on t
     foldSecondaryAdvisoryReviewSettlements(comments, {
       secondaryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
       headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
     }),
     { settledAt: '2026-09-02T12:03:00Z', declined: false },
   );
@@ -443,6 +620,7 @@ test('foldSecondaryAdvisoryReviewSettlements: two settled logins -> anchors on t
     foldSecondaryAdvisoryReviewSettlements(comments, {
       secondaryBotLogins: ['chatgpt-codex-connector[bot]', 'coderabbitai[bot]'],
       headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
     }),
     { settledAt: '2026-09-02T12:03:00Z', declined: false },
   );
@@ -468,7 +646,7 @@ test('foldSecondaryAdvisoryReviewSettlements: every configured login declining -
 
 test('foldSecondaryAdvisoryReviewSettlements: one settled and one declined -> anchors on the settled login only (decline never extends the wait)', () => {
   const comments = [
-    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:01:00Z'),
     // Posted LATER than the genuine review, but must not become the anchor.
     comment(
       'chatgpt-codex-connector[bot]',
@@ -487,7 +665,7 @@ test('foldSecondaryAdvisoryReviewSettlements: one settled and one declined -> an
 
 test('foldSecondaryAdvisoryReviewSettlements: three distinct logins, one of each state -> pending wins over both settled and declined', () => {
   const comments = [
-    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:01:00Z'),
     comment(
       'chatgpt-codex-connector[bot]',
       DECLINE_NOTICE,
@@ -508,15 +686,29 @@ test('foldSecondaryAdvisoryReviewSettlements: three distinct logins, one of each
   );
 });
 
-test('foldSecondaryAdvisoryReviewSettlements: three distinct logins all settled -> anchors on the latest of the three', () => {
+// #3261: this test used to be titled "three distinct logins all settled ->
+// anchors on the latest of the three", relying on 'my-custom-bot[bot]' (an
+// identity with no completion recognizer at all) reaching `settled: true`
+// via plain prose. Under the fixed fail-closed rule this is now
+// structurally impossible -- only `coderabbitai` and
+// `chatgpt-codex-connector` have any completion recognizer, so a "three
+// distinct logins, all settled" case can no longer exist. Replaced with the
+// fold-level version of the acceptance criterion instead: two genuinely
+// recognized identities settle, the third (unrecognized) identity stays
+// permanently pending regardless of its comment's content, and any pending
+// sibling keeps the WHOLE fold pending (the full window), per this
+// function's own existing fold rule.
+test('foldSecondaryAdvisoryReviewSettlements: an unrecognized identity keeps the whole fold pending even when every other login is genuinely settled (#3261)', () => {
   const comments = [
-    comment('coderabbitai[bot]', GENUINE_REVIEW, '2026-09-02T12:01:00Z'),
+    comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T12:01:00Z'),
     comment(
       'chatgpt-codex-connector[bot]',
-      GENUINE_REVIEW,
+      CODEX_SUMMARY_COMPLETED,
       '2026-09-02T12:04:00Z',
     ),
-    comment('my-custom-bot[bot]', GENUINE_REVIEW, '2026-09-02T12:02:00Z'),
+    // No recognized completion shape exists for this identity at all, so
+    // this can never settle no matter what it posts.
+    comment('my-custom-bot[bot]', 'Looks fine to me.', '2026-09-02T12:02:00Z'),
   ];
   assert.deepEqual(
     foldSecondaryAdvisoryReviewSettlements(comments, {
@@ -526,8 +718,9 @@ test('foldSecondaryAdvisoryReviewSettlements: three distinct logins all settled 
         'my-custom-bot[bot]',
       ],
       headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
     }),
-    { settledAt: '2026-09-02T12:04:00Z', declined: false },
+    { settledAt: null, declined: false },
   );
 });
 

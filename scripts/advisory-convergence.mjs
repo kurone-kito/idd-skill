@@ -135,6 +135,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
@@ -143,6 +144,7 @@ import {
   resolveAdvisoryBotLogins,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
+  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
@@ -2484,7 +2486,7 @@ export function collectFromGitHub(
     Number(args.prNumber),
     port,
   );
-  const threads = fetchReviewThreads(port, Number(args.prNumber));
+  const baseThreads = fetchReviewThreads(port, Number(args.prNumber));
   // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
   // BEFORE computing `trustedMarkerLogins`, so collaborator-marker trust
   // can be resolved from ALL candidates' comments -- not just whichever
@@ -2536,6 +2538,55 @@ export function collectFromGitHub(
         ])
       : [],
   });
+  // #3269: bounded second-pass GraphQL fetch, scoped to only advisory-bot
+  // thread comments edited after their thread's latest IDD disposition
+  // (see `selectAdvisoryThreadCommentIdsEditedAfterDisposition`'s own doc
+  // comment) -- so the disposition-evidence check below (reusing
+  // `summarizeDispositionEvidenceForGate`, `computeAdvisoryConvergenceVerdict`)
+  // can verify a cosmetic edit (e.g. CodeRabbit's own comment-to-reply
+  // marker rewrite) and date it by content activity instead of
+  // `updatedAt`, which also moves on IDD's own hide-on-supersede
+  // minimization (kurone-kito/idd-skill#3173). `isDispositionAuthor` here
+  // is `trustedMarkerLogins` alone, matching this gate's own
+  // `iddAgentLogins: trustedMarkerLogins` option below (this gate has no
+  // separate "IDD agent" notion from "trusted marker actor") -- candidate
+  // selection and freshness evaluation must agree on which comment
+  // anchors "the disposition", or the two merge gates (this one and F2's
+  // pre-merge-readiness.mts) could disagree. A fetch failure degrades to
+  // no enrichment (today's `updatedAt` dating) rather than failing this
+  // whole collection.
+  const trustedMarkerLoginSet = new Set(trustedMarkerLogins);
+  const editHistoryCandidateIds =
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(baseThreads, {
+      isDispositionAuthor: (login) => trustedMarkerLoginSet.has(login),
+      advisoryBotLogins,
+    });
+  let editHistories = [];
+  if (editHistoryCandidateIds.length > 0) {
+    try {
+      editHistories = port.getReviewThreadCommentUserContentEdits(
+        editHistoryCandidateIds,
+      );
+    } catch {
+      // Fail closed to no enrichment -- every affected comment keeps
+      // today's `updatedAt` dating (see
+      // `resolveThreadCommentRevisionDatingOutcome`'s own "unverifiable"
+      // outcome for an absent/incomplete history, protocol-helpers.mts).
+    }
+  }
+  // Called unconditionally: returns `baseThreads` UNCHANGED (same
+  // reference) when there is nothing to attach, matching
+  // `pre-merge-readiness.mts`'s own identical pattern. The cast back to
+  // `ReviewThreadPayload[]` is safe: `attachReviewThreadCommentEditHistories`
+  // is deliberately typed over protocol-helpers.mts's generic `ThreadLike`
+  // (the wider structural contract every review-thread consumer already
+  // satisfies), but it only ever adds a `userContentEdits` property onto
+  // an unchanged `baseThreads` comment or returns a thread verbatim --
+  // never drops or narrows a field `ReviewThreadPayload` itself requires.
+  const threads = attachReviewThreadCommentEditHistories(
+    baseThreads,
+    editHistories,
+  );
   // #1810: delegates to `resolveClaimEvidence` (below `hasTrustedClaimMarker-
   // History`'s definition) instead of calling `pickResolvingClaimEvents` /
   // `classifyClaimCandidateAmbiguity` / `hasTrustedClaimMarkerHistory`
@@ -3390,7 +3441,13 @@ function fetchPrAuthor(port, prNumber) {
  * already expect and are directly tested against) -- same shim strategy as
  * {@link toIssueCommentPayload}. `pageInfo.hasNextPage` is always `false`:
  * the port's `fetchReviewThreadsGeneric` already fully paginates every
- * thread's comments before returning. */
+ * thread's comments before returning. Each comment's own `id` and
+ * `lastEditedAt` (#3269) are threaded through too -- `id` lets
+ * `selectAdvisoryThreadCommentIdsEditedAfterDisposition` name a candidate
+ * comment for the bounded `userContentEdits` fetch, and `lastEditedAt`
+ * (already returned by the port since #3246, but never mapped into this
+ * shape until #3269) is what `effectiveThreadCommentActivityAt` reads to
+ * tell a genuinely unedited comment from an edited one at all. */
 function toReviewThreadPayload(node) {
   return {
     id: node.id,
@@ -3398,6 +3455,7 @@ function toReviewThreadPayload(node) {
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: node.comments.map((comment) => ({
+        id: comment.id,
         body: comment.body,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
@@ -3406,6 +3464,7 @@ function toReviewThreadPayload(node) {
           __typename: comment.authorTypename,
         },
         pullRequestReview: { id: comment.pullRequestReviewId },
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

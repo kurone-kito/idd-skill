@@ -117,8 +117,14 @@ export function parsePaginatedGhNdjson(raw) {
  * coverage (already passing, or intentionally not run) and never counts as
  * a genuinely non-passing cause. Hoisted to module scope (#2021) so both
  * {@link summarizeRequiredChecks} and {@link computePreMergeReadinessBlockers}
- * share one definition instead of two independently-maintained copies. */
-const CHECK_PASS_EQUIVALENT_STATES = new Set([
+ * share one definition instead of two independently-maintained copies.
+ * Exported (kurone-kito/idd-skill#3256) for a third consumer,
+ * `pre-merge-readiness.mts`'s collector, which needs the identical
+ * pass-equivalent test to decide whether a resolved `idd-advisory-
+ * convergence` check-run instance's SUCCESS-shaped state would otherwise
+ * satisfy the required check before it can gate that on the instance's own
+ * triggering event. */
+export const CHECK_PASS_EQUIVALENT_STATES = new Set([
   'SUCCESS',
   'SKIPPED',
   'NEUTRAL',
@@ -1200,10 +1206,9 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
 // genuine walkthrough at the outer-wrapper level. Unlike
 // `CODERABBIT_SKIP_REVIEW_MARKER`, this marker deliberately does NOT
 // exclude a comment from `isReviewSummaryComment` -- it mirrors Codex's
-// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`
-// in disposition-non-review-notices.mts): the comment is still
-// summary-shaped, but a separate completeness gate
-// (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
+// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`,
+// below): the comment is still summary-shaped, but a separate completeness
+// gate (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
 // auto-accept eligibility. Single-sourced so the settlement classifier,
 // `buildDispositionPlan`'s completeness gate, and
 // `classifyRegularBotComment`'s RESOLVED guard all recognize
@@ -1256,11 +1261,10 @@ export const CODEX_SUMMARY_MARKER =
 // review-summary comment instead of only CodeRabbit's (#2695). Recognizing
 // the marker does NOT by itself mean the review is complete -- Codex's
 // summary can also appear while its own status table still reads "Running"
-// for the current HEAD; `disposition-non-review-notices.mts`'s
-// `isCodexReviewSummaryCompleteForHeadSha` gates the actual auto-accept on
-// that separately. Single-sourced here so adding a future bot's summary
-// marker means adding one map entry, not touching the recognizer function
-// itself.
+// for the current HEAD; `isCodexReviewSummaryCompleteForHeadSha` (below)
+// gates the actual auto-accept / settlement on that separately.
+// Single-sourced here so adding a future bot's summary marker means adding
+// one map entry, not touching the recognizer function itself.
 const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY = new Map([
   ['coderabbitai', CODERABBIT_SUMMARY_MARKER],
   ['chatgpt-codex-connector', CODEX_SUMMARY_MARKER],
@@ -1297,6 +1301,119 @@ export function isCodeRabbitAlreadyReviewedAcknowledgement(body) {
   return CODERABBIT_ALREADY_REVIEWED_ACK_RE.test(
     String(body ?? '').trimStart(),
   );
+}
+// #3261: identity-pinned "genuinely complete" recognizer for CodeRabbit's
+// OWN summary marker specifically -- unlike `isReviewSummaryComment` (which
+// matches ANY configured bot's marker by design, since every existing call
+// site already filters comments by author login before calling it), this is
+// used to decide SETTLEMENT for one specific configured identity
+// (`computeSecondaryAdvisoryReviewSettlement`, below), so it must not credit
+// a `coderabbitai`-authored comment as complete merely because its body
+// happens to start with a different bot's byte-identical marker text. Excludes
+// the same three non-complete shapes the settlement classifier already
+// distinguishes: the skip-review notice, the paused-review notice (both also
+// classified as terminal declines elsewhere), and the #3260 in-progress
+// revision (a genuine walkthrough that has not finished processing new
+// commits yet). Mirrors the existing `token === 'coderabbitai'` gate already
+// used for the in-progress check.
+export function isCodeRabbitCompletedReviewSummary(body) {
+  const text = String(body ?? '').trimStart();
+  return (
+    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
+    !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text) &&
+    !CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(text) &&
+    !isCodeRabbitReviewInProgressSummary(text)
+  );
+}
+// #2695 (Codex review, P1): chatgpt-codex-connector[bot] edits its own
+// review-status comment IN PLACE across its whole lifecycle -- including
+// while its own table still reads "Running" for the current HEAD.
+// Auto-accepting it at that point (before Codex has posted its actual
+// findings as their own review threads) would let the disposition-evidence
+// gate treat the review as settled ahead of findings that arrive later --
+// "a false positive is a false merge", the same hazard the CodeRabbit
+// per-HEAD re-disposition above guards against. #3260 corrects this
+// comment's prior claim that "CodeRabbit's own summary marker has no
+// analogous in-progress state": CodeRabbit edits its OWN summary comment in
+// place too, nesting a "review in progress by coderabbit.ai" marker next to
+// the previous review's content while it processes new commits (live
+// evidence: kurone-kito/idd-skill#3260, PR #3196 comment `5789875341`).
+// `disposition-non-review-notices.mts`'s `buildDispositionPlan` own
+// summary-walkthrough loop gates on that state via
+// `isCodeRabbitReviewInProgressSummary` before this function ever runs --
+// this table-parsing gate itself still applies to Codex only, because
+// Codex's own in-progress signal is this status table, not a
+// CodeRabbit-shaped marker. Parses the comment's own status table (columns
+// identified by header text, so a reordered or renamed non-Status/Commit
+// column does not break it) and requires the row for the current HEAD's
+// (possibly-abbreviated) commit to read "Completed" (case-insensitively,
+// tolerating the emoji/bold markup Codex wraps it in); any other outcome --
+// Running, no matching row, or an unparseable table -- is treated as
+// not-yet-complete so the caller must not disposition it (or, per #3261,
+// treat it as a settled secondary-bot review) yet.
+//
+// #3261: moved here from `disposition-non-review-notices.mts` so
+// `computeSecondaryAdvisoryReviewSettlement` (below) can use it directly
+// without an import cycle (that file already imports from this one); it is
+// re-exported unchanged from `disposition-non-review-notices.mts` so its
+// two existing call sites there, and every external import, keep working.
+export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
+  const fullHeadSha = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (!fullHeadSha) {
+    return false;
+  }
+  const rows = String(body ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'))
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split('|')
+        .map((cell) => cell.trim()),
+    );
+  if (rows.length === 0) {
+    return false;
+  }
+  const header = rows[0].map((cell) => cell.toLowerCase());
+  const statusColumn = header.findIndex((cell) => cell.includes('status'));
+  const commitColumn = header.findIndex((cell) => cell.includes('commit'));
+  if (statusColumn === -1 || commitColumn === -1) {
+    return false;
+  }
+  // Last matching row wins in case the table ever lists a commit more than
+  // once, mirroring the "current state" semantics of an in-place edit.
+  let latestStatus = null;
+  for (const row of rows.slice(1)) {
+    const commitCell = (row[commitColumn] ?? '')
+      .replace(/`/g, '')
+      .trim()
+      .toLowerCase();
+    if (!commitCell || !fullHeadSha.startsWith(commitCell)) {
+      continue;
+    }
+    latestStatus = row[statusColumn] ?? '';
+  }
+  // Copilot review (PR #3422, two rounds): a bare `/completed/i` substring
+  // test accepts a hypothetical "Not Completed" / "Uncompleted" status
+  // cell (both contain the substring "completed"). An unanchored
+  // `/\*\*\s*completed\s*\*\*/i.test()` first-round fix was still not
+  // enough: `.test()` searches anywhere in the string, so a malformed cell
+  // like "**Not **Completed**" (a separately bolded "Completed" segment
+  // embedded after other bolded text) would still match. Extract ONLY the
+  // first Markdown-bolded segment -- the actual status word every observed
+  // real cell wraps in bold (`**Completed**`, `**Running**`), with
+  // whatever follows (Codex's real fixture trails a `<relative-time>` HTML
+  // span in the same cell) left out of the comparison -- and require THAT
+  // extracted segment, trimmed, to equal "completed" exactly. Fail-closed
+  // for any other shape, including no bold markup at all.
+  if (latestStatus === null) {
+    return false;
+  }
+  const boldStatusWord = /\*\*(.+?)\*\*/.exec(latestStatus)?.[1] ?? '';
+  return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
@@ -1608,6 +1725,7 @@ export function indexThreadsByReview(threads, options = {}) {
       if (
         !hasFreshDisposition(thread, {
           isDispositionAuthor: options.isDispositionAuthor,
+          advisoryBotLogins: options.advisoryBotLogins,
         }) &&
         !classifyThreadAckOnlyPostDisposition(thread, {
           iddAgentLogins: options.iddAgentLogins,
@@ -1952,6 +2070,9 @@ export function hasFreshDisposition(thread, options = {}) {
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -1973,14 +2094,19 @@ export function hasFreshDisposition(thread, options = {}) {
   const latestFeedbackAt = maxIsoTimestamp(
     comments
       .filter((comment) => !isIddDisposition(comment))
-      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
       .filter(isValidIsoTimestamp),
   );
   return comments.some((comment) => {
     if (!isIddDisposition(comment)) {
       return false;
     }
-    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
+    const dispositionActivityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
     if (!isValidIsoTimestamp(dispositionActivityAt)) {
       return false;
     }
@@ -1989,6 +2115,173 @@ export function hasFreshDisposition(thread, options = {}) {
       compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0
     );
   });
+}
+/**
+ * #3269: for each thread, finds the maximum content-activity timestamp
+ * among comments `hasFreshDisposition` would accept as a disposition on
+ * it (the SAME recognition: `isDispositionComment`, or -- only on an
+ * already-resolved thread -- the terminal `isRejectionConfirmedDisposition`
+ * marker, authored by `isDispositionAuthor`), then returns the GraphQL
+ * node id of every thread comment that is authored by a configured
+ * advisory bot, reports a parseable `lastEditedAt`
+ * (`classifyCommentEditState` === `'edited'`), and whose `lastEditedAt`
+ * postdates that thread's own disposition anchor.
+ *
+ * The two merge-gate collectors (`pre-merge-readiness.mts`'s F2 evidence
+ * collector, `advisory-convergence.mts`'s required-check collector) call
+ * this BEFORE `hasFreshDisposition`/`summarizeDispositionEvidenceForGate`
+ * itself, to build the bounded candidate list for
+ * `ProviderPort.getReviewThreadCommentUserContentEdits` (its own doc
+ * comment has the fetch's full contract), then thread the result through
+ * {@link attachReviewThreadCommentEditHistories} before calling either.
+ * A thread with no recognized disposition at all contributes no
+ * candidates: nothing yet anchors "after the disposition" for it, and
+ * `hasFreshDisposition` will report it missing regardless of how any
+ * individual comment is dated.
+ *
+ * `isDispositionAuthor` defaults to `hasFreshDisposition`'s own default
+ * (reject known bots, accept any human). A caller SHOULD pass the SAME
+ * predicate it will later pass to `hasFreshDisposition`/
+ * `summarizeDispositionEvidenceForGate` for this same evaluation, or
+ * candidate selection and freshness evaluation can disagree about which
+ * comment anchors "the disposition".
+ */
+export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+  threads,
+  options = {},
+) {
+  const dispositionAuthorPredicate =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const ids = new Set();
+  for (const thread of threads ?? []) {
+    const nodes = thread.comments?.nodes ?? [];
+    const threadResolved = Boolean(thread.isResolved);
+    const isDisposition = (comment) =>
+      isDispositionComment(comment) ||
+      (threadResolved && isRejectionConfirmedDisposition(comment));
+    const dispositionAt = maxIsoTimestamp(
+      nodes
+        .filter((comment) => {
+          if (!isDisposition(comment)) {
+            return false;
+          }
+          const authorLogin = String(comment.author?.login ?? '')
+            .trim()
+            .toLowerCase();
+          return dispositionAuthorPredicate(authorLogin);
+        })
+        // Dating the disposition comment itself never needs cosmetic-edit
+        // verification -- it is IDD-agent/human-authored, never a
+        // configured advisory bot -- so an empty advisoryBotLogins set
+        // here (this file's own default) is deliberate and safe.
+        .map((comment) => effectiveThreadCommentActivityAt(comment))
+        .filter(isValidIsoTimestamp),
+    );
+    if (!dispositionAt) {
+      continue;
+    }
+    for (const comment of nodes) {
+      const authorLogin = String(comment.author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (!isConfiguredAdvisoryBotLogin(authorLogin, advisoryBotLogins)) {
+        continue;
+      }
+      if (classifyCommentEditState(comment) !== 'edited') {
+        continue;
+      }
+      const lastEditedAt = String(
+        comment.lastEditedAt ?? comment.last_edited_at ?? '',
+      );
+      if (!isValidIsoTimestamp(lastEditedAt)) {
+        continue;
+      }
+      if (compareIsoTimestamps(lastEditedAt, dispositionAt) <= 0) {
+        continue;
+      }
+      const id = String(comment.id ?? '').trim();
+      if (id) {
+        ids.add(id);
+      }
+    }
+  }
+  return [...ids];
+}
+/**
+ * #3269: pure enrichment step -- returns a NEW `threads` array where each
+ * thread comment whose id matches an entry in `histories` (by
+ * `commentId`) carries that entry's `userContentEdits`. A comment with no
+ * matching entry, or a thread with no matching comment, is returned
+ * UNCHANGED (same object identity), so a caller can cheaply tell whether
+ * anything changed. The two merge-gate collectors call this with the
+ * result of `ProviderPort.getReviewThreadCommentUserContentEdits`, keyed
+ * on the SAME node ids
+ * {@link selectAdvisoryThreadCommentIdsEditedAfterDisposition} returned.
+ */
+export function attachReviewThreadCommentEditHistories(threads, histories) {
+  const byId = new Map();
+  for (const history of histories ?? []) {
+    const id = String(history?.commentId ?? '').trim();
+    if (id) {
+      byId.set(id, history);
+    }
+  }
+  if (byId.size === 0) {
+    return threads;
+  }
+  // `Array.prototype.map` always allocates a new OUTER array, even when
+  // every element it returns is unchanged -- `byId` being non-empty does
+  // not by itself mean any `threads` comment actually matched one of its
+  // ids (e.g. every requested id came back with no matching comment).
+  // Track that explicitly so a genuinely-no-op call (matching the
+  // `byId.size === 0` short-circuit just above) still returns `threads`
+  // by the SAME reference, honoring this function's own doc comment.
+  let anyChanged = false;
+  const nextThreads = threads.map((thread) => {
+    const nodes = thread.comments?.nodes ?? [];
+    if (nodes.length === 0) {
+      return thread;
+    }
+    let changed = false;
+    const nextNodes = nodes.map((comment) => {
+      const id = String(comment.id ?? '').trim();
+      const history = id ? byId.get(id) : undefined;
+      if (!history) {
+        return comment;
+      }
+      changed = true;
+      return {
+        ...comment,
+        userContentEdits: {
+          totalCount:
+            typeof history.totalCount === 'number' ? history.totalCount : 0,
+          edits: (history.edits ?? []).map((edit) => ({
+            editedAt: edit?.editedAt ?? null,
+            diff: edit?.diff ?? null,
+            editorLogin: edit?.editorLogin ?? null,
+            deletedAt: edit?.deletedAt ?? null,
+          })),
+        },
+      };
+    });
+    if (!changed) {
+      return thread;
+    }
+    anyChanged = true;
+    return {
+      ...thread,
+      comments: {
+        pageInfo: thread.comments?.pageInfo,
+        nodes: nextNodes,
+      },
+    };
+  });
+  return anyChanged ? nextThreads : threads;
 }
 // A disposition marker may carry a single interior punctuation char `[.!:]`
 // immediately before the closing `**` — `**Accepted.**` (natural English
@@ -2832,7 +3125,14 @@ const CODERABBIT_ACK_MATCHES_BEHAVIOR_CLOSURE_RE = new RegExp(
 // -- the only lead-in actually observed -- and nothing else.
 const CODERABBIT_ACK_MATCHES_LEADIN_RE =
   /^[.!]\s+(?:this|that|it|the\s+fix)\s+$/i;
-function isKnownAdvisoryAckTemplate(comment) {
+// Exported (kurone-kito/idd-skill#3263) so the bot-comment corpus contract
+// test can call this wording classifier directly, the same way it calls
+// every other exported classifier in `BOT_WORDING_CLASSIFIERS` below --
+// previously module-private, reachable only through
+// `classifyThreadAckOnlyPostDisposition`'s own author+shape+snapshot-
+// boundary gate, which needs a whole thread fixture rather than a single
+// comment body.
+export function isKnownAdvisoryAckTemplate(comment) {
   const authorLogin = String(comment.author?.login ?? '');
   const body = String(comment.body ?? '');
   if (!authorLogin || !isCodeRabbitLogin(authorLogin) || !body) {
@@ -3045,6 +3345,63 @@ export function isAdvisoryNonReviewNotice(body) {
     isTerminalAdvisoryNonReviewNotice(text)
   );
 }
+/**
+ * Every wording-based bot-comment classifier this module (and its leaf
+ * `copilot-review-body.mts` dependency) exports, registered once so the
+ * bot-comment corpus contract test (#3263) can run each fixture entry
+ * through the classifier(s) it names without hand-wiring a new import and
+ * call for every id. A matcher not registered here is out of the corpus
+ * evidence bar entirely -- adding one is a deliberate, reviewable edit to
+ * this list, the same visibility the corpus's own grandfather list gets
+ * from being test-pinned.
+ *
+ * `coderabbit-embedded-findings` reports {@link
+ * extractCodeRabbitEmbeddedFindings}'s own finding COUNT for the body
+ * alone, not {@link countUncoveredCodeRabbitEmbeddedFindings}'s
+ * body-minus-already-threaded-comments difference -- that comparison
+ * needs a second, non-body input (the PR's already-threaded comment
+ * count) with no natural per-fixture source, breaking the uniform
+ * one-argument shape every other entry shares.
+ */
+export const BOT_WORDING_CLASSIFIERS = [
+  {
+    id: 'copilot-review-body',
+    apply: (fixture) => classifyCopilotReviewBody(fixture.body),
+  },
+  {
+    id: 'coderabbit-review-in-progress',
+    apply: (fixture) => isCodeRabbitReviewInProgressSummary(fixture.body),
+  },
+  {
+    id: 'coderabbit-already-reviewed-ack',
+    apply: (fixture) =>
+      isCodeRabbitAlreadyReviewedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-rate-limited-ack',
+    apply: (fixture) => isCodeRabbitRateLimitedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-courtesy-ack',
+    apply: (fixture) =>
+      isKnownAdvisoryAckTemplate({
+        author: { login: fixture.login },
+        body: fixture.body,
+      }),
+  },
+  {
+    id: 'coderabbit-embedded-findings',
+    apply: (fixture) => extractCodeRabbitEmbeddedFindings(fixture.body).length,
+  },
+  {
+    id: 'advisory-non-review-notice',
+    apply: (fixture) => isAdvisoryNonReviewNotice(fixture.body),
+  },
+  {
+    id: 'advisory-terminal-notice',
+    apply: (fixture) => isTerminalAdvisoryNonReviewNotice(fixture.body),
+  },
+];
 // A trusted IDD disposition of a non-review notice: the canonical
 // `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
 // completed review` reply. Requires the `**Rejected**` prefix (via
@@ -3119,9 +3476,8 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // lifecycle, so this can match while its status table still reads "Running"
 // for the current HEAD -- callers that decide whether to AUTO-ACCEPT (as
 // opposed to merely classifying a comment as needing some disposition) must
-// gate on completion separately, as
-// `disposition-non-review-notices.mts`'s `isCodexReviewSummaryCompleteForHeadSha`
-// does.
+// gate on completion separately, as `isCodexReviewSummaryCompleteForHeadSha`
+// (above) does.
 // #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
 // review content despite starting with the CodeRabbit summary marker, so it
 // is excluded here too -- never a summary walkthrough, always a non-review
@@ -3256,13 +3612,32 @@ export function dispositionNamesAdvisoryBot(
 //   `declined: true` here, not the ambiguous/pending case.)
 // - Neither `settled` nor `declined` -- still pending: no comment from the
 //   bot at or after `headCommittedAt` at all, an unparseable
-//   `headCommittedAt`/unconfigured `secondaryBotLogin`, or (#3260) the
-//   LATEST matching comment is CodeRabbit's own in-progress revision
+//   `headCommittedAt`/unconfigured `secondaryBotLogin`, (#3260) the LATEST
+//   matching comment is CodeRabbit's own in-progress revision
 //   (`isCodeRabbitReviewInProgressSummary`) -- CodeRabbit edits its summary
 //   comment in place when it starts reviewing new commits, so the outer
 //   `summarize by coderabbit.ai` wrapper alone cannot tell an in-progress
 //   revision apart from a genuine completed walkthrough; #2335's original
-//   full-window protection is unchanged for this case.
+//   full-window protection is unchanged for this case -- or (#3261) the
+//   LATEST matching comment is a NON-TERMINAL, non-notice body that simply
+//   is not a RECOGNIZED COMPLETED shape for this identity: a CodeRabbit
+//   reply that is not a summary walkthrough at all (e.g. a bare
+//   review-trigger acknowledgement), a Codex review-status comment whose
+//   own table still reads "Running" for this HEAD (the settlement
+//   classifier had no matching exclusion for this before #3261, even
+//   though #2695 already excludes it from AUTO-ACCEPT in
+//   `disposition-non-review-notices.mts`), or any other non-terminal
+//   comment at all from a secondary-bot identity this file has no
+//   completion recognizer for -- only `coderabbitai` and
+//   `chatgpt-codex-connector` have one. This is "non-terminal" specifically
+//   because a TERMINAL notice (rate-limit/skip/paused,
+//   `isTerminalAdvisoryNonReviewNotice` above) is checked first,
+//   identity-agnostically, before any of this dispatch runs -- an
+//   unrecognized identity's terminal notice still correctly reports
+//   `declined: true`, not pending. Fail-closed by design (Background of
+//   #3261): an unrecognized identity or shape costs its siblings the full
+//   quiet window rather than the short settled buffer, which is safer than
+//   crediting a review this classifier cannot actually verify is finished.
 //
 // Only the single latest matching comment is examined -- a notice posted
 // BEFORE a later genuine comment (rate-limited, then recovered) reports
@@ -3299,9 +3674,18 @@ export function dispositionNamesAdvisoryBot(
 // (`headObservedAt`: the earliest check-suite `createdAt` for the current
 // HEAD) here, not the committer-supplied `committedDate` -- see
 // `buildPreMergeReadinessSummary`'s own call site below.
+//
+// #3261: `headSha` is the current PR HEAD's own commit SHA (as opposed to
+// `headCommittedAt`'s timestamp role above), needed only for the Codex
+// completion check (`isCodexReviewSummaryCompleteForHeadSha` matches a
+// specific commit, not a point in time). Optional because every existing
+// direct caller in this file's own test suite predates it and only
+// exercises the `coderabbitai` identity, which never reads it; a missing
+// or empty value simply fails the Codex branch closed (pending), never
+// throws.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments,
-  { secondaryBotLogin, headCommittedAt },
+  { secondaryBotLogin, headCommittedAt, headSha },
 ) {
   const token = advisoryBotIdentityToken(secondaryBotLogin);
   const headAt = String(headCommittedAt ?? '');
@@ -3357,7 +3741,41 @@ export function computeSecondaryAdvisoryReviewSettlement(
     // to `secondaryBotLogin`'s own comments, not necessarily CodeRabbit's.
     return { settled: false, settledAt: null, declined: false };
   }
-  return { settled: true, settledAt: latest.at, declined: false };
+  // #3261: fail-closed dispatch -- settlement requires a RECOGNIZED
+  // COMPLETED shape for THIS identity, not merely "not a known notice".
+  // Only two identities have any completion recognizer at all; every other
+  // identity always reports pending (see the function's own doc comment
+  // above).
+  if (token === 'coderabbitai') {
+    if (isCodeRabbitCompletedReviewSummary(latest.body)) {
+      return { settled: true, settledAt: latest.at, declined: false };
+    }
+    return { settled: false, settledAt: null, declined: false };
+  }
+  if (token === 'chatgpt-codex-connector') {
+    // Copilot review (PR #3422): `isCodexReviewSummaryCompleteForHeadSha`
+    // is a pure table parser with no identity check of its own -- it
+    // requires only Status/Commit columns and a Completed row, so calling
+    // it directly on ANY comment body would credit an ordinary
+    // Codex-authored comment that merely happens to embed a
+    // matching-shaped Markdown table. Pin to the identity's own
+    // `CODEX_SUMMARY_MARKER` first, the same way the `coderabbitai` branch
+    // above is pinned to `CODERABBIT_SUMMARY_MARKER` via
+    // `isCodeRabbitCompletedReviewSummary`.
+    const fullHeadSha = String(headSha ?? '').trim();
+    if (
+      fullHeadSha &&
+      String(latest.body ?? '')
+        .trimStart()
+        .startsWith(CODEX_SUMMARY_MARKER) &&
+      isCodexReviewSummaryCompleteForHeadSha(latest.body, fullHeadSha)
+    ) {
+      return { settled: true, settledAt: latest.at, declined: false };
+    }
+    return { settled: false, settledAt: null, declined: false };
+  }
+  // No recognized completion shape exists for this identity at all.
+  return { settled: false, settledAt: null, declined: false };
 }
 // #3186: folds each configured secondary advisory bot login's own
 // independent {@link computeSecondaryAdvisoryReviewSettlement} classification
@@ -3383,9 +3801,14 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // kurone-kito/idd-skill#3253: same parameter-name-kept-value-changed note as
 // `computeSecondaryAdvisoryReviewSettlement` above -- `headCommittedAt` here
 // is fed the GitHub-observed anchor by every live caller.
+//
+// #3261: `headSha` is passed straight through to every per-login
+// `computeSecondaryAdvisoryReviewSettlement` call -- see that function's own
+// doc comment for its role. Every login shares the same current PR HEAD, so
+// one value covers the whole fold.
 export function foldSecondaryAdvisoryReviewSettlements(
   comments,
-  { secondaryBotLogins, headCommittedAt },
+  { secondaryBotLogins, headCommittedAt, headSha },
 ) {
   if (secondaryBotLogins.length === 0) {
     return { settledAt: null, declined: false };
@@ -3394,6 +3817,7 @@ export function foldSecondaryAdvisoryReviewSettlements(
     computeSecondaryAdvisoryReviewSettlement(comments, {
       secondaryBotLogin,
       headCommittedAt,
+      headSha,
     }),
   );
   if (settlements.some((entry) => !entry.settled && !entry.declined)) {
@@ -4650,7 +5074,7 @@ export function buildActivitySnapshotSummary(
           // marker (#2045); ordinary Accepted/Rejected markers keep the
           // pre-existing createdAt anchor.
           isRejectionConfirmedDisposition(comment)
-            ? effectiveThreadCommentActivityAt(comment)
+            ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
             : comment.createdAt,
         ),
     ),
@@ -4693,7 +5117,7 @@ export function buildActivitySnapshotSummary(
           )
           .map((comment) =>
             isRejectionConfirmedDisposition(comment)
-              ? effectiveThreadCommentActivityAt(comment)
+              ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
               : comment.createdAt,
           )
           .filter(isValidIsoTimestamp),
@@ -4716,7 +5140,10 @@ export function buildActivitySnapshotSummary(
       if (isDispositionMarkerComment(comment)) {
         return false;
       }
-      const activityAt = effectiveThreadCommentActivityAt(comment);
+      const activityAt = effectiveThreadCommentActivityAt(
+        comment,
+        advisoryBotLogins,
+      );
       return (
         isValidIsoTimestamp(activityAt) &&
         compareIsoTimestamps(activityAt, threadDispositionAt) > 0
@@ -4815,7 +5242,7 @@ export function buildActivitySnapshotSummary(
           describeAckItem(
             'thread-reply',
             comment,
-            effectiveThreadCommentActivityAt(comment),
+            effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
           ),
         ),
       ],
@@ -5176,9 +5603,15 @@ function isIddOriginatedThreadReply(comment, options) {
 // already existed at-or-before the disposition (its own `createdAt` is not
 // newer than the disposition, and its `updatedAt` is strictly newer than its
 // own `createdAt`) rather than a brand-new post-disposition comment.
-// Deliberately advisory-only, like its sibling: GitHub's API exposes no
-// revision diff for an edited comment, so this helper cannot tell a
-// cosmetic append from a substantive change to the finding.
+// Deliberately advisory-only, like its sibling: this heuristic itself
+// (createdAt-at-or-before-disposition plus a later updatedAt) still
+// cannot tell a cosmetic append from a substantive edit to the finding --
+// #3269 corrects a related but narrower premise, that GitHub's API
+// exposes no revision diff for an edited comment at all. It does
+// (GraphQL `userContentEdits`), and `hasFreshDisposition`'s own dating
+// (via `effectiveThreadCommentActivityAt`) now uses it, bounded to the
+// two merge-gate collectors that fetch it; `inPlaceEditOnly` here keeps
+// its own, separate, revision-content-blind heuristic unchanged.
 export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
   const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
   if (!thread.isResolved) {
@@ -5228,7 +5661,9 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
               body: String(comment.body ?? ''),
             })),
       )
-      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
       .filter(isValidIsoTimestamp),
   );
   if (!threadDispositionAt) {
@@ -5250,7 +5685,10 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
     ) {
       return false;
     }
-    const activityAt = effectiveThreadCommentActivityAt(comment);
+    const activityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
     return (
       isValidIsoTimestamp(activityAt) &&
       (!snapshotBoundaryAt ||
@@ -5727,6 +6165,11 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
+          // #3269: threaded through so a verified-cosmetic advisory-bot
+          // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
+          // dates by its content activity, not `updatedAt` -- see
+          // `effectiveThreadCommentActivityAt`'s doc comment.
+          advisoryBotLogins: options.advisoryBotLogins,
         })
       ) {
         return null;
@@ -5771,7 +6214,9 @@ export function summarizeDispositionEvidenceForGate(
                 authorLogin !== prAuthorLogin
               );
             })
-            .map((comment) => effectiveThreadCommentActivityAt(comment))
+            .map((comment) =>
+              effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+            )
             .filter(isValidIsoTimestamp),
         );
         if (
@@ -6060,6 +6505,7 @@ export function summarizeRequiredChecks(
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
     identityUnresolvedCheckNames = null,
+    nonTargetEventCheckNames = null,
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -6267,6 +6713,17 @@ export function summarizeRequiredChecks(
       ? identityUnresolvedCheckNames.map((name) => String(name ?? '').trim())
       : [],
   );
+  // kurone-kito/idd-skill#3256 (round 2 -- advisor review, mirroring
+  // #2919 round 4's identical reasoning for `identityUnresolvedNameSet`
+  // just above): the required-check names the downgrade below actually
+  // fired for (empty unless it fired). See `nonTargetEventCheckNames`'s
+  // own doc comment above.
+  let nonTargetEventRequiredCheckNames = [];
+  const nonTargetEventNameSet = new Set(
+    Array.isArray(nonTargetEventCheckNames)
+      ? nonTargetEventCheckNames.map((name) => String(name ?? '').trim())
+      : [],
+  );
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -6326,6 +6783,22 @@ export function summarizeRequiredChecks(
         }
       }
     }
+    // kurone-kito/idd-skill#3256: independent of, and checked alongside
+    // (never exclusively with), the source-pinned and identity-unresolved
+    // causes above -- mirrors identityUnresolvedNameSet's own block
+    // exactly, same "computed from requiredCheckNames independently of
+    // status" reasoning.
+    if (nonTargetEventNameSet.size > 0) {
+      const affected = requiredCheckNames.filter((name) =>
+        nonTargetEventNameSet.has(name),
+      );
+      if (affected.length > 0) {
+        nonTargetEventRequiredCheckNames = affected;
+        if (status === 'success') {
+          status = 'unknown';
+        }
+      }
+    }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately
     // NOT ciClassification.discardedNonPassingInstances above, which is
     // derived from the waiver-adjusted effectiveChecks. A valid waiver
@@ -6355,7 +6828,12 @@ export function summarizeRequiredChecks(
     protectionReadsUnreadable,
     presentRunConclusion: resolvePresentRunConclusion(
       normalizedChecks,
-      identityUnresolvedNameSet,
+      // kurone-kito/idd-skill#3256: unioned with `nonTargetEventNameSet` --
+      // `resolvePresentRunConclusion` treats any name in this set
+      // identically (fail closed into 'some-failing'), so a single
+      // combined set covers both causes without adding a third
+      // parameter. See that function's own doc comment.
+      new Set([...identityUnresolvedNameSet, ...nonTargetEventNameSet]),
     ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
@@ -6380,14 +6858,19 @@ export function summarizeRequiredChecks(
     // comment above -- empty unless the identity-unresolved downgrade
     // actually fired for this call.
     identityUnresolvedRequiredCheckNames,
-    // kurone-kito/idd-skill#2919 (round 5): see the field's own inline
-    // comment above -- the dedup+waiver-adjusted classification `status`
-    // BEFORE the source-pinned/identity-unresolved downgrades could narrow
-    // it. Lets a caller determine, exactly, whether a genuinely separate
-    // concurrent CI cause exists alongside those two named downgrades,
-    // without re-deriving per-check pass/fail evidence itself. `'unknown'`
-    // when no required checks are configured (mirrors `status`'s own
-    // initial default in that case).
+    // kurone-kito/idd-skill#3256: see the field's own inline comment
+    // above -- empty unless the non-target-event downgrade actually
+    // fired for this call.
+    nonTargetEventRequiredCheckNames,
+    // kurone-kito/idd-skill#2919 (round 5; kurone-kito/idd-skill#3256
+    // added the third downgrade): see the field's own inline comment
+    // above -- the dedup+waiver-adjusted classification `status` BEFORE
+    // the source-pinned/identity-unresolved/non-target-event downgrades
+    // could narrow it. Lets a caller determine, exactly, whether a
+    // genuinely separate concurrent CI cause exists alongside those three
+    // named downgrades, without re-deriving per-check pass/fail evidence
+    // itself. `'unknown'` when no required checks are configured (mirrors
+    // `status`'s own initial default in that case).
     preDowngradeStatus,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
@@ -7542,6 +8025,19 @@ export function computePreMergeReadinessBlockers(report) {
       identityUnresolvedNames.length > 0
         ? `required ${identityUnresolvedNames.length > 1 ? 'checks' : 'check'} ${identityUnresolvedNames.join(', ')} ${identityUnresolvedNames.length > 1 ? 'have' : 'has'} an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
         : '';
+    // kurone-kito/idd-skill#3256: name the non-target-event cause
+    // explicitly -- see `summarizeRequiredChecks`'s
+    // `nonTargetEventRequiredCheckNames` doc comment. Independent of (and
+    // checked alongside, never exclusively with) the two causes above.
+    const nonTargetEventNames = Array.isArray(
+      ci.nonTargetEventRequiredCheckNames,
+    )
+      ? ci.nonTargetEventRequiredCheckNames.map((name) => String(name ?? ''))
+      : [];
+    const nonTargetEventDetail =
+      nonTargetEventNames.length > 0
+        ? `required ${nonTargetEventNames.length > 1 ? 'checks' : 'check'} ${nonTargetEventNames.join(', ')} ${nonTargetEventNames.length > 1 ? 'have' : 'has'} no \`pull_request_target\`-triggered pass among their live instances (only a non-target event, e.g. \`pull_request\`); a same-repository PR could edit that event's own copy of the workflow, so this required check cannot be trusted as passing until a \`pull_request_target\`-triggered instance passes`
+        : '';
     // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2;
     // round 5 -- advisor review, replacing an earlier per-check-name
     // reconstruction here): the specific pinned/identity-unresolved causes
@@ -7576,15 +8072,17 @@ export function computePreMergeReadinessBlockers(report) {
     // cause can exist) sees byte-identical detail text to before -- this
     // only widens the detail for the new combined shape.
     // kurone-kito/idd-skill#2919 (round 5 -- E10 critique, latent-trap
-    // note, not a bug today): on a branch with NO required checks
-    // configured at all (`ci.noRequiredChecksConfigured: true`),
-    // `sourcePinnedNames`/`identityUnresolvedNames` are always empty
-    // (both downgrades live entirely inside `summarizeRequiredChecks`'s
-    // `requiredCheckNames.length > 0` block) and `preDowngradeStatus`
-    // stays its unset `'unknown'` default -- so `hasUnexplainedConcurrentCause`
-    // is spuriously `true` here, but harmlessly: `sourcePinnedDetail` and
-    // `identityUnresolvedDetail` below are ALSO both empty in this case,
-    // so the `[...].filter(Boolean).join('; ') || genericStatusDetail`
+    // note, not a bug today; kurone-kito/idd-skill#3256 added the third
+    // cause below): on a branch with NO required checks configured at
+    // all (`ci.noRequiredChecksConfigured: true`),
+    // `sourcePinnedNames`/`identityUnresolvedNames`/`nonTargetEventNames`
+    // are always empty (all three downgrades live entirely inside
+    // `summarizeRequiredChecks`'s `requiredCheckNames.length > 0` block)
+    // and `preDowngradeStatus` stays its unset `'unknown'` default -- so
+    // `hasUnexplainedConcurrentCause` is spuriously `true` here, but
+    // harmlessly: `sourcePinnedDetail`, `identityUnresolvedDetail`, and
+    // `nonTargetEventDetail` below are ALSO all empty in this case, so
+    // the `[...].filter(Boolean).join('; ') || genericStatusDetail`
     // expression reduces to `genericStatusDetail` either way (identical to
     // pre-#2919 behavior for the unprotected-branch path; the gate itself
     // still correctly blocks via `resolvePresentRunConclusion` above,
@@ -7607,6 +8105,7 @@ export function computePreMergeReadinessBlockers(report) {
         : [
             sourcePinnedDetail,
             identityUnresolvedDetail,
+            nonTargetEventDetail,
             hasUnexplainedConcurrentCause ? genericStatusDetail : '',
           ]
             .filter(Boolean)
@@ -8091,6 +8590,8 @@ export function buildPreMergeReadinessSummary(
     {
       secondaryBotLogins,
       headCommittedAt: options.advisoryConvergenceHeadObservedAt,
+      // #3261: needed for the Codex identity's Completed-at-HEAD check.
+      headSha: prHeadSha,
     },
   );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
@@ -8400,6 +8901,13 @@ export function buildPreMergeReadinessSummary(
       options.advisoryConvergenceIdentityUnresolved === true
         ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
         : null,
+    // kurone-kito/idd-skill#3256: only `idd-advisory-convergence` is a
+    // candidate -- it is the sole check name this collector ever resolves
+    // per-instance triggering events for (see `pre-merge-readiness.mts`).
+    nonTargetEventCheckNames:
+      options.advisoryConvergenceNonTargetEventOnly === true
+        ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
+        : null,
   });
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker
   // below -- CI may currently report `idd-advisory-convergence` PASSING,
@@ -8600,11 +9108,20 @@ export function buildPreMergeReadinessSummary(
     // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME` above is only the
     // workflow YAML's top-level `name:` string, which a DIFFERENT
     // workflow file can declare identically (Copilot review, PR #2915:
-    // this repository's own `idd-advisory-convergence.yml` documents
-    // running both `pull_request` and `pull_request_target` instances
-    // of the SAME file simultaneously during its Phase 1 transition
-    // window -- a legitimate same-file case this filter must keep
-    // passing, not the gap this constant closes). Declared as an
+    // this repository's own `idd-advisory-convergence.yml` can still
+    // produce a `pull_request` instance alongside its genuine
+    // `pull_request_target` one from the SAME file whenever a
+    // same-repository PR reintroduces that trigger to its own copy
+    // post-#2764 Phase 2 -- a legitimate same-file case this filter must
+    // keep passing, not the gap this constant closes; this candidate
+    // filter deliberately does not itself gate on triggering event --
+    // kurone-kito/idd-skill#3256's own event gate lives in
+    // `pre-merge-readiness.mts`'s collector for the PRIMARY required-check
+    // path, while this self-waiver path is independently protected by
+    // condition 4 of the self-waiver marker's own trust model, which
+    // already rejects a non-`pull_request_target` cited run -- see
+    // `docs/idd-helper-scripts.md`'s "External-check waiver contract").
+    // Declared as an
     // independent local literal rather than importing
     // `ADVISORY_CONVERGENCE_WORKFLOW_PATH` from `advisory-convergence.mts`
     // -- that file already imports FROM this one (`protocol-helpers.mts`),
@@ -10224,16 +10741,301 @@ function threadActivityAt(thread) {
     .filter(isValidIsoTimestamp);
   return maxIsoTimestamp(commentTimes);
 }
-function effectiveThreadCommentActivityAt(comment) {
-  const updatedAt = String(comment?.updatedAt ?? '');
-  if (isValidIsoTimestamp(updatedAt)) {
-    return updatedAt;
+// #3269: matches any HTML comment, including a multi-line one (e.g. the
+// `<!--\n<consolidated_sites>...\n-->` block real CodeRabbit review-thread
+// replies carry) -- `[\s\S]*?` (not `.*?`) so `.` crossing a newline is not
+// needed, and non-greedy so consecutive comments extract as separate
+// entries rather than one span from the first `<!--` to the last `-->`.
+const THREAD_COMMENT_HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+// #3269: the ONLY allowlisted append onto an otherwise-unchanged visible
+// text -- CodeRabbit's own resolve-attempt line, singular or plural
+// commit-range form (real samples: kurone-kito/idd-skill PR #3160 comment
+// `4056226337` appends "Addressed in commit 28c18a9"; PR #3154 comment
+// `4053784487` appends "Addressed in commits aa13fb1 to fda04e3"). Allows
+// leading/trailing blank lines (CRLF-tolerant) around the one resolution
+// line, but nothing else.
+const APPENDED_RESOLUTION_SUFFIX_RE =
+  /^(?:\r?\n)*✅ Addressed in commits? [0-9a-f]{7,40}(?: to [0-9a-f]{7,40})?(?:\r?\n)*$/;
+// #3269 (Copilot review, PR #3430): a single-byte placeholder standing in
+// for one whole HTML comment, used by `commentPositionSkeleton` below.
+// Fully REMOVING each comment (an earlier revision of this function did)
+// loses WHERE each comment sat relative to the surrounding visible text
+// and to every other comment; replacing each with this fixed token
+// instead preserves that position while still hiding the comment's own
+// (allowlisted-substitutable) content. `\u0000` cannot appear in a real
+// GitHub comment body, so it can never collide with genuine content.
+const HTML_COMMENT_POSITION_PLACEHOLDER = '\u0000';
+/** #3269: `body` with each HTML comment replaced by
+ * {@link HTML_COMMENT_POSITION_PLACEHOLDER} -- see
+ * {@link commentPositionSkeleton}'s own doc comment for why position is
+ * preserved rather than the comment being removed outright.
+ *
+ * Not an HTML/output sanitizer (CodeQL's `js/incomplete-sanitization`
+ * flagged an earlier, fully-removing revision of this function on PR
+ * #3430; the same reasoning applies to this replace-with-placeholder
+ * form): the result is compared with `===` / `String.prototype.
+ * startsWith` inside {@link isVisibleTextAppendOnly} below and never
+ * rendered, concatenated into markup, or otherwise reaches an HTML/DOM
+ * sink, so an unclosed `<!--` surviving a single pass carries no
+ * injection risk here -- it only ever changes which internal dating
+ * branch a GraphQL-fetched bot comment's revision history takes. */
+function commentPositionSkeleton(body) {
+  return String(body ?? '').replace(
+    THREAD_COMMENT_HTML_COMMENT_RE,
+    HTML_COMMENT_POSITION_PLACEHOLDER,
+  );
+}
+/**
+ * #3269: `true` when `currBody`'s visible text either equals `prevBody`'s,
+ * or extends it with nothing but the allowlisted resolution line above.
+ * Deliberately an exact-prefix (`startsWith`) check, not a trimmed/
+ * normalized comparison: the issue's own condition is "equals the
+ * previous revision's visible text, optionally followed by ... one
+ * appended resolution line", and comparing anything less exact would
+ * also accept a substantive mid-body edit that happens to leave the same
+ * trailing bytes. Compares {@link commentPositionSkeleton} (HTML
+ * comments placeholder'd, not removed) rather than the fully-stripped
+ * text (Copilot review, PR #3430): a plain "strip everything" comparison
+ * cannot tell a comment that moved to a different position from one that
+ * did not, since removing every comment collapses both to the same
+ * result -- the placeholder preserves that position as part of THIS
+ * check, so {@link isOnlyAllowlistedMarkerCommentDiff}'s own by-position
+ * comment-content comparison can safely assume position alignment once
+ * this check has already passed.
+ */
+function isVisibleTextAppendOnly(prevBody, currBody) {
+  const prevSkeleton = commentPositionSkeleton(prevBody);
+  const currSkeleton = commentPositionSkeleton(currBody);
+  if (currSkeleton === prevSkeleton) {
+    return true;
   }
-  const createdAt = String(comment?.createdAt ?? '');
-  if (isValidIsoTimestamp(createdAt)) {
-    return createdAt;
+  if (!currSkeleton.startsWith(prevSkeleton)) {
+    return false;
   }
-  return '';
+  const remainder = currSkeleton.slice(prevSkeleton.length);
+  return APPENDED_RESOLUTION_SUFFIX_RE.test(remainder);
+}
+// #3269: CodeRabbit's own hidden reply-vs-comment marker, exactly as
+// observed live (kurone-kito/idd-skill PR #3160/#3154/#3196) -- an
+// original finding's marker HTML comment is rewritten from this exact
+// "comment" form to this exact "reply" form once CodeRabbit treats the
+// finding as replied-to, with no other change to that one HTML comment.
+// Deliberately directional (never normalize both forms to one before
+// comparing): a hypothetical reply-to-comment rewrite is NOT the same
+// allowlisted, one-way substitution the issue names.
+const CODERABBIT_COMMENT_MARKER =
+  '<!-- This is an auto-generated comment by CodeRabbit -->';
+const CODERABBIT_REPLY_MARKER =
+  '<!-- This is an auto-generated reply by CodeRabbit -->';
+/**
+ * #3269: `true` when every HTML comment in `prevBody` and `currBody`
+ * matches 1:1 by position, except that any differing pair is EXACTLY the
+ * allowlisted CodeRabbit comment-to-reply marker substitution above.
+ * Comparing extracted comments in isolation (not just stripping them
+ * before comparing visible text, as {@link isVisibleTextAppendOnly}
+ * already does) matters here: stripping hides ANY comment-content change,
+ * so relying on visible-text equality alone would also treat an
+ * arbitrary hidden-comment rewrite as cosmetic. A comment COUNT mismatch
+ * (one added or removed) is never allowlisted.
+ */
+function isOnlyAllowlistedMarkerCommentDiff(prevBody, currBody) {
+  const prevComments =
+    String(prevBody ?? '').match(THREAD_COMMENT_HTML_COMMENT_RE) ?? [];
+  const currComments =
+    String(currBody ?? '').match(THREAD_COMMENT_HTML_COMMENT_RE) ?? [];
+  if (prevComments.length !== currComments.length) {
+    return false;
+  }
+  for (let index = 0; index < prevComments.length; index += 1) {
+    if (prevComments[index] === currComments[index]) {
+      continue;
+    }
+    if (
+      prevComments[index] === CODERABBIT_COMMENT_MARKER &&
+      currComments[index] === CODERABBIT_REPLY_MARKER
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+/**
+ * #3269: walks `comment.userContentEdits.edits` in chronological
+ * (oldest-first) order and classifies each transition against its
+ * immediately preceding revision as "verified cosmetic" per the issue's
+ * exact three-condition definition:
+ * - the transition's editor equals `authorLogin` (the comment's own
+ *   author -- the caller already confirmed that author is a configured
+ *   advisory bot before calling this, since only a bot's OWN edit of its
+ *   OWN comment can ever be cosmetic in this sense);
+ * - {@link isVisibleTextAppendOnly} between the two revisions;
+ * - {@link isOnlyAllowlistedMarkerCommentDiff} between the two revisions.
+ *
+ * Returns `'all-cosmetic'` when every transition qualifies (dating stays
+ * `createdAt`), `'dated'` with the LAST transition that failed
+ * (dating is that revision's own `editedAt`), or `'unverifiable'` when
+ * the history itself cannot be trusted -- absent/empty, `totalCount`
+ * disagreeing with the fetched page (an incomplete history), fewer than
+ * two revisions for a comment GitHub reports as edited, ANY revision's
+ * `editedAt` failing to parse, a deleted or `null`-body revision anywhere
+ * in the chain, or the chronologically newest revision's own body not
+ * exactly matching the separately-fetched `comment.body` (the two reads
+ * can observe different instants -- Copilot review, PR #3430).
+ * `'unverifiable'` always means "keep today's `updatedAt` dating" to the
+ * caller -- never treated as `'all-cosmetic'`, the same fail-closed
+ * direction `classifyCommentEditState` documents for its own `'unknown'`
+ * state.
+ */
+function resolveThreadCommentRevisionDatingOutcome(comment, authorLogin) {
+  const history = comment.userContentEdits;
+  const edits = history?.edits;
+  if (!history || !Array.isArray(edits) || edits.length < 2) {
+    return { kind: 'unverifiable' };
+  }
+  const totalCount = history.totalCount;
+  if (typeof totalCount !== 'number' || totalCount !== edits.length) {
+    return { kind: 'unverifiable' };
+  }
+  // Copilot review, PR #3430: every revision's `editedAt` must be a
+  // parseable timestamp BEFORE sorting/classifying, not only checked
+  // opportunistically inside the loop below when a transition happens to
+  // be classified non-cosmetic. A malformed/null `editedAt` on a
+  // revision whose transition happens to LOOK cosmetic (same body,
+  // editor, marker as its predecessor) would otherwise never be
+  // rejected at all, and could also corrupt the chronological sort
+  // order used to evaluate every other transition -- fail closed here
+  // instead of trusting a partially-malformed history.
+  if (edits.some((edit) => !isValidIsoTimestamp(edit?.editedAt ?? ''))) {
+    return { kind: 'unverifiable' };
+  }
+  // Connection order is newest-edit-first by convention
+  // (`ProviderPort.getReviewThreadCommentUserContentEdits`'s own doc
+  // comment), but a caller (a hand-built test fixture, in particular)
+  // must never be trusted to preserve that order -- sort explicitly by
+  // `editedAt` ascending (oldest/creation revision first). Every
+  // `editedAt` is already confirmed parseable above.
+  const chronological = [...edits].sort(
+    (left, right) =>
+      Date.parse(String(left.editedAt)) - Date.parse(String(right.editedAt)),
+  );
+  // Copilot review, PR #3430: `comment.body` and `comment.userContentEdits`
+  // come from two SEPARATE fetches (the thread-comments read and the
+  // bounded edit-history read) that are never guaranteed to observe the
+  // exact same instant -- if the comment was edited again between them,
+  // the fetched history's own newest revision could be stale relative to
+  // the CURRENT body this dating decision is actually about. Classifying
+  // a stale-but-internally-consistent history as all-cosmetic would then
+  // silently ignore a real edit neither fetch's snapshot alone reveals.
+  // Require the chronologically newest revision's own `diff` to exactly
+  // match the fetched `comment.body` before trusting the history at all.
+  const newestRevision = chronological[chronological.length - 1];
+  if (
+    typeof newestRevision?.diff !== 'string' ||
+    newestRevision.diff !== String(comment.body ?? '')
+  ) {
+    return { kind: 'unverifiable' };
+  }
+  let prevBody = null;
+  let lastNonCosmeticAt = null;
+  for (const edit of chronological) {
+    if (edit == null || edit.deletedAt != null) {
+      return { kind: 'unverifiable' };
+    }
+    if (typeof edit.diff !== 'string') {
+      return { kind: 'unverifiable' };
+    }
+    if (prevBody !== null) {
+      // Copilot review, PR #3430: normalize through the same
+      // `[bot]`-suffix-tolerant identity token every other
+      // advisory-bot-login comparison in this file already uses
+      // (`isConfiguredAdvisoryBotLogin` above) -- a raw lowercase
+      // comparison would silently reject every otherwise-valid
+      // cosmetic revision if GraphQL ever returns `editor.login` and
+      // `author.login` in different spellings for the same bot
+      // identity.
+      const editorToken = advisoryBotIdentityToken(edit.editorLogin);
+      const cosmetic =
+        editorToken !== '' &&
+        editorToken === advisoryBotIdentityToken(authorLogin) &&
+        isVisibleTextAppendOnly(prevBody, edit.diff) &&
+        isOnlyAllowlistedMarkerCommentDiff(prevBody, edit.diff);
+      if (!cosmetic) {
+        // `edit.editedAt` was already confirmed parseable above.
+        lastNonCosmeticAt = String(edit.editedAt);
+      }
+    }
+    prevBody = edit.diff;
+  }
+  return lastNonCosmeticAt
+    ? { kind: 'dated', at: lastNonCosmeticAt }
+    : { kind: 'all-cosmetic' };
+}
+/**
+ * Content-activity dating for one review-thread comment, shared by
+ * `hasFreshDisposition` and every diagnostic below it. Pre-#3269, this
+ * always preferred `updatedAt` (falling back to `createdAt`) -- but
+ * `updatedAt` also moves without any content edit (e.g. IDD's own
+ * hide-on-supersede minimization, kurone-kito/idd-skill#3173). #3269
+ * dates by content activity instead, using `classifyCommentEditState`'s
+ * three-state `lastEditedAt` contract:
+ * - `'unedited'` (an explicit `lastEditedAt: null`): `createdAt` -- the
+ *   comment was never body-edited, so `updatedAt` cannot reflect a real
+ *   content change;
+ * - `'edited'`: the time of the comment's own last revision that was NOT
+ *   a verified cosmetic edit (`resolveThreadCommentRevisionDatingOutcome`
+ *   above), which is `createdAt` when every revision was cosmetic --
+ *   ONLY when `comment.userContentEdits` is populated AND `comment`'s
+ *   author is a configured advisory bot (`advisoryBotLogins`); otherwise
+ *   falls back to `updatedAt`, unchanged from today;
+ * - `'unknown'` (absent/unparseable `lastEditedAt`): `updatedAt`,
+ *   unchanged from today.
+ *
+ * `advisoryBotLogins` defaults to an empty set, so a caller that omits it
+ * (every caller outside the two merge-gate collectors' own
+ * disposition-evidence path) never verifies an edited comment as
+ * cosmetic, regardless of what `userContentEdits` data happens to be
+ * attached -- fail-closed defense in depth, matching the issue's own
+ * negative test for "an allowlisted append on a comment by an author who
+ * is not an advisory bot".
+ */
+function effectiveThreadCommentActivityAt(
+  comment,
+  advisoryBotLogins = new Set(),
+) {
+  if (comment == null) {
+    return '';
+  }
+  const updatedAt = String(comment.updatedAt ?? '');
+  const validUpdatedAt = isValidIsoTimestamp(updatedAt) ? updatedAt : '';
+  const createdAt = String(comment.createdAt ?? '');
+  const validCreatedAt = isValidIsoTimestamp(createdAt) ? createdAt : '';
+  const fallback = validUpdatedAt || validCreatedAt;
+  const editState = classifyCommentEditState(comment);
+  if (editState === 'unedited') {
+    return validCreatedAt || validUpdatedAt;
+  }
+  if (editState !== 'edited') {
+    // 'unknown': lastEditedAt absent/unparseable -- keep today's dating.
+    return fallback;
+  }
+  const authorLogin = String(comment.author?.login ?? '')
+    .trim()
+    .toLowerCase();
+  if (!isConfiguredAdvisoryBotLogin(authorLogin, advisoryBotLogins)) {
+    return fallback;
+  }
+  const outcome = resolveThreadCommentRevisionDatingOutcome(
+    comment,
+    authorLogin,
+  );
+  if (outcome.kind === 'all-cosmetic') {
+    return validCreatedAt || validUpdatedAt;
+  }
+  if (outcome.kind === 'dated' && isValidIsoTimestamp(outcome.at)) {
+    return outcome.at;
+  }
+  return fallback;
 }
 function hasCompletedBotThreadDispositions(
   threads,

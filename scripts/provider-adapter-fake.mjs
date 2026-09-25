@@ -372,6 +372,23 @@ export function createFakeProviderAdapter(fixture) {
     listChangeRequestReviewThreadCommentIds(number) {
       return fixture.reviewThreadCommentIds?.[number] ?? [];
     },
+    getReviewThreadCommentUserContentEdits(nodeIds) {
+      fixture.requestedReviewThreadCommentEditHistoryIds ??= [];
+      fixture.requestedReviewThreadCommentEditHistoryIds.push([...nodeIds]);
+      if (fixture.reviewThreadCommentUserContentEditsFails) {
+        throw new Error(
+          'fake provider: getReviewThreadCommentUserContentEdits configured to fail',
+        );
+      }
+      return nodeIds.map(
+        (id) =>
+          fixture.reviewThreadCommentUserContentEdits?.[id] ?? {
+            commentId: id,
+            totalCount: 0,
+            edits: [],
+          },
+      );
+    },
     listChangeRequestGraphqlComments(number) {
       return fixture.changeRequestGraphqlComments?.[number] ?? [];
     },
@@ -436,7 +453,11 @@ export function createFakeProviderAdapter(fixture) {
             ? fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`]
             : undefined;
           const workflowPath = runValue?.path ? String(runValue.path) : null;
-          return { detailsUrl, workflowPath };
+          // kurone-kito/idd-skill#3256: mirrors `workflowPath` above -- the
+          // real REST `actions/runs/{id}` payload this fixture models
+          // already carries `event` alongside `path`.
+          const workflowEvent = runValue?.event ? String(runValue.event) : null;
+          return { detailsUrl, workflowPath, event: workflowEvent };
         });
     },
     getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {

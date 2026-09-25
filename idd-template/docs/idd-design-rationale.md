@@ -808,6 +808,48 @@ after — a CI rerun settling, a new disposition reply, another `main`
 advance — stales it and fails `--apply` closed on `review-currency`
 rather than merging on data the retry has since invalidated.
 
+### Bot-comment wording matchers need a real-sample evidence bar
+
+IDD classifies advisory-bot output (CodeRabbit, Copilot, Codex) by
+exact wording, and every classifier's own detection patterns were
+added one wording at a time, each after a separate field report —
+with no consistent evidence bar for how many real samples justified
+adding one. `kurone-kito/idd-skill#2641` derived its courtesy-
+acknowledgment template from 18 of 18 real samples;
+`kurone-kito/idd-skill#2710` was closed as not planned on a 10-of-10
+sample that showed the proposed signal never appears on its own;
+`kurone-kito/idd-skill#3193` was accepted on a single second-hand
+report from a private repository, with the key sentence never even
+captured verbatim (matched structurally instead). No committed copy of
+any real bot body backed any of these decisions, so nothing would have
+noticed if live vendor output later drifted from what a matcher
+expected — a suppressed-comments parser going stale unnoticed is
+exactly that failure mode realized.
+
+A single rule resolves the inconsistency, applied going forward: a new
+wording enters the registered wording-classifier list only with at
+least 3 real samples from at least 2 distinct PRs, added to a
+committed bot-comment corpus fixture in the same PR, each entry
+recording its own provenance (bot login, PR number, review or comment
+id, and the revision's edit timestamp when the body came from an
+edit-history query) so anyone can re-fetch and re-verify it. A
+network-free contract test enforces the bar mechanically: it re-runs
+every registered classifier over every corpus entry that names it, and
+separately checks each classifier's own real-positive-sample count and
+distinct-PR count against the floor. A classifier that predates this
+rule with fewer real samples than the bar requires is not
+retroactively broken by it — it is named on a test-pinned grandfather
+list instead, each entry stating its originating issue and the search
+that found too few samples, so widening that list is a visible,
+reviewable edit rather than a silent exception.
+
+Copilot review coverage is a companion fix from the same roadmap, not
+part of this wording-matcher rule: it moved from a denylist (every
+review counts as covering except one exact error template) to a
+positive signature (a recognized-review-body-shape check), closing the
+same fail-open direction a wording denylist has — an error message in
+new wording no longer silently counts as a covering review.
+
 ### Zero-Accepted-PATH-A advisory re-review gate
 
 Without this gate, E8's zero-Accepted-PATH-A path would skip E14 (the

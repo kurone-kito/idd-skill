@@ -819,6 +819,51 @@ reply, another `main` advance — stales it and fails `--apply` closed
 on `review-currency` rather than merging on data the retry has since
 invalidated.
 
+### Bot-comment wording matchers need a real-sample evidence bar
+
+IDD classifies advisory-bot output (CodeRabbit, Copilot, Codex) by
+exact wording, and every classifier's own detection patterns were
+added one wording at a time, each after a separate field report —
+with no consistent evidence bar for how many real samples justified
+adding one. Issue #2641 derived its courtesy-acknowledgment template
+from 18 of 18 real samples; issue #2710 was closed as not planned on a
+10-of-10 sample that showed the proposed signal never appears on its
+own; issue #3193 was accepted on a single second-hand report from a
+private repository, with the key sentence never captured verbatim (so
+that span is matched structurally instead). No committed copy of any
+real bot body backed any of these decisions, so nothing would have
+noticed if live vendor output later drifted from what a matcher
+expected — the #1880 suppressed-comments parser going stale unnoticed
+is exactly that failure mode realized.
+
+Issue #3263 resolves the inconsistency with a single rule, applied
+going forward: a new wording enters `BOT_WORDING_CLASSIFIERS`
+(`protocol-helpers.mts`) only with at least 3 real samples from at
+least 2 distinct PRs, added to
+`tests/fixtures/bot-comment-corpus/corpus.json` in the same PR, each
+entry recording its own provenance (bot login, PR number, review or
+comment id, and the revision's `editedAt` when the body came from
+GraphQL `userContentEdits`) so anyone can re-fetch and re-verify it.
+`tests/bot-comment-corpus.test.mts` enforces the bar mechanically: it
+re-runs every registered classifier over every corpus entry that names
+it, and separately checks each classifier's own real-positive-sample
+count and distinct-PR count against the 3-sample/2-PR floor. A
+classifier that predates this rule with fewer real samples than the
+bar requires is not retroactively broken by it — it is named on a
+test-pinned grandfather list instead, each entry stating its
+originating issue and the search that found too few samples, so
+widening that list is a visible, reviewable edit rather than a silent
+exception.
+
+Copilot review coverage (`findLastCopilotReviewCommit`,
+`resolveLatestCopilotReviewClause`) is a companion fix from the same
+roadmap, not part of this wording-matcher rule: it moved from a
+denylist (every review counts as covering except the one exact #3015
+error template) to a positive signature (`classifyCopilotReviewBody`'s
+own recognized-shape check), closing the same fail-open direction a
+wording denylist has — an error message in new wording no longer
+silently counts as a covering review.
+
 ### Zero-Accepted-PATH-A advisory re-review gate
 
 Without this gate, E8's zero-Accepted-PATH-A path would skip E14 (the

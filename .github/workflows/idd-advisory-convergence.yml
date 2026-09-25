@@ -9,20 +9,21 @@ concurrency:
   # workflow (#2136, #2764 Phase 1) and must not share this group.
   #
   # kurone-kito/idd-skill#2657 (Codex review, PR #2895): also grouped by
-  # `github.event_name`, so the `pull_request` and `pull_request_target`
-  # instances that both fire on the same opened/synchronize PR event no
-  # longer share a cancellation slot. Before this, whichever instance
-  # started later could cancel the other mid-run -- including the
-  # `pull_request_target` instance's own `idd-advisory-convergence-self-
-  # waiver` job, which would then never finish posting the bootstrap
-  # marker for that push, since a cancelled run is not itself a new
-  # trigger (recovery would need a manual rerun, defeating the whole
-  # no-human-click point of that job). Splitting the groups by event name
-  # still lets a new push correctly cancel a STALE run of the SAME event
-  # type for the same PR; it costs nothing beyond the "two required-check
-  # runs per PR" transition-window cost the CI-topology comment below
-  # already accepts, since a run that no longer gets cancelled by its
-  # sibling now more often simply completes on its own instead.
+  # `github.event_name`, so a `pull_request` instance never shares a
+  # cancellation slot with the genuine `pull_request_target` one. Before
+  # this, whichever instance started later could cancel the other
+  # mid-run -- including the `pull_request_target` instance's own
+  # `idd-advisory-convergence-self-waiver` job, which would then never
+  # finish posting the bootstrap marker for that push, since a cancelled
+  # run is not itself a new trigger (recovery would need a manual rerun,
+  # defeating the whole no-human-click point of that job). Post-#2764
+  # Phase 2 (kurone-kito/idd-skill#3256), a `pull_request` instance only
+  # exists at all when a PR reintroduces that trigger to its own copy of
+  # this file -- rare, not the routine case this grouping originally
+  # guarded -- but the isolation stays: it costs nothing, and still
+  # protects the genuine run from that instance the same way. Splitting
+  # the groups by event name still lets a new push correctly cancel a
+  # STALE run of the SAME event type for the same PR.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
@@ -32,22 +33,27 @@ name: IDD advisory-convergence gate
 # judgment the execution model must choose to honor into a
 # non-bypassable required status check -- see roadmap #1342.
 #
-# Trigger-migration transition state (#2764 Phase 1): this workflow's
-# own copy of `on:` below is evaluated against the pull request's merge
-# ref for `pull_request` -- exactly the trust gap `pull_request_target`
-# closes, since THAT trigger is evaluated against the base branch's own
-# workflow YAML instead, so a same-repository PR cannot edit its copy of
-# this file to force its own required check green. Both `pull_request`
-# and `pull_request_target` are active simultaneously during Phase 1
-# (same activity types on both) so the implementing PR itself stays
-# normally mergeable -- `pull_request_target` cannot fire against the
-# PR that first defines it, only against PRs opened after it merges to
-# `main`. A follow-up issue (Phase 2, filed once Phase 1 has run cleanly
-# on production PRs for a period) will remove the now-redundant
-# `pull_request` trigger. The accepted, bounded cost of this transition
-# window is two required-check runs per PR under the same check name,
-# temporarily widening `#1381`'s known same-SHA-multiple-runs race (see
-# the concurrency-hardening investigation below) from rare to routine.
+# Trigger-migration finished state (#2764 Phase 2): this workflow's
+# `on:` below declares only `pull_request_target`, which GitHub always
+# evaluates against the BASE branch's own workflow YAML, never the pull
+# request's own merge ref -- closing the trust gap a `pull_request`
+# trigger would otherwise leave open (a same-repository PR editing its
+# own copy of this file to force its own required check green).
+# Trade-off, accepted (Groom hearing, 2026-09-24): a PR that edits this
+# workflow is itself checked by `main`'s unmodified copy, so that PR's
+# own workflow changes are never exercised before it merges; and a PR
+# that first introduces this file (for example an adopter's onboarding
+# PR, whose base branch has no copy yet) gets no
+# `idd-advisory-convergence` run at all, so it cannot satisfy an
+# already-registered required check on its own -- `pull_request_target`
+# never fires against the PR that first adds it. A PR that reintroduces
+# a `pull_request` trigger to its own copy of this file still produces
+# a live, same-file `idd-advisory-convergence` instance -- a legitimate
+# same-file dedup case (see `groupChecksByProducer`'s doc comment in
+# protocol-helpers.mts) -- but kurone-kito/idd-skill#3256 taught
+# `pre-merge-readiness.mts`'s collector to resolve each instance's
+# triggering event and never let a non-`pull_request_target` pass
+# satisfy this required check.
 #
 # Read-only: contents: read + issues: read + pull-requests: read +
 # actions: read (kurone-kito/idd-skill#2657, Codex review PR #2895). The
@@ -140,8 +146,8 @@ name: IDD advisory-convergence gate
 # generic "re-run failed jobs".
 #
 # Bounded poll for the "not reviewed yet" race (#2015): the
-# `pull_request`/`pull_request_target` `synchronize` trigger above
-# fires the instant a push lands, well before the primary bot's own
+# `pull_request_target` `synchronize` trigger above fires the instant a
+# push lands, well before the primary bot's own
 # review typically lands (10-40s later) -- originally via the separate
 # `pull_request_review` trigger this workflow declared directly; that
 # trigger moved to the companion workflow in #2764 Phase 1, but the
@@ -167,9 +173,9 @@ name: IDD advisory-convergence gate
 # not landed by the end of the window, or lands with outstanding items,
 # the job fails exactly as it always has.
 #
-# Known residual (PR #2023 review), reshaped by #2764 Phase 1: this
-# job's own concurrency group (below) is keyed by PR number ALONE
-# across all three of its triggers, with `cancel-in-progress: true`.
+# Known residual (PR #2023 review), reshaped by #2764 Phase 1 and 2:
+# this job's own concurrency group (below) is keyed by PR number ALONE
+# across each of its triggers, with `cancel-in-progress: true`.
 # Originally, if the primary bot's review landed WHILE this poll was
 # asleep, that submission started a fresh `pull_request_review`-triggered
 # run directly in the SAME group, cancelling this run before its next
@@ -311,11 +317,6 @@ name: IDD advisory-convergence gate
 # reference before merge in the ordinary IDD flow, and by CODEOWNERS
 # review as the general backstop for any PR that evades it.
 on:
-  pull_request:
-    types:
-      - opened
-      - reopened
-      - synchronize
   pull_request_target:
     types:
       - opened
@@ -466,10 +467,10 @@ jobs:
   # this job's own job is only to detect the trigger and post it --
   # trust is established entirely at consume time, not here.
   #
-  # `if: pull_request_target` only, never `pull_request`: during
-  # kurone-kito/idd-skill#2764 Phase 1's transition window, both triggers
-  # remain active on this file, so a same-repository PR editing this YAML
-  # could otherwise also run this job under a `pull_request`-triggered
+  # `if: pull_request_target` only, never `pull_request`: this file's
+  # own `on:` block no longer declares `pull_request` at all (#2764
+  # Phase 2), but a same-repository PR can still reintroduce that
+  # trigger to its own copy of this YAML and run this job under an
   # instance it fully controls. The consumer's fourth trust condition
   # (the marker's `run-id:` must resolve to a `pull_request_target`-
   # triggered run) would reject a marker from that instance anyway, but
