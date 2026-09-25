@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { AuthorityEvidence } from '../src/scripts/external-check-waiver.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
+  composeGateTrustedMarkerLogins,
   parseProviderOutageAdvancedComment,
   parseProviderOutageDeclarationComment,
   renderProviderOutageAdvancedComment,
@@ -15,6 +16,7 @@ import {
   parseArgs,
   renderText,
   resolveProviderOutageDeclaration,
+  trustedLoginsForProviderOutageAdvancements,
 } from '../src/scripts/provider-outage-declaration.mts';
 
 const NOW = new Date('2026-09-01T06:00:00Z');
@@ -665,4 +667,56 @@ test('renderText: renders a genuinely different, non-JSON one-line-per-field for
 test('parseArgs: --help skips the required-flag checks', () => {
   const parsed = parseArgs(['--help']);
   assert.equal(parsed.help, true);
+});
+
+function advancedBy(login: string): CommentLike {
+  return {
+    body: renderProviderOutageAdvancedComment({
+      actor: login,
+      prNumber: 2345,
+      headSha: 'a'.repeat(40),
+      declaredAt: '2026-09-01T05:00:00Z',
+    }),
+    created_at: '2026-09-01T05:01:00Z',
+    author: { login },
+  };
+}
+
+test('list-advanced: a repository owner absent from trustedMarkerActors and not the viewer is not trusted', () => {
+  const logins = trustedLoginsForProviderOutageAdvancements({
+    viewerLogin: 'someone-else',
+    config: { trustedMarkerActors: ['listed-bot'] },
+  });
+  const list = listProviderOutageAdvancements([advancedBy('repo-owner')], {
+    trustedMarkerLogins: logins,
+  });
+  assert.equal(list.length, 0);
+});
+
+test('list-advanced: the same marker is trusted once the repository owner is listed', () => {
+  const logins = trustedLoginsForProviderOutageAdvancements({
+    viewerLogin: 'someone-else',
+    config: { trustedMarkerActors: ['repo-owner'] },
+  });
+  const list = listProviderOutageAdvancements([advancedBy('repo-owner')], {
+    trustedMarkerLogins: logins,
+  });
+  assert.equal(list.length, 1);
+  assert.equal(list[0]?.prNumber, 2345);
+});
+
+test('provider-outage advancement trust matches the gate trusted-marker composition', () => {
+  const config = { trustedMarkerActors: ['listed-bot'] };
+  assert.deepEqual(
+    trustedLoginsForProviderOutageAdvancements({
+      viewerLogin: 'viewer',
+      config,
+      collaboratorMarkerLogins: ['collab-writer'],
+    }),
+    composeGateTrustedMarkerLogins({
+      viewerLogin: 'viewer',
+      config,
+      collaboratorMarkerLogins: ['collab-writer'],
+    }),
+  );
 });

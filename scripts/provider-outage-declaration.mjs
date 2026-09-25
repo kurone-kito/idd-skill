@@ -20,8 +20,8 @@
 // (pre-merge-readiness.mts / advisory-wait-state.mts).
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import {
-  buildTrustedMarkerLogins,
   matchCheckSelector,
   normalizeAuthorityEvidence,
   resolveActorLogin,
@@ -33,11 +33,14 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import { loadTrustedActorConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
+  resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  composeGateTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   parseProviderOutageAdvancedComment,
   parseProviderOutageDeclarationComment,
@@ -291,6 +294,27 @@ export function evaluateProviderOutageRelief(input) {
  * sweep re-requests review per recorded HEAD, not merely per pull request
  * number.
  */
+/**
+ * Trusted logins for `idd-provider-outage-advanced` markers. Same
+ * composition the merge gate uses. No implicit repository owner.
+ * Config for a repository-scoped read comes from the live default
+ * branch, not the local worktree.
+ */
+export function trustedLoginsForProviderOutageAdvancements({
+  viewerLogin,
+  config,
+  flagValue = '',
+  envValue = '',
+  collaboratorMarkerLogins = [],
+}) {
+  return composeGateTrustedMarkerLogins({
+    viewerLogin,
+    flagValue,
+    envValue,
+    config,
+    collaboratorMarkerLogins,
+  });
+}
 export function listProviderOutageAdvancements(comments, options = {}) {
   const trustedSet = new Set(
     (options.trustedMarkerLogins ?? []).map((login) =>
@@ -543,15 +567,29 @@ export async function runProviderOutageDeclaration(options = {}) {
     const comments =
       options.comments ??
       fetchIssueComments({ owner, repo: name, issueNumber: targetIssue });
-    const trustedMarkerLogins = buildTrustedMarkerLogins({
-      owner,
-      repo: name,
-      rawConfig,
-      viewerLogin: '',
-      issueComments: comments,
+    const viewerLogin = (
+      options.viewerLogin ??
+      String(safeGhText(['api', 'user', '--jq', '.login']))
+    )
+      .trim()
+      .toLowerCase();
+    const trustConfig =
+      options.trustConfig !== undefined
+        ? options.trustConfig
+        : loadTrustedActorConfig({ owner, repo: name, baseRefName: '' });
+    const trustedMarkerLogins = trustedLoginsForProviderOutageAdvancements({
+      viewerLogin,
+      config: trustConfig,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
+        trustConfig,
+        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+      )
+        ? resolveTrustedCollaboratorMarkerLogins(owner, name, comments)
+        : [],
     });
     const result = listProviderOutageAdvancements(comments, {
-      trustedMarkerLogins: [...trustedMarkerLogins],
+      trustedMarkerLogins,
     });
     render(result, args.format);
     return { exitCode: 0, result };
