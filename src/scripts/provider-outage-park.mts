@@ -185,6 +185,13 @@ interface CommentLike {
   body?: string | null;
   created_at?: string | null;
   user?: { login?: string | null } | null;
+  /** #3249: `idd-provider-outage-park` is one of the issue's own named
+   * restrict-only exceptions -- ignoring an edited marker would LOWER the
+   * parked count and could lift `providerOutage.maxParkedChanges`, the
+   * opposite of every other family this issue tightens. Declared here only
+   * so a test fixture carrying it type-checks; this reader never consults
+   * it and intentionally applies no edit-state gate. */
+  last_edited_at?: string | null;
 }
 
 /**
