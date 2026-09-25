@@ -9,8 +9,9 @@
 // carry one exact `set` value (kurone-kito/idd-skill#3468). The
 // review-fix-loop-cutoff sole-member precondition calls this instead of
 // asking a session to paginate every issue comment by hand. A search
-// response with `incomplete_results`, or any other unfinished listing,
-// exits non-zero and never reports `soleMember: true`.
+// response with `incomplete_results`, a duplicate hit that hides a
+// distinct issue, an unfinished index-lag window, or any other
+// unfinished listing, exits non-zero and never reports `soleMember: true`.
 import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghApiJson } from './gh-exec.mjs';
@@ -31,6 +32,16 @@ import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
 export const SEARCH_RESULT_CAP = 1000;
 const SEARCH_PAGE_SIZE = 100;
 const SEARCH_MAX_PAGES = SEARCH_RESULT_CAP / SEARCH_PAGE_SIZE;
+/**
+ * How far back the issues API is read after a finished search. GitHub's
+ * search index can omit a comment that is already on the issue while
+ * still reporting `incomplete_results: false`. Issues updated inside
+ * this window are comment-scanned even when search missed them.
+ */
+export const INDEX_LAG_WINDOW_MS = 60 * 60 * 1000;
+/** One full page at this size means a later sibling may have been cut off. */
+export const INDEX_LAG_PAGE_SIZE = 100;
+export const INDEX_LAG_ISSUE_CAP = 100;
 const SET_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const FLAG_SPEC = {
@@ -99,8 +110,9 @@ export function parseIssueSearchPage(payload) {
 /**
  * Decide whether a sequence of search pages is a finished listing of
  * every hit. `incomplete_results` on any page, a total above the search
- * cap, or a collected item count other than `total_count` is unfinished.
- * Pull requests are dropped only after the raw count matches.
+ * cap, a collected item count other than `total_count`, or fewer
+ * distinct issue numbers than `total_count` is unfinished. Pull
+ * requests are dropped only after those counts match.
  */
 export function collectSearchedIssueNumbers(pages) {
   const unfinished = (reason) => ({
@@ -124,9 +136,14 @@ export function collectSearchedIssueNumbers(pages) {
   if (totalCount > SEARCH_RESULT_CAP) {
     return unfinished('search result cap exceeded');
   }
-  const rawCount = pages.reduce((sum, page) => sum + page.items.length, 0);
+  const rawItems = pages.flatMap((page) => page.items);
+  const rawCount = rawItems.length;
   if (rawCount !== totalCount) {
     return unfinished('collected count does not match total_count');
+  }
+  const uniqueCount = new Set(rawItems.map((item) => item.number)).size;
+  if (uniqueCount !== totalCount) {
+    return unfinished('unique count does not match total_count');
   }
   const numbers = [
     ...new Set(
@@ -139,12 +156,20 @@ export function collectSearchedIssueNumbers(pages) {
   ].sort((left, right) => left - right);
   return { complete: true, numbers, reason: '' };
 }
+function looksLikeOwnerMarker(body, markerPrefix) {
+  return body
+    .toLowerCase()
+    .includes(`${markerPrefix.toLowerCase()}-authoring-owner:`);
+}
 /**
  * Issues whose unedited trusted authoring-owner markers use `set`
- * exactly. An edited trusted marker for that set fails closed: ignoring
- * it could report a sole member while a sibling marker was rewritten.
- * Untrusted comments and markers for a different set do not count.
- * One issue with several markers for the set is still one member.
+ * exactly. Any edited trusted comment that still carries the
+ * authoring-owner token fails closed before parsing, including one
+ * whose edit removed the set or broke the marker shape. Ignoring that
+ * comment could report a sole member while a sibling marker was
+ * rewritten. Untrusted comments and unedited markers for a different
+ * set do not count. One issue with several markers for the set is
+ * still one member.
  */
 export function evaluateAuthoringSetMembers(input) {
   if (!input.enumerationComplete) {
@@ -164,17 +189,20 @@ export function evaluateAuthoringSetMembers(input) {
     if (!trusted.has(login)) {
       continue;
     }
-    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
-    if (!parsed || parsed.set !== input.set) {
-      continue;
-    }
-    if (comment.lastEditedAt !== null) {
+    if (
+      looksLikeOwnerMarker(comment.body, input.markerPrefix) &&
+      comment.lastEditedAt !== null
+    ) {
       return {
         complete: false,
         soleMember: false,
         issues: [],
         reason: 'edited trusted authoring-owner marker',
       };
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (!parsed || parsed.set !== input.set) {
+      continue;
     }
     issues.add(comment.issueNumber);
   }
@@ -186,13 +214,59 @@ export function evaluateAuthoringSetMembers(input) {
     reason: '',
   };
 }
+/**
+ * Issues updated inside the index-lag window. A full page, or more
+ * items than the cap, is unfinished: stopping there could hide a
+ * sibling search has not indexed yet. Pull requests are dropped only
+ * after that bound holds.
+ */
+export function collectIndexLagIssueNumbers(items, pageFull) {
+  if (pageFull || items.length > INDEX_LAG_ISSUE_CAP) {
+    return {
+      complete: false,
+      numbers: [],
+      reason: 'index-lag window exceeded',
+    };
+  }
+  const numbers = [
+    ...new Set(
+      items.filter((item) => !item.pullRequest).map((item) => item.number),
+    ),
+  ].sort((left, right) => left - right);
+  return { complete: true, numbers, reason: '' };
+}
+function fetchIndexLagIssues(owner, repo, sinceIso) {
+  const payload = ghApiJson(
+    `repos/${owner}/${repo}/issues?state=all&since=${encodeURIComponent(sinceIso)}&per_page=${INDEX_LAG_PAGE_SIZE}&page=1`,
+  );
+  if (!Array.isArray(payload)) {
+    throw new Error(
+      'authoring-set-members: index-lag issue list is not a readable page',
+    );
+  }
+  const items = [];
+  for (const item of payload) {
+    const record = item;
+    if (!Number.isInteger(record.number) || record.number <= 0) {
+      throw new Error(
+        'authoring-set-members: index-lag issue list has an unreadable issue number',
+      );
+    }
+    items.push({
+      number: record.number,
+      pullRequest: record.pull_request != null,
+    });
+  }
+  return { items, pageFull: payload.length >= INDEX_LAG_PAGE_SIZE };
+}
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/authoring-set-members.mjs --set <id> [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--trusted-marker-logins <login1,login2>]
 
 Lists every issue in the repository whose unedited trusted authoring-owner
 marker carries that exact set. Read-only. Exits non-zero when the listing
-does not finish, including a search response with incomplete_results.
+does not finish, including a search response with incomplete_results, a
+duplicate search hit, or an index-lag window that does not finish.
 soleMember is true only when exactly one such issue is listed.
 
 Output schema:
@@ -290,26 +364,42 @@ function runCli() {
   });
   const query = `repo:${owner}/${repo} is:issue "${args.set}"`;
   const search = collectSearchedIssueNumbers(fetchSearchPages(query));
-  const comments = search.complete
-    ? search.numbers.flatMap((issueNumber) =>
-        fetchProvenanceCommentsGraphql(owner, repo, issueNumber).map(
-          (comment) => ({
-            authorLogin: comment.authorLogin,
-            body: comment.body,
-            lastEditedAt: comment.lastEditedAt,
-            issueNumber,
-          }),
-        ),
+  const fetchedLag = search.complete
+    ? fetchIndexLagIssues(
+        owner,
+        repo,
+        new Date(Date.now() - INDEX_LAG_WINDOW_MS).toISOString(),
+      )
+    : null;
+  const lag = fetchedLag
+    ? collectIndexLagIssueNumbers(fetchedLag.items, fetchedLag.pageFull)
+    : { complete: true, numbers: [], reason: '' };
+  const enumerationComplete = search.complete && lag.complete;
+  const issueNumbers = enumerationComplete
+    ? [...new Set([...search.numbers, ...lag.numbers])].sort(
+        (left, right) => left - right,
       )
     : [];
+  const comments = issueNumbers.flatMap((issueNumber) =>
+    fetchProvenanceCommentsGraphql(owner, repo, issueNumber).map((comment) => ({
+      authorLogin: comment.authorLogin,
+      body: comment.body,
+      lastEditedAt: comment.lastEditedAt,
+      issueNumber,
+    })),
+  );
   const evaluation = evaluateAuthoringSetMembers({
     set: args.set,
     markerPrefix,
     trustedMarkerLogins,
     comments,
-    enumerationComplete: search.complete,
+    enumerationComplete,
   });
-  const reason = search.complete ? evaluation.reason : search.reason;
+  const reason = !search.complete
+    ? search.reason
+    : !lag.complete
+      ? lag.reason
+      : evaluation.reason;
   process.stdout.write(
     `${JSON.stringify(
       {

@@ -80,7 +80,17 @@
       }
     },
     "idd-authoring-set-members.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-branch-conflict-state.mjs": {
       "migrated": true,

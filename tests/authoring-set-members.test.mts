@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  collectIndexLagIssueNumbers,
   collectSearchedIssueNumbers,
   evaluateAuthoringSetMembers,
   type IssueSearchPage,
@@ -122,6 +123,24 @@ test('an edited trusted marker for the set fails closed', () => {
   assert.deepEqual(result.issues, []);
 });
 
+test('an edited trusted marker that no longer parses fails closed', () => {
+  const rewritten = marker(3469).replace('<!--', '');
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(3468, marker(3468)),
+      comment(3469, rewritten, 'kurone-kito', '2026-09-25T18:00:00Z'),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.reason, 'edited trusted authoring-owner marker');
+});
+
 test('an unfinished enumeration is not a sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
@@ -152,6 +171,18 @@ test('a short collection is unfinished even when incomplete_results is false', (
   assert.equal(result.reason, 'collected count does not match total_count');
 });
 
+test('duplicate search hits are unfinished even when the raw count matches', () => {
+  const result = collectSearchedIssueNumbers([
+    page(2, [
+      { number: 3468, pullRequest: false },
+      { number: 3468, pullRequest: false },
+    ]),
+  ]);
+  assert.equal(result.complete, false);
+  assert.equal(result.reason, 'unique count does not match total_count');
+  assert.deepEqual(result.numbers, []);
+});
+
 test('a finished search drops pull requests and lists issue numbers', () => {
   const result = collectSearchedIssueNumbers([
     page(2, [
@@ -161,6 +192,29 @@ test('a finished search drops pull requests and lists issue numbers', () => {
   ]);
   assert.equal(result.complete, true);
   assert.deepEqual(result.numbers, [3468]);
+});
+
+test('a full index-lag page is unfinished and drops every number', () => {
+  const items = Array.from({ length: 3 }, (_, index) => ({
+    number: index + 1,
+    pullRequest: false,
+  }));
+  const result = collectIndexLagIssueNumbers(items, true);
+  assert.equal(result.complete, false);
+  assert.equal(result.reason, 'index-lag window exceeded');
+  assert.deepEqual(result.numbers, []);
+});
+
+test('an index-lag page drops pull requests', () => {
+  const result = collectIndexLagIssueNumbers(
+    [
+      { number: 12, pullRequest: true },
+      { number: 3469, pullRequest: false },
+    ],
+    false,
+  );
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.numbers, [3469]);
 });
 
 test('CLI: --set exits non-zero when search reports incomplete_results', () => {
@@ -214,6 +268,10 @@ test('CLI: one verified marker prints that issue and soleMember true', () => {
       }));
       process.exit(0);
     }
+    if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    }
     if (args.includes('graphql')) {
       process.stdout.write(JSON.stringify({
         data: {
@@ -261,6 +319,77 @@ test('CLI: one verified marker prints that issue and soleMember true', () => {
     assert.equal(output.complete, true);
     assert.equal(output.soleMember, true);
     assert.deepEqual(output.issues, [3468]);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: a sibling only in the index-lag window is not a sole member', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }));
+      process.exit(0);
+    }
+    if (joined.includes('state=all')) {
+      process.stdout.write(JSON.stringify([{ number: 3469 }]));
+      process.exit(0);
+    }
+    if (args.includes('graphql')) {
+      const body = joined.includes('number=3469')
+        ? ${JSON.stringify(marker(3469))}
+        : ${JSON.stringify(marker(3468))};
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 1,
+                  lastEditedAt: null,
+                  createdAt: '2026-09-25T18:00:00Z',
+                  updatedAt: '2026-09-25T18:00:00Z',
+                  body,
+                  author: { login: 'kurone-kito' }
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    }
+    process.stderr.write('unexpected gh ' + joined);
+    process.exit(2);
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+          '--set',
+          SET,
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.complete, true);
+    assert.equal(output.soleMember, false);
+    assert.deepEqual(output.issues, [3468, 3469]);
   } finally {
     restore();
   }
