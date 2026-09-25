@@ -47,6 +47,7 @@ import type {
   TrustedMarkerActorResolution,
 } from './protocol-helpers.mts';
 import {
+  attachReviewThreadCommentEditHistories,
   buildPreMergeReadinessSummary,
   classifyPrLoopMembership,
   deriveIddAgentLogins,
@@ -62,6 +63,7 @@ import {
   resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
+  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
 } from './protocol-helpers.mts';
 import {
@@ -75,6 +77,7 @@ import {
 import type {
   ProviderComment,
   ProviderPort,
+  ProviderReviewThreadCommentEditHistory,
   ProviderReviewThreadWithComments,
 } from './provider-port.mts';
 // #2919: reused (not a new regex) to extract a live check-run's owning
@@ -1052,6 +1055,55 @@ export function collectPreMergeReadiness(
     trustedMarkerLogins,
     operationalComments: [...comments, ...claimComments],
   });
+  // #3269: bounded second-pass GraphQL fetch, scoped to only advisory-bot
+  // thread comments edited after their thread's latest IDD disposition
+  // (see `selectAdvisoryThreadCommentIdsEditedAfterDisposition`'s own doc
+  // comment) -- so `dispositionEvidence` below can verify a cosmetic edit
+  // (e.g. CodeRabbit's own comment-to-reply marker rewrite) and date it by
+  // content activity instead of `updatedAt`, which also moves on IDD's
+  // own hide-on-supersede minimization (kurone-kito/idd-skill#3173). The
+  // `isDispositionAuthor` predicate here MUST match
+  // `summarizeDispositionEvidenceForGate`'s own (via
+  // `buildPreMergeReadinessSummary`'s `iddAgentLogins`/`trustedMarkerLogins`
+  // options), or candidate selection and freshness evaluation could
+  // disagree about which comment anchors "the disposition". A fetch
+  // failure degrades to no enrichment (today's `updatedAt` dating)
+  // rather than failing this whole collector.
+  const baseNormalizedThreads = threads.map(normalizeThread);
+  const dispositionAuthorLoginSet = new Set([
+    ...iddAgentLogins,
+    ...trustedMarkerLogins,
+  ]);
+  const editHistoryCandidateIds =
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      baseNormalizedThreads,
+      {
+        isDispositionAuthor: (login) => dispositionAuthorLoginSet.has(login),
+        advisoryBotLogins,
+      },
+    );
+  let editHistories: ProviderReviewThreadCommentEditHistory[] = [];
+  if (editHistoryCandidateIds.length > 0) {
+    try {
+      editHistories = port.getReviewThreadCommentUserContentEdits(
+        editHistoryCandidateIds,
+      );
+    } catch {
+      // Fail closed to no enrichment -- every affected comment keeps
+      // today's `updatedAt` dating (see
+      // `resolveThreadCommentRevisionDatingOutcome`'s own "unverifiable"
+      // outcome for an absent/incomplete history, protocol-helpers.mts).
+    }
+  }
+  // Called unconditionally (even with an empty `editHistories`): returns
+  // `baseNormalizedThreads` UNCHANGED (same reference) when there is
+  // nothing to attach, so this is never more than a no-op enrichment pass
+  // in that case, and keeps `normalizedThreads`'s inferred type the same
+  // (structurally `ThreadLike[]`) regardless of which branch above ran.
+  const normalizedThreads = attachReviewThreadCommentEditHistories(
+    baseNormalizedThreads,
+    editHistories,
+  );
   const advisoryWaitPolicy = resolveAdvisoryWaitPolicy(advisoryWaitConfig);
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(advisoryWaitConfig);
   const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
@@ -1519,7 +1571,7 @@ export function collectPreMergeReadiness(
       prHeadSha,
       comments: normalizedComments,
       reviews: normalizedReviews,
-      threads: threads.map(normalizeThread),
+      threads: normalizedThreads,
       checks,
       branchRules,
       branchRulesets,
@@ -1949,6 +2001,13 @@ export function normalizeReview(review: ReviewPayload) {
  * threaded through -- it feeds `dispositionEvidence.missingThreads[].id`,
  * which a caller reads to identify which live thread to reply to; dropping
  * it forced a separate positional lookup to recover the real thread.
+ * Each comment's own `id` and `lastEditedAt` (#3269) are threaded through
+ * too -- `id` lets `selectAdvisoryThreadCommentIdsEditedAfterDisposition`
+ * name a candidate comment for the bounded `userContentEdits` fetch, and
+ * `lastEditedAt` (already returned by the port since #3246, but never
+ * mapped into this shape until #3269) is what
+ * `effectiveThreadCommentActivityAt` reads to tell a genuinely unedited
+ * comment from an edited one at all.
  */
 export function normalizeThread(thread: ProviderReviewThreadWithComments) {
   return {
@@ -1958,11 +2017,13 @@ export function normalizeThread(thread: ProviderReviewThreadWithComments) {
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: thread.comments.map((comment) => ({
+        id: comment.id,
         author: { login: comment.authorLogin },
         body: comment.body,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt || comment.createdAt,
         pullRequestReview: { id: comment.pullRequestReviewId ?? null },
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

@@ -181,6 +181,94 @@ export function fetchLastEditedAtByNodeId(ghTextFn, nodeIds) {
   }
   return result;
 }
+/** Bounds the single unpaginated `last:N` page {@link
+ * fetchReviewThreadCommentUserContentEdits} reads per comment -- the two
+ * merge-gate collectors that call it already scope `nodeIds` to a small,
+ * bounded set (advisory-bot thread comments edited after their thread's
+ * disposition), and a comment whose real edit history exceeds this page
+ * is reported with `totalCount > edits.length`, which the caller treats
+ * as an incomplete/unverifiable history (fails closed to `updatedAt`
+ * dating, `protocol-helpers.mts`'s
+ * `resolveThreadCommentRevisionDatingOutcome`) rather than a reason to
+ * paginate further. */
+const REVIEW_THREAD_COMMENT_EDITS_PAGE_SIZE = 20;
+/**
+ * #3269: batch-resolve GraphQL `PullRequestReviewComment.userContentEdits`
+ * for the given comment node ids via `nodes(ids:)`, chunked to 100 ids per
+ * request (matching {@link fetchLastEditedAtByNodeId}'s own convention).
+ * Backs {@link ProviderPort.getReviewThreadCommentUserContentEdits} -- see
+ * that method's doc comment for the full contract (bounded page size,
+ * `totalCount` vs. `edits.length`, connection order, fail-fast on a
+ * missing/mismatched node).
+ */
+export function fetchReviewThreadCommentUserContentEdits(ghTextFn, nodeIds) {
+  const result = [];
+  if (nodeIds.length === 0) {
+    return result;
+  }
+  const query = `query($ids:[ID!]!){
+  nodes(ids:$ids) {
+    id
+    ... on PullRequestReviewComment {
+      userContentEdits(last:${REVIEW_THREAD_COMMENT_EDITS_PAGE_SIZE}) {
+        totalCount
+        nodes { editedAt diff editor { login } deletedAt }
+      }
+    }
+  }
+}`;
+  const chunkSize = 100;
+  for (let start = 0; start < nodeIds.length; start += chunkSize) {
+    const chunk = nodeIds.slice(start, start + chunkSize);
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      ...chunk.flatMap((id) => ['-f', `ids[]=${id}`]),
+    ];
+    const parsed = JSON.parse(ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(parsed, 'fetchReviewThreadCommentUserContentEdits');
+    const nodes = parsed?.data?.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      throw new Error(
+        `fetchReviewThreadCommentUserContentEdits: expected ${chunk.length} node(s), got ${Array.isArray(nodes) ? nodes.length : 'none'}`,
+      );
+    }
+    nodes.forEach((node, index) => {
+      const expectedId = chunk[index];
+      const typed = node;
+      if (typed == null || String(typed.id ?? '') !== expectedId) {
+        throw new Error(
+          `fetchReviewThreadCommentUserContentEdits: node ${expectedId} missing or mismatched in response`,
+        );
+      }
+      const connection = typed.userContentEdits;
+      const totalCount =
+        typeof connection?.totalCount === 'number' ? connection.totalCount : 0;
+      const rawEdits = Array.isArray(connection?.nodes) ? connection.nodes : [];
+      const edits = rawEdits.map((raw) => {
+        const typedEdit = raw;
+        return {
+          editedAt:
+            typeof typedEdit?.editedAt === 'string' ? typedEdit.editedAt : null,
+          diff: typeof typedEdit?.diff === 'string' ? typedEdit.diff : null,
+          editorLogin:
+            typedEdit?.editor?.login == null
+              ? null
+              : String(typedEdit.editor.login),
+          deletedAt:
+            typeof typedEdit?.deletedAt === 'string'
+              ? typedEdit.deletedAt
+              : null,
+        };
+      });
+      result.push({ commentId: expectedId, totalCount, edits });
+    });
+  }
+  return result;
+}
 /**
  * Backs {@link ProviderPort.getWorkItemUserContentEdits} (via
  * {@link fetchWorkItemUserContentEdits}'s full backward-pagination loop
@@ -2444,12 +2532,17 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         owner,
         repo,
         number,
-        'body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
+        // #3269: `id` added -- the comment's own GraphQL node id, needed to
+        // batch-fetch getReviewThreadCommentUserContentEdits for exactly
+        // the qualifying advisory-bot comments (see that method's doc
+        // comment on provider-port.mts).
+        'id body createdAt updatedAt lastEditedAt author { login } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
         isResolved: node.isResolved,
         comments: node.comments.map((comment) => ({
+          id: comment.id == null ? undefined : String(comment.id),
           body: String(comment.body ?? ''),
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),
@@ -2498,6 +2591,9 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           .map((comment) => comment.databaseId)
           .filter((id) => typeof id === 'number'),
       }));
+    },
+    getReviewThreadCommentUserContentEdits(nodeIds) {
+      return fetchReviewThreadCommentUserContentEdits(deps.ghText, nodeIds);
     },
     listChangeRequestGraphqlComments(number) {
       const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
@@ -2861,12 +2957,15 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         owner,
         repo,
         number,
-        'body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
+        // #3269: `id` added -- see the identical addition and doc comment
+        // on `listChangeRequestReviewThreadsWithComments` above.
+        'id body createdAt updatedAt lastEditedAt author { login __typename } pullRequestReview { id }',
       );
       return nodes.map((node) => ({
         id: node.id,
         isResolved: node.isResolved,
         comments: node.comments.map((comment) => ({
+          id: comment.id == null ? undefined : String(comment.id),
           body: String(comment.body ?? ''),
           createdAt: String(comment.createdAt ?? ''),
           updatedAt: String(comment.updatedAt ?? ''),

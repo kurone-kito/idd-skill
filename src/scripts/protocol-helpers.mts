@@ -119,6 +119,51 @@ interface ThreadCommentLike {
   createdAt?: string | null;
   updatedAt?: string | null;
   pullRequestReview?: { id?: string | null } | null;
+  /** #3269: GraphQL `PullRequestReviewComment.lastEditedAt` -- see
+   * `classifyCommentEditState`'s three-state contract. Populated only by
+   * the two merge-gate collectors' own thread normalizers
+   * (`pre-merge-readiness.mts`, `advisory-convergence.mts`); every other
+   * consumer's thread comment leaves this `undefined` ('unknown' edit
+   * state), which keeps `effectiveThreadCommentActivityAt`'s pre-#3269
+   * `updatedAt` dating unchanged there. */
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
+  /** #3269: this comment's bounded `userContentEdits` revision history,
+   * populated ONLY by the two merge-gate collectors, and only for
+   * advisory-bot thread comments whose `lastEditedAt` postdates their
+   * thread's latest IDD disposition -- see
+   * `selectAdvisoryThreadCommentIdsEditedAfterDisposition` and
+   * `attachReviewThreadCommentEditHistories`. Every other thread comment
+   * (including an edited one at any other consumer) leaves this
+   * `undefined`, which keeps `updatedAt` dating for it. */
+  userContentEdits?: {
+    totalCount: number;
+    edits: {
+      editedAt?: string | null;
+      diff?: string | null;
+      editorLogin?: string | null;
+      deletedAt?: string | null;
+    }[];
+  } | null;
+}
+
+/** #3269: one entry {@link ProviderPort.getReviewThreadCommentUserContentEdits}
+ * (provider-port.mts) returns -- declared structurally here (never
+ * importing from provider-port.mts, matching this file's existing
+ * generic-shape convention for every other `*Like` interface) so
+ * {@link attachReviewThreadCommentEditHistories} stays a pure function a
+ * collector can call with its own port-shaped result array. */
+interface ReviewThreadCommentEditHistoryLike {
+  commentId?: string | null;
+  totalCount?: number | null;
+  edits?:
+    | {
+        editedAt?: string | null;
+        diff?: string | null;
+        editorLogin?: string | null;
+        deletedAt?: string | null;
+      }[]
+    | null;
 }
 
 /** Review thread (GraphQL `reviewThreads` node). */
@@ -567,12 +612,20 @@ export interface DispositionEvidenceSummary {
   // edited pre-existing comment, not a brand-new post-disposition comment).
   // This is a strict subset of the ack-only signal -- see
   // `missingThreads[].inPlaceEditOnly` for the per-thread detail and why this
-  // still never changes `route` by itself: GitHub's API exposes no revision
-  // diff for an edited comment, so neither this helper nor its caller can
-  // mechanically verify that an in-place edit only added cosmetic content
-  // (e.g. an "addressed" badge) rather than changing the substance of the
-  // finding. An agent that wants to trust this signal must still read the
-  // comment's current body before overriding.
+  // still never changes `route` by itself: this helper's OWN heuristic here
+  // (createdAt-at-or-before-disposition plus a later updatedAt, computed by
+  // `classifyThreadAckOnlyPostDisposition`) still cannot mechanically verify
+  // that an in-place edit only added cosmetic content (e.g. an "addressed"
+  // badge) rather than changing the substance of the finding -- an agent
+  // that wants to trust THIS signal must still read the comment's current
+  // body before overriding. GitHub's API does expose a revision diff for an
+  // edited comment (GraphQL `userContentEdits`, #3269 corrects an earlier,
+  // broader claim that it does not): `hasFreshDisposition`'s own dating (via
+  // `effectiveThreadCommentActivityAt`) now verifies a bounded set of such
+  // edits directly, in the two merge-gate collectors that fetch that
+  // history, so a thread whose sole blocker is a VERIFIED cosmetic edit
+  // clears through `missingThreadCount`/`route` itself rather than needing
+  // this advisory override at all.
   soleCauseInPlaceEditOnly: boolean;
   missingRegularComments: {
     id: string;
@@ -613,7 +666,12 @@ export interface DispositionEvidenceSummary {
     // than its own `createdAt`) -- distinguishing "the bot edited its own
     // already-dispositioned finding in place" from a generically ack-shaped
     // but genuinely new post-disposition comment. Still advisory-only: it
-    // never changes `reason` or the summary `route` by itself.
+    // never changes `reason` or the summary `route` by itself. This raw-
+    // timestamp heuristic is unrelated to, and unchanged by, #3269's
+    // separate revision-content verification (see `soleCauseInPlaceEditOnly`'s
+    // doc comment above) -- it stays a coarser, content-blind signal on
+    // purpose, for the (non-advisory-bot, or unbounded-fetch-scope) cases
+    // that verification never covers.
     inPlaceEditOnly: boolean;
   }[];
 }
@@ -2522,6 +2580,7 @@ export function indexThreadsByReview(
       if (
         !hasFreshDisposition(thread, {
           isDispositionAuthor: options.isDispositionAuthor,
+          advisoryBotLogins: options.advisoryBotLogins,
         }) &&
         !classifyThreadAckOnlyPostDisposition(thread, {
           iddAgentLogins: options.iddAgentLogins,
@@ -2921,6 +2980,13 @@ export function hasFreshDisposition(
   thread: ThreadLike,
   options: {
     isDispositionAuthor?: (login: string) => boolean;
+    // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
+    // verified-cosmetic-edit dating -- see that function's doc comment.
+    // Omitted (the default) by every caller outside the F2/F3
+    // disposition-evidence path, which never verifies an edited comment
+    // as cosmetic regardless of any attached `userContentEdits`,
+    // unchanged pre-#3269 `updatedAt` dating.
+    advisoryBotLogins?: unknown[] | null;
   } = {},
 ): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
@@ -2943,6 +3009,9 @@ export function hasFreshDisposition(
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -2967,7 +3036,9 @@ export function hasFreshDisposition(
   const latestFeedbackAt = maxIsoTimestamp(
     comments
       .filter((comment) => !isIddDisposition(comment))
-      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
       .filter(isValidIsoTimestamp),
   );
 
@@ -2975,7 +3046,10 @@ export function hasFreshDisposition(
     if (!isIddDisposition(comment)) {
       return false;
     }
-    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
+    const dispositionActivityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
     if (!isValidIsoTimestamp(dispositionActivityAt)) {
       return false;
     }
@@ -2984,6 +3058,181 @@ export function hasFreshDisposition(
       compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0
     );
   });
+}
+
+/**
+ * #3269: for each thread, finds the maximum content-activity timestamp
+ * among comments `hasFreshDisposition` would accept as a disposition on
+ * it (the SAME recognition: `isDispositionComment`, or -- only on an
+ * already-resolved thread -- the terminal `isRejectionConfirmedDisposition`
+ * marker, authored by `isDispositionAuthor`), then returns the GraphQL
+ * node id of every thread comment that is authored by a configured
+ * advisory bot, reports a parseable `lastEditedAt`
+ * (`classifyCommentEditState` === `'edited'`), and whose `lastEditedAt`
+ * postdates that thread's own disposition anchor.
+ *
+ * The two merge-gate collectors (`pre-merge-readiness.mts`'s F2 evidence
+ * collector, `advisory-convergence.mts`'s required-check collector) call
+ * this BEFORE `hasFreshDisposition`/`summarizeDispositionEvidenceForGate`
+ * itself, to build the bounded candidate list for
+ * `ProviderPort.getReviewThreadCommentUserContentEdits` (its own doc
+ * comment has the fetch's full contract), then thread the result through
+ * {@link attachReviewThreadCommentEditHistories} before calling either.
+ * A thread with no recognized disposition at all contributes no
+ * candidates: nothing yet anchors "after the disposition" for it, and
+ * `hasFreshDisposition` will report it missing regardless of how any
+ * individual comment is dated.
+ *
+ * `isDispositionAuthor` defaults to `hasFreshDisposition`'s own default
+ * (reject known bots, accept any human). A caller SHOULD pass the SAME
+ * predicate it will later pass to `hasFreshDisposition`/
+ * `summarizeDispositionEvidenceForGate` for this same evaluation, or
+ * candidate selection and freshness evaluation can disagree about which
+ * comment anchors "the disposition".
+ */
+export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+  threads: ThreadLike[],
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    advisoryBotLogins?: unknown[] | null;
+  } = {},
+): string[] {
+  const dispositionAuthorPredicate =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login: string) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const ids = new Set<string>();
+  for (const thread of threads ?? []) {
+    const nodes = thread.comments?.nodes ?? [];
+    const threadResolved = Boolean(thread.isResolved);
+    const isDisposition = (comment: { body?: string | null }): boolean =>
+      isDispositionComment(comment) ||
+      (threadResolved && isRejectionConfirmedDisposition(comment));
+    const dispositionAt = maxIsoTimestamp(
+      nodes
+        .filter((comment) => {
+          if (!isDisposition(comment)) {
+            return false;
+          }
+          const authorLogin = String(comment.author?.login ?? '')
+            .trim()
+            .toLowerCase();
+          return dispositionAuthorPredicate(authorLogin);
+        })
+        // Dating the disposition comment itself never needs cosmetic-edit
+        // verification -- it is IDD-agent/human-authored, never a
+        // configured advisory bot -- so an empty advisoryBotLogins set
+        // here (this file's own default) is deliberate and safe.
+        .map((comment) => effectiveThreadCommentActivityAt(comment))
+        .filter(isValidIsoTimestamp),
+    );
+    if (!dispositionAt) {
+      continue;
+    }
+    for (const comment of nodes) {
+      const authorLogin = String(comment.author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (!isConfiguredAdvisoryBotLogin(authorLogin, advisoryBotLogins)) {
+        continue;
+      }
+      if (classifyCommentEditState(comment) !== 'edited') {
+        continue;
+      }
+      const lastEditedAt = String(
+        comment.lastEditedAt ?? comment.last_edited_at ?? '',
+      );
+      if (!isValidIsoTimestamp(lastEditedAt)) {
+        continue;
+      }
+      if (compareIsoTimestamps(lastEditedAt, dispositionAt) <= 0) {
+        continue;
+      }
+      const id = String(comment.id ?? '').trim();
+      if (id) {
+        ids.add(id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * #3269: pure enrichment step -- returns a NEW `threads` array where each
+ * thread comment whose id matches an entry in `histories` (by
+ * `commentId`) carries that entry's `userContentEdits`. A comment with no
+ * matching entry, or a thread with no matching comment, is returned
+ * UNCHANGED (same object identity), so a caller can cheaply tell whether
+ * anything changed. The two merge-gate collectors call this with the
+ * result of `ProviderPort.getReviewThreadCommentUserContentEdits`, keyed
+ * on the SAME node ids
+ * {@link selectAdvisoryThreadCommentIdsEditedAfterDisposition} returned.
+ */
+export function attachReviewThreadCommentEditHistories(
+  threads: ThreadLike[],
+  histories: ReviewThreadCommentEditHistoryLike[] | null | undefined,
+): ThreadLike[] {
+  const byId = new Map<string, ReviewThreadCommentEditHistoryLike>();
+  for (const history of histories ?? []) {
+    const id = String(history?.commentId ?? '').trim();
+    if (id) {
+      byId.set(id, history);
+    }
+  }
+  if (byId.size === 0) {
+    return threads;
+  }
+  // `Array.prototype.map` always allocates a new OUTER array, even when
+  // every element it returns is unchanged -- `byId` being non-empty does
+  // not by itself mean any `threads` comment actually matched one of its
+  // ids (e.g. every requested id came back with no matching comment).
+  // Track that explicitly so a genuinely-no-op call (matching the
+  // `byId.size === 0` short-circuit just above) still returns `threads`
+  // by the SAME reference, honoring this function's own doc comment.
+  let anyChanged = false;
+  const nextThreads = threads.map((thread) => {
+    const nodes = thread.comments?.nodes ?? [];
+    if (nodes.length === 0) {
+      return thread;
+    }
+    let changed = false;
+    const nextNodes = nodes.map((comment) => {
+      const id = String(comment.id ?? '').trim();
+      const history = id ? byId.get(id) : undefined;
+      if (!history) {
+        return comment;
+      }
+      changed = true;
+      return {
+        ...comment,
+        userContentEdits: {
+          totalCount:
+            typeof history.totalCount === 'number' ? history.totalCount : 0,
+          edits: (history.edits ?? []).map((edit) => ({
+            editedAt: edit?.editedAt ?? null,
+            diff: edit?.diff ?? null,
+            editorLogin: edit?.editorLogin ?? null,
+            deletedAt: edit?.deletedAt ?? null,
+          })),
+        },
+      };
+    });
+    if (!changed) {
+      return thread;
+    }
+    anyChanged = true;
+    return {
+      ...thread,
+      comments: {
+        pageInfo: thread.comments?.pageInfo,
+        nodes: nextNodes,
+      },
+    };
+  });
+  return anyChanged ? nextThreads : threads;
 }
 
 // A disposition marker may carry a single interior punctuation char `[.!:]`
@@ -5850,7 +6099,7 @@ export function buildActivitySnapshotSummary(
           // marker (#2045); ordinary Accepted/Rejected markers keep the
           // pre-existing createdAt anchor.
           isRejectionConfirmedDisposition(comment)
-            ? effectiveThreadCommentActivityAt(comment)
+            ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
             : comment.createdAt,
         ),
     ),
@@ -5895,7 +6144,7 @@ export function buildActivitySnapshotSummary(
           )
           .map((comment) =>
             isRejectionConfirmedDisposition(comment)
-              ? effectiveThreadCommentActivityAt(comment)
+              ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
               : comment.createdAt,
           )
           .filter(isValidIsoTimestamp),
@@ -5918,7 +6167,10 @@ export function buildActivitySnapshotSummary(
       if (isDispositionMarkerComment(comment)) {
         return false;
       }
-      const activityAt = effectiveThreadCommentActivityAt(comment);
+      const activityAt = effectiveThreadCommentActivityAt(
+        comment,
+        advisoryBotLogins,
+      );
       return (
         isValidIsoTimestamp(activityAt) &&
         compareIsoTimestamps(activityAt, threadDispositionAt) > 0
@@ -6028,7 +6280,7 @@ export function buildActivitySnapshotSummary(
           describeAckItem(
             'thread-reply',
             comment,
-            effectiveThreadCommentActivityAt(comment),
+            effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
           ),
         ),
       ],
@@ -6435,9 +6687,15 @@ function isIddOriginatedThreadReply(
 // already existed at-or-before the disposition (its own `createdAt` is not
 // newer than the disposition, and its `updatedAt` is strictly newer than its
 // own `createdAt`) rather than a brand-new post-disposition comment.
-// Deliberately advisory-only, like its sibling: GitHub's API exposes no
-// revision diff for an edited comment, so this helper cannot tell a
-// cosmetic append from a substantive change to the finding.
+// Deliberately advisory-only, like its sibling: this heuristic itself
+// (createdAt-at-or-before-disposition plus a later updatedAt) still
+// cannot tell a cosmetic append from a substantive edit to the finding --
+// #3269 corrects a related but narrower premise, that GitHub's API
+// exposes no revision diff for an edited comment at all. It does
+// (GraphQL `userContentEdits`), and `hasFreshDisposition`'s own dating
+// (via `effectiveThreadCommentActivityAt`) now uses it, bounded to the
+// two merge-gate collectors that fetch it; `inPlaceEditOnly` here keeps
+// its own, separate, revision-content-blind heuristic unchanged.
 export function classifyThreadAckOnlyPostDisposition(
   thread: ThreadLike,
   options: {
@@ -6495,7 +6753,9 @@ export function classifyThreadAckOnlyPostDisposition(
               body: String(comment.body ?? ''),
             })),
       )
-      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
       .filter(isValidIsoTimestamp),
   );
   if (!threadDispositionAt) {
@@ -6517,7 +6777,10 @@ export function classifyThreadAckOnlyPostDisposition(
     ) {
       return false;
     }
-    const activityAt = effectiveThreadCommentActivityAt(comment);
+    const activityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
     return (
       isValidIsoTimestamp(activityAt) &&
       (!snapshotBoundaryAt ||
@@ -7015,6 +7278,11 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
+          // #3269: threaded through so a verified-cosmetic advisory-bot
+          // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
+          // dates by its content activity, not `updatedAt` -- see
+          // `effectiveThreadCommentActivityAt`'s doc comment.
+          advisoryBotLogins: options.advisoryBotLogins,
         })
       ) {
         return null;
@@ -7059,7 +7327,9 @@ export function summarizeDispositionEvidenceForGate(
                 authorLogin !== prAuthorLogin
               );
             })
-            .map((comment) => effectiveThreadCommentActivityAt(comment))
+            .map((comment) =>
+              effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+            )
             .filter(isValidIsoTimestamp),
         );
         if (
@@ -12435,21 +12705,266 @@ function threadActivityAt(thread: ThreadLike): string | null | undefined {
   return maxIsoTimestamp(commentTimes);
 }
 
+// #3269: matches any HTML comment, including a multi-line one (e.g. the
+// `<!--\n<consolidated_sites>...\n-->` block real CodeRabbit review-thread
+// replies carry) -- `[\s\S]*?` (not `.*?`) so `.` crossing a newline is not
+// needed, and non-greedy so consecutive comments extract as separate
+// entries rather than one span from the first `<!--` to the last `-->`.
+const THREAD_COMMENT_HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+
+/** #3269: `body` with every HTML comment removed -- the "visible text" a
+ * verified-cosmetic edit's append-only check compares. Deliberately does
+ * NOT trim/collapse the whitespace a removed comment leaves behind: the
+ * append-only check below only ever compares a longer string's PREFIX
+ * against a shorter one, so incidental blank-line noise from a stripped
+ * comment lands inside the compared or the appended region either way,
+ * never silently dropped from the comparison. */
+function stripHtmlCommentsForVisibleText(body: string): string {
+  return String(body ?? '').replace(THREAD_COMMENT_HTML_COMMENT_RE, '');
+}
+
+// #3269: the ONLY allowlisted append onto an otherwise-unchanged visible
+// text -- CodeRabbit's own resolve-attempt line, singular or plural
+// commit-range form (real samples: kurone-kito/idd-skill PR #3160 comment
+// `4056226337` appends "Addressed in commit 28c18a9"; PR #3154 comment
+// `4053784487` appends "Addressed in commits aa13fb1 to fda04e3"). Allows
+// leading/trailing blank lines (CRLF-tolerant) around the one resolution
+// line, but nothing else.
+const APPENDED_RESOLUTION_SUFFIX_RE =
+  /^(?:\r?\n)*✅ Addressed in commits? [0-9a-f]{7,40}(?: to [0-9a-f]{7,40})?(?:\r?\n)*$/;
+
+/**
+ * #3269: `true` when `currBody`'s visible text (HTML comments stripped)
+ * either equals `prevBody`'s, or extends it with nothing but the
+ * allowlisted resolution line above. Deliberately an exact-prefix
+ * (`startsWith`) check, not a trimmed/normalized comparison: the issue's
+ * own condition is "equals the previous revision's visible text,
+ * optionally followed by ... one appended resolution line", and comparing
+ * anything less exact would also accept a substantive mid-body edit that
+ * happens to leave the same trailing bytes.
+ */
+function isVisibleTextAppendOnly(prevBody: string, currBody: string): boolean {
+  const prevVisible = stripHtmlCommentsForVisibleText(prevBody);
+  const currVisible = stripHtmlCommentsForVisibleText(currBody);
+  if (currVisible === prevVisible) {
+    return true;
+  }
+  if (!currVisible.startsWith(prevVisible)) {
+    return false;
+  }
+  const remainder = currVisible.slice(prevVisible.length);
+  return APPENDED_RESOLUTION_SUFFIX_RE.test(remainder);
+}
+
+// #3269: CodeRabbit's own hidden reply-vs-comment marker, exactly as
+// observed live (kurone-kito/idd-skill PR #3160/#3154/#3196) -- an
+// original finding's marker HTML comment is rewritten from this exact
+// "comment" form to this exact "reply" form once CodeRabbit treats the
+// finding as replied-to, with no other change to that one HTML comment.
+// Deliberately directional (never normalize both forms to one before
+// comparing): a hypothetical reply-to-comment rewrite is NOT the same
+// allowlisted, one-way substitution the issue names.
+const CODERABBIT_COMMENT_MARKER =
+  '<!-- This is an auto-generated comment by CodeRabbit -->';
+const CODERABBIT_REPLY_MARKER =
+  '<!-- This is an auto-generated reply by CodeRabbit -->';
+
+/**
+ * #3269: `true` when every HTML comment in `prevBody` and `currBody`
+ * matches 1:1 by position, except that any differing pair is EXACTLY the
+ * allowlisted CodeRabbit comment-to-reply marker substitution above.
+ * Comparing extracted comments in isolation (not just stripping them
+ * before comparing visible text, as {@link isVisibleTextAppendOnly}
+ * already does) matters here: stripping hides ANY comment-content change,
+ * so relying on visible-text equality alone would also treat an
+ * arbitrary hidden-comment rewrite as cosmetic. A comment COUNT mismatch
+ * (one added or removed) is never allowlisted.
+ */
+function isOnlyAllowlistedMarkerCommentDiff(
+  prevBody: string,
+  currBody: string,
+): boolean {
+  const prevComments =
+    String(prevBody ?? '').match(THREAD_COMMENT_HTML_COMMENT_RE) ?? [];
+  const currComments =
+    String(currBody ?? '').match(THREAD_COMMENT_HTML_COMMENT_RE) ?? [];
+  if (prevComments.length !== currComments.length) {
+    return false;
+  }
+  for (let index = 0; index < prevComments.length; index += 1) {
+    if (prevComments[index] === currComments[index]) {
+      continue;
+    }
+    if (
+      prevComments[index] === CODERABBIT_COMMENT_MARKER &&
+      currComments[index] === CODERABBIT_REPLY_MARKER
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+/** #3269: outcome of {@link resolveThreadCommentRevisionDatingOutcome}. */
+type ThreadCommentRevisionDatingOutcome =
+  | { kind: 'unverifiable' }
+  | { kind: 'all-cosmetic' }
+  | { kind: 'dated'; at: string };
+
+/**
+ * #3269: walks `comment.userContentEdits.edits` in chronological
+ * (oldest-first) order and classifies each transition against its
+ * immediately preceding revision as "verified cosmetic" per the issue's
+ * exact three-condition definition:
+ * - the transition's editor equals `authorLogin` (the comment's own
+ *   author -- the caller already confirmed that author is a configured
+ *   advisory bot before calling this, since only a bot's OWN edit of its
+ *   OWN comment can ever be cosmetic in this sense);
+ * - {@link isVisibleTextAppendOnly} between the two revisions;
+ * - {@link isOnlyAllowlistedMarkerCommentDiff} between the two revisions.
+ *
+ * Returns `'all-cosmetic'` when every transition qualifies (dating stays
+ * `createdAt`), `'dated'` with the LAST transition that failed
+ * (dating is that revision's own `editedAt`), or `'unverifiable'` when
+ * the history itself cannot be trusted -- absent/empty, `totalCount`
+ * disagreeing with the fetched page (an incomplete history), fewer than
+ * two revisions for a comment GitHub reports as edited, a deleted or
+ * `null`-body revision anywhere in the chain, or a non-cosmetic
+ * transition with an unparseable `editedAt`. `'unverifiable'` always
+ * means "keep today's `updatedAt` dating" to the caller -- never treated
+ * as `'all-cosmetic'`, the same fail-closed direction
+ * `classifyCommentEditState` documents for its own `'unknown'` state.
+ */
+function resolveThreadCommentRevisionDatingOutcome(
+  comment: ThreadCommentLike,
+  authorLogin: string,
+): ThreadCommentRevisionDatingOutcome {
+  const history = comment.userContentEdits;
+  const edits = history?.edits;
+  if (!history || !Array.isArray(edits) || edits.length < 2) {
+    return { kind: 'unverifiable' };
+  }
+  const totalCount = history.totalCount;
+  if (typeof totalCount !== 'number' || totalCount !== edits.length) {
+    return { kind: 'unverifiable' };
+  }
+  // Connection order is newest-edit-first by convention
+  // (`ProviderPort.getReviewThreadCommentUserContentEdits`'s own doc
+  // comment), but a caller (a hand-built test fixture, in particular)
+  // must never be trusted to preserve that order -- sort explicitly by
+  // `editedAt` ascending (oldest/creation revision first).
+  const chronological = [...edits].sort((left, right) => {
+    const leftAt = Date.parse(String(left?.editedAt ?? ''));
+    const rightAt = Date.parse(String(right?.editedAt ?? ''));
+    if (Number.isNaN(leftAt) && Number.isNaN(rightAt)) {
+      return 0;
+    }
+    if (Number.isNaN(leftAt)) {
+      return 1;
+    }
+    if (Number.isNaN(rightAt)) {
+      return -1;
+    }
+    return leftAt - rightAt;
+  });
+  let prevBody: string | null = null;
+  let lastNonCosmeticAt: string | null = null;
+  for (const edit of chronological) {
+    if (edit == null || edit.deletedAt != null) {
+      return { kind: 'unverifiable' };
+    }
+    if (typeof edit.diff !== 'string') {
+      return { kind: 'unverifiable' };
+    }
+    if (prevBody !== null) {
+      const editorLogin = String(edit.editorLogin ?? '')
+        .trim()
+        .toLowerCase();
+      const cosmetic =
+        editorLogin !== '' &&
+        editorLogin === authorLogin &&
+        isVisibleTextAppendOnly(prevBody, edit.diff) &&
+        isOnlyAllowlistedMarkerCommentDiff(prevBody, edit.diff);
+      if (!cosmetic) {
+        if (!isValidIsoTimestamp(edit.editedAt ?? '')) {
+          return { kind: 'unverifiable' };
+        }
+        lastNonCosmeticAt = String(edit.editedAt);
+      }
+    }
+    prevBody = edit.diff;
+  }
+  return lastNonCosmeticAt
+    ? { kind: 'dated', at: lastNonCosmeticAt }
+    : { kind: 'all-cosmetic' };
+}
+
+/**
+ * Content-activity dating for one review-thread comment, shared by
+ * `hasFreshDisposition` and every diagnostic below it. Pre-#3269, this
+ * always preferred `updatedAt` (falling back to `createdAt`) -- but
+ * `updatedAt` also moves without any content edit (e.g. IDD's own
+ * hide-on-supersede minimization, kurone-kito/idd-skill#3173). #3269
+ * dates by content activity instead, using `classifyCommentEditState`'s
+ * three-state `lastEditedAt` contract:
+ * - `'unedited'` (an explicit `lastEditedAt: null`): `createdAt` -- the
+ *   comment was never body-edited, so `updatedAt` cannot reflect a real
+ *   content change;
+ * - `'edited'`: the time of the comment's own last revision that was NOT
+ *   a verified cosmetic edit (`resolveThreadCommentRevisionDatingOutcome`
+ *   above), which is `createdAt` when every revision was cosmetic --
+ *   ONLY when `comment.userContentEdits` is populated AND `comment`'s
+ *   author is a configured advisory bot (`advisoryBotLogins`); otherwise
+ *   falls back to `updatedAt`, unchanged from today;
+ * - `'unknown'` (absent/unparseable `lastEditedAt`): `updatedAt`,
+ *   unchanged from today.
+ *
+ * `advisoryBotLogins` defaults to an empty set, so a caller that omits it
+ * (every caller outside the two merge-gate collectors' own
+ * disposition-evidence path) never verifies an edited comment as
+ * cosmetic, regardless of what `userContentEdits` data happens to be
+ * attached -- fail-closed defense in depth, matching the issue's own
+ * negative test for "an allowlisted append on a comment by an author who
+ * is not an advisory bot".
+ */
 function effectiveThreadCommentActivityAt(
-  comment:
-    | { updatedAt?: string | null; createdAt?: string | null }
-    | null
-    | undefined,
+  comment: ThreadCommentLike | null | undefined,
+  advisoryBotLogins: Set<string> = new Set(),
 ): string {
-  const updatedAt = String(comment?.updatedAt ?? '');
-  if (isValidIsoTimestamp(updatedAt)) {
-    return updatedAt;
+  if (comment == null) {
+    return '';
   }
-  const createdAt = String(comment?.createdAt ?? '');
-  if (isValidIsoTimestamp(createdAt)) {
-    return createdAt;
+  const updatedAt = String(comment.updatedAt ?? '');
+  const validUpdatedAt = isValidIsoTimestamp(updatedAt) ? updatedAt : '';
+  const createdAt = String(comment.createdAt ?? '');
+  const validCreatedAt = isValidIsoTimestamp(createdAt) ? createdAt : '';
+  const fallback = validUpdatedAt || validCreatedAt;
+  const editState = classifyCommentEditState(comment);
+  if (editState === 'unedited') {
+    return validCreatedAt || validUpdatedAt;
   }
-  return '';
+  if (editState !== 'edited') {
+    // 'unknown': lastEditedAt absent/unparseable -- keep today's dating.
+    return fallback;
+  }
+  const authorLogin = String(comment.author?.login ?? '')
+    .trim()
+    .toLowerCase();
+  if (!isConfiguredAdvisoryBotLogin(authorLogin, advisoryBotLogins)) {
+    return fallback;
+  }
+  const outcome = resolveThreadCommentRevisionDatingOutcome(
+    comment,
+    authorLogin,
+  );
+  if (outcome.kind === 'all-cosmetic') {
+    return validCreatedAt || validUpdatedAt;
+  }
+  if (outcome.kind === 'dated' && isValidIsoTimestamp(outcome.at)) {
+    return outcome.at;
+  }
+  return fallback;
 }
 
 function hasCompletedBotThreadDispositions(

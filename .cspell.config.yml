@@ -61,3 +61,13 @@ words:
   - rethrew
   - resumability
   - vrchat
+  - unfetched
+  # #3269: fragments of real GraphQL review-thread/comment node ids
+  # (PullRequestReviewThread/-Comment, base64-like opaque suffixes),
+  # quoted verbatim from live kurone-kito/idd-skill PR #3160/#3154/#3196
+  # data in test fixtures -- not invented words.
+  - PRRC
+  - PRRT
+  - Wpaqs
+  - Iwjk
+  - xzgrt

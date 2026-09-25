@@ -40,6 +40,7 @@ import type {
   ProviderRequiredCheck,
   ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
+  ProviderReviewThreadCommentEditHistory,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
   ProviderReviewThreadWithAuthorType,
@@ -211,6 +212,26 @@ export interface FakeProviderFixture {
   reviewThreadsExtended?: Record<number, ProviderReviewThreadExtended[]>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadCommentIds}. */
   reviewThreadCommentIds?: Record<number, ProviderReviewThreadCommentIds[]>;
+  /** Backs {@link ProviderPort.getReviewThreadCommentUserContentEdits},
+   * keyed by the requested comment's own GraphQL node id (#3269). An id
+   * with no fixture entry gets a `{commentId, totalCount: 0, edits: []}`
+   * default -- matches the real adapter's behavior for a comment GitHub
+   * reports as never edited. */
+  reviewThreadCommentUserContentEdits?: Record<
+    string,
+    ProviderReviewThreadCommentEditHistory
+  >;
+  /** When `true`, {@link ProviderPort.getReviewThreadCommentUserContentEdits}
+   * throws -- simulates a failed `userContentEdits` fetch (#3269's own
+   * "a failed userContentEdits fetch" negative test). */
+  reviewThreadCommentUserContentEditsFails?: boolean;
+  /** Every {@link ProviderPort.getReviewThreadCommentUserContentEdits}
+   * call's `nodeIds` argument is appended here, in call order (#3269) --
+   * lets a test assert exactly which comment ids a collector requested
+   * edit history for (the "requested only for advisory-bot thread
+   * comments whose lastEditedAt is after their thread's disposition"
+   * acceptance criterion). */
+  requestedReviewThreadCommentEditHistoryIds?: string[][];
   /** Backs {@link ProviderPort.listChangeRequestGraphqlComments}. */
   changeRequestGraphqlComments?: Record<number, ProviderGraphqlComment[]>;
   /** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
@@ -796,6 +817,26 @@ export function createFakeProviderAdapter(
       number: number,
     ): ProviderReviewThreadCommentIds[] {
       return fixture.reviewThreadCommentIds?.[number] ?? [];
+    },
+
+    getReviewThreadCommentUserContentEdits(
+      nodeIds: string[],
+    ): ProviderReviewThreadCommentEditHistory[] {
+      fixture.requestedReviewThreadCommentEditHistoryIds ??= [];
+      fixture.requestedReviewThreadCommentEditHistoryIds.push([...nodeIds]);
+      if (fixture.reviewThreadCommentUserContentEditsFails) {
+        throw new Error(
+          'fake provider: getReviewThreadCommentUserContentEdits configured to fail',
+        );
+      }
+      return nodeIds.map(
+        (id) =>
+          fixture.reviewThreadCommentUserContentEdits?.[id] ?? {
+            commentId: id,
+            totalCount: 0,
+            edits: [],
+          },
+      );
     },
 
     listChangeRequestGraphqlComments(number: number): ProviderGraphqlComment[] {

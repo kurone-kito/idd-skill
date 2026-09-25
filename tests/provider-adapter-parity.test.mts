@@ -309,6 +309,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                       comments: {
                         nodes: [
                           {
+                            id: 'PRRC_resolved',
                             body: '**Accepted** — fixed.',
                             createdAt: '2026-01-01T00:00:00Z',
                             updatedAt: '2026-01-01T00:00:00Z',
@@ -327,6 +328,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                       comments: {
                         nodes: [
                           {
+                            id: 'PRRC_open',
                             body: 'Please fix this too.',
                             createdAt: '2026-01-01T01:00:00Z',
                             updatedAt: '2026-01-01T01:00:00Z',
@@ -357,6 +359,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
           isResolved: true,
           comments: [
             {
+              id: 'PRRC_resolved',
               body: '**Accepted** — fixed.',
               createdAt: '2026-01-01T00:00:00Z',
               updatedAt: '2026-01-01T00:00:00Z',
@@ -371,6 +374,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
           isResolved: false,
           comments: [
             {
+              id: 'PRRC_open',
               body: 'Please fix this too.',
               createdAt: '2026-01-01T01:00:00Z',
               updatedAt: '2026-01-01T01:00:00Z',

@@ -54,6 +54,7 @@ import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
   LIVE_STATUS_DIGEST_MARKER,
   summarizeClaimValidation,
+  summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -2353,6 +2354,92 @@ test('#3337: an untrusted author comment produces the same disposition-evidence 
     digestShaped.sameHeadReroll.ineligibleReasons,
     ordinary.sameHeadReroll.ineligibleReasons,
   );
+});
+
+// #3269: the required check (computeAdvisoryConvergenceVerdict, via its own
+// reused summarizeDispositionEvidenceForGate call) must reach the SAME
+// verdict as F2's own summarizeDispositionEvidenceForGate call
+// (buildPreMergeReadinessSummary, protocol-helpers.mts) for an identical
+// enriched thread -- otherwise the two merge gates could disagree about
+// whether a verified-cosmetic advisory-bot edit re-blocks. The fixture is
+// the real PR #3160 thread PRRT_kwDOSWpaqs6kHP8I / comment 4056226337 (see
+// tests/pre-merge-readiness.test.mts's identical fixture for the full
+// citation): 3 real revisions where the only post-disposition changes are
+// an "Addressed in commit" append and CodeRabbit's own comment-to-reply
+// marker rewrite, both verified cosmetic, so the finding dates by its
+// createdAt (well before the disposition) rather than its post-cleanup
+// updatedAt.
+test('#3269: dispositionEvidence.missingThreadCount agrees with F2 for the real PRRT_kwDOSWpaqs6kHP8I fixture', () => {
+  const findingText =
+    '**Security & Privacy**: the CLI integration fixture never exercises the unauthorized-contributor rejection path.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T07:17:38Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated reply by CodeRabbit -->\n\n✅ Addressed in commit 28c18a9`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:01Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated comment by CodeRabbit -->\n\n✅ Addressed in commit 28c18a9`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: `${findingText}\n\n<!-- This is an auto-generated comment by CodeRabbit -->`,
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6kHP8I',
+    isResolved: true,
+    comments: {
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs7xxRoh',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T12:00:11Z',
+          lastEditedAt: '2026-09-20T07:17:38Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: TRUSTED },
+          createdAt: '2026-09-20T07:17:35Z',
+          updatedAt: '2026-09-20T07:17:35Z',
+          body: '**Accepted** — Fixed in 28c18a9.',
+        },
+      ],
+    },
+  };
+
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ threads: [thread] }),
+    baseOptions({ advisoryBotLogins: ['coderabbitai[bot]'] }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.dispositionEvidence.missingThreadCount, 0);
+
+  // F2's own call site (buildPreMergeReadinessSummary,
+  // protocol-helpers.mts), replicated here against the SAME thread. A
+  // snapshotBoundaryAt well before this PR's own activity keeps the
+  // separate "resolved thread predates the snapshot boundary" carve-out
+  // from independently clearing the thread, so a passing assertion here
+  // demonstrates the SAME verified-cosmetic dating fix, not an unrelated
+  // boundary short-circuit.
+  const f2Summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: [TRUSTED],
+      trustedMarkerLogins: [TRUSTED],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-09-19T00:00:00Z',
+    },
+  );
+  assert.equal(f2Summary.missingThreadCount, 0);
 });
 
 test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {
@@ -5966,6 +6053,36 @@ test('collectFromGitHub resolves the provider-outage declaration at the SAME inj
     /resolveProviderOutageDeclaration\(\{[^}]*now:\s*new Date\(resolvedNow\),?[^}]*\}\)/s,
   );
   assert.match(source, /options:\s*\{\s*now:\s*resolvedNow,/);
+});
+
+test('collectFromGitHub selects, fetches, and attaches userContentEdits history before threads reaches inputs.threads (#3269: pins the call-site forwarding shape)', () => {
+  // Same "pin the call site" spirit as the #1810/#1906/#2137/#2353 tests
+  // above: the enrichment pipeline is proven correct in isolation
+  // (protocol-helpers.mts's own selectAdvisoryThreadCommentIdsEditedAfterDisposition
+  // / attachReviewThreadCommentEditHistories tests, plus
+  // pre-merge-readiness.mts's two dedicated fake-port tests for its own
+  // identical wiring), so the one remaining risk at THIS real call site
+  // is someone re-inlining `baseThreads` directly into `inputs.threads`
+  // (dropping the enrichment silently) or using a candidate-selection
+  // predicate that disagrees with this gate's own `iddAgentLogins:
+  // trustedMarkerLogins` convention just below.
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /selectAdvisoryThreadCommentIdsEditedAfterDisposition\(baseThreads, \{\s*isDispositionAuthor: \(login\) => trustedMarkerLoginSet\.has\(login\),\s*advisoryBotLogins,\s*\}\);/,
+  );
+  assert.match(
+    source,
+    /try \{\s*editHistories = port\.getReviewThreadCommentUserContentEdits\(/,
+  );
+  assert.match(
+    source,
+    /const threads = attachReviewThreadCommentEditHistories\(\s*baseThreads,\s*editHistories,\s*\)/,
+  );
+  assert.match(source, /inputs:\s*\{[^}]*\bthreads,[^}]*\}/s);
 });
 
 // --- parseArgs ---------------------------------------------------------------

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   createGithubProviderAdapter,
   fetchLastEditedAtByNodeId,
+  fetchReviewThreadCommentUserContentEdits,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
 
@@ -1623,6 +1624,164 @@ test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #3269: getReviewThreadCommentUserContentEdits /
+// fetchReviewThreadCommentUserContentEdits.
+// ---------------------------------------------------------------------------
+
+test('getReviewThreadCommentUserContentEdits: selects editedAt, diff, editor, deletedAt and maps totalCount (#3269)', () => {
+  let capturedQuery: string | undefined;
+  let capturedIds: string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedQuery = args.find((arg) => arg.startsWith('query=query($ids'));
+        capturedIds = args
+          .filter((arg) => arg.startsWith('ids[]='))
+          .map((arg) => arg.slice('ids[]='.length));
+        return JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_1',
+                userContentEdits: {
+                  totalCount: 2,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body after the edit',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                    {
+                      editedAt: '2026-09-20T05:37:59Z',
+                      diff: 'body at creation',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        });
+      },
+    }),
+  );
+  const result = port.getReviewThreadCommentUserContentEdits(['PRRC_1']);
+  assert.match(
+    capturedQuery ?? '',
+    /editedAt diff editor \{ login \} deletedAt/,
+  );
+  assert.match(capturedQuery ?? '', /\.\.\. on PullRequestReviewComment/);
+  assert.deepEqual(capturedIds, ['PRRC_1']);
+  assert.deepEqual(result, [
+    {
+      commentId: 'PRRC_1',
+      totalCount: 2,
+      edits: [
+        {
+          editedAt: '2026-09-20T07:17:38Z',
+          diff: 'body after the edit',
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+        {
+          editedAt: '2026-09-20T05:37:59Z',
+          diff: 'body at creation',
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+      ],
+    },
+  ]);
+});
+
+test('getReviewThreadCommentUserContentEdits: an incomplete history reports totalCount above edits.length verbatim, never truncated or padded (#3269)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_incomplete',
+                userContentEdits: {
+                  totalCount: 25,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'newest fetched revision',
+                      editor: { login: 'coderabbitai' },
+                      deletedAt: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  const result = port.getReviewThreadCommentUserContentEdits([
+    'PRRC_incomplete',
+  ]);
+  assert.equal(result[0].totalCount, 25);
+  assert.equal(result[0].edits.length, 1);
+});
+
+test('fetchReviewThreadCommentUserContentEdits: chunks a 101-id batch into two requests of 100 and 1', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `PRRC_${i}`);
+  const calls: string[][] = [];
+  const ghTextStub = (args: string[]): string => {
+    calls.push(args);
+    const idArgs = args.filter((arg) => arg.startsWith('ids[]='));
+    return JSON.stringify({
+      data: {
+        nodes: idArgs.map((arg) => ({
+          id: arg.slice('ids[]='.length),
+          userContentEdits: { totalCount: 0, nodes: [] },
+        })),
+      },
+    });
+  };
+  const result = fetchReviewThreadCommentUserContentEdits(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    nodeIds,
+  );
+  assert.equal(calls.length, 2, 'expected exactly two chunked requests');
+  assert.equal(
+    calls[0].filter((arg) => arg.startsWith('ids[]=')).length,
+    100,
+    'first request carries 100 ids',
+  );
+  assert.equal(
+    calls[1].filter((arg) => arg.startsWith('ids[]=')).length,
+    1,
+    'second request carries the remaining 1 id',
+  );
+  assert.equal(result.length, 101);
+  for (const entry of result) {
+    assert.deepEqual(entry.edits, []);
+    assert.equal(entry.totalCount, 0);
+  }
+});
+
+test('fetchReviewThreadCommentUserContentEdits: an empty id list makes no request', () => {
+  const ghTextStub = (): string => {
+    throw new Error('ghText must not be called for an empty id list');
+  };
+  const result = fetchReviewThreadCommentUserContentEdits(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    [],
+  );
+  assert.deepEqual(result, []);
+});
+
+// ---------------------------------------------------------------------------
 // searchOpenWorkItems (#2266): discover-roadmap-graph.mts's
 // buildSearchIssuesRunner, previously never directly tested (only exercised
 // through live production wiring) -- net-new coverage.
@@ -1799,6 +1958,10 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
                 comments: {
                   nodes: [
                     {
+                      // #3269: proves the comment's own node id is
+                      // selected and mapped, not merely tolerated when
+                      // absent.
+                      id: 'PRRC_1',
                       body: 'hello',
                       url: 'https://example.invalid/c/1',
                       createdAt: '2026-01-01T00:00:00Z',
@@ -1839,6 +2002,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
       isResolved: true,
       comments: [
         {
+          id: 'PRRC_1',
           body: 'hello',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
@@ -2506,6 +2670,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
                 comments: {
                   nodes: [
                     {
+                      id: 'PRRC_1',
                       body: 'hi',
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
@@ -2543,6 +2708,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
       isResolved: false,
       comments: [
         {
+          id: 'PRRC_1',
           body: 'hi',
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
