@@ -840,7 +840,11 @@ function buildRequiredChecksRollup(
  * is not in the required set does not change a `success` rollup.
  * The no-required-checks fallback calls {@link resolvePresentRunConclusion}
  * so a success from a different workflow cannot hide another producer's
- * failure.
+ * failure. Waiver coverage is not an input: `collectCiWaitState` does
+ * not read external-check waivers, so a required check that is failing
+ * in the rollup stays non-passing here even when pre-merge readiness
+ * would treat a valid waiver as covered. This command does not
+ * re-validate waivers.
  */
 export function ciWaitSummaryIsPreMergeCiPassing(
   summary: CiWaitStateSummary,

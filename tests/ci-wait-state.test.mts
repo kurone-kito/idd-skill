@@ -1333,3 +1333,17 @@ test('#3465: pre-merge CI predicate follows required-check success, pending, fai
     false,
   );
 });
+
+test('#3465: a raw required-check failure refuses without consulting waivers', () => {
+  // collectCiWaitState does not read external-check waivers. A failing
+  // required check stays non-passing for the watermark gate even when a
+  // later pre-merge pass would treat a valid waiver as covered.
+  const failing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'FAILURE' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
+});
