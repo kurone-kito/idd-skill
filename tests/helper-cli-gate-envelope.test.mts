@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { fixtureEnv } from './test-utils.mts';
+import { fixtureEnv, stubExecutable } from './test-utils.mts';
 
 // #3443: envelope-on gate exits the shared args-only contract sweep cannot
 // stage (a held lock, a clone-lock timeout, or a parsed failing report).
@@ -23,25 +23,22 @@ interface SpawnResult {
   stderr: string;
 }
 
-function childEnv(ghDir?: string): NodeJS.ProcessEnv {
+function childEnv(): NodeJS.ProcessEnv {
   const env = fixtureEnv();
   env.IDD_HELPER_ERROR_ENVELOPE = '1';
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
-  if (ghDir !== undefined) {
-    env.PATH = env.PATH ? `${ghDir}${delimiter}${env.PATH}` : ghDir;
-  }
   return env;
 }
 
 function spawnBin(
   bin: string,
   args: readonly string[],
-  options: { cwd?: string; ghDir?: string } = {},
+  options: { cwd?: string } = {},
 ): SpawnResult {
   const result = spawnSync(process.execPath, [join(BIN_DIR, bin), ...args], {
     cwd: options.cwd ?? REPO_ROOT,
-    env: childEnv(options.ghDir),
+    env: childEnv(),
     encoding: 'utf8',
     timeout: SPAWN_TIMEOUT_MS,
     killSignal: 'SIGKILL',
@@ -89,24 +86,8 @@ function withGitRepo(run: (repo: string) => void): void {
   }
 }
 
-function writeGhStub(scriptBody: string): {
-  dir: string;
-  cleanup: () => void;
-} {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-gate-gh-'));
-  const bodyPath = join(dir, 'gh.body.js');
-  writeFileSync(bodyPath, scriptBody);
-  writeFileSync(
-    join(dir, 'gh'),
-    `#!/bin/sh\nexec "${process.execPath}" "${bodyPath}" "$@"\n`,
-  );
-  chmodSync(join(dir, 'gh'), 0o755);
-  return {
-    dir,
-    cleanup: () => {
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
+function writeGhStub(scriptBody: string): () => void {
+  return stubExecutable('gh', scriptBody);
 }
 
 const NOT_FOUND_GH = `process.stderr.write('gh: HTTP 404\\n'); process.exit(1);\n`;
@@ -261,33 +242,39 @@ test('clone-lock passes a non-zero child status through as gate', () => {
 });
 
 test('suitability-close-execute not-found dry-run is an envelope gate exit 1', () => {
-  const stub = writeGhStub(NOT_FOUND_GH);
+  const cleanup = writeGhStub(NOT_FOUND_GH);
   try {
-    const result = spawnBin(
-      'idd-suitability-close-execute.mjs',
-      ['--issue', '1', '--owner', 'example', '--repo', 'example'],
-      { ghDir: stub.dir },
-    );
+    const result = spawnBin('idd-suitability-close-execute.mjs', [
+      '--issue',
+      '1',
+      '--owner',
+      'example',
+      '--repo',
+      'example',
+    ]);
     assertGate(result, 1);
     assert.match(result.stdout, /"ready": false/);
   } finally {
-    stub.cleanup();
+    cleanup();
   }
 });
 
 test('roadmap-audit-execute childless dry-run is an envelope gate exit 1', () => {
-  const stub = writeGhStub(CHILDLESS_ROADMAP_GH);
+  const cleanup = writeGhStub(CHILDLESS_ROADMAP_GH);
   try {
-    const result = spawnBin(
-      'idd-roadmap-audit-execute.mjs',
-      ['--roadmap', '7', '--owner', 'example', '--repo', 'example'],
-      { ghDir: stub.dir },
-    );
+    const result = spawnBin('idd-roadmap-audit-execute.mjs', [
+      '--roadmap',
+      '7',
+      '--owner',
+      'example',
+      '--repo',
+      'example',
+    ]);
     assertGate(result, 1);
     assert.match(result.stdout, /"ready": false/);
     assert.match(result.stdout, /"kind": "childless"/);
   } finally {
-    stub.cleanup();
+    cleanup();
   }
 });
 
