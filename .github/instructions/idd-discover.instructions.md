@@ -565,9 +565,9 @@ ascending issue-number order:
   claim-state rules in `idd-claim.instructions.md`, including
   forced-handoff and legacy markers. Loop the single-issue
   `resume-claim-routing.mjs --fresh-claim-gate` resolver, or apply those
-  rules manually. Only when the latest valid `claimed-by` is
-  non-stale (`created_at > now - claim-stale-age`; see
-  `docs/policy-constants.md`), run
+  rules manually. A non-stale `claimed-by` with no `{claim-id}`
+  is **ineligible**. Only when it is non-stale (see
+  `docs/policy-constants.md`) and has one, run
   `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
   fallback) with `--worktree`=own cwd and that `--claim-id`:
   `present: true` (not malformed) routes to
@@ -575,7 +575,7 @@ ascending issue-number order:
   is **ineligible**. Also **ineligible** when a stale or released
   claim's same-clone worktree probe finds a live match or is
   unreadable without verified owner resume or authorized handoff
-  (#3141, Round 21 report). Otherwise it **remains eligible**.
+  (#3141). Otherwise it **remains eligible**.
 
 After scanning the current batch:
 
