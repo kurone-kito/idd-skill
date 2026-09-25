@@ -40,13 +40,15 @@ state has been re-read.
 The ordinary digest helper (`live-status-digest.mjs`) enforces this
 author boundary mechanically: only a current-digest comment authored by
 a trusted marker actor is ever updated or counted toward the
-duplicate-digest check, and a digest is excluded from review activity
-and unreplied-comment counting (`buildActivitySnapshotSummary`,
-`summarizeRegularCommentsForGate`) only when its author is that same
-trusted marker actor; disposition-evidence counting
-(`summarizeDispositionEvidenceForGate`) additionally excludes a
-recognized IDD-agent author, so a second trusted session's own digest
-is never mistaken for unanswered feedback. A digest-marker comment
+duplicate-digest check. Review-activity counting
+(`buildActivitySnapshotSummary`) excludes a digest-marker comment only
+when its author is that same trusted marker actor. Unreplied-comment
+and disposition-evidence counting (`summarizeRegularCommentsForGate`,
+`summarizeDispositionEvidenceForGate`) instead exclude a digest-marker
+comment when its author is a trusted marker actor OR a recognized
+IDD-agent author -- otherwise an agent's own digest posted outside the
+trusted set would count as a genuine reply and wrongly clear earlier,
+still-unanswered feedback as already addressed. A digest-marker comment
 from any other actor is left alone by the ordinary helper -- it
 neither rewrites nor deletes it -- and counts as ordinary PR/issue
 activity requiring the normal review disposition, exactly like any
