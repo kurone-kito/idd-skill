@@ -1356,7 +1356,7 @@ test('#2549: a budget-exhausted live-coverage-recovered instance with no passing
 // but the hold notice must name `--refresh-latest --apply` so an agent
 // does not stop on the maintainer-decision sentence. Default `--apply`
 // still executes nothing, because these instances are not promoted.
-test('#3472: a budget-held unpromoted live-coverage recovery names --refresh-latest and default --apply does not rerun it', () => {
+test('#3472: a budget-held live-coverage recovery that was not promoted names --refresh-latest and default --apply does not rerun it', () => {
   const plan = computeRerunPlan(
     baseInput({
       prNumber: 3467,
