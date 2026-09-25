@@ -1590,6 +1590,23 @@ test('maskMarkdownForScan keeps inline code when inlineCode: "keep" is requested
   );
 });
 
+test('maskMarkdownForScan ignores a literal <!-- inside a kept inline code span as a comment opener (Copilot review, PR #3424)', () => {
+  // inlineCode: 'keep' leaves the code span's own text visible in the
+  // output, but a caller that also masks HTML comments must not read a
+  // `<!--` that appears only inside that (unmasked) code span as a real
+  // comment opener -- doing so would mask everything up to the next
+  // real `-->`, hiding genuine content the same way an unmasked fenced
+  // or indented code region's own `<!--` never would.
+  const body = ['`<!--`', 'real content', '-->'].join('\n');
+  const masked = maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  });
+  assert.equal(masked.includes('real content'), true);
+  // The inline code span's own text stays visible (inlineCode: 'keep').
+  assert.equal(masked.includes('`<!--`'), true);
+});
+
 test('mergeMarkdownCodeRanges coalesces overlapping and touching ranges, sorted by start', () => {
   assert.deepEqual(
     mergeMarkdownCodeRanges([

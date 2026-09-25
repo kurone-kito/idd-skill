@@ -2580,12 +2580,19 @@ export function maskMarkdownForScan(
     ...findIndentedCodeRanges(normalized, fencedRanges),
   ]);
 
-  let ranges: MarkdownCodeRange[];
-  if (inlineCode === 'mask') {
-    // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the
-    // structural ranges already computed above instead of recomputing
-    // them via a second findFencedCodeRanges call.
-    const inlineRanges: MarkdownCodeRange[] = [];
+  // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the structural
+  // ranges already computed above instead of recomputing them via a
+  // second findFencedCodeRanges call. Computed unconditionally -- even
+  // when the caller keeps inline code visible in the final output
+  // (inlineCode: 'keep') -- because a caller that also masks HTML
+  // comments (htmlComments: 'mask') still needs these ranges below to
+  // correctly exclude a `<!--` that only appears inside inline code
+  // from comment-opener consideration (Copilot review, PR #3424): an
+  // opener candidate found only because inline code was left unmasked
+  // is not a real comment, the same way one found only because a
+  // fenced/indented code region was left unmasked never would be.
+  const inlineRanges: MarkdownCodeRange[] = [];
+  {
     let cursor = 0;
     for (const structuralRange of structuralRanges) {
       inlineRanges.push(
@@ -2596,10 +2603,12 @@ export function maskMarkdownForScan(
     inlineRanges.push(
       ...findInlineCodeRanges(normalized, cursor, normalized.length),
     );
-    ranges = mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges]);
-  } else {
-    ranges = structuralRanges;
   }
+
+  let ranges: MarkdownCodeRange[] =
+    inlineCode === 'mask'
+      ? mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges])
+      : structuralRanges;
 
   if (htmlBlocks === 'mask') {
     ranges = mergeMarkdownCodeRanges([
@@ -2609,9 +2618,15 @@ export function maskMarkdownForScan(
   }
 
   if (htmlComments === 'mask') {
+    // See the inlineRanges comment above: comment-opener detection must
+    // ignore inline code even when the final output does not mask it.
+    const commentIgnoredRanges =
+      inlineCode === 'mask'
+        ? ranges
+        : mergeMarkdownCodeRanges([...ranges, ...inlineRanges]);
     ranges = mergeMarkdownCodeRanges([
       ...ranges,
-      ...findHtmlCommentRanges(normalized, ranges),
+      ...findHtmlCommentRanges(normalized, commentIgnoredRanges),
     ]);
   }
 

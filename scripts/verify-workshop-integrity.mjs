@@ -205,9 +205,12 @@ export function extractReferenceDefinitions(markdown) {
   // One combined pass (rather than the two chained wrapper calls this
   // used before -- each of which independently re-runs the entry
   // point's own fenced/indented scan) so fenced/indented code and HTML
-  // comments are both masked together, in the order the entry point
-  // already gets right: code regions first, so a literal `<!--` inside
-  // an inline code span can never be misread as a comment opener.
+  // comments are both masked together. `inlineCode: 'keep'` leaves an
+  // inline code span's own text visible in the output, but the shared
+  // entry point still excludes it from comment-opener consideration
+  // (Copilot review, PR #3424), so a literal `<!--` inside inline code
+  // can never be misread as a real comment opener and hide a real
+  // reference definition after it.
   const stripped = maskMarkdownForScan(String(markdown), {
     inlineCode: 'keep',
     htmlComments: 'mask',

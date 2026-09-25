@@ -465,6 +465,12 @@ test('stripHtmlComments masks single-line and multi-line HTML comments', () => {
   assert.equal(stripped.split('\n').length, md.split('\n').length);
 });
 
+test('stripHtmlComments does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  const md = '`<!--`\nreal content\n-->';
+  const stripped = stripHtmlComments(md);
+  assert.equal(stripped.includes('real content'), true);
+});
+
 test('extractReferences ignores links inside HTML comments', () => {
   const md = 'real [a](./a.md)\n<!-- ignored [demo](./missing.md) -->\nend';
   const refs = extractReferences(md);
@@ -479,12 +485,29 @@ test('extractReferenceDefinitions ignores definitions inside HTML comments', () 
   assert.equal(defs.get('real'), './a.md');
 });
 
+test('extractReferenceDefinitions does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  // `stripFencedCodeBlocks`/`extractReferenceDefinitions` keep inline
+  // code visible (inlineCode: 'keep') for their own purposes, but the
+  // shared #3281 entry point still excludes it from comment-opener
+  // detection, so a `<!--` shown only inside a code span must not mask
+  // a real definition that follows it, up to a later real `-->`.
+  const md = '`<!--`\n[real]: ./a.md\n-->\n';
+  const defs = extractReferenceDefinitions(md);
+  assert.equal(defs.get('real'), './a.md');
+});
+
 test('extractHeadingSlugs ignores headings inside HTML comments', () => {
   const md = `# Real\n\n<!-- # Hidden -->\n\n## Visible\n`;
   const slugs = extractHeadingSlugs(md);
   assert.equal(slugs.has('real'), true);
   assert.equal(slugs.has('visible'), true);
   assert.equal(slugs.has('hidden'), false);
+});
+
+test('extractHeadingSlugs does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  const md = '`<!--`\n## Real Heading\n-->\n';
+  const slugs = extractHeadingSlugs(md);
+  assert.equal(slugs.has('real-heading'), true);
 });
 
 test('stripInlineCodeSpans masks multi-line backtick code spans', () => {
