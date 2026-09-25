@@ -210,6 +210,23 @@ function maxTimestamp(values: (string | null)[]): string | null {
   return best;
 }
 
+const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
+
+// #3267 (Copilot review, PR #3437): this account must not receive the
+// blanket IDD-author exclusion. Callers may list it in iddAgentLogins
+// (the CLI defaults that set from trusted marker actors), but only the
+// narrow classifyIddPrComment shapes are bookkeeping. A general
+// operational prefix from this login stays review feedback.
+function isBlanketIddAuthor(
+  login: string,
+  isIdd: (login: string) => boolean,
+): boolean {
+  if (login.trim().toLowerCase() === GITHUB_ACTIONS_BOT_LOGIN) {
+    return false;
+  }
+  return isIdd(login);
+}
+
 function isDispositionBody(body: string | null | undefined): boolean {
   const trimmed = String(body ?? '').trimStart();
   return (
@@ -365,7 +382,7 @@ function collectUnresolvedThreads(
     const origin = nodes[0];
     const originAuthor = authorLogin(origin);
     // A thread the IDD agent itself opened is not reviewer feedback.
-    if (originAuthor && isIdd(originAuthor)) {
+    if (originAuthor && isBlanketIddAuthor(originAuthor, isIdd)) {
       continue;
     }
     out.push({
@@ -463,7 +480,7 @@ function collectUnaddressedComments(
     // comment with "**Rejected**" is still surfaced as feedback. A
     // missing/unknown author (deleted user / ghost comment) is surfaced with
     // `author: null` rather than dropped, to avoid a false negative.
-    if (isIdd(author)) {
+    if (isBlanketIddAuthor(author, isIdd)) {
       continue;
     }
     // IDD bookkeeping is not feedback: a trusted operational-state marker,
@@ -526,7 +543,7 @@ function collectUnaddressedComments(
     const author = authorLogin(review);
     // Same author rule as comments: exclude only explicit IDD agents; a
     // missing/unknown author is surfaced with `author: null`.
-    if (isIdd(author)) {
+    if (isBlanketIddAuthor(author, isIdd)) {
       continue;
     }
     const isChangesRequested = review.state === 'CHANGES_REQUESTED';

@@ -799,10 +799,15 @@ export function evaluateOperationalComment(
     { trustedMarkerLogins: trusted ? [author] : [] },
   );
 
+  // #3267 (Copilot review, PR #3437): a matching operational prefix plus a
+  // trusted author is not enough. github-actions[bot] can sit in the trusted
+  // set and still classify a general prefix such as <!-- claimed-by: as
+  // review. Minimizing that comment would undo the narrow-trust rule.
+  if (classification !== 'idd-operational') {
+    return false;
+  }
+
   if (prefix === null) {
-    if (classification !== 'idd-operational') {
-      return false;
-    }
     const subject = subjectFromNode(comment, 'IssueComment', 'OUTDATED');
     addSkipped(
       report,

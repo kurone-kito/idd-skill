@@ -17,6 +17,7 @@ import {
   parsePrNumbers,
   readActiveClaim,
 } from '../src/scripts/audit-pr-cleanup.mts';
+import { renderClaimedByMarker } from '../src/scripts/marker-helpers.mts';
 import {
   indexLatestGatingReviewsByAuthor,
   renderLiveStatusDigest,
@@ -894,6 +895,37 @@ test('evaluateOperationalComment does not swallow the same digest body from an u
   });
 });
 
+test('evaluateOperationalComment does not minimize a trusted github-actions claimed-by comment', () => {
+  withSandboxConfig(undefined, () => {
+    const comment = {
+      id: 'CLAIM-BOT-1',
+      url: 'https://pr#CLAIM-BOT-1',
+      author: { login: 'github-actions[bot]' },
+      body: renderClaimedByMarker({
+        agentId: 'github-actions[bot]',
+        claimId: 'claim-abc',
+        supersedes: 'none',
+        timestamp: '2026-06-09T00:00:00Z',
+        branch: 'issue/1-test',
+      }),
+      isMinimized: false,
+      viewerCanMinimize: true,
+    };
+    const report = createAuditReport();
+    const handled = evaluateOperationalComment(
+      comment,
+      mergedPr,
+      report,
+      'kurone-kito',
+      'idd-skill',
+    );
+
+    assert.equal(handled, false);
+    assert.equal(report.candidates.length, 0);
+    assert.equal(report.skipped.length, 0);
+  }, ['github-actions[bot]']);
+});
+
 // #3270: readActiveClaim (private summarizeClaimValidation-based claim
 // resolver) exercised directly against a stubbed `gh` -- same technique as
 // `withFakeGh` above -- rather than stubbing every other `gh` call a full
@@ -951,14 +983,18 @@ process.exit(1);
   }
 }
 
-function withSandboxConfig<T>(staleAge: string | undefined, run: () => T): T {
+function withSandboxConfig<T>(
+  staleAge: string | undefined,
+  run: () => T,
+  trustedMarkerActors: string[] = ['kurone-kito'],
+): T {
   const originalCwd = process.cwd();
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-audit-pr-cleanup-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
     JSON.stringify({
-      trustedMarkerActors: ['kurone-kito'],
+      trustedMarkerActors,
       ...(staleAge ? { claimTiming: { staleAge } } : {}),
     }),
   );
