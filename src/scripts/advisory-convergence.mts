@@ -3533,8 +3533,14 @@ export function collectFromGitHub(
     policy?.providerOutage?.declarationTarget;
   if (outageDeclarationTargetIssue) {
     try {
+      // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+      // reject a body-edited declaration marker. Safe inside this
+      // function's existing fail-closed try/catch below: a GraphQL failure
+      // here degrades `outageDeclarationActive` to `false`, never a crash.
       const declarationComments = retryTransientGhFailure(() =>
-        port.listWorkItemComments(outageDeclarationTargetIssue),
+        port.listWorkItemComments(outageDeclarationTargetIssue, {
+          includeEditState: true,
+        }),
       ).map(toIssueCommentPayload);
       const authorityOf = (actorLogin: string): AuthorityEvidence =>
         normalizeAuthorityEvidence(
@@ -4535,7 +4541,7 @@ function toReviewThreadPayload(
           __typename: comment.authorTypename,
         },
         pullRequestReview: { id: comment.pullRequestReviewId },
-        lastEditedAt: comment.lastEditedAt,
+         lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

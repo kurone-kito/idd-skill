@@ -961,6 +961,48 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
   assert.equal(verdict.ready, true);
 });
 
+// #3249: same fixture as above, but the trusted `**Rejected**` reply was
+// edited after posting -- it must no longer count as a fresh disposition,
+// so the thread stays in `threads.blockingIds` (an edited disposition must
+// never satisfy or relax this gate, only ordinary unedited feedback can).
+test('#3249: an edited trusted Rejected reply leaves the thread in threads.blockingIds', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_EDITED_REJECT',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: '**Rejected** — not applicable to this change.',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                lastEditedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 1);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRT_EDITED_REJECT']);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
 // #3244: `summarizeDispositionEvidenceForGate` (reused unfiltered for
 // Clause 2) no longer honors the #2135 review-reply stamp regardless of
 // author -- an untrusted account's stamped `**Accepted**` must not clear
@@ -1922,6 +1964,7 @@ function rerollMarkerComment(
     login?: string;
     headSha?: string;
     embeddedAt?: string;
+    lastEditedAt?: string | null;
   } = {},
 ) {
   const headSha = overrides.headSha ?? HEAD;
@@ -1930,6 +1973,8 @@ function rerollMarkerComment(
     author: { login: overrides.login ?? TRUSTED },
     body: `advisory-reroll: ${AGENT_ID} ${headSha} ${embeddedAt}`,
     createdAt,
+    lastEditedAt:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -2052,6 +2097,27 @@ test('sameHeadReroll: a trusted same-HEAD marker counts and is not yet exhausted
     baseInputs({
       reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
       comments: [rerollMarkerComment(REROLL_AT)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 1);
+  assert.equal(verdict.sameHeadReroll.exhausted, false);
+  assert.equal(verdict.sameHeadReroll.latestAt, REROLL_AT);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+// #3249: `advisory-reroll:` is a restrict-only marker (the issue's own
+// exception list) -- ignoring an edited copy would LOWER the count and
+// could lift an exhausted budget, the opposite direction of every other
+// family this issue tightens. An edited trusted marker must therefore keep
+// counting toward the same-HEAD reroll budget, exactly like the unedited
+// case above.
+test('#3249: an edited trusted same-HEAD reroll marker still counts toward the budget (restrict-only, unchanged)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT, { lastEditedAt: RECENT })],
     }),
     baseOptions(),
   );
