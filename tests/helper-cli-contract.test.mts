@@ -144,6 +144,11 @@ function childEnv(): NodeJS.ProcessEnv {
   delete env.GIT_OBJECT_DIRECTORY;
   delete env.GH_TOKEN;
   delete env.GH_ENTERPRISE_TOKEN;
+  // GitHub Actions sets this, and audit-pr-cleanup treats it as the
+  // repository instead of calling gh. That skips the fake-gh 503 the
+  // no-args row records as transport and fails later as a usage error.
+  delete env.GITHUB_REPOSITORY;
+  delete env.GITHUB_REPOSITORY_OWNER;
   env.HOME = tempHome;
   env.XDG_CONFIG_HOME = tempHome;
   env.IDD_HELPER_ERROR_ENVELOPE = '1';
