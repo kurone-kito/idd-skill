@@ -170,3 +170,104 @@ test('workflow_dispatch checkout is pinned to the trusted default branch, pull_r
     );
   }
 });
+
+test('cleanup step timeout is below the job timeout and evidence still runs after it (#3320)', () => {
+  for (const path of WORKFLOW_PATHS) {
+    const text = readWorkflow(path);
+    const cleanupStart = text.indexOf(
+      'name: Run F4 cleanup (server-side fallback)',
+    );
+    assert.notStrictEqual(
+      cleanupStart,
+      -1,
+      `${path} must define the cleanup step`,
+    );
+    const evidenceStart = text.indexOf(
+      'name: Post cleanup evidence comment',
+      cleanupStart,
+    );
+    assert.notStrictEqual(
+      evidenceStart,
+      -1,
+      `${path} must define the evidence step after cleanup`,
+    );
+    const beforeCleanup = text.slice(0, cleanupStart);
+    const jobTimeouts = [
+      ...beforeCleanup.matchAll(/timeout-minutes:\s*(\d+)/g),
+    ];
+    assert.equal(
+      jobTimeouts.length,
+      1,
+      `${path} must set exactly one job timeout-minutes before the cleanup step`,
+    );
+    const jobTimeout = Number(jobTimeouts[0]?.[1]);
+    const cleanupBlock = text.slice(cleanupStart, evidenceStart);
+    const stepTimeoutMatch = cleanupBlock.match(/timeout-minutes:\s*(\d+)/);
+    assert.ok(
+      stepTimeoutMatch,
+      `${path} cleanup step must set timeout-minutes`,
+    );
+    const stepTimeout = Number(stepTimeoutMatch?.[1]);
+    assert.ok(
+      stepTimeout < jobTimeout,
+      `${path} cleanup timeout ${stepTimeout} must be below job timeout ${jobTimeout}`,
+    );
+    assert.equal(
+      stepTimeout,
+      8,
+      `${path} cleanup step timeout must be 8 minutes`,
+    );
+    if (path.startsWith('idd-template/')) {
+      assert.match(
+        cleanupBlock,
+        /if: steps\.profile\.outputs\.profile != 'instructions-only' && steps\.manager\.outputs\.manager != 'ambiguous'/,
+        `${path} cleanup step must keep the profile/manager skip guard`,
+      );
+    }
+    const evidence = text.slice(evidenceStart);
+    assert.match(
+      evidence,
+      /if: always\(\) && steps\.cleanup\.outcome != 'skipped'/,
+      `${path} evidence step must run on always() unless cleanup was skipped`,
+    );
+    const evidenceRun = evidence.indexOf('run: |');
+    assert.notStrictEqual(
+      evidenceRun,
+      -1,
+      `${path} evidence step must have a run script`,
+    );
+    const evidenceHeader = evidence.slice(0, evidenceRun);
+    assert.match(
+      evidenceHeader,
+      /PR_NUMBER: \$\{\{ steps\.cleanup\.outputs\.pr_number \|\| github\.event\.pull_request\.number \|\| github\.event\.inputs\.pr_number \}\}/,
+      `${path} evidence PR_NUMBER must fall back to the event expression`,
+    );
+    const existingGuard = evidence.indexOf('if [ -n "$EXISTING" ]');
+    const ghApi = evidence.indexOf('gh api --paginate');
+    const emptyPr = evidence.indexOf('if [ -z "$PR_NUMBER" ]');
+    const timeoutAssign = evidence.indexOf('STATUS="timeout"');
+    assert.ok(
+      emptyPr !== -1 && emptyPr < ghApi,
+      `${path} empty PR_NUMBER exit must precede gh api`,
+    );
+    assert.ok(
+      timeoutAssign !== -1 && timeoutAssign < existingGuard,
+      `${path} STATUS=timeout must precede the duplicate-evidence skip`,
+    );
+    const prelude = evidence.slice(0, existingGuard);
+    for (const token of [
+      'APPLIED=0',
+      'FAILED=0',
+      'SKIPPED=0',
+      'BLOCKED=0',
+      'RETRY_ATTEMPTS=0',
+      'RETRY_BOUND_EXHAUSTED=false',
+      'The cleanup step ended without reporting a status. Counts are zero.',
+    ]) {
+      assert.ok(
+        prelude.includes(token),
+        `${path} timeout prelude must include ${token} before the skip guard`,
+      );
+    }
+  }
+});

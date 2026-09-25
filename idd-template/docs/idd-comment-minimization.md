@@ -326,9 +326,13 @@ node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check --format j
 ```
 
 It then parses the report and posts the canonical
-`<!-- idd-cleanup-evidence: ... -->` comment so every actually-merged
-PR receives evidence within a few minutes even when the agent did
-not run F4 manually.
+`<!-- idd-cleanup-evidence: ... -->` comment so a merged PR still
+receives evidence when the agent did not run F4 manually. Across 395
+successful runs from 2026-09-01 through 2026-09-23, elapsed time
+(`updatedAt` minus `createdAt`) was p50 71 s, p90 136 s, p95 157 s,
+and max 352 s. A cleanup step that reaches its own timeout still
+posts `timeout` evidence before the job cap, instead of leaving no
+marker.
 
 The template (`idd-template/`) ships a generic counterpart at
 `idd-template/.github/workflows/post-merge-cleanup.yml`, part of the
@@ -364,11 +368,16 @@ never suppress this run's own non-success evidence), and the agent F4
 step skips its own post under that same both-converged rule —
 including when the workflow itself posted the prior success record. A
 trusted comment recording any other status (`failed`, `incomplete`,
-`permission-blocked`, `rescan-failed`, `recheck-failed`) does not
+`permission-blocked`, `rescan-failed`, `recheck-failed`,
+`helper-error`, `timeout`) does not
 suppress either side,
 so a `workflow_dispatch` rerun after a `rescan-failed` post still
 posts fresh evidence (preventive; no observed incident yet — issue
-`#2043`). The workflow's PR-keyed `concurrency` group only serializes
+`#2043`). `helper-error` and `timeout` are server-side fallback
+statuses with cleanup-failure meaning: the workflow ran but printed
+no parseable report, or the cleanup step ended without reporting.
+Neither is a successful apply, so neither suppresses a later post.
+The workflow's PR-keyed `concurrency` group only serializes
 workflow runs against each other; it does not gate the agent's local
 F4.
 
@@ -459,11 +468,12 @@ gh pr checks <pr-number> --json workflow,bucket --jq \
 - **`true`**: the run is in flight. Poll the same query at a reasonable
   interval until it returns `false`, bounded by
   `ciWait.generationTimeout` (default `PT10M`) measured from this
-  first `true` observation. A single bound suffices here — unlike the
-  longer-running checks `idd-ci.instructions.md`'s own polling
-  algorithm bounds with the queued/running split, this workflow's job
-  completes in roughly 15 seconds, so distinguishing a merely queued
-  run from an actually running one buys nothing at that scale. Past
+  first `true` observation. A single bound suffices here. The source
+  workflow's job cap is 10 minutes, which this default already covers,
+  so a queued-versus-running split does not change the wait. The
+  template job cap is longer because that copy installs dependencies
+  before an 8-minute cleanup step; past this bound the existing
+  fail-open still applies. Past
   that bound with the run still in flight, treat it the same as
   "not in flight" and continue to the duplicate-success-record skip
   rule unchanged — a resulting duplicate comment is this check's
@@ -730,7 +740,8 @@ successful outcome (`applied` / `clean`) and this run's own outcome is
 also `applied`/`clean`** (issue `#2213`'s both-converged rule) —
 narrowing, not fully preventing, duplicate success records; a prior
 success record alone must never suppress this run's own
-`failed`/`incomplete`/`rescan-failed`/`recheck-failed` evidence, even
+`failed`/`incomplete`/`rescan-failed`/`recheck-failed`/`helper-error`/`timeout`
+evidence, even
 when this run's own apply returned `applied` for residual markers the
 other side already minimized first; still post when no prior success
 record exists, or to correct an existing `failed` / `incomplete` /
@@ -746,15 +757,15 @@ record (preventive; no observed incident yet — issue `#2043`):
 
 **F4 Cleanup Evidence**
 
-| Field                            | Value                                                 |
-| -------------------------------- | ----------------------------------------------------- |
-| Status                           | applied / clean / failed / incomplete / rescan-failed |
-| Applied                          | N                                                     |
-| Failed                           | N                                                     |
-| Skipped                          | N                                                     |
-| Permission-blocked               | N                                                     |
-| Retry attempts (bound-exhausted) | N (true / false)                                      |
-| Notes                            | reason for any failed or skipped items                |
+| Field                            | Value                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| Status                           | applied / clean / failed / incomplete / rescan-failed / helper-error / timeout |
+| Applied                          | N                                                                              |
+| Failed                           | N                                                                              |
+| Skipped                          | N                                                                              |
+| Permission-blocked               | N                                                                              |
+| Retry attempts (bound-exhausted) | N (true / false)                                                               |
+| Notes                            | reason for any failed or skipped items                                         |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror
@@ -839,7 +850,9 @@ pass may re-run the re-check to confirm convergence.
 
 A `recheck-failed` record does not suppress a later run's own success
 post, the same non-suppression behavior `failed`/`incomplete`/
-`rescan-failed` already have.
+`rescan-failed`/`helper-error`/`timeout` already have.
+`helper-error` and `timeout` are workflow evidence statuses, not
+apply outcomes.
 
 ### Cleanup-permission-blocked comment
 
