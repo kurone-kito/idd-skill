@@ -672,25 +672,37 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
 export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 
 // A canonical or near-miss spelling of one of the two dependency
-// keywords, case-insensitively, optionally preceded by up to 3 leading
-// `*`/`_` emphasis markers (a trailing/closing emphasis marker is handled
-// separately by stripDependencyLineDecoration further down, since it can
-// appear before or after an optional colon). `\b` on both sides of the
-// alternation keeps this from matching inside an unrelated longer word;
-// it does NOT by itself exclude a real machine marker like
-// `idd-skill-blocked-by` (a `-` is a non-word character, so a `\b` still
-// sits between it and the following letter) -- that case is excluded by
-// requiring a genuine reference to follow, in findDependencyKeywordMisuse
-// further down, not by this pattern alone. Same TDZ hazard as
-// REAL_ISSUE_REFERENCE_PATTERN and its siblings above -- declared here,
-// ahead of the import.meta.main trigger, not next to
+// keywords, case-insensitively, optionally wrapped in up to 3 leading
+// and/or trailing `*`/`_` emphasis markers (a colon, and any emphasis
+// this pattern's own trailing group doesn't happen to consume, is
+// handled separately by stripDependencyLineDecoration further down).
+// Deliberately does NOT use `\b` around the alternation: `\b` treats `_`
+// as a word character, so `_Blocked by_ #12` -- ordinary CommonMark
+// underscore emphasis, not an obscure shape -- would silently fail to
+// match. Both boundaries break independently: a leading `_` (`_Blocked
+// by #12`) defeats the boundary check right after the emphasis run, and
+// a trailing `_` (`Blocked by_ #12`) defeats the one right after "by",
+// so either one alone -- and certainly both together, as in the example
+// above -- silently drops the match (confirmed empirically during the
+// C1 review of this file, #3285).
+// Instead, `(?<![A-Za-z0-9])`/`(?![A-Za-z0-9])` bound the whole
+// emphasis-plus-keyword run against a true letter/digit, which an
+// emphasis marker never is, so leading/trailing `*`/`_` count as a
+// boundary the same as whitespace or punctuation does. This does NOT by
+// itself exclude a real machine marker like `idd-skill-blocked-by` (a
+// `-` is not a letter/digit either, so the boundary check still passes
+// there) -- that case is excluded by requiring a genuine reference to
+// follow, in findDependencyKeywordMisuse further down, not by this
+// pattern alone. Same TDZ hazard as REAL_ISSUE_REFERENCE_PATTERN and its
+// siblings above -- declared here, ahead of the import.meta.main
+// trigger, not next to
 // findDependencyKeywordMisuse()/checkDependencyLineGrammar() further down
 // (#3285: checkDependencyLineGrammar runs synchronously off of
 // main() -> auditAuthoredIssue() at CLI-entry time, so a `const` declared
 // after this trigger point is still in the temporal dead zone when it
 // fires).
 const NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN =
-  /[*_]{0,3}\b(?:blocked\s+by|blocked-by|blockedby|depends\s+on|depends-on|dependson)\b/gi;
+  /(?<![A-Za-z0-9])[*_]{0,3}(?:blocked\s+by|blocked-by|blockedby|depends\s+on|depends-on|dependson)[*_]{0,3}(?![A-Za-z0-9])/gi;
 
 // Matches a Markdown link's opening `[label](target)` shape at the start
 // of a string -- deliberately looser than ISSUE_OR_PR_REFERENCE_PATTERN's

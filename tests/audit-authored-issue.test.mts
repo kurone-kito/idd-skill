@@ -1165,6 +1165,14 @@ test('dependency-line-grammar fails on a list item with an emphasis-wrapped keyw
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
 });
 
+test('dependency-line-grammar fails on an underscore-emphasis-wrapped keyword (C1 review: `_` is a word character, defeating a naive \\b boundary)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('_Blocked by_ #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
 test('dependency-line-grammar fails on a Markdown-link reference instead of a plain token', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by [#12](https://github.com/kurone-kito/idd-skill/issues/12)',
@@ -1285,6 +1293,13 @@ test('dependency-line-grammar passes a real sequential-roadmap blocked-by marker
 test('dependency-line-grammar passes a same-repo qualified reference when currentRepo is not supplied (unverifiable, not malformed)', () => {
   const { finding } = dependencyLineGrammarFinding(
     'Blocked by kurone-kito/idd-skill#1391',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar does not treat "unblocked by" as a keyword mention (C1 round 2 review: pins the boundary check still excludes a real word prefix after the \\b removal)', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    'This work is unblocked by the recent fix in #12.',
   );
   assert.equal(finding.result, 'pass');
 });
