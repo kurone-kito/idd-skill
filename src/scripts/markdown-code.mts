@@ -1941,7 +1941,8 @@ export function findIndentedCodeRanges(
       continue;
     }
     const parsed = parseContainerLine(rawLine);
-    const listItem = parseListItemMatch(parsed.content);
+    let listItem = parseListItemMatch(parsed.content);
+    let relativeListContentIndent: number | null = null;
     const isBlank = parsed.content.trim() === '';
     const openTop =
       listStack.length > 0 ? listStack[listStack.length - 1] : null;
@@ -1961,6 +1962,40 @@ export function findIndentedCodeRanges(
       ) {
         listStack.pop();
       }
+      // parseListItemMatch's own LIST_ITEM_PATTERN caps a recognized
+      // marker's own leading indent at 0-3 ABSOLUTE columns -- correct
+      // for a marker at the top level, but not relative to an
+      // already-open container. A marker genuinely nested two-plus
+      // list levels deep (absolute indent >= 4 once an enclosing
+      // level's own content column is already >= 4 -- e.g. a
+      // two-digit ordered marker like `10.`) was therefore never
+      // recognized here even though CommonMark treats it as a real,
+      // further-nested list item (Copilot review, PR #3424). Retry
+      // recognition relative to the still-open level's own content
+      // indent (after the pop above), mirroring parseFencedLine's own
+      // activeListContentIndent-relative stripping for the identical
+      // "marker directly after another list's own content indent"
+      // shape -- the same 0-3-relative-column rule then correctly
+      // still rejects a marker indented too deep even to open a
+      // further-nested item (that stays indented code).
+      const stillOpenTop =
+        listStack.length > 0 ? listStack[listStack.length - 1] : null;
+      if (stillOpenTop !== null) {
+        const relativeContent = stripLeadingIndentColumns(
+          parsed.content,
+          stillOpenTop.contentIndent,
+        );
+        const relativeListItem = parseListItemMatch(relativeContent);
+        const relativeContentIndent =
+          relativeListItem === null
+            ? null
+            : parseListItemContainer(relativeContent);
+        if (relativeListItem !== null && relativeContentIndent !== null) {
+          listItem = relativeListItem;
+          relativeListContentIndent =
+            stillOpenTop.contentIndent + relativeContentIndent;
+        }
+      }
     }
     const activeTop =
       listStack.length > 0 ? listStack[listStack.length - 1] : null;
@@ -1975,7 +2010,7 @@ export function findIndentedCodeRanges(
           !/^1[.)]$/u.test(listItem.marker)));
     const listContentIndent: number | null = isNonInterruptingListItem
       ? null
-      : parsed.listContentIndent;
+      : (relativeListContentIndent ?? parsed.listContentIndent);
     const isIndented =
       indentationColumns(parsed.content) >=
       (activeTop === null ? 4 : activeTop.contentIndent + 4);

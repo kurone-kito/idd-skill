@@ -1550,6 +1550,42 @@ test('maskMarkdownForScan masks a dedent after a fresh paragraph the same way ma
   assert.equal(maskMarkdownForScan(body).includes('not-a-link'), false);
 });
 
+test('maskMarkdownForScan recognizes a list item nested two levels deep under a wide ordered marker (Copilot review, PR #3424, round 6)', () => {
+  // parseListItemMatch's own LIST_ITEM_PATTERN caps a recognized
+  // marker's own leading indent at 0-3 ABSOLUTE columns -- correct for
+  // a marker at the top level, but not relative to an already-open
+  // container. Once an outer level's own content column reaches 4 (a
+  // two-digit ordered marker like `10.` already does: 3 marker
+  // characters + 1 space), a further-nested marker's own absolute
+  // indent is necessarily >= 4 too, so the un-adjusted 0-3 cap always
+  // rejected it -- even though CommonMark treats it as a real nested
+  // list item, not indented code. Verified against commonmark.js: the
+  // whole thing stays open list nesting, and the trailing link is
+  // real. Also confirmed non-regressing (this exact input previously
+  // matched `main`'s own wrong answer here, unlike the round-5
+  // trade-off cases above, which stay unchanged).
+  const body = [
+    '10. outer',
+    '      - inner',
+    '',
+    '          - [workshop](docs/workshop/README.md)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan still masks indented code that is too deep even for a further-nested list item', () => {
+  // Control for the test above: relative-column recognition must still
+  // reject a marker indented too far past the enclosing level's own
+  // content column (>= 4 relative columns) to open a further-nested
+  // item -- that content is genuinely indented code, unchanged by the
+  // round-6 fix.
+  const body = ['10. outer', '', '          deep code #1'].join('\n');
+  const masked = maskMarkdownForScan(body);
+  assert.equal(masked.includes('deep code'), false);
+  assert.equal(masked.includes('10. outer'), true);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);
