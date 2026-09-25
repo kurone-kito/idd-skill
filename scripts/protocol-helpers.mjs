@@ -1867,12 +1867,79 @@ function hasNonReviewNoticeDispositionAfter(
 // and a non-notice Codex comment (a review summary, a finding reply, etc.)
 // is never classified here at all, since `isCodexUsageLimitNotice` only
 // recognizes the flat notice shape.
+// #3466 Copilot review (PR #3470): a bare "does any qualifying disposition
+// exist after me" check is not one-to-one -- if a merged PR carries two
+// Codex usage-limit notices from the same connector and only ONE later
+// trusted `**Rejected**` reply, both notices independently see that same
+// disposition and both would return `RESOLVED`, letting F4 minimize an
+// undispositioned notice too. The #1018 carry-forward elsewhere in this
+// file already solves the identical multi-notice-vs-one-disposition
+// problem for the F2/F3 gate by capping credit to the oldest N notices
+// when only N matching dispositions exist (never binding a specific
+// disposition to a specific notice -- see that loop's own comment). Mirror
+// that exact count-capped convention here: rank this notice among every
+// Codex usage-limit notice in the comment set (oldest first) and require
+// at least that many matching trusted dispositions to exist before it can
+// resolve.
+function rankAmongCodexUsageLimitNotices(comment, comments) {
+  const notices = comments.filter(
+    (candidate) =>
+      advisoryBotIdentityToken(candidate.author?.login ?? '') ===
+        'chatgpt-codex-connector' &&
+      isCodexUsageLimitNotice(candidate.body ?? ''),
+  );
+  const bySortedTime = notices
+    .map((candidate, inputIndex) => ({ candidate, inputIndex }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.candidate.createdAt ?? '');
+      const rightTime = Date.parse(right.candidate.createdAt ?? '');
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.inputIndex - right.inputIndex;
+    });
+  return bySortedTime.findIndex(({ candidate }) => candidate === comment);
+}
+function countNonReviewNoticeDispositionsForBot(
+  comments,
+  targetBotLogin,
+  isDispositionAuthorOption,
+) {
+  const isDispositionAuthor =
+    typeof isDispositionAuthorOption === 'function'
+      ? isDispositionAuthorOption
+      : (login) => !isKnownReviewBot(login);
+  return comments.filter((candidate) => {
+    const author = String(candidate.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    return (
+      isDispositionAuthor(author) &&
+      isNonReviewNoticeDisposition({ body: candidate.body }) &&
+      dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
+    );
+  }).length;
+}
 function classifyCodexUsageLimitNotice(comment, comments, options) {
   const author = comment.author?.login ?? '';
   if (advisoryBotIdentityToken(author) !== 'chatgpt-codex-connector') {
     return null;
   }
   if (!isCodexUsageLimitNotice(comment.body ?? '')) {
+    return null;
+  }
+  const rank = rankAmongCodexUsageLimitNotices(comment, comments);
+  if (rank === -1) {
+    // Unreachable in normal use (the target is itself one of `comments`),
+    // but fail closed rather than guess this notice's place in line.
+    return null;
+  }
+  const matchingDispositionCount = countNonReviewNoticeDispositionsForBot(
+    comments,
+    author,
+    options.isDispositionAuthor,
+  );
+  if (rank >= matchingDispositionCount) {
     return null;
   }
   if (

@@ -11442,6 +11442,96 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     );
     assert.equal(result, null);
   });
+
+  // #3466 (Copilot review, PR #3470): a bare "does any qualifying
+  // disposition exist after me" check is not one-to-one -- two notices
+  // sharing a single later disposition must not BOTH resolve. Only the
+  // oldest notice may resolve, mirroring the #1018 carry-forward's own
+  // count-capped convention (credit the oldest N notices when only N
+  // matching dispositions exist).
+  test('#3466: two Codex notices sharing one later disposition resolve only the oldest', () => {
+    const firstNotice = {
+      ...codexNotice,
+      id: 1001,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const secondNotice = {
+      ...codexNotice,
+      id: 1002,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    const singleDisposition = {
+      ...dispositionReply,
+      id: 1003,
+      createdAt: '2026-09-25T15:20:00Z',
+    };
+    const comments = [firstNotice, secondNotice, singleDisposition];
+
+    const resolvedFirst = classifyRegularBotComment(firstNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedSecond = classifyRegularBotComment(
+      secondNotice,
+      comments,
+      [],
+      {
+        isDispositionAuthor,
+        includeCodexUsageLimitNotice: true,
+      },
+    );
+
+    assert.equal(resolvedFirst?.classifier, 'RESOLVED');
+    assert.equal(resolvedSecond, null);
+  });
+
+  // Complement: once a SECOND matching disposition exists, both notices may
+  // resolve -- the cap is on count, not identity.
+  test('#3466: two Codex notices each resolve once two matching dispositions exist', () => {
+    const firstNotice = {
+      ...codexNotice,
+      id: 2001,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const secondNotice = {
+      ...codexNotice,
+      id: 2002,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    const firstDisposition = {
+      ...dispositionReply,
+      id: 2003,
+      createdAt: '2026-09-25T15:05:00Z',
+    };
+    const secondDisposition = {
+      ...dispositionReply,
+      id: 2004,
+      createdAt: '2026-09-25T15:20:00Z',
+    };
+    const comments = [
+      firstNotice,
+      firstDisposition,
+      secondNotice,
+      secondDisposition,
+    ];
+
+    const resolvedFirst = classifyRegularBotComment(firstNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedSecond = classifyRegularBotComment(
+      secondNotice,
+      comments,
+      [],
+      {
+        isDispositionAuthor,
+        includeCodexUsageLimitNotice: true,
+      },
+    );
+
+    assert.equal(resolvedFirst?.classifier, 'RESOLVED');
+    assert.equal(resolvedSecond?.classifier, 'RESOLVED');
+  });
 }
 
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
