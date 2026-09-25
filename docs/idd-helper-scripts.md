@@ -3533,6 +3533,29 @@ reflexively as any other CLI option.
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
   `claim`, `branchCurrency`, and optional `dispositionEvidence`
+- **Secondary-bot settlement is fail-closed** (#3261). When
+  `advisoryWait.secondaryQuietWindow`/`secondaryBotLogin(s)` are
+  configured, `secondaryQuietWindow` only shortens to the short settled
+  buffer once a configured secondary bot's latest comment for the current
+  HEAD is a RECOGNIZED COMPLETED shape for that bot's identity:
+  `coderabbitai` settles on a clean summary walkthrough carrying none of
+  the in-progress, paused, or skip-review markers; `chatgpt-codex-connector`
+  settles only when its review-status table's row for the current HEAD
+  reads Completed. Every other NON-TERMINAL case reports pending, not
+  settled — a CodeRabbit reply that is not a summary walkthrough, a Codex
+  status still reading Running for this HEAD, and any other comment at all
+  from a secondary-bot identity this classifier has no completion
+  recognizer for — so the full configured window still applies. A
+  terminal rate-limit/skip-review/paused notice still reports `declined`
+  regardless of identity, exactly as before this change; only the
+  previously-permissive fallback for a non-terminal, non-notice comment
+  is now fail-closed. This is a
+  deliberate cost: an unrecognized identity or an in-progress review can
+  never shortcut the wait, even though it also means one slow or
+  unrecognized secondary bot delays the whole fold (every configured login
+  must independently settle or decline before
+  `foldSecondaryAdvisoryReviewSettlements` reports anything but the full
+  window).
 - `branchCurrency` (#1513) pairs the PR's live `mergeable` /
   `mergeStateStatus` with whether the base branch's protection or ruleset
   requires an up-to-date head before merge. `requiresUpToDateHead` is
@@ -3993,6 +4016,36 @@ reflexively as any other CLI option.
   additionally carries `route` / `blockingCount` / full missing-item lists
   for the F2 merge gate) — this gate's `dispositionEvidence` never gates
   anything by itself.
+- **Verified-cosmetic-edit dating (`#3269`)**: `hasFreshDisposition`, and
+  every diagnostic sharing `effectiveThreadCommentActivityAt`, dates a
+  review-thread comment by content activity rather than always
+  preferring `updatedAt` — `updatedAt` also moves without any real
+  content change (e.g. IDD's own hide-on-supersede minimization,
+  kurone-kito/idd-skill#3173). A comment with an explicit GraphQL
+  `lastEditedAt: null` dates by `createdAt`. An edited comment dates by
+  the time of its own last revision that is NOT a verified cosmetic
+  edit, falling back to `createdAt` when every revision was cosmetic. A
+  revision is verified cosmetic only when its editor is the comment's
+  own advisory-bot author; after stripping HTML comments its visible
+  text equals the previous revision's, optionally followed by one
+  appended `✅ Addressed in commit(s) <sha>…` resolution line; and the
+  only HTML-comment difference (if any) is CodeRabbit's own
+  `auto-generated comment`→`auto-generated reply` marker rewrite.
+  Anything else — a substantive text change, a deleted or `null`
+  revision, an incomplete `userContentEdits` page (`totalCount` above
+  what was fetched), a non-bot editor, or a failed fetch — keeps
+  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch this
+  needs runs ONLY in the two merge-gate collectors —
+  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's own
+  required-check collector — and only for advisory-bot thread comments
+  whose `lastEditedAt` postdates their thread's latest IDD disposition;
+  every other consumer (`review-activity-snapshot.mjs`, the merged-PR
+  feedback sweep, `audit-pr-cleanup.mjs`) never fetches it, so an edited
+  comment keeps `updatedAt` dating there, unchanged.
+  `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
+  separate, coarser, revision-content-blind heuristic
+  (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating
+  fix.
 - Reuses the existing evidence modules — `isCopilotReviewerLogin` /
   `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
   `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,

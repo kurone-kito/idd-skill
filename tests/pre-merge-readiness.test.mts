@@ -31,6 +31,7 @@ import {
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
+  attachReviewThreadCommentEditHistories,
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
@@ -54,6 +55,7 @@ import {
   resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
+  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
   summarizeBranchCurrency,
@@ -65,7 +67,10 @@ import {
   summarizeReviewerStates,
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
-import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
 import type {
   ProviderComment,
   ProviderPort,
@@ -3775,6 +3780,960 @@ test('disposition evidence does not flag ack-only or in-place-edit-only for a no
   assert.equal(summary.missingThreads[0].inPlaceEditOnly, false);
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
   assert.equal(summary.soleCauseInPlaceEditOnly, false);
+});
+
+// ---------------------------------------------------------------------------
+// #3269: verified-cosmetic-edit dating. hasFreshDisposition/
+// effectiveThreadCommentActivityAt now date an advisory-bot thread comment
+// by createdAt (explicit lastEditedAt: null) or by the last NON-cosmetic
+// revision's own editedAt (a bounded, attached userContentEdits history),
+// rather than always falling back to updatedAt -- see that function's own
+// doc comment in protocol-helpers.mts. Every fixture below models real
+// GraphQL userContentEdits revisions fetched live from
+// kurone-kito/idd-skill PR #3160, #3154, and #3196 while authoring this
+// issue (2026-09-24/25) -- comment/thread ids and every timestamp are the
+// real ones; body TEXT is abbreviated from the real (multi-kilobyte)
+// CodeRabbit payload down to the structural elements the classifier
+// actually reads (a finding sentence, the marker HTML comment, the
+// "Addressed in commit(s)" resolution line).
+// ---------------------------------------------------------------------------
+
+/** Builds an abbreviated CodeRabbit finding body matching the real
+ * structural shape `isVisibleTextAppendOnly` /
+ * `isOnlyAllowlistedMarkerCommentDiff` read: a finding sentence, then the
+ * `auto-generated comment`/`auto-generated reply` marker HTML comment,
+ * optionally followed by the "Addressed in commit(s)" resolution line. */
+function coderabbitFindingBody(
+  findingText: string,
+  markerVariant: 'comment' | 'reply',
+  appendedResolutionLine?: string,
+): string {
+  const marker =
+    markerVariant === 'comment'
+      ? '<!-- This is an auto-generated comment by CodeRabbit -->'
+      : '<!-- This is an auto-generated reply by CodeRabbit -->';
+  const withMarker = `${findingText}\n\n${marker}`;
+  return appendedResolutionLine
+    ? `${withMarker}\n\n${appendedResolutionLine}`
+    : withMarker;
+}
+
+test('hasFreshDisposition: PR #3160 thread PRRT_kwDOSWpaqs6kHP8I comment 4056226337 -- 3 real revisions (append, then marker-only rewrite) all cosmetic, dated by createdAt (fresh) (#3269)', () => {
+  const findingText =
+    '**Security & Privacy**: the CLI integration fixture never exercises the unauthorized-contributor rejection path.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T07:17:38Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:01Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6kHP8I',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs7xxRoh',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T12:00:11Z',
+          lastEditedAt: '2026-09-20T07:17:38Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T07:17:35Z',
+          updatedAt: '2026-09-20T07:17:35Z',
+          body: '**Accepted** — Fixed in 28c18a9: the CLI integration fixture exercises a contributor viewer.',
+        },
+      ],
+    },
+  };
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.equal(hasFreshDisposition(thread, options), true);
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('hasFreshDisposition: PR #3160 thread PRRT_kwDOSWpaqs6kIwjk comment 4056812269 -- append then marker-only rewrite, both cosmetic, dated by createdAt (fresh) (#3269)', () => {
+  const findingText =
+    '**Maintainability & Code Quality**: align the PR claim-binding rule with the implementation.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T11:28:35Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 0cd8f9f',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T11:28:24Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 0cd8f9f',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T11:16:54Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6kIwjk',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs7xzgrt',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T11:16:54Z',
+          updatedAt: '2026-09-20T12:00:35Z',
+          lastEditedAt: '2026-09-20T11:28:35Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T11:28:18Z',
+          updatedAt: '2026-09-20T11:28:18Z',
+          body: "**Accepted** — fixed in 0cd8f9fa: idd-comment-minimization.md's claim-binding description now states the exact-one-linked-issue requirement.",
+        },
+      ],
+    },
+  };
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.equal(hasFreshDisposition(thread, options), true);
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('hasFreshDisposition: PR #3154 thread PRRT_kwDOSWpaqs6kBCfi comment 4053784487 -- real commits <sha> to <sha> append, cosmetic, dated by createdAt (fresh) (#3269)', () => {
+  const findingText =
+    '**Functional Correctness**: stop when manual occupancy release already ran.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T13:30:20Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commits aa13fb1 to fda04e3',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-19T16:47:36Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commits aa13fb1 to fda04e3',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-19T16:19:28Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6kBCfi',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs7xn9en',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-19T16:19:28Z',
+          updatedAt: '2026-09-20T14:07:28Z',
+          lastEditedAt: '2026-09-20T13:30:20Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T13:30:16Z',
+          updatedAt: '2026-09-20T13:30:16Z',
+          body: '**Accepted** — fixed in fda04e38: the collision table now includes an explicit stop condition.',
+        },
+      ],
+    },
+  };
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.equal(hasFreshDisposition(thread, options), true);
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence: PR #3160 thread PRRT_kwDOSWpaqs6kHP8G -- the verified-cosmetic finding 4056226334 no longer counts as post-disposition feedback (#3269)', () => {
+  // Real fixture with the courtesy reply 4056387808 OMITTED: proves the
+  // finding comment alone (now dated by createdAt, well before the
+  // disposition) no longer blocks this thread.
+  const findingText =
+    '**Maintainability & Code Quality**: distinguish recovery-hold reports from recovery evidence.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T07:17:26Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:07Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const findingComment = {
+    id: 'PRRC_kwDOSWpaqs7xxRoe',
+    author: { login: 'coderabbitai' },
+    createdAt: '2026-09-20T05:37:59Z',
+    updatedAt: '2026-09-20T07:17:26Z',
+    lastEditedAt: '2026-09-20T07:17:26Z',
+    body: edits[0].diff,
+    userContentEdits: { totalCount: edits.length, edits },
+  };
+  const dispositionComment = {
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-09-20T07:17:22Z',
+    updatedAt: '2026-09-20T07:17:22Z',
+    body: '**Accepted** — Fixed in 28c18a9 and kept current in 6e2073e9: the primary docs and idd-template mirror now distinguish apply-time recovery-hold evidence.',
+  };
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+
+  const threadWithoutCourtesyReply = {
+    id: 'PRRT_kwDOSWpaqs6kHP8G',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [findingComment, dispositionComment],
+    },
+  };
+  assert.equal(hasFreshDisposition(threadWithoutCourtesyReply, options), true);
+  const summaryWithoutCourtesyReply = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [threadWithoutCourtesyReply] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summaryWithoutCourtesyReply.missingThreadCount, 0);
+
+  // Real fixture WITH the courtesy reply: the thread still stays missing,
+  // for the separate reason the issue's Background cites -- the reply's
+  // own body ("thanks for the update") does not match the #2641 ack
+  // template, so it is a genuinely outstanding, un-dispositioned comment
+  // regardless of how the (now-cleared) finding above dates.
+  const courtesyReply = {
+    author: { login: 'coderabbitai' },
+    createdAt: '2026-09-20T07:17:35Z',
+    updatedAt: '2026-09-20T07:17:35Z',
+    lastEditedAt: null,
+    body: '`@kurone-kito`, thanks for the update. The documentation change addresses the distinction between JSON-only preflight holds and apply-time recovery-hold evidence.',
+  };
+  const threadWithCourtesyReply = {
+    id: 'PRRT_kwDOSWpaqs6kHP8G',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [findingComment, dispositionComment, courtesyReply],
+    },
+  };
+  const summaryWithCourtesyReply = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [threadWithCourtesyReply] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summaryWithCourtesyReply.missingThreadCount, 1);
+  assert.equal(
+    summaryWithCourtesyReply.missingThreads[0].reason,
+    'missing-fresh-disposition',
+  );
+});
+
+test('a thread comment with an explicit lastEditedAt: null and an updatedAt later than the disposition is dated by createdAt (fresh) (#3269)', () => {
+  // Real fixture: kurone-kito/idd-skill PR #3196, CodeRabbit's courtesy
+  // reply 4079698725 on thread PRRT_kwDOSWpaqs6lCQVv -- createdAt
+  // 2026-09-23T06:37:41Z, an explicit `lastEditedAt: null`, and updatedAt
+  // 2026-09-23T07:32:41Z (the post-merge cleanup's minimization time,
+  // unrelated to any real content edit -- the issue's own Background
+  // section cites this exact comment). The real thread's own disposition
+  // (06:37:26Z) predates even this comment's createdAt, so a synthetic
+  // slightly-later disposition (06:40:00Z) is used here to exercise the
+  // "dated by createdAt is fresh" outcome this real `lastEditedAt: null`
+  // shape enables.
+  const thread = {
+    id: 'PRRT_kwDOSWpaqs6lCQVv',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-23T06:40:00Z',
+          updatedAt: '2026-09-23T06:40:00Z',
+          body: '**Accepted** — fixed in 88bf0c1d.',
+        },
+        {
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-23T06:37:41Z',
+          updatedAt: '2026-09-23T07:32:41Z',
+          lastEditedAt: null,
+          body: '`@kurone-kito`, thanks for the detailed confirmation. The updated routing covers the affected exits.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    true,
+  );
+});
+
+test('the same comment with lastEditedAt absent or unparseable keeps updatedAt dating (missing) (#3269)', () => {
+  const dispositionComment = {
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-09-23T06:40:00Z',
+    updatedAt: '2026-09-23T06:40:00Z',
+    body: '**Accepted** — fixed in 88bf0c1d.',
+  };
+  const baseCourtesyReply = {
+    author: { login: 'coderabbitai' },
+    createdAt: '2026-09-23T06:37:41Z',
+    updatedAt: '2026-09-23T07:32:41Z',
+    body: '`@kurone-kito`, thanks for the detailed confirmation. The updated routing covers the affected exits.',
+  };
+  for (const lastEditedAtCase of [undefined, 'not-a-real-timestamp']) {
+    const thread = {
+      id: 'PRRT_kwDOSWpaqs6lCQVv',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          dispositionComment,
+          { ...baseCourtesyReply, lastEditedAt: lastEditedAtCase },
+        ],
+      },
+    };
+    assert.equal(
+      hasFreshDisposition(thread, {
+        isDispositionAuthor: (login) => login === 'kurone-kito',
+        advisoryBotLogins: ['coderabbitai[bot]'],
+      }),
+      false,
+      `lastEditedAt=${String(lastEditedAtCase)} must keep updatedAt dating`,
+    );
+  }
+});
+
+// --- #3269 negative tests: each reports missing-fresh-disposition -----------
+
+test('#3269 negative: a post-disposition revision that changes the visible text dates by that revision, not createdAt (missing)', () => {
+  // Precision note: this is NOT the 'unverifiable' outcome (an absent or
+  // incomplete history) -- the history here is complete and every field
+  // is well-formed, so resolveThreadCommentRevisionDatingOutcome reaches
+  // its 'dated' outcome with a real, valid editedAt (the substantive
+  // 08:00:00Z revision correctly fails the visible-text-append check).
+  // The thread still blocks because that REAL dated timestamp is after
+  // the disposition, exactly as it should be for a genuinely new claim.
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        'this is a completely different, substantive claim about the code',
+        'comment',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(
+        '**Potential issue**: needs a null check.',
+        'comment',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-visible-text-change',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 negative: a revision with a null or deleted body is unverifiable (missing)', () => {
+  const buildThread = (
+    edits: {
+      editedAt: string;
+      diff: string | null;
+      editorLogin: string;
+      deletedAt: string | null;
+    }[],
+  ) => ({
+    id: 'thread-null-or-deleted-revision',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: coderabbitFindingBody(
+            '**Potential issue**: needs a null check.',
+            'reply',
+            '✅ Addressed in commit 28c18a9',
+          ),
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  });
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+
+  // Null diff (revision body unavailable).
+  assert.equal(
+    hasFreshDisposition(
+      buildThread([
+        {
+          editedAt: '2026-09-20T08:00:00Z',
+          diff: null,
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+        {
+          editedAt: '2026-09-20T05:37:59Z',
+          diff: coderabbitFindingBody(
+            '**Potential issue**: needs a null check.',
+            'comment',
+          ),
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+      ]),
+      options,
+    ),
+    false,
+  );
+
+  // Deleted revision.
+  assert.equal(
+    hasFreshDisposition(
+      buildThread([
+        {
+          editedAt: '2026-09-20T08:00:00Z',
+          diff: coderabbitFindingBody(
+            '**Potential issue**: needs a null check.',
+            'reply',
+            '✅ Addressed in commit 28c18a9',
+          ),
+          editorLogin: 'coderabbitai',
+          deletedAt: '2026-09-20T08:05:00Z',
+        },
+        {
+          editedAt: '2026-09-20T05:37:59Z',
+          diff: coderabbitFindingBody(
+            '**Potential issue**: needs a null check.',
+            'comment',
+          ),
+          editorLogin: 'coderabbitai',
+          deletedAt: null,
+        },
+      ]),
+      options,
+    ),
+    false,
+  );
+});
+
+test('#3269 negative: a history whose totalCount exceeds the fetched revisions is unverifiable (missing)', () => {
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        '**Potential issue**: needs a null check.',
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(
+        '**Potential issue**: needs a null check.',
+        'comment',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-incomplete-history',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          // The real edit count (5) exceeds the fetched page (2 nodes) --
+          // an incomplete history must fail closed, never assume the
+          // unfetched earlier revisions were also cosmetic.
+          userContentEdits: { totalCount: 5, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 negative: a revision whose editor is not the bot dates by that revision, not createdAt (missing)', () => {
+  // Precision note: same as the visible-text-change negative test above --
+  // this reaches resolveThreadCommentRevisionDatingOutcome's 'dated'
+  // outcome (a real, valid editedAt on the non-cosmetic revision), not
+  // its 'unverifiable' outcome. The thread still blocks because that
+  // real timestamp is after the disposition.
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        '**Potential issue**: needs a null check.',
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      // A repo collaborator with edit rights, not the bot itself --
+      // GitHub lets any Write-role account rewrite an existing comment's
+      // body while keeping its author/id/created_at, so this must never
+      // count as the bot's own cosmetic self-edit.
+      editorLogin: 'a-human-collaborator',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(
+        '**Potential issue**: needs a null check.',
+        'comment',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-wrong-editor',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 negative: a failed userContentEdits fetch (no history attached) is unverifiable (missing)', () => {
+  // Mirrors what the collector's own try/catch produces on a fetch
+  // failure: the comment reports `lastEditedAt` as edited, but
+  // `userContentEdits` is never attached at all.
+  const thread = {
+    id: 'thread-failed-fetch',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: coderabbitFindingBody(
+            '**Potential issue**: needs a null check.',
+            'reply',
+            '✅ Addressed in commit 28c18a9',
+          ),
+          // No userContentEdits field at all.
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 negative: an allowlisted append on a comment by an author who is not an advisory bot is unverifiable (missing)', () => {
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        'please rename this variable',
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'a-human-reviewer',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody('please rename this variable', 'comment'),
+      editorLogin: 'a-human-reviewer',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-non-bot-append',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          // Not a configured advisory bot -- an ordinary human reviewer
+          // whose own self-edit happens to have exactly the allowlisted
+          // append-only shape. Condition 1 requires the author to BE an
+          // advisory bot, not merely "editor equals author".
+          author: { login: 'a-human-reviewer' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 negative: a malformed editedAt on a cosmetic-looking revision is unverifiable, not silently all-cosmetic (Copilot review, PR #3430)', () => {
+  // The malformed revision is chronologically OLDEST (Date.parse fails,
+  // so it is not what sorts it there -- it is simply the first-authored
+  // one) and its body/editor/marker exactly match the middle revision's,
+  // so a cosmetic check that never validates `editedAt` on a
+  // cosmetic-classified transition would let this whole history resolve
+  // to 'all-cosmetic' (dated by createdAt) despite one revision's own
+  // timestamp being garbage.
+  const findingText = '**Potential issue**: needs a null check.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      // Malformed/garbage editedAt -- textually identical to the
+      // revision above, so a check that only fires inside the
+      // non-cosmetic branch would never catch this.
+      editedAt: 'not-a-real-timestamp',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-malformed-edited-at',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 positive: a `[bot]`-suffixed editor login still verifies as cosmetic against a suffixless comment author (Copilot review, PR #3430)', () => {
+  // Real GraphQL data always returns the bare login (no `[bot]` suffix)
+  // for both `author.login` and `editor.login` on the same Bot actor
+  // (verified empirically against kurone-kito/idd-skill PR #3160/#3154/
+  // #3196 while authoring this issue), but the editor/author comparison
+  // must still tolerate a spelling mismatch the same way every other
+  // advisory-bot-identity comparison in this file already does
+  // (`isConfiguredAdvisoryBotLogin`) -- this synthesizes the case where
+  // one side happens to carry the suffix.
+  const findingText = '**Potential issue**: needs a null check.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai[bot]',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai[bot]',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-suffix-mismatch',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          // Suffixless author login, matching real GraphQL review-thread
+          // data -- the editor entries above deliberately carry the
+          // `[bot]` suffix to exercise the normalization.
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T12:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T07:00:00Z',
+          updatedAt: '2026-09-20T07:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    true,
+  );
 });
 
 test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {
@@ -10136,7 +11095,12 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
   // marker text -- `computeSecondaryAdvisoryReviewSettlement` filters
   // `comments` by whichever login `secondaryBotLogin` names, not
   // necessarily CodeRabbit, before these body-shape checks ever run.
-  test('#3260: computeSecondaryAdvisoryReviewSettlement settles a non-CodeRabbit secondary bot even if its body coincidentally contains the in-progress marker text', () => {
+  // #3261 update: this scenario is now subsumed by a much broader rule --
+  // an identity with no completion recognizer at all (like
+  // "some-other-bot[bot]") can never settle regardless of body content, so
+  // the coincidental marker text is moot; the result is pending either way,
+  // no longer settled as it was before #3261.
+  test('#3261: a non-CodeRabbit, non-Codex secondary bot never settles, even on a body that coincidentally contains the CodeRabbit in-progress marker text', () => {
     const result = computeSecondaryAdvisoryReviewSettlement(
       [
         {
@@ -10151,8 +11115,8 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
         headCommittedAt: '2026-09-23T07:12:24Z',
       },
     );
-    assert.equal(result.settled, true);
-    assert.equal(result.settledAt, '2026-09-23T07:13:25Z');
+    assert.equal(result.settled, false);
+    assert.equal(result.settledAt, null);
     assert.equal(result.declined, false);
   });
 
@@ -10495,10 +11459,28 @@ function declinedNoticeComment(login: string, createdAt: string) {
   };
 }
 
+// #3261: a genuinely settled review must now be a RECOGNIZED COMPLETED
+// shape for its identity, not plain prose -- a CodeRabbit summary with none
+// of the in-progress/paused/skip-review markers, or a Codex status table
+// whose row for the current HEAD reads Completed. Every call site below
+// uses `fixtures/pre-merge-readiness/clean.json`'s own `prHeadSha`
+// (`1111111111111111111111111111111111111111`) unchanged, so the Codex
+// table's commit cell is a prefix of that same SHA.
+const GENUINE_REVIEW_HEAD_SHA_PREFIX = '1111111';
+
 function genuineReviewComment(login: string, createdAt: string) {
+  const isCodex = login.toLowerCase().includes('codex');
+  const body = isCodex
+    ? '<!-- codex-pull-request-review-summary -->\n\n' +
+      '## Codex Review Summary\n\n' +
+      '| Review | Status | Commit | Review trigger |\n' +
+      '| --- | --- | --- | --- |\n' +
+      `| 📝 **Code Review** | ✅ **Completed** | \`${GENUINE_REVIEW_HEAD_SHA_PREFIX}\` | PR opened |\n`
+    : '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+      '## Walkthrough\nLooks fine to me.';
   return {
     author: { login },
-    body: 'Looks fine to me.',
+    body,
     createdAt,
     updatedAt: createdAt,
   };
@@ -10767,6 +11749,48 @@ test('#3196: the plural secondaryBotLogins option wins over the legacy singular 
   );
   const status = secondaryQuietWindowOf(summary);
   assert.equal(status.anchorAt, '2026-05-11T23:59:00Z');
+  assert.equal(status.declined, false);
+});
+
+// #3261: an identity with no completion recognizer at all must never get
+// the short settled buffer, even when it posts a genuine-looking comment --
+// the full configured window still applies, same as a login that never
+// posts anything.
+test('#3261: an unrecognized secondary-bot identity never gets the settled buffer -- the full configured window still applies', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        // No recognizer exists for this identity at all, so this can never
+        // settle no matter what it posts.
+        {
+          author: { login: 'my-custom-bot[bot]' },
+          body: 'Looks fine to me.',
+          createdAt: '2026-05-11T23:51:00Z',
+          updatedAt: '2026-05-11T23:51:00Z',
+        },
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 10,
+      secondaryBotLogins: ['my-custom-bot[bot]'],
+      advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  // Same anchor/elapsed/remaining as the never-posted pending case -- the
+  // comment exists but its identity has no completion recognizer, so it
+  // never anchors the settled buffer.
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.minutes, 10);
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 6);
+  assert.equal(status.elapsed, false);
   assert.equal(status.declined, false);
 });
 
@@ -11846,6 +12870,324 @@ test('collectPreMergeReadiness: --claimless refuses a PR with a mix of same-repo
       ),
     /closing issue references are unreadable/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// #3269: selectAdvisoryThreadCommentIdsEditedAfterDisposition /
+// attachReviewThreadCommentEditHistories -- the two pure protocol-helpers.mts
+// functions the collector-level tests below exercise indirectly through
+// collectPreMergeReadiness. Tested directly here too, in isolation from the
+// full CLI/fake-port plumbing.
+// ---------------------------------------------------------------------------
+
+test('selectAdvisoryThreadCommentIdsEditedAfterDisposition: selects only advisory-bot comments edited after their thread disposition (#3269)', () => {
+  const threads = [
+    {
+      id: 'RT_candidate',
+      isResolved: true,
+      comments: {
+        nodes: [
+          {
+            id: 'c-candidate',
+            author: { login: 'coderabbitai' },
+            createdAt: '2026-09-20T05:00:00Z',
+            updatedAt: '2026-09-20T09:00:00Z',
+            lastEditedAt: '2026-09-20T08:00:00Z',
+            body: 'finding',
+          },
+          {
+            author: { login: 'kurone-kito' },
+            createdAt: '2026-09-20T07:00:00Z',
+            updatedAt: '2026-09-20T07:00:00Z',
+            body: '**Accepted** — fixed.',
+          },
+        ],
+      },
+    },
+    {
+      // No disposition at all -- nothing anchors "after the disposition".
+      id: 'RT_no_disposition',
+      isResolved: false,
+      comments: {
+        nodes: [
+          {
+            id: 'c-no-disposition',
+            author: { login: 'coderabbitai' },
+            createdAt: '2026-09-20T05:00:00Z',
+            updatedAt: '2026-09-20T09:00:00Z',
+            lastEditedAt: '2026-09-20T08:00:00Z',
+            body: 'finding',
+          },
+        ],
+      },
+    },
+  ];
+  const ids = selectAdvisoryThreadCommentIdsEditedAfterDisposition(threads, {
+    isDispositionAuthor: (login) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+  assert.deepEqual(ids, ['c-candidate']);
+});
+
+test('attachReviewThreadCommentEditHistories: returns the input array unchanged (same reference) when nothing matches (#3269)', () => {
+  const threads = [
+    {
+      id: 'RT_1',
+      isResolved: true,
+      comments: {
+        nodes: [
+          {
+            id: 'c1',
+            author: { login: 'x' },
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            body: '',
+          },
+        ],
+      },
+    },
+  ];
+  assert.equal(attachReviewThreadCommentEditHistories(threads, []), threads);
+  assert.equal(
+    attachReviewThreadCommentEditHistories(threads, [
+      { commentId: 'no-match', totalCount: 0, edits: [] },
+    ]),
+    threads,
+  );
+});
+
+test('attachReviewThreadCommentEditHistories: attaches a matching history onto the correct comment by id (#3269)', () => {
+  const threads = [
+    {
+      id: 'RT_1',
+      isResolved: true,
+      comments: {
+        nodes: [
+          {
+            id: 'c1',
+            author: { login: 'coderabbitai' },
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            body: 'finding',
+          },
+        ],
+      },
+    },
+  ];
+  const history = {
+    commentId: 'c1',
+    totalCount: 1,
+    edits: [
+      {
+        editedAt: '2026-01-01T00:00:00Z',
+        diff: 'finding',
+        editorLogin: 'coderabbitai',
+        deletedAt: null,
+      },
+    ],
+  };
+  const enriched = attachReviewThreadCommentEditHistories(threads, [history]);
+  assert.deepEqual(
+    (
+      enriched[0].comments as {
+        nodes: { userContentEdits?: unknown }[];
+      }
+    ).nodes[0].userContentEdits,
+    { totalCount: 1, edits: history.edits },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #3269: collectPreMergeReadiness wiring -- the bounded second-pass
+// getReviewThreadCommentUserContentEdits fetch is requested ONLY for
+// advisory-bot thread comments whose lastEditedAt postdates their thread's
+// disposition, never for every edited comment.
+// ---------------------------------------------------------------------------
+
+function editHistorySelectionFixture(): {
+  fixture: FakeProviderFixture;
+  port: ProviderPort;
+} {
+  const fixture: FakeProviderFixture = {
+    viewerLogin: 'kurone-kito',
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: {
+      1: [
+        {
+          // A resolved thread with a disposition AND an advisory-bot
+          // comment edited after it -- the only real candidate.
+          id: 'RT_candidate',
+          isResolved: true,
+          comments: [
+            {
+              id: 'PRRC_candidate',
+              body: '**Potential issue**: needs a null check.',
+              createdAt: '2026-09-20T05:00:00Z',
+              updatedAt: '2026-09-20T09:00:00Z',
+              authorLogin: 'coderabbitai',
+              pullRequestReviewId: null,
+              lastEditedAt: '2026-09-20T08:00:00Z',
+            },
+            {
+              id: 'PRRC_candidate_disposition',
+              body: '**Accepted** — fixed.',
+              createdAt: '2026-09-20T07:00:00Z',
+              updatedAt: '2026-09-20T07:00:00Z',
+              authorLogin: 'kurone-kito',
+              pullRequestReviewId: null,
+              lastEditedAt: null,
+            },
+          ],
+        },
+        {
+          // An UNRESOLVED thread with no disposition at all -- nothing
+          // anchors "after the disposition", so no candidate here even
+          // though the bot comment is edited.
+          id: 'RT_no_disposition',
+          isResolved: false,
+          comments: [
+            {
+              id: 'PRRC_no_disposition',
+              body: '**Nit**: rename this.',
+              createdAt: '2026-09-20T05:00:00Z',
+              updatedAt: '2026-09-20T09:00:00Z',
+              authorLogin: 'coderabbitai',
+              pullRequestReviewId: null,
+              lastEditedAt: '2026-09-20T08:00:00Z',
+            },
+          ],
+        },
+        {
+          // A resolved thread with a disposition, but the edited comment
+          // is HUMAN-authored -- not a configured advisory bot, so it is
+          // never selected either.
+          id: 'RT_human_edit',
+          isResolved: true,
+          comments: [
+            {
+              id: 'PRRC_human',
+              body: 'please fix this too',
+              createdAt: '2026-09-20T05:00:00Z',
+              updatedAt: '2026-09-20T09:00:00Z',
+              authorLogin: 'a-human-reviewer',
+              pullRequestReviewId: null,
+              lastEditedAt: '2026-09-20T08:00:00Z',
+            },
+            {
+              id: 'PRRC_human_disposition',
+              body: '**Accepted** — fixed.',
+              createdAt: '2026-09-20T06:00:00Z',
+              updatedAt: '2026-09-20T06:00:00Z',
+              authorLogin: 'kurone-kito',
+              pullRequestReviewId: null,
+              lastEditedAt: null,
+            },
+          ],
+        },
+        {
+          // A resolved thread with a disposition and an advisory-bot
+          // comment edited BEFORE it -- not "after the disposition", so
+          // not selected either.
+          id: 'RT_edited_before_disposition',
+          isResolved: true,
+          comments: [
+            {
+              id: 'PRRC_edited_before',
+              body: '**Potential issue**: needs a null check.',
+              createdAt: '2026-09-20T04:00:00Z',
+              updatedAt: '2026-09-20T04:30:00Z',
+              authorLogin: 'coderabbitai',
+              pullRequestReviewId: null,
+              lastEditedAt: '2026-09-20T04:30:00Z',
+            },
+            {
+              id: 'PRRC_edited_before_disposition',
+              body: '**Accepted** — fixed.',
+              createdAt: '2026-09-20T05:00:00Z',
+              updatedAt: '2026-09-20T05:00:00Z',
+              authorLogin: 'kurone-kito',
+              pullRequestReviewId: null,
+              lastEditedAt: null,
+            },
+          ],
+        },
+      ],
+    },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-09-20T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  };
+  return { fixture, port: createFakeProviderAdapter(fixture) };
+}
+
+test('collectPreMergeReadiness requests userContentEdits only for advisory-bot thread comments edited after their thread disposition (#3269)', () => {
+  const { fixture, port } = editHistorySelectionFixture();
+  collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claimless',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--advisory-bot-logins',
+      'coderabbitai[bot]',
+      '--now',
+      '2026-09-21T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  assert.deepEqual(fixture.requestedReviewThreadCommentEditHistoryIds, [
+    ['PRRC_candidate'],
+  ]);
+});
+
+test('collectPreMergeReadiness degrades to no enrichment (still reports the thread missing) when the userContentEdits fetch fails (#3269)', () => {
+  const { fixture, port } = editHistorySelectionFixture();
+  fixture.reviewThreadCommentUserContentEditsFails = true;
+  // Must not throw -- the collector's own try/catch degrades to no
+  // enrichment rather than failing this whole collection.
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claimless',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--advisory-bot-logins',
+      'coderabbitai[bot]',
+      '--now',
+      '2026-09-21T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const dispositionEvidence = report.dispositionEvidence as {
+    missingThreadCount: number;
+  };
+  // RT_candidate's finding still has no verified edit history (the fetch
+  // failed) -- its lastEditedAt-bumped updatedAt still postdates the
+  // disposition, so the thread still blocks.
+  assert.ok(dispositionEvidence.missingThreadCount >= 1);
 });
 
 // ---------------------------------------------------------------------------
