@@ -2632,7 +2632,7 @@ test('getWorkflowRunJobs calls the jobs sub-path and preserves a string runId ab
 });
 
 // kurone-kito/idd-skill#2926
-test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variables and flattens checkSuites.nodes[].checkRuns.nodes[] into {detailsUrl, workflowPath}, resolving workflowPath from checkSuite.workflowRun.file.path (never detailsUrl)', () => {
+test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variables and flattens checkSuites.nodes[].checkRuns.nodes[] into {detailsUrl, workflowPath, event}, resolving both workflowPath and event from checkSuite.workflowRun (never detailsUrl)', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(
     'o',
@@ -2650,6 +2650,8 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
                       // A suite whose workflow run resolves cleanly.
                       workflowRun: {
                         file: { path: '.github/workflows/real.yml' },
+                        // kurone-kito/idd-skill#3256
+                        event: 'pull_request_target',
                       },
                       checkRuns: {
                         nodes: [
@@ -2680,6 +2682,7 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
                       // contributes an entry.
                       workflowRun: {
                         file: { path: '.github/workflows/unrelated.yml' },
+                        event: 'pull_request_target',
                       },
                       checkRuns: { nodes: [] },
                     },
@@ -2702,10 +2705,12 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/real.yml',
+      event: 'pull_request_target',
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: null,
+      event: null,
     },
   ]);
   assert.ok(
@@ -2721,6 +2726,15 @@ test('listCheckRunWorkflowPaths sends the commit oid/checkName as GraphQL variab
   assert.ok(
     !capturedArgs?.some((arg) => arg.includes('detailsUrl:')),
     'workflowPath resolution must never reference detailsUrl in the query itself',
+  );
+  // kurone-kito/idd-skill#3256: the GraphQL query itself must request
+  // `event` alongside `file{path}` on `workflowRun` -- a regression here
+  // would silently fall back to `event: undefined` on every live suite.
+  assert.ok(
+    capturedArgs?.some(
+      (arg) => arg.includes('workflowRun{') && arg.includes('event'),
+    ),
+    `expected the workflowRun selection to request event, got: ${capturedArgs?.join(' ')}`,
   );
 });
 
@@ -2801,6 +2815,10 @@ test('listCheckRunWorkflowPaths skips a null checkSuite list item instead of thr
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/real.yml',
+      // kurone-kito/idd-skill#3256: the mock `workflowRun` above carries no
+      // `event`, so it resolves to `null` -- same absence convention as
+      // `workflowPath`.
+      event: null,
     },
   ]);
 });
@@ -2855,6 +2873,10 @@ test('listCheckRunWorkflowPaths treats a null checkRun entry alongside a real on
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: null,
+      // kurone-kito/idd-skill#3256: the same suite-ambiguity nulling as
+      // `workflowPath` -- see `checkRunWorkflowPathsFromSuiteNodes`'s own
+      // doc comment.
+      event: null,
     },
   ]);
 });
@@ -2935,14 +2957,19 @@ test('listCheckRunWorkflowPaths reports workflowPath null for EVERY check-run in
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: null,
+      // kurone-kito/idd-skill#3256: same same-suite-ambiguity nulling as
+      // `workflowPath`.
+      event: null,
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: null,
+      event: null,
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/3/job/1',
       workflowPath: '.github/workflows/other.yml',
+      event: null,
     },
   ]);
 });
@@ -2973,6 +3000,7 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
                       {
                         workflowRun: {
                           file: { path: '.github/workflows/a.yml' },
+                          event: 'pull_request_target',
                         },
                         checkRuns: {
                           nodes: [
@@ -3000,6 +3028,7 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
                     {
                       workflowRun: {
                         file: { path: '.github/workflows/b.yml' },
+                        event: 'pull_request',
                       },
                       checkRuns: {
                         nodes: [
@@ -3031,10 +3060,12 @@ test('listCheckRunWorkflowPaths paginates the checkSuites connection to completi
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
       workflowPath: '.github/workflows/a.yml',
+      event: 'pull_request_target',
     },
     {
       detailsUrl: 'https://github.com/o/r/actions/runs/2/job/1',
       workflowPath: '.github/workflows/b.yml',
+      event: 'pull_request',
     },
   ]);
   assert.ok(

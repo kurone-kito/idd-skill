@@ -48,7 +48,22 @@ test('required advisory-convergence workflows no longer trigger on review commen
       /issue_comment/,
       `${path} on: must not include issue_comment`,
     );
-    assert.match(onBlock, /pull_request:/);
+    // kurone-kito/idd-skill#3256 (#2764 Phase 2): the transitional
+    // `pull_request` trigger is dropped -- only `pull_request_target`
+    // remains, anchored at line start/end so this can never
+    // false-negative against `pull_request_target:` or a
+    // `pull_request_review*` trigger, which both contain `pull_request`
+    // as a substring.
+    assert.doesNotMatch(
+      onBlock,
+      /^\s*pull_request:\s*$/m,
+      `${path} on: must no longer include the transitional pull_request trigger`,
+    );
+    assert.match(
+      onBlock,
+      /^\s*pull_request_target:\s*$/m,
+      `${path} on: must still include pull_request_target`,
+    );
   }
 });
 

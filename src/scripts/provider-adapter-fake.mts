@@ -242,7 +242,13 @@ export interface FakeProviderFixture {
    * rollup entry, evidence-gating included). A test that wants to
    * simulate `checkSuite.workflowRun` DISAGREEING with `detailsUrl` --
    * the scenario #2926 actually defends against -- supplies this key
-   * explicitly instead of relying on the derived default. */
+   * explicitly instead of relying on the derived default.
+   * kurone-kito/idd-skill#3256: the derived path above also resolves
+   * `event` from `workflowRuns[...].event`, `null` when absent -- no
+   * `workflowRuns` fixture needs a change to keep compiling or behaving
+   * the same. A test supplying this key EXPLICITLY, however, must now
+   * also set `event` on every entry (the interface field is required, not
+   * optional, mirroring `workflowPath`'s own rigor). */
   checkRunWorkflowPaths?: Record<string, ProviderCheckRunWorkflowPath[]>;
   /** Backs {@link ProviderPort.getWorkflowRunJobs}, keyed by
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
@@ -889,11 +895,15 @@ export function createFakeProviderAdapter(
           const runId = parseRunIdFromUrl(detailsUrl);
           const runValue = runId
             ? (fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`] as
-                | { path?: unknown }
+                | { path?: unknown; event?: unknown }
                 | undefined)
             : undefined;
           const workflowPath = runValue?.path ? String(runValue.path) : null;
-          return { detailsUrl, workflowPath };
+          // kurone-kito/idd-skill#3256: mirrors `workflowPath` above -- the
+          // real REST `actions/runs/{id}` payload this fixture models
+          // already carries `event` alongside `path`.
+          const workflowEvent = runValue?.event ? String(runValue.event) : null;
+          return { detailsUrl, workflowPath, event: workflowEvent };
         });
     },
 
