@@ -277,15 +277,19 @@ export function extractReferenceDefinitions(
 ): Map<string, string> {
   // One combined pass (rather than the two chained wrapper calls this
   // used before -- each of which independently re-runs the entry
-  // point's own fenced/indented scan) so fenced/indented code and HTML
-  // comments are both masked together. `inlineCode: 'keep'` leaves an
-  // inline code span's own text visible in the output, but the shared
-  // entry point still excludes it from comment-opener consideration
-  // (Copilot review, PR #3424), so a literal `<!--` inside inline code
-  // can never be misread as a real comment opener and hide a real
-  // reference definition after it.
+  // point's own fenced/indented scan) so fenced/indented code, inline
+  // code spans, and HTML comments are all masked together. Masking
+  // inline code (Copilot review round 2, PR #3424) matters on its own,
+  // not only for comment-opener exclusion: a reference definition has
+  // no legitimate reason to live inside inline code, but a multiline
+  // code span's own visible text (`inlineCode: 'keep'` previously left
+  // it that way) could still contain a `[label]: target`-shaped line,
+  // which this function's line-by-line regex scan below cannot tell
+  // apart from a real definition -- a caller resolving `[text][label]`
+  // against the returned map could then resolve to a target that was
+  // only ever shown as a code example.
   const stripped = maskMarkdownForScan(String(markdown), {
-    inlineCode: 'keep',
+    inlineCode: 'mask',
     htmlComments: 'mask',
   });
   const map = new Map<string, string>();

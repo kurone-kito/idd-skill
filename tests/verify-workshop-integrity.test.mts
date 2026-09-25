@@ -486,14 +486,30 @@ test('extractReferenceDefinitions ignores definitions inside HTML comments', () 
 });
 
 test('extractReferenceDefinitions does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
-  // `stripFencedCodeBlocks`/`extractReferenceDefinitions` keep inline
-  // code visible (inlineCode: 'keep') for their own purposes, but the
-  // shared #3281 entry point still excludes it from comment-opener
-  // detection, so a `<!--` shown only inside a code span must not mask
-  // a real definition that follows it, up to a later real `-->`.
+  // A `<!--` shown only inside a code span (now masked away entirely,
+  // since extractReferenceDefinitions masks inline code -- see the
+  // test below) must not mask a real definition that follows it, up to
+  // a later real `-->`.
   const md = '`<!--`\n[real]: ./a.md\n-->\n';
   const defs = extractReferenceDefinitions(md);
   assert.equal(defs.get('real'), './a.md');
+});
+
+test('extractReferenceDefinitions ignores a [label]: target line shown inside a multiline code span (Copilot review round 2, PR #3424)', () => {
+  // A reference definition has no legitimate reason to live inside
+  // inline code, but a multiline code span's own visible text could
+  // still contain a `[label]: target`-shaped line that this function's
+  // line-by-line regex scan cannot otherwise tell apart from a real
+  // definition -- a caller resolving `[text][label]` against the
+  // returned map could then resolve to a target only ever shown as a
+  // code example.
+  const md = '`\n[fake]: ./missing.md\n`\n\n[real][fake]\n';
+  const defs = extractReferenceDefinitions(md);
+  assert.equal(defs.has('fake'), false);
+  const refs = extractReferences(md, defs);
+  assert.deepEqual(refs, [
+    { kind: 'link', label: 'fake', line: 5, status: 'unresolved-reference' },
+  ]);
 });
 
 test('extractHeadingSlugs ignores headings inside HTML comments', () => {
