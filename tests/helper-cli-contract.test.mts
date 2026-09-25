@@ -206,17 +206,33 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: exactly the six first-batch bins are marked migrated', () => {
+test('helper-cli-contract fixture: the first batch and the discover/claim batch are marked migrated', () => {
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
   assert.deepEqual(migratedBins, [
+    'idd-audit-authored-issue.mjs',
     'idd-authoring-owner-provenance.mjs',
+    'idd-branch-name.mjs',
     'idd-ci-wait-state.mjs',
+    'idd-claim-approval-gate.mjs',
+    'idd-claim-lock.mjs',
+    'idd-clone-lock.mjs',
+    'idd-discover-orphan-filter.mjs',
     'idd-discover-readiness-check.mjs',
+    'idd-discover-roadmap-graph.mjs',
+    'idd-discover-shared-file-overlap.mjs',
     'idd-discover-viability-gate.mjs',
+    'idd-emit-marker.mjs',
+    'idd-phase-id-resolver.mjs',
     'idd-pre-merge-readiness.mjs',
     'idd-resume-claim-routing.mjs',
+    'idd-resume-route-selection.mjs',
+    'idd-roadmap-audit-execute.mjs',
+    'idd-select-desynced-index.mjs',
+    'idd-stalled-session-quiet-check.mjs',
+    'idd-suitability-close-execute.mjs',
+    'idd-suitability-triage.mjs',
   ]);
 });
 

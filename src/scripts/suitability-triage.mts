@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/suitability-triage.mts
 //
 // The scripts/suitability-triage.mjs copy is generated from the .mts
@@ -7,7 +8,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-
 import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -26,6 +26,13 @@ import {
   ghText,
   resolveGhApiHostname,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   findFencedCodeRanges,
@@ -2059,7 +2066,13 @@ function findUnsafeExecutionDirectiveMatch(
 }
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('suitability-triage', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export function evaluateSuitability(
@@ -3410,13 +3423,17 @@ export function resolveInputMode(
     (args.bodyFile !== undefined ? 1 : 0) +
     (args.stdin ? 1 : 0);
   if (inputModeCount === 0) {
-    throw new Error('one of --issue, --body-file, or --stdin is required');
+    throw markCliUsageError(
+      new Error('one of --issue, --body-file, or --stdin is required'),
+    );
   }
   if (inputModeCount > 1) {
-    throw new Error('choose only one of --issue, --body-file, or --stdin');
+    throw markCliUsageError(
+      new Error('choose only one of --issue, --body-file, or --stdin'),
+    );
   }
   if (args.bodyFile === '') {
-    throw new Error('--body-file requires a non-empty path');
+    throw markCliUsageError(new Error('--body-file requires a non-empty path'));
   }
   return args.bodyFile !== undefined || args.stdin ? 'local' : 'issue';
 }
@@ -3549,7 +3566,7 @@ export function collectHighConfidenceDuplicateEvidence(
   };
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -3560,11 +3577,13 @@ function runCli(): void {
   // any of the --issue-only setup below.
   if (resolveInputMode(args) === 'local') {
     runLocalCli(args);
-    return;
+    return 0;
   }
 
   if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -3801,6 +3820,7 @@ function runCli(): void {
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 interface LocalSuitabilityResult {

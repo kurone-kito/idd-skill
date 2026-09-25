@@ -11,6 +11,12 @@ import {
 } from './ci-wait-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
@@ -53,7 +59,13 @@ const RESUME_ROUTE_SELECTION_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resume-route-selection', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 export function selectResumeRoute(input) {
   const state = normalizeState(input);
@@ -161,7 +173,9 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -189,6 +203,7 @@ function runCli() {
     output.decision_table = decisionTable();
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 export function collectRoutingInput({
   port,

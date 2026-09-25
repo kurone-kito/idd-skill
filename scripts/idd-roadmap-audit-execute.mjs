@@ -25,6 +25,13 @@ import {
   enumerateRoadmapGraph,
   isClaimStaleByAge,
 } from './discover-roadmap-graph.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
@@ -1049,7 +1056,9 @@ function applyLocalCoordinationGate(resolvedDeps, branchName, verdict) {
 export async function runRoadmapAuditExecute(argv, deps) {
   const args = parseArgs(argv);
   if (!args.roadmapNumber) {
-    throw new Error('missing required --roadmap <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --roadmap <number> argument'),
+    );
   }
   const roadmapNumber = args.roadmapNumber;
   const resolvedDeps = deps ?? createProductionDeps(args);
@@ -1561,8 +1570,10 @@ function parseArgs(argv) {
   // validate one repo while the traversal / mutation runs against the
   // current-directory repo. Require both or neither.
   if ((owner === '') !== (repo === '')) {
-    throw new Error(
-      'idd-roadmap-audit-execute: --owner and --repo must be provided together or not at all',
+    throw markCliUsageError(
+      new Error(
+        'idd-roadmap-audit-execute: --owner and --repo must be provided together or not at all',
+      ),
     );
   }
   return {
@@ -1584,7 +1595,7 @@ function parsePositiveIntegerOrNull(token, flag) {
   }
   const raw = token.trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${token}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${token}`));
   }
   return Number(raw);
 }
@@ -1640,18 +1651,40 @@ function printHelp() {
   trusts that review actually happened.
 `);
 }
+async function main() {
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    process.argv.slice(2),
+  );
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  return exitCode;
+}
 if (import.meta.main) {
   if (process.argv.slice(2).some((arg) => arg === '--help' || arg === '-h')) {
     printHelp();
     process.exit(0);
   }
-  runRoadmapAuditExecute(process.argv.slice(2))
-    .then(({ verdict, exitCode }) => {
-      process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-      process.exit(exitCode);
-    })
-    .catch((error) => {
-      process.stderr.write(`Error: ${error.message}\n`);
-      process.exit(1);
+  // #3343: keep the pre-migration `Error: <message>` catch (exit 1, no
+  // stack). Classify that caught error when the envelope is enabled so a
+  // usage failure stays `usage` instead of a generic gate.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-roadmap-audit-execute', async () => {
+      try {
+        return await main();
+      } catch (error) {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      }
     });
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    });
+  }
 }

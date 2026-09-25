@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/stalled-session-quiet-check.mts
 //
 // The scripts/stalled-session-quiet-check.mjs copy is generated from the
@@ -7,13 +8,19 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-
 import { parseCliArgs } from './cli-args.mts';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -96,7 +103,13 @@ const STALLED_SESSION_QUIET_CHECK_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('stalled-session-quiet-check', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 /**
@@ -207,14 +220,16 @@ function normalizeActivities(raw: unknown): Activity[] {
     });
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.pr === null || !Number.isInteger(args.pr) || args.pr <= 0) {
-    throw new Error('--pr is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--pr is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -278,6 +293,7 @@ function runCli(): void {
     ...result,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 function collectActivities({
