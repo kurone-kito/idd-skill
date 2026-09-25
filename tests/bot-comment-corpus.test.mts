@@ -150,23 +150,47 @@ test("every corpus entry's expected labels match every classifier it names", () 
   assert.deepEqual(mismatches, []);
 });
 
-test('every registered wording classifier has at least 3 real positive samples from at least 2 distinct PRs, or is grandfathered', () => {
-  const corpus = loadCorpus();
+/**
+ * `true` when `source` names a real, re-fetchable review or comment: a
+ * non-null `pr` AND at least one of `reviewId`/`commentId` set. A fixture
+ * failing this check contributes NEITHER a sample nor a distinct-PR count
+ * to the evidence bar below -- it still gets exercised for label
+ * correctness by the first test in this file, but a null `pr` (e.g. a
+ * grandfathered template with no re-fetchable source at all) or a
+ * non-null `pr` with neither id set (a placeholder/fabricated PR number
+ * naming no actual fetchable review or comment) has no real provenance to
+ * count as evidence. Without this exclusion, a future classifier could
+ * combine two real PR samples with one such entry and wrongly clear the
+ * bar (Copilot review, PR #3433, rounds 1 and 2).
+ */
+function hasRealProvenance(source: CorpusEntrySource): boolean {
+  return (
+    source.pr !== null &&
+    (source.reviewId !== null || source.commentId !== null)
+  );
+}
+
+interface EvidenceBarCounts {
+  sampleCount: number;
+  distinctPrCount: number;
+}
+
+/**
+ * Computes each classifier id's own positive-sample count and distinct-PR
+ * count from `corpus`, applying {@link isPositiveLabel} and {@link
+ * hasRealProvenance} identically to how the real corpus test below does.
+ * Extracted as a pure function (rather than inlined in that test) so a
+ * synthetic regression fixture can exercise the counting logic itself in
+ * isolation, without depending on the real corpus file's own current
+ * contents.
+ */
+function computeEvidenceBarCounts(
+  corpus: CorpusEntry[],
+): Map<string, EvidenceBarCounts> {
   const samplesByClassifier = new Map<string, Set<string>>();
   for (const entry of corpus) {
     for (const [classifierId, label] of Object.entries(entry.expectedLabels)) {
-      if (!isPositiveLabel(label)) {
-        continue;
-      }
-      // A fixture with no real PR (e.g. a grandfathered template with no
-      // re-fetchable source) contributes neither a sample nor a
-      // distinct-PR count -- it has no real provenance to count as
-      // evidence for the 3-sample/2-PR bar, even though it still gets
-      // exercised for label correctness by the test above. Without this
-      // exclusion, a future classifier could combine two real PR samples
-      // with one synthetic/no-provenance fixture and wrongly clear the
-      // bar (Copilot review, PR #3433).
-      if (entry.source.pr === null) {
+      if (!isPositiveLabel(label) || !hasRealProvenance(entry.source)) {
         continue;
       }
       const set = samplesByClassifier.get(classifierId) ?? new Set<string>();
@@ -178,10 +202,8 @@ test('every registered wording classifier has at least 3 real positive samples f
       samplesByClassifier.set(classifierId, set);
     }
   }
-
-  const violations: string[] = [];
-  for (const classifier of BOT_WORDING_CLASSIFIERS) {
-    const entries = samplesByClassifier.get(classifier.id) ?? new Set<string>();
+  const counts = new Map<string, EvidenceBarCounts>();
+  for (const [classifierId, entries] of samplesByClassifier) {
     const sampleCount = [...entries].filter((e) =>
       e.startsWith('sample:'),
     ).length;
@@ -190,6 +212,20 @@ test('every registered wording classifier has at least 3 real positive samples f
         .filter((e) => e.startsWith('pr:'))
         .map((e) => e.slice('pr:'.length)),
     ).size;
+    counts.set(classifierId, { sampleCount, distinctPrCount });
+  }
+  return counts;
+}
+
+test('every registered wording classifier has at least 3 real positive samples from at least 2 distinct PRs, or is grandfathered', () => {
+  const corpus = loadCorpus();
+  const countsByClassifier = computeEvidenceBarCounts(corpus);
+
+  const violations: string[] = [];
+  for (const classifier of BOT_WORDING_CLASSIFIERS) {
+    const { sampleCount, distinctPrCount } = countsByClassifier.get(
+      classifier.id,
+    ) ?? { sampleCount: 0, distinctPrCount: 0 };
     const meetsBar =
       sampleCount >= MIN_SAMPLES && distinctPrCount >= MIN_DISTINCT_PRS;
     const isGrandfathered = classifier.id in GRANDFATHERED_CLASSIFIER_IDS;
@@ -210,6 +246,51 @@ test('every registered wording classifier has at least 3 real positive samples f
     }
   }
   assert.deepEqual(violations, []);
+});
+
+test('computeEvidenceBarCounts excludes an entry with a PR number but no review/comment id', () => {
+  // Regression fixture for the exact shape Copilot's round-2 review
+  // flagged: a non-null `pr` with BOTH `reviewId` and `commentId` null (a
+  // placeholder/fabricated PR number, not a real fetchable source) must
+  // not count as evidence, even though a naive `pr !== null` check alone
+  // would have let it through.
+  const syntheticCorpus: CorpusEntry[] = [
+    {
+      id: 'real-sample-a',
+      botLogin: 'coderabbitai[bot]',
+      source: { pr: 1, reviewId: 111, commentId: null, editedAt: null },
+      surface: 'pr comment',
+      body: 'a',
+      note: null,
+      expectedLabels: { 'test-classifier': true },
+    },
+    {
+      id: 'real-sample-b',
+      botLogin: 'coderabbitai[bot]',
+      source: { pr: 2, reviewId: null, commentId: 222, editedAt: null },
+      surface: 'pr comment',
+      body: 'b',
+      note: null,
+      expectedLabels: { 'test-classifier': true },
+    },
+    {
+      id: 'placeholder-pr-no-ids',
+      botLogin: 'coderabbitai[bot]',
+      source: { pr: 3, reviewId: null, commentId: null, editedAt: null },
+      surface: 'pr comment',
+      body: 'c',
+      note: null,
+      expectedLabels: { 'test-classifier': true },
+    },
+  ];
+  const counts = computeEvidenceBarCounts(syntheticCorpus);
+  // Only the two entries with a real review/comment id count -- the
+  // third (pr set, both ids null) must not push this classifier's
+  // distinct-PR count from 2 to 3.
+  assert.deepEqual(counts.get('test-classifier'), {
+    sampleCount: 2,
+    distinctPrCount: 2,
+  });
 });
 
 test('every classifier BOT_WORDING_CLASSIFIERS registers is exercised by at least one corpus entry', () => {
