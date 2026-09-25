@@ -185,6 +185,12 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
 const GENERATED_TOKENS_FILE_PREFIX = 'idd-generated-tokens';
@@ -228,7 +234,13 @@ const CLAIM_LOCK_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('claim-lock', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * Keep repository discovery tied to the requested worktree rather than to
@@ -1189,20 +1201,24 @@ function runCli() {
     process.exit(0);
   }
   if (selectedModeCount(args) !== 1) {
-    throw new Error(
-      'exactly one of --acquire, --check, --record-tokens, --read-tokens, or --backfill-tokens is required',
+    throw markCliUsageError(
+      new Error(
+        'exactly one of --acquire, --check, --record-tokens, --read-tokens, or --backfill-tokens is required',
+      ),
     );
   }
   if (args.worktree === null) {
-    throw new Error('--worktree is required');
+    throw markCliUsageError(new Error('--worktree is required'));
   }
   if (args.check) {
     process.stdout.write(`${JSON.stringify(checkClaimLock(args.worktree))}\n`);
-    return;
+    return 0;
   }
   if (args.readTokens) {
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --read-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --read-tokens'),
+      );
     }
     const read = readGeneratedClaimTokens(args.worktree, args.claimId);
     const outcome =
@@ -1212,14 +1228,18 @@ function runCli() {
           ? { path: read.path, present: true, malformed: true }
           : { path: read.path, present: false };
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
-    return;
+    return 0;
   }
   if (args.recordTokens) {
     if (args.agentId === null) {
-      throw new Error('--agent-id is required for --record-tokens');
+      throw markCliUsageError(
+        new Error('--agent-id is required for --record-tokens'),
+      );
     }
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --record-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --record-tokens'),
+      );
     }
     const outcome = recordGeneratedClaimTokens(args.worktree, {
       agentId: args.agentId,
@@ -1227,24 +1247,26 @@ function runCli() {
       ...(args.nonce === null ? {} : { nonce: args.nonce }),
     });
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
-    return;
+    return 0;
   }
   if (args.backfillTokens) {
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --backfill-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --backfill-tokens'),
+      );
     }
     const outcome = backfillGeneratedClaimTokens(args.worktree, args.claimId);
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
     if (outcome.status !== 'backfilled') {
-      process.exitCode = 2;
+      return 2;
     }
-    return;
+    return 0;
   }
   if (args.agentId === null) {
-    throw new Error('--agent-id is required for --acquire');
+    throw markCliUsageError(new Error('--agent-id is required for --acquire'));
   }
   if (args.claimId === null) {
-    throw new Error('--claim-id is required for --acquire');
+    throw markCliUsageError(new Error('--claim-id is required for --acquire'));
   }
   const outcome = acquireClaimLock(
     args.worktree,
@@ -1254,8 +1276,9 @@ function runCli() {
   );
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
   if (outcome.mode === 'collision') {
-    process.exitCode = 2;
+    return 2;
   }
+  return 0;
 }
 function printHelp() {
   process.stdout.write(`Usage:

@@ -11,7 +11,14 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
+  wrapGhCompatibilityError,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -42,7 +49,13 @@ const STALLED_SESSION_QUIET_CHECK_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('stalled-session-quiet-check', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * Evaluate whether a quiet window has been met for stalled-session detection.
@@ -146,7 +159,9 @@ function runCli() {
     process.exit(0);
   }
   if (args.pr === null || !Number.isInteger(args.pr) || args.pr <= 0) {
-    throw new Error('--pr is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--pr is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -200,6 +215,7 @@ function runCli() {
     ...result,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 function collectActivities({ repository, pr, now, claimCreatedAt }) {
   const activities = [];
@@ -459,7 +475,11 @@ function runGh(args) {
     });
   } catch (error) {
     const stderr = String(error?.stderr ?? '').trim();
-    if (stderr) throw new Error(`gh command failed: ${stderr}`);
+    if (stderr) {
+      // Keep the compatibility message, and keep the original stderr so a
+      // bare `gh: HTTP NNN` line still classifies.
+      throw wrapGhCompatibilityError(error);
+    }
     throw error;
   }
 }

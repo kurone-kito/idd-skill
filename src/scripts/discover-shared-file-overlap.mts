@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/discover-shared-file-overlap.mts
 //
 // The scripts/discover-shared-file-overlap.mjs copy is generated from the
@@ -15,9 +16,15 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   findMarkdownCodeRanges,
@@ -223,7 +230,13 @@ const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-shared-file-overlap', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -798,15 +811,17 @@ interface ParsedArgs {
   help: boolean;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.candidates.length === 0) {
-    throw new Error(
-      'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+    throw markCliUsageError(
+      new Error(
+        'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+      ),
     );
   }
 
@@ -870,6 +885,7 @@ function runCli(): void {
     ...analysis,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 /**
@@ -1171,7 +1187,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 function parsePositiveInt(value: string | undefined, flag: string): number {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`invalid ${flag} value: ${value ?? ''}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value ?? ''}`));
   }
   return parsed;
 }

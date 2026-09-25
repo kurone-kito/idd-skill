@@ -563,14 +563,20 @@ ascending issue-number order:
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the shared
   claim-state rules in `idd-claim.instructions.md`, including
-  forced-handoff and legacy markers. Loop the single-issue
-  `resume-claim-routing.mjs --fresh-claim-gate` resolver, or apply those
-  rules manually. A candidate is **ineligible** when the latest valid
-  `claimed-by` is non-stale (`created_at > now - claim-stale-age`; see
-  `docs/policy-constants.md`), or when a stale or released claim's same-clone
-  worktree probe finds a live match or is unreadable without verified owner
-  resume or authorized handoff (#3141, Round 21 report). Otherwise it
-  **remains eligible**.
+  forced-handoff and legacy markers. Loop
+  `resume-claim-routing.mjs --fresh-claim-gate`, or by hand.
+  Hold `stop` until the probe below.
+  A non-stale `claimed-by` with no `{claim-id}`
+  is **ineligible**. Only when it is non-stale (see
+  `docs/policy-constants.md`) and has one, run
+  `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
+  fallback) with `--worktree`=own cwd and that `--claim-id`:
+  `present: true` (not malformed) routes to
+  `idd-resume.instructions.md`. A refusal continues the scan;
+  other results are **ineligible**. Also **ineligible** when a stale or released
+  claim's same-clone worktree probe finds a live match or is
+  unreadable without verified owner resume or authorized handoff
+  (#3141). Otherwise it **remains eligible**.
 
 After scanning the current batch:
 
@@ -656,15 +662,12 @@ deterministic **lowest issue number** pick.
 matches, after desync and before effort — see
 [rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-milestone-scope-preference).
 
-**Author-recorded effort hint (soft tie-breaker).** When candidates
-remain tied after the score and optional desync rules, prefer the
-**lower-effort** candidate before the lowest-issue-number tie-break.
-Read the authored `<!-- idd-skill-effort: S|M|L -->` footer
-(or the `discover-roadmap-graph` node's `effort`): `S` < `M` < `L`, with
-a missing or invalid hint as the **neutral middle** (`M`). **Soft**
-rule: reorders only within a single score tie band, never skips,
-gates, or crosses a band; the `discover-roadmap-graph` union already
-emits this order.
+**Author-recorded effort hint (soft tie-breaker).** When tied after
+score/desync/milestone, prefer **lower-effort**, then lowest issue number.
+Read the `<!-- idd-skill-effort: S|M|L -->` footer (or
+`discover-roadmap-graph`'s `effort`): `S` < `M` < `L`; missing/invalid
+is **neutral** (`M`). **Soft**: reorders only within one score tie
+band; `discover-roadmap-graph` already emits this order.
 
 **High-contention shared-file overlap (advisory).** Concurrent sessions
 tend to edit the same F-phase bundle files and `audit/sync-manifest.json`.
@@ -702,9 +705,7 @@ discover phase:
 **Do not use `idd-skill-blocked-by` to group sub-tasks under
 an active roadmap** — those belong in the roadmap's task list as
 `- [ ] #NNN` entries. `blocked-by` is only for a separate, prior
-roadmap that must close first; see the
-[A3 diagnostic](../../docs/idd-design-rationale.md#a3--diagnostic-all-candidates-blocked-by-an-open-roadmap)
-for the deadlock this prevents.
+roadmap that must close first (see A3's diagnostic above for the deadlock this prevents).
 
 ## Scope invariant (summary)
 

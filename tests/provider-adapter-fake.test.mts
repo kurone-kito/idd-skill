@@ -185,6 +185,8 @@ test('listCheckRunWorkflowPaths returns the explicit fixture override for the ex
         {
           detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
           workflowPath: '.github/workflows/real.yml',
+          // kurone-kito/idd-skill#3256
+          event: 'pull_request_target',
         },
       ],
     },
@@ -200,6 +202,7 @@ test('listCheckRunWorkflowPaths returns the explicit fixture override for the ex
       {
         detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
         workflowPath: '.github/workflows/real.yml',
+        event: 'pull_request_target',
       },
     ],
   );
@@ -232,7 +235,15 @@ test('listCheckRunWorkflowPaths derives its default from statusCheckRollup + wor
         closingIssuesReferences: [],
       },
     },
-    workflowRuns: { 'o/r/1': { path: '.github/workflows/real.yml' } },
+    // kurone-kito/idd-skill#3256: `event` alongside `path` -- the real
+    // REST `actions/runs/{id}` payload this fixture models already
+    // carries both.
+    workflowRuns: {
+      'o/r/1': {
+        path: '.github/workflows/real.yml',
+        event: 'pull_request_target',
+      },
+    },
   });
   // Only the matching-name entry is returned -- 'some-other-check' is
   // filtered out even though its run id (2) would also resolve cleanly.
@@ -247,6 +258,7 @@ test('listCheckRunWorkflowPaths derives its default from statusCheckRollup + wor
       {
         detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1',
         workflowPath: '.github/workflows/real.yml',
+        event: 'pull_request_target',
       },
     ],
   );

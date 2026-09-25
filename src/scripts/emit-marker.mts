@@ -13,6 +13,13 @@
 
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
+  applyHelperCliOutcomeWhenDisabled,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
+import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
   renderReviewWatermarkMarker,
@@ -21,10 +28,16 @@ import {
 const MARKER_TYPES = ['claimed-by', 'review-watermark', 'review-baseline'];
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('emit-marker', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -32,8 +45,10 @@ function runCli(): void {
   }
   const type = args.type;
   if (!type || !MARKER_TYPES.includes(type)) {
-    throw new Error(
-      `--type is required and must be one of: ${MARKER_TYPES.join(', ')}`,
+    throw markCliUsageError(
+      new Error(
+        `--type is required and must be one of: ${MARKER_TYPES.join(', ')}`,
+      ),
     );
   }
 
@@ -82,6 +97,7 @@ function runCli(): void {
   }
 
   process.stdout.write(`${body}\n`);
+  return 0;
 }
 
 interface ParsedArgs {
@@ -110,12 +126,14 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
       continue;
     }
     if (!token.startsWith('--')) {
-      throw new Error(`unknown argument: ${token}`);
+      throw markCliUsageError(new Error(`unknown argument: ${token}`));
     }
     const key = token.slice(2);
     const value = argv[index + 1];
     if (value === undefined || value.startsWith('--')) {
-      throw new Error(`missing value for argument: ${token}`);
+      throw markCliUsageError(
+        new Error(`missing value for argument: ${token}`),
+      );
     }
     parsed[key] = value;
     index += 1;

@@ -313,14 +313,6 @@ reviewer feedback:
   `Closes`) or a PR target leaves the reference unresolved until
   the issue body is corrected.
 
-Use these prefixes so that disposition is always unambiguous:
-
-- PATH B acceptance marker (only for a _completed_ review of the current
-  HEAD): `**Accepted** — {what the advisory comment confirmed}`
-- Ordinary rejection: `**Rejected** — {reason}`
-- CODEOWNER / required reviewer, or inconclusive (E5), exception:
-  `**Awaiting maintainer decision** — {reasoning}`
-
 Two requirements let F2/F3's disposition-evidence gate recognize an
 `**Accepted**`/`**Rejected**` disposition: `isDispositionComment` reads
 "starts with that marker," pairing dispositions to advisory comments

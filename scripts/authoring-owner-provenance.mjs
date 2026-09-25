@@ -60,6 +60,12 @@
 import { createHash } from 'node:crypto';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghTextUnbounded } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { parseAuthoringOwnerComment } from './marker-helpers.mjs';
 import { resolveGhHostnameArgs } from './minimize-superseded-markers.mjs';
@@ -674,7 +680,13 @@ const AUTHORING_OWNER_PROVENANCE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3342: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('authoring-owner-provenance', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(
@@ -690,8 +702,10 @@ function parseArgs(argv) {
   // the issue lookup. Mirrors suitability-close-execute.mts's own
   // --owner/--repo pairing guard: require both or neither.
   if ((owner === '') !== (repo === '')) {
-    throw new Error(
-      'authoring-owner-provenance: --owner and --repo must be provided together or not at all',
+    throw markCliUsageError(
+      new Error(
+        'authoring-owner-provenance: --owner and --repo must be provided together or not at all',
+      ),
     );
   }
   // `Number.parseInt` accepts trailing garbage ("2891junk" -> 2891), so a
@@ -823,7 +837,9 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -898,4 +914,5 @@ function runCli() {
     ),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }

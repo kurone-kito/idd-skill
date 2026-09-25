@@ -40,6 +40,7 @@ import type {
   ProviderRequiredCheck,
   ProviderRequiredChecksSummary,
   ProviderReviewsWithHeadCommitDate,
+  ProviderReviewThreadCommentEditHistory,
   ProviderReviewThreadCommentIds,
   ProviderReviewThreadExtended,
   ProviderReviewThreadWithAuthorType,
@@ -211,6 +212,26 @@ export interface FakeProviderFixture {
   reviewThreadsExtended?: Record<number, ProviderReviewThreadExtended[]>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadCommentIds}. */
   reviewThreadCommentIds?: Record<number, ProviderReviewThreadCommentIds[]>;
+  /** Backs {@link ProviderPort.getReviewThreadCommentUserContentEdits},
+   * keyed by the requested comment's own GraphQL node id (#3269). An id
+   * with no fixture entry gets a `{commentId, totalCount: 0, edits: []}`
+   * default -- matches the real adapter's behavior for a comment GitHub
+   * reports as never edited. */
+  reviewThreadCommentUserContentEdits?: Record<
+    string,
+    ProviderReviewThreadCommentEditHistory
+  >;
+  /** When `true`, {@link ProviderPort.getReviewThreadCommentUserContentEdits}
+   * throws -- simulates a failed `userContentEdits` fetch (#3269's own
+   * "a failed userContentEdits fetch" negative test). */
+  reviewThreadCommentUserContentEditsFails?: boolean;
+  /** Every {@link ProviderPort.getReviewThreadCommentUserContentEdits}
+   * call's `nodeIds` argument is appended here, in call order (#3269) --
+   * lets a test assert exactly which comment ids a collector requested
+   * edit history for (the "requested only for advisory-bot thread
+   * comments whose lastEditedAt is after their thread's disposition"
+   * acceptance criterion). */
+  requestedReviewThreadCommentEditHistoryIds?: string[][];
   /** Backs {@link ProviderPort.listChangeRequestGraphqlComments}. */
   changeRequestGraphqlComments?: Record<number, ProviderGraphqlComment[]>;
   /** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
@@ -242,7 +263,13 @@ export interface FakeProviderFixture {
    * rollup entry, evidence-gating included). A test that wants to
    * simulate `checkSuite.workflowRun` DISAGREEING with `detailsUrl` --
    * the scenario #2926 actually defends against -- supplies this key
-   * explicitly instead of relying on the derived default. */
+   * explicitly instead of relying on the derived default.
+   * kurone-kito/idd-skill#3256: the derived path above also resolves
+   * `event` from `workflowRuns[...].event`, `null` when absent -- no
+   * `workflowRuns` fixture needs a change to keep compiling or behaving
+   * the same. A test supplying this key EXPLICITLY, however, must now
+   * also set `event` on every entry (the interface field is required, not
+   * optional, mirroring `workflowPath`'s own rigor). */
   checkRunWorkflowPaths?: Record<string, ProviderCheckRunWorkflowPath[]>;
   /** Backs {@link ProviderPort.getWorkflowRunJobs}, keyed by
    * `${owner}/${repo}/${runId}`; an absent key throws (matches the
@@ -798,6 +825,26 @@ export function createFakeProviderAdapter(
       return fixture.reviewThreadCommentIds?.[number] ?? [];
     },
 
+    getReviewThreadCommentUserContentEdits(
+      nodeIds: string[],
+    ): ProviderReviewThreadCommentEditHistory[] {
+      fixture.requestedReviewThreadCommentEditHistoryIds ??= [];
+      fixture.requestedReviewThreadCommentEditHistoryIds.push([...nodeIds]);
+      if (fixture.reviewThreadCommentUserContentEditsFails) {
+        throw new Error(
+          'fake provider: getReviewThreadCommentUserContentEdits configured to fail',
+        );
+      }
+      return nodeIds.map(
+        (id) =>
+          fixture.reviewThreadCommentUserContentEdits?.[id] ?? {
+            commentId: id,
+            totalCount: 0,
+            edits: [],
+          },
+      );
+    },
+
     listChangeRequestGraphqlComments(number: number): ProviderGraphqlComment[] {
       return fixture.changeRequestGraphqlComments?.[number] ?? [];
     },
@@ -889,11 +936,15 @@ export function createFakeProviderAdapter(
           const runId = parseRunIdFromUrl(detailsUrl);
           const runValue = runId
             ? (fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`] as
-                | { path?: unknown }
+                | { path?: unknown; event?: unknown }
                 | undefined)
             : undefined;
           const workflowPath = runValue?.path ? String(runValue.path) : null;
-          return { detailsUrl, workflowPath };
+          // kurone-kito/idd-skill#3256: mirrors `workflowPath` above -- the
+          // real REST `actions/runs/{id}` payload this fixture models
+          // already carries `event` alongside `path`.
+          const workflowEvent = runValue?.event ? String(runValue.event) : null;
+          return { detailsUrl, workflowPath, event: workflowEvent };
         });
     },
 

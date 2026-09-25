@@ -278,6 +278,7 @@
       "sourcePinnedRequiredCheckNames": [],
       "sourcePinnedUnresolved": false,
       "identityUnresolvedRequiredCheckNames": [],
+      "nonTargetEventRequiredCheckNames": [],
       "preDowngradeStatus": "success",
       "checks": [
         {
@@ -309,6 +310,7 @@
       "wrongHead": [],
       "wrongClaim": [],
       "unauthorized": [],
+      "insufficientAuthority": [],
       "malformed": [],
       "notConfigured": [],
       "modeDisabled": [],

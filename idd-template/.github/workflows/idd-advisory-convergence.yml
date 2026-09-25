@@ -56,31 +56,36 @@ concurrency:
   # cancel an in-flight PR-linked run.
   #
   # kurone-kito/idd-skill#2657 (Codex review, PR #2895): also isolate
-  # pull_request from pull_request_target (previously grouped together)
-  # -- both fire on the same opened/synchronize PR event, so whichever
-  # instance started later could cancel the other mid-run, including the
-  # pull_request_target instance's own idd-advisory-convergence-self-
-  # waiver job, which would then never finish posting the bootstrap
-  # marker for that push (a cancelled run is not itself a new trigger,
-  # so recovery would need a manual rerun -- defeating the whole
-  # no-human-click point of that job). A new push still correctly
-  # cancels a STALE run of the SAME event type for the same PR.
+  # pull_request from pull_request_target so a same-repository PR that
+  # reintroduces a pull_request trigger to its own copy of this file
+  # (see the on: comment below) cannot have that instance cancel the
+  # genuine pull_request_target run mid-flight, including that run's own
+  # idd-advisory-convergence-self-waiver job, which would then never
+  # finish posting the bootstrap marker for that push (a cancelled run
+  # is not itself a new trigger, so recovery would need a manual rerun
+  # -- defeating the whole no-human-click point of that job). A new push
+  # still correctly cancels a STALE run of the SAME event type for the
+  # same PR.
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
 on:
-  # Trigger-migration transition state: pull_request is evaluated
-  # against the pull request's own merge ref, so a same-repository PR
-  # could edit this file's copy to force its own required check green.
-  # pull_request_target closes that gap -- it is evaluated against the
-  # base branch's own workflow YAML instead -- but cannot fire against
-  # the PR that first adds or edits this trigger, only against PRs
-  # opened afterward, so both stay active together rather than a
-  # single-PR replacement that would leave the implementing PR unable
-  # to satisfy its own required check. Drop pull_request once this has
-  # run cleanly on production PRs for a period. pull_request_review
-  # moved to the companion idd-advisory-convergence-comment.yml
-  # workflow instead of staying here, for the identical reason.
-  pull_request:
-    types: [opened, reopened, synchronize]
+  # Trigger-migration finished state (kurone-kito/idd-skill#2764 Phase
+  # 2): only pull_request_target is declared below. GitHub always
+  # evaluates it against the BASE branch's own workflow YAML, never the
+  # pull request's own merge ref, so a same-repository PR cannot edit
+  # its own copy of this file to force its required check green.
+  # Trade-off, accepted (kurone-kito/idd-skill Groom hearing,
+  # 2026-09-24): a PR that edits this workflow is itself checked by the
+  # base branch's unmodified copy, so its own workflow changes are never
+  # exercised before it merges; and a PR that first adds this file to a
+  # repository gets no idd-advisory-convergence run at all, so it cannot
+  # satisfy an already-registered required check on its own --
+  # pull_request_target never fires against the PR that first adds it.
+  # A PR that reintroduces a pull_request trigger to its own copy of
+  # this file still produces a live, same-file idd-advisory-convergence
+  # instance, but that instance's pass never satisfies the check (see
+  # docs/idd-helper-scripts.md). pull_request_review moved to the
+  # companion idd-advisory-convergence-comment.yml workflow instead of
+  # staying here, for the identical reason.
   pull_request_target:
     types: [opened, reopened, synchronize]
   workflow_dispatch:

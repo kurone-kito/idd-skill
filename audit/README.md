@@ -276,3 +276,93 @@ matched. Optionally carry a reason before the closing `-->`, for
 example `<!-- audit:ignore-link: known false positive -->`. Keep this
 narrowly used: prefer fixing the link or the heading first, and
 reserve the marker for a link this checker cannot correctly evaluate.
+
+## Lite Gate Parity
+
+Most lite files under `idd-template/.github/instructions/lite/` state
+that any mismatch with their standard-file counterpart (within the
+lite file's declared scope) is a bug in the lite file, but nothing
+mechanically checked that promise. Parity has been restored by hand,
+repeatedly, after each gap was found by chance: issue
+[#1700](https://github.com/kurone-kito/idd-skill/issues/1700) and
+[#1701](https://github.com/kurone-kito/idd-skill/issues/1701) (lite E14
+recovery bounds and E3 routing),
+[#1794](https://github.com/kurone-kito/idd-skill/issues/1794) (the
+activation-nonce recheck dropped from two lite guards),
+[#2772](https://github.com/kurone-kito/idd-skill/issues/2772) (five
+lite restatements that lost conditions),
+[#2968](https://github.com/kurone-kito/idd-skill/issues/2968) (a
+requested systematic lite-vs-standard sweep, itself performed by
+hand), and
+[#2978](https://github.com/kurone-kito/idd-skill/issues/2978) (lite
+resume routing). `liteGateParity` is the prevention pass: a
+machine-readable registry of named safety gates, each pointing at one
+standard-file location and either its lite-file counterpart(s) or a
+stated reason the lite profile omits it on purpose.
+
+### Registry shape
+
+`liteGateParity` is an array of entries. Each entry carries:
+
+- `id` (unique, kebab-case) and `phase` (for example `F2`) — free-form
+  labels; only `id` uniqueness is enforced.
+- `standard`: one **location** in a canonical
+  `idd-template/.github/instructions/*.instructions.md` source (never
+  a path under `lite/`).
+- exactly one of:
+  - `lite`: one or more locations in
+    `idd-template/.github/instructions/lite/` (always under `lite/`),
+    optionally paired with `helperGate` (below);
+  - `omittedByDesign`: `{ reason, lite: <location> }` — a non-empty
+    `reason` plus the lite file's own location stating the exclusion,
+    so every omission is visible where a lite reader would look for
+    the gate.
+
+A **location** is `{ file, heading, contains }` or `{ file, heading,
+pattern }` — exactly one of `contains` (a literal substring) or
+`pattern` (a regular-expression source, no implicit flags). `heading`
+is the exact ATX heading text (no leading `#`s); its section runs from
+that heading to the next heading of the same or shallower level,
+including any fenced code blocks the section contains — many lite
+gates live inside a fenced example. The heading is resolved with
+GitHub's own heading-slug algorithm (the same one
+[Markdown Link/Anchor Audit](#markdown-linkanchor-audit) above uses),
+so a renamed heading fails the same way a dead anchor would. `heading`
+must be unique within its own file: since it is always plain text
+(never a pre-suffixed slug like `Gate-1`), it can only ever describe a
+document's _first_ occurrence of that heading, so a location whose
+file repeats the identical heading text elsewhere fails closed as
+ambiguous rather than silently resolving to the first occurrence
+(#3310 review).
+
+`helperGate: { source, gate }` marks a `lite` entry whose lite
+location delegates the actual gate decision to a helper's verdict
+(for example a `blockers[]` entry) instead of restating it in prose;
+the audit then also requires the literal `gate: '<gate>'` text
+inside `source` (typically a `src/scripts/*.mts` helper module), so a
+helper-side rename of the gate id is caught too.
+
+### What the check catches, and what it does not
+
+`collectLiteGateParityViolations`
+(`src/scripts/consistency-helpers.mts`) reports an error for: an entry
+carrying neither or both of `lite`/`omittedByDesign`; an empty
+`omittedByDesign.reason`; a duplicate `id`; a location's file that
+does not exist; a heading with no matching GitHub slug in its file, or
+one that matches more than one heading there; a
+location carrying both or neither of `contains`/`pattern`; a
+`contains` substring or `pattern` match missing from its heading's
+section; a location that is not a
+`idd-template/.github/instructions/*.instructions.md` file (standard
+paths must not sit under `lite/`; lite paths must); a missing or empty
+`liteGateParity` registry when the canonical lite corpus is present in
+the tree (a manifest with no lite corpus may omit it); a `helperGate`
+literal missing from its `source`; and a
+`helperGate` on an `omittedByDesign` entry, which has no lite
+location to delegate a verdict from.
+
+**Known limit**: the registry detects a _registered_ gate
+disappearing from either side — it does not detect an unregistered
+new standard gate that never got a lite counterpart or an
+`omittedByDesign` entry. Authors adding a new standard safety gate
+register it here in the same pull request.

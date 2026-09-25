@@ -4,6 +4,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { posix } from 'node:path';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 
 const DEFAULT_TEMPLATE_ROOT = 'idd-template/';
 // The suppression marker for a narrowly-used, intentional exception (see
@@ -46,24 +47,22 @@ function stripHeadingMarkup(text) {
  * Extract every ATX (`#`...`######`) heading's GitHub slug from `text`, in
  * document order, with GitHub's duplicate-suffixing rule applied (the
  * second occurrence of a slug becomes `slug-1`, the third `slug-2`, ...).
- * Fence-aware (fenced code blocks are skipped) but, like audit-docs.mts's
- * own `headingSignature`, only recognizes triple-backtick fences and ATX
- * headings -- tilde fences, longer fences, and Setext headings are out of
- * scope, matching the existing precedent; a missed heading only widens the
- * checker's tolerance (a false pass), never produces a false failure.
+ * Fence-aware via the shared #3281 masking entry point (backtick AND
+ * tilde fences, and CommonMark's <= 3-space indent limit on a valid fence
+ * opener, unlike a naive backtick-only toggle) -- but, like
+ * audit-docs.mts's own `headingSignature`, still only recognizes ATX
+ * headings; Setext headings are out of scope, matching the existing
+ * precedent, and a missed heading only widens the checker's tolerance (a
+ * false pass), never produces a false failure. Inline code spans are left
+ * unmasked here (unlike {@link extractLinkOccurrences}'s own masking
+ * pass) so `stripHeadingMarkup` below can still unwrap a heading's own
+ * inline-code segment instead of losing its text.
  */
 export function extractHeadingSlugs(text) {
   const slugs = [];
   const counts = new Map();
-  let inFence = false;
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      continue;
-    }
+  const masked = maskMarkdownForScan(text, { inlineCode: 'keep' });
+  for (const line of masked.split(/\r?\n/)) {
     const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (!match) {
       continue;
@@ -75,41 +74,30 @@ export function extractHeadingSlugs(text) {
   }
   return slugs;
 }
-// Removes backtick code spans from a single line (blanking, not deleting --
-// callers only use the result for pattern matching, not for column-accurate
-// output). A code span that wraps across lines is not recognized, mirroring
-// the same per-line approximation checkForbiddenPatterns'/headingSignature's
-// fence handling already accepts elsewhere in this audit.
-function stripInlineCodeSpans(line) {
-  return line.replace(/`[^`]*`/g, '');
-}
 const INLINE_LINK_PATTERN =
   /\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*"|\s+'[^']*')?\)/g;
 const REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[[^\]]+\]:\s*(\S+)/;
 /**
  * Extract every inline (`[text](target)`) and reference-style
- * (`[label]: target`) link occurrence from `text`, fence-aware and with
- * inline code spans stripped first so example link syntax shown as code is
- * never mistaken for a real link. A line carrying a well-formed
- * `IGNORE_MARKER_PATTERN` comment (after code-span stripping, so a
- * documentation example of the marker wrapped in backticks never
- * suppresses a real link on that line) marks every link occurrence on
- * that line as suppressed.
+ * (`[label]: target`) link occurrence from `text`. Fence- and span-aware
+ * via the shared #3281 masking entry point ({@link maskMarkdownForScan}'s
+ * defaults: fenced/indented code blocks and inline code spans masked,
+ * HTML comments left intact) so example link syntax shown as code is
+ * never mistaken for a real link, and so a real fenced/indented code
+ * block cannot swallow the rest of the file the way a naive backtick-only
+ * toggle could. Unlike the previous per-line stripper, the masking pass
+ * is CommonMark-aware across the whole text, so a code span that wraps
+ * across lines is masked correctly too. A line carrying a well-formed
+ * `IGNORE_MARKER_PATTERN` comment (comments are never masked, so this
+ * still runs against the same text a reader would see; a marker shown
+ * only inside a masked code span never suppresses a real link on that
+ * line) marks every link occurrence on that line as suppressed.
  */
 export function extractLinkOccurrences(text) {
   const occurrences = [];
-  let inFence = false;
-  const lines = text.split(/\r?\n/);
+  const lines = maskMarkdownForScan(text).split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
-    const rawLine = lines[index];
-    if (/^\s*```/.test(rawLine)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      continue;
-    }
-    const line = stripInlineCodeSpans(rawLine);
+    const line = lines[index];
     const suppressed = IGNORE_MARKER_PATTERN.test(line);
     const lineNumber = index + 1;
     for (const match of line.matchAll(INLINE_LINK_PATTERN)) {

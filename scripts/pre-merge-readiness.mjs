@@ -30,6 +30,13 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   inspectDevelopmentBranch,
@@ -38,7 +45,10 @@ import {
   resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mjs';
 import {
+  attachReviewThreadCommentEditHistories,
+  buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
+  CHECK_PASS_EQUIVALENT_STATES,
   classifyPrLoopMembership,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
@@ -53,7 +63,9 @@ import {
   resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
+  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
+  selectLatestCheckInstance,
 } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
@@ -227,10 +239,14 @@ export function collectPreMergeReadiness(
     process.exit(0);
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   if (!args.claimless && !args.claimIssueNumber) {
-    throw new Error('missing required --claim-issue <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --claim-issue <number> argument'),
+    );
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
@@ -363,9 +379,10 @@ export function collectPreMergeReadiness(
   // `CheckPayload.workflowPath`'s own doc comment and this issue's
   // Background). Scoped to this ONE check name deliberately: it is the
   // only one with a documented same-display-name-different-file collision
-  // scenario in this repository today (the concurrent `pull_request`/
-  // `pull_request_target` transition window `.github/workflows/
-  // idd-advisory-convergence.yml` itself documents). The producer-identity
+  // scenario in this repository today (a same-repository PR that
+  // reintroduces a `pull_request` trigger to its own copy of
+  // `.github/workflows/idd-advisory-convergence.yml` post-#2764 Phase 2,
+  // per kurone-kito/idd-skill#3256). The producer-identity
   // KEY widens for every `groupChecksByProducer` consumer regardless (see
   // `protocol-helpers.mts`); only the SOURCING of real `workflowPath` data
   // stays this narrow, so any other check name still benefits the moment a
@@ -382,8 +399,9 @@ export function collectPreMergeReadiness(
   // stays small on its own: this repository's own live PR rollups show
   // exactly one `idd-advisory-convergence` check-run entry per PR in the
   // ordinary case (the `-self-waiver` check is a different name, not
-  // matched here), two-to-three during the documented transition window --
-  // never the up-to-20 budget the marker-verification block below spends.
+  // matched here), two-to-three in the documented same-file dedup case
+  // above -- never the up-to-20 budget the marker-verification block below
+  // spends.
   //
   // kurone-kito/idd-skill#2919 (round 2 -- Codex + Copilot review on PR
   // #2921, six new findings against a prior cap+excess-sentinel design):
@@ -441,10 +459,22 @@ export function collectPreMergeReadiness(
   // rather than "identity unresolved": it never had resolvable evidence
   // to begin with, matching the pre-#1483 absent-discriminator
   // convention every other `type`/`workflowName`-absent check already
-  // gets. A MIXED check name (some instances parseable, some not) is NOT
-  // given this same pass -- the parseable instances DO have resolvable
-  // identity evidence, so treating the whole name as "no evidence" could
-  // mask a genuine decoy hiding behind one malformed `detailsUrl`
+  // gets. As of kurone-kito/idd-skill#3256 (live Copilot review, PR
+  // #3425, rejected -- see that PR's own review thread), this also
+  // leaves the new `event` gate below unresolved for this branch: the
+  // genuine checker instance always has a parseable `detailsUrl`, so this
+  // branch only fires when NO genuine instance is present at all (a
+  // forged-only-instance window #2919/#2926's own producer-identity
+  // provenance already targets, not a `pull_request`-vs-
+  // `pull_request_target` problem this issue's own scope covers), and a
+  // genuine instance alongside a `detailsUrl`-less forged one already
+  // routes through the MIXED branch below instead, which fails closed
+  // regardless. Same accepted zero-evidence posture, deliberately not
+  // widened or narrowed by this issue. A MIXED check name (some instances
+  // parseable, some not) is NOT given this same pass -- the parseable
+  // instances DO have resolvable identity evidence, so treating the
+  // whole name as "no evidence" could mask a genuine decoy hiding behind
+  // one malformed `detailsUrl`
   // (Copilot finding, round 2); it is instead folded into "identity
   // unresolved" like any other partial-resolution case.
   const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 50;
@@ -459,6 +489,45 @@ export function collectPreMergeReadiness(
   // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
   // the primary required-check gate -- see the doc comment above.
   let advisoryConvergenceIdentityUnresolved = false;
+  // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review, PR #3425,
+  // two findings against two successive revisions -- see the resolution
+  // loop's own doc comment below for the full history): true when, among
+  // the live `idd-advisory-convergence` instances grouped by same-producer
+  // `(type, workflowName, workflowPath)` and reduced to each group's own
+  // DEDUP-SELECTED representative (the same `selectLatestCheckInstance`
+  // tie-break `classifyCiChecks` itself applies), at least one
+  // representative is pass-equivalent (something exists that would
+  // otherwise read as a pass) AND no representative is BOTH pass-equivalent
+  // AND triggered by `pull_request_target` (no genuinely qualifying pass
+  // exists anywhere to back that reported success). Deliberately keyed on
+  // each group's SELECTED representative, never a raw, un-deduped instance:
+  // a same-file group can carry an older, qualifying `pull_request_target`
+  // pass alongside a newer, non-qualifying `pull_request` pass (a PR that
+  // reintroduced that trigger and pushed again) -- `classifyCiChecks`
+  // dedupes the group down to the NEWER instance before ever classifying
+  // pass/fail, so the older pass never actually backs the reported
+  // `success`. Equally deliberately, an UNRELATED producer group (a
+  // same-display-name decoy workflow file, #2919's own motivating
+  // scenario) never spoils an otherwise-qualifying pass in a DIFFERENT
+  // group: `classifyCiChecks` treats two independent, both-passing
+  // producers as an all-passing rollup regardless of the decoy's own
+  // event, so this flag only ever fires when NO group anywhere has a
+  // qualifying representative. Reported to `buildPreMergeReadinessSummary`
+  // (`advisoryConvergenceNonTargetEventOnly` option) so it can downgrade
+  // the primary required-check gate the same way
+  // `advisoryConvergenceIdentityUnresolved` does, but as a DISTINCT cause
+  // (see `summarizeRequiredChecks`'s `nonTargetEventCheckNames` doc
+  // comment for why the two are never folded into one field). Computed
+  // only once the workflow-path/event resolution below succeeds cleanly
+  // for every live instance -- an unresolved event already routes through
+  // `advisoryConvergenceIdentityUnresolved` instead (see the resolution
+  // loop's own `!event` guard), so this flag and that one are mutually
+  // exclusive in practice. Stays `false` whenever no representative is
+  // pass-equivalent at all -- `classifyCiChecks` already reports
+  // `failed`/`pending` for that case with no help needed here, matching
+  // `summarizeRequiredChecks`'s own downgrade precedent of only ever
+  // narrowing an already-`'success'` status.
+  let advisoryConvergenceNonTargetEventOnly = false;
   if (advisoryConvergenceCheckEntries.length > 0) {
     const runIdsByIndex = new Map();
     for (const { index } of advisoryConvergenceCheckEntries) {
@@ -518,6 +587,9 @@ export function collectPreMergeReadiness(
           }
           if (!advisoryConvergenceIdentityUnresolved) {
             const pathByDetailsUrl = new Map();
+            // kurone-kito/idd-skill#3256: mirrors `pathByDetailsUrl` exactly
+            // -- same join key, same duplicate-detection guard below.
+            const eventByDetailsUrl = new Map();
             const duplicateDetailsUrls = new Set();
             for (const association of associations) {
               if (pathByDetailsUrl.has(association.detailsUrl)) {
@@ -526,6 +598,10 @@ export function collectPreMergeReadiness(
                 pathByDetailsUrl.set(
                   association.detailsUrl,
                   association.workflowPath,
+                );
+                eventByDetailsUrl.set(
+                  association.detailsUrl,
+                  association.event,
                 );
               }
             }
@@ -540,20 +616,50 @@ export function collectPreMergeReadiness(
               );
             }
             const pathsByIndex = new Map();
+            // kurone-kito/idd-skill#3256: mirrors `pathsByIndex` -- resolved
+            // (and validated) only alongside `path` below, in the SAME loop
+            // and under the SAME fail-closed guard, so an index never ends
+            // up with one resolved and the other missing.
+            const eventsByIndex = new Map();
             for (const { index } of advisoryConvergenceCheckEntries) {
               const detailsUrl = String(
                 rawStatusCheckRollup[index]?.detailsUrl ?? '',
               );
               const path = pathByDetailsUrl.get(detailsUrl);
+              const event = eventByDetailsUrl.get(detailsUrl);
               if (
                 duplicateDetailsUrls.has(detailsUrl) ||
                 (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) > 1 ||
-                !path
+                !path ||
+                !event
               ) {
+                // A missing `event` here also skips `workflowPath`
+                // enrichment for this whole check name (both are set only
+                // AFTER this loop completes cleanly, below), which in turn
+                // leaves `workflowPath` absent -- PERMISSIVE for the
+                // self-waiver candidate filter's own `!check.workflowPath`
+                // fallback (`selfConvergenceProducerCandidates` in
+                // protocol-helpers.mts), reopening #2919's decoy-masking
+                // gap for THAT unrelated path specifically. Accepted: `event`
+                // is populated whenever `checkSuite.workflowRun` itself is
+                // non-null -- i.e. for every GENUINE Actions-triggered
+                // check-run -- and is `null` only when `workflowRun` itself
+                // is (a non-Actions check-run posted directly via the
+                // Checks API, this file's own `provider-adapter-github.test.mts`
+                // models exactly this). That non-Actions case is what this
+                // MIXED branch (a genuine instance alongside a workflowRun-
+                // less one) already fails closed on today; the self-waiver
+                // marker's own condition 4 independently rejects a
+                // non-`pull_request_target` cited run regardless. So this
+                // is a fixture-completeness gap (see the `event`-less
+                // `workflowRuns` test fixtures this repository's own test
+                // suite had to backfill for #3256), never a live
+                // production hole.
                 advisoryConvergenceIdentityUnresolved = true;
                 break;
               }
               pathsByIndex.set(index, path);
+              eventsByIndex.set(index, event);
             }
             if (!advisoryConvergenceIdentityUnresolved) {
               checks = checks.map((check, index) => {
@@ -562,6 +668,91 @@ export function collectPreMergeReadiness(
                   ? check
                   : { ...check, workflowPath: path };
               });
+              // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review,
+              // PR #3425, two findings): every advisory-convergence entry
+              // now has a cleanly-resolved `event` in `eventsByIndex` (the
+              // loop above would already have set
+              // `advisoryConvergenceIdentityUnresolved` and broken out
+              // otherwise).
+              //
+              // Round-1 finding (High): the original formula checked "does
+              // ANY pass-equivalent live instance have a qualifying event"
+              // across the RAW, un-deduped entries -- wrong, because
+              // `classifyCiChecks` (via `groupChecksByProducer` +
+              // `selectLatestCheckInstance`) dedupes same-producer
+              // `(type, workflowName, workflowPath)` instances down to ONE
+              // representative before ever classifying pass/fail, and an
+              // older qualifying pass can coexist with a newer,
+              // dedup-SELECTED non-qualifying pass from the very same real
+              // workflow file (a PR that reintroduces `pull_request` and
+              // pushes a later, still-green run there) -- the raw-entry
+              // check found the older instance and stayed permissive while
+              // the newer, actually-representative instance was the one
+              // `ci.status` would report `success` from.
+              //
+              // Round-2 finding (Medium), against this file's own FIRST
+              // fix for the round-1 finding: that fix over-corrected to
+              // "flag when ANY group's own selected representative is a
+              // non-qualifying pass" -- wrong in the OPPOSITE direction, for
+              // a genuinely SEPARATE producer (a same-display-name decoy
+              // workflow file, #2919's own motivating scenario):
+              // `classifyCiChecks` treats a `pull_request_target` SUCCESS
+              // in one group and an unrelated `pull_request` SUCCESS in a
+              // DIFFERENT group as an all-passing rollup (two independent,
+              // both-passing producers), so flagging the whole check name
+              // over the unrelated decoy's own non-qualifying event wrongly
+              // downgraded an available, genuinely qualifying pass.
+              //
+              // Correct formula (mirrors the ORIGINAL round-1 existence
+              // check, but over each group's DEDUP-SELECTED representative
+              // instead of raw entries): group by
+              // `(type, workflowName, workflowPath)` (name is already
+              // constant across every entry here), pick each group's own
+              // `selectLatestCheckInstance` (the identical tie-break
+              // protocol-helpers.mts exports for this exact purpose), then
+              // flag only when at least one group's selected representative
+              // is pass-equivalent (there is something that would
+              // otherwise read as a pass) AND no group's selected
+              // representative is BOTH pass-equivalent AND
+              // `pull_request_target`-triggered (no genuinely qualifying
+              // pass exists anywhere to back that reported success).
+              const advisoryConvergenceProducerGroups = new Map();
+              for (const { index } of advisoryConvergenceCheckEntries) {
+                const check = checks[index];
+                const type = check?.type ? String(check.type).trim() : '';
+                const workflowName = check?.workflowName
+                  ? String(check.workflowName).trim()
+                  : '';
+                const path = pathsByIndex.get(index) ?? '';
+                const key = `${type}\0${workflowName}\0${path}`;
+                const entry = {
+                  state: String(check?.state ?? '').toUpperCase(),
+                  completedAt: check?.completedAt ?? null,
+                  event: eventsByIndex.get(index) ?? '',
+                };
+                const group = advisoryConvergenceProducerGroups.get(key);
+                if (group) {
+                  group.push(entry);
+                } else {
+                  advisoryConvergenceProducerGroups.set(key, [entry]);
+                }
+              }
+              const advisoryConvergenceSelectedRepresentatives = [
+                ...advisoryConvergenceProducerGroups.values(),
+              ].map((group) => selectLatestCheckInstance(group));
+              const advisoryConvergenceHasPassEquivalentGroup =
+                advisoryConvergenceSelectedRepresentatives.some((selected) =>
+                  CHECK_PASS_EQUIVALENT_STATES.has(selected.state),
+                );
+              const advisoryConvergenceHasQualifyingTargetPass =
+                advisoryConvergenceSelectedRepresentatives.some(
+                  (selected) =>
+                    CHECK_PASS_EQUIVALENT_STATES.has(selected.state) &&
+                    selected.event === 'pull_request_target',
+                );
+              advisoryConvergenceNonTargetEventOnly =
+                advisoryConvergenceHasPassEquivalentGroup &&
+                !advisoryConvergenceHasQualifyingTargetPass;
             }
           }
         }
@@ -672,16 +863,21 @@ export function collectPreMergeReadiness(
     branchProtection,
   );
   const collaboratorTrustEnabled = readCollaboratorTrustEnabled(iddConfig);
-  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+  // kurone-kito/idd-skill#3250: the shared composition -- see
+  // `buildEffectiveTrustedMarkerLogins`'s own doc comment for why the
+  // collaborator-marker-trust discovery itself stays file-local
+  // (`resolveTrustedCollaboratorMarkerLogins`, loop-safety wrapped) while
+  // only the final combine step is shared.
+  const trustedMarkerLogins = buildEffectiveTrustedMarkerLogins({
     viewerLogin,
-    ...configuredTrustedActors,
-    ...(collaboratorTrustEnabled
+    configuredTrustedActors,
+    collaboratorMarkerLogins: collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimComments,
         ])
-      : []),
-  ]);
+      : [],
+  });
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
   // evaluated when claimless AND (the PR actually has closing references
   // OR the field itself could not be read) -- the common claimless case
@@ -798,6 +994,55 @@ export function collectPreMergeReadiness(
     trustedMarkerLogins,
     operationalComments: [...comments, ...claimComments],
   });
+  // #3269: bounded second-pass GraphQL fetch, scoped to only advisory-bot
+  // thread comments edited after their thread's latest IDD disposition
+  // (see `selectAdvisoryThreadCommentIdsEditedAfterDisposition`'s own doc
+  // comment) -- so `dispositionEvidence` below can verify a cosmetic edit
+  // (e.g. CodeRabbit's own comment-to-reply marker rewrite) and date it by
+  // content activity instead of `updatedAt`, which also moves on IDD's
+  // own hide-on-supersede minimization (kurone-kito/idd-skill#3173). The
+  // `isDispositionAuthor` predicate here MUST match
+  // `summarizeDispositionEvidenceForGate`'s own (via
+  // `buildPreMergeReadinessSummary`'s `iddAgentLogins`/`trustedMarkerLogins`
+  // options), or candidate selection and freshness evaluation could
+  // disagree about which comment anchors "the disposition". A fetch
+  // failure degrades to no enrichment (today's `updatedAt` dating)
+  // rather than failing this whole collector.
+  const baseNormalizedThreads = threads.map(normalizeThread);
+  const dispositionAuthorLoginSet = new Set([
+    ...iddAgentLogins,
+    ...trustedMarkerLogins,
+  ]);
+  const editHistoryCandidateIds =
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      baseNormalizedThreads,
+      {
+        isDispositionAuthor: (login) => dispositionAuthorLoginSet.has(login),
+        advisoryBotLogins,
+      },
+    );
+  let editHistories = [];
+  if (editHistoryCandidateIds.length > 0) {
+    try {
+      editHistories = port.getReviewThreadCommentUserContentEdits(
+        editHistoryCandidateIds,
+      );
+    } catch {
+      // Fail closed to no enrichment -- every affected comment keeps
+      // today's `updatedAt` dating (see
+      // `resolveThreadCommentRevisionDatingOutcome`'s own "unverifiable"
+      // outcome for an absent/incomplete history, protocol-helpers.mts).
+    }
+  }
+  // Called unconditionally (even with an empty `editHistories`): returns
+  // `baseNormalizedThreads` UNCHANGED (same reference) when there is
+  // nothing to attach, so this is never more than a no-op enrichment pass
+  // in that case, and keeps `normalizedThreads`'s inferred type the same
+  // (structurally `ThreadLike[]`) regardless of which branch above ran.
+  const normalizedThreads = attachReviewThreadCommentEditHistories(
+    baseNormalizedThreads,
+    editHistories,
+  );
   const advisoryWaitPolicy = resolveAdvisoryWaitPolicy(advisoryWaitConfig);
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(advisoryWaitConfig);
   const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
@@ -903,6 +1148,8 @@ export function collectPreMergeReadiness(
   const externalCheckWaiverMaxValidity =
     readExternalCheckWaiverMaxValidity(iddConfig);
   const externalCheckWaiverMode = readExternalCheckWaiverMode(iddConfig);
+  const externalCheckWaiverAuthorityPolicy =
+    readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
@@ -1251,7 +1498,7 @@ export function collectPreMergeReadiness(
       prHeadSha,
       comments: normalizedComments,
       reviews: normalizedReviews,
-      threads: threads.map(normalizeThread),
+      threads: normalizedThreads,
       checks,
       branchRules,
       branchRulesets,
@@ -1302,6 +1549,10 @@ export function collectPreMergeReadiness(
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
       advisoryConvergenceIdentityUnresolved,
+      // kurone-kito/idd-skill#3256: caller-precomputed by the same
+      // enrichment block above -- see its doc comment for the full
+      // rationale.
+      advisoryConvergenceNonTargetEventOnly,
       advisoryConvergenceOutageRelieved:
         advisoryConvergenceOutageRelief.relieved,
       advisoryConvergenceOutageRelievedSince:
@@ -1314,6 +1565,8 @@ export function collectPreMergeReadiness(
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       externalCheckWaiverMode,
+      externalCheckWaiverAuthorityPolicy,
+      resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
       staleAgeMs,
       forcedHandoffEnabled,
@@ -1365,15 +1618,45 @@ export function renderCliUsageError(error) {
 }
 // CLI: emit the readiness report as JSON when invoked directly.
 if (import.meta.main) {
+  // #3342: call main() directly when the envelope is disabled, for the
+  // same uniform pattern every migrated helper's own trigger uses -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment. Moot in
+  // practice for this file specifically: main()'s own try/catch below
+  // never lets an exception escape uncaught, so there is no raw crash
+  // text for the runHelperCli-added-frame concern to affect here.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('pre-merge-readiness', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+// #3342: this file already had a top-level catch that renders its own
+// `{"error": ...}` stdout JSON and exits 1 on any failure -- unlike the
+// other five migrated helpers, which have no existing catch and let
+// `runHelperCli` classify a thrown error itself. Classifying the SAME
+// error here (via `classifyHelperError`) and reporting it as an outcome
+// object keeps that exact existing rendering unchanged while still
+// giving `runHelperCli` a real `kind` (e.g. `transport` for a `gh: HTTP
+// 503` failure, the #2806 ambiguity this whole issue exists to remove)
+// instead of the generic `gate` it would otherwise assign to any
+// returned non-zero exit code.
+function main() {
   try {
     process.stdout.write(
       `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
     );
+    return 0;
   } catch (error) {
     process.stdout.write(
       `${JSON.stringify(renderCliUsageError(error), null, 2)}\n`,
     );
-    process.exitCode = 1;
+    const classified = classifyHelperError(error);
+    return {
+      exitCode: 1,
+      kind: classified.kind,
+      message: classified.message,
+      httpStatus: classified.httpStatus,
+    };
   }
 }
 function warnDeprecatedFlag(deprecated, canonical) {
@@ -1439,7 +1722,7 @@ export function parseArgs(argv) {
       return null;
     }
     if (!/^[1-9]\d*$/.test(token)) {
-      throw new Error(`invalid ${flagName} value: ${token}`);
+      throw markCliUsageError(new Error(`invalid ${flagName} value: ${token}`));
     }
     return Number(token);
   };
@@ -1478,10 +1761,14 @@ export function parseArgs(argv) {
   }
   const claimless = Boolean(values.claimless);
   if (claimless && values['claim-issue'] !== undefined) {
-    throw new Error('--claimless cannot be combined with --claim-issue');
+    throw markCliUsageError(
+      new Error('--claimless cannot be combined with --claim-issue'),
+    );
   }
   if (claimless && claimId) {
-    throw new Error('--claimless cannot be combined with --claim-id');
+    throw markCliUsageError(
+      new Error('--claimless cannot be combined with --claim-id'),
+    );
   }
   // #3298: --closing-issues declares the deliberate multi-issue closing set
   // (idd-pr-submit.instructions.md's "Multiple closing issues" case) for
@@ -1492,13 +1779,15 @@ export function parseArgs(argv) {
   let closingIssueNumbers = null;
   if (closingIssuesToken !== undefined) {
     if (claimless) {
-      throw new Error('--closing-issues cannot be combined with --claimless');
+      throw markCliUsageError(
+        new Error('--closing-issues cannot be combined with --claimless'),
+      );
     }
     closingIssueNumbers = closingIssuesToken.split(',').map((token) => {
       const trimmed = token.trim();
       if (!/^[1-9]\d*$/.test(trimmed)) {
-        throw new Error(
-          `invalid --closing-issues value: ${closingIssuesToken}`,
+        throw markCliUsageError(
+          new Error(`invalid --closing-issues value: ${closingIssuesToken}`),
         );
       }
       return Number(trimmed);
@@ -1511,8 +1800,10 @@ export function parseArgs(argv) {
       claimIssueNumber !== null &&
       !closingIssueNumbers.includes(claimIssueNumber)
     ) {
-      throw new Error(
-        `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+      throw markCliUsageError(
+        new Error(
+          `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+        ),
       );
     }
   }
@@ -1629,7 +1920,13 @@ export function normalizeClaimComment(comment) {
  */
 export function normalizeReview(review) {
   return {
-    author: { login: review.user?.login ?? '' },
+    author: {
+      login: review.user?.login ?? '',
+      // #3262: `findLastCopilotReviewCommit` reads `author.type` for the
+      // bare-login vs `[bot]`-suffix match. Dropping it here made a
+      // configured `[bot]` login fail closed on this REST path.
+      type: review.user?.type ?? null,
+    },
     state: review.state ?? '',
     commitId: review.commit_id ?? '',
     submittedAt: review.submitted_at ?? '',
@@ -1648,6 +1945,13 @@ export function normalizeReview(review) {
  * threaded through -- it feeds `dispositionEvidence.missingThreads[].id`,
  * which a caller reads to identify which live thread to reply to; dropping
  * it forced a separate positional lookup to recover the real thread.
+ * Each comment's own `id` and `lastEditedAt` (#3269) are threaded through
+ * too -- `id` lets `selectAdvisoryThreadCommentIdsEditedAfterDisposition`
+ * name a candidate comment for the bounded `userContentEdits` fetch, and
+ * `lastEditedAt` (already returned by the port since #3246, but never
+ * mapped into this shape until #3269) is what
+ * `effectiveThreadCommentActivityAt` reads to tell a genuinely unedited
+ * comment from an edited one at all.
  */
 export function normalizeThread(thread) {
   return {
@@ -1657,11 +1961,13 @@ export function normalizeThread(thread) {
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: thread.comments.map((comment) => ({
+        id: comment.id,
         author: { login: comment.authorLogin },
         body: comment.body,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt || comment.createdAt,
         pullRequestReview: { id: comment.pullRequestReviewId ?? null },
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };
@@ -1988,6 +2294,16 @@ function readExternalCheckWaiverMaxValidity(iddConfig) {
 // fail-closed guard.
 function readExternalCheckWaiverMode(iddConfig) {
   return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers.mode;
+}
+// kurone-kito/idd-skill#3250: configured external-check waiver authority
+// policy (`ciGate.externalCheckWaivers.authorityPolicy`), threaded to the
+// consume-side authority check. `normalizePolicyConfig` already defaults
+// this to `owners-and-maintainers-only`, so an absent config resolves to
+// the same fail-closed default `summarizeExternalCheckWaivers` itself
+// falls back to.
+function readExternalCheckWaiverAuthorityPolicy(iddConfig) {
+  return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers
+    .authorityPolicy;
 }
 // #2353 (Codex review on PR #2370, second follow-up): a declaration's own
 // `startedAt` is generated before the `--declare --apply` interactive

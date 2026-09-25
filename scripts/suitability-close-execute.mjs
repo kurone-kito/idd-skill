@@ -28,6 +28,13 @@ import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
 } from './discover-shared-file-overlap.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
   DEFAULT_STALE_AGE_MS,
@@ -498,8 +505,10 @@ export function parseArgs(argv) {
   // idd-roadmap-audit-execute.mts's own --owner/--repo pairing guard:
   // require both or neither.
   if ((owner === '') !== (repo === '')) {
-    throw new Error(
-      'suitability-close-execute: --owner and --repo must be provided together or not at all',
+    throw markCliUsageError(
+      new Error(
+        'suitability-close-execute: --owner and --repo must be provided together or not at all',
+      ),
     );
   }
   return {
@@ -544,22 +553,46 @@ function runCli() {
     process.exit(0);
   }
   if (args.issue === null) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.apply && (!args.claimId || !args.agentId)) {
-    throw new Error('--apply requires --claim-id and --agent-id');
+    throw markCliUsageError(
+      new Error('--apply requires --claim-id and --agent-id'),
+    );
   }
   const deps = createProductionDeps(args);
   const verdict = runSuitabilityCloseExecute(args, deps);
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   const success = args.apply ? verdict.closed : verdict.ready;
-  process.exit(success ? 0 : 1);
+  return success ? 0 : 1;
 }
 if (import.meta.main) {
-  try {
-    runCli();
-  } catch (error) {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exit(1);
+  // #3343: keep the pre-migration `Error: <message>` catch. When the
+  // envelope is disabled, call runCli() at this same depth so an uncaught
+  // crash (none today -- this catch handles every throw) stays unchanged.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('suitability-close-execute', () => {
+      try {
+        return runCli();
+      } catch (error) {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      }
+    });
+  } else {
+    try {
+      applyHelperCliOutcomeWhenDisabled(runCli());
+    } catch (error) {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    }
   }
 }

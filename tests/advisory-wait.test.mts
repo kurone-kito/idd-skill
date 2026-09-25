@@ -1047,6 +1047,64 @@ test('#1686: isCopilotReviewerLogin matches only the exact Copilot login set and
   assert.equal(isCopilotReviewerLogin('copilot-impersonator'), false);
 });
 
+test('#3262: findLastCopilotReviewCommit matches a configured external bot across REST login spellings via user.type', () => {
+  const commitId = 'c'.repeat(40);
+  const restShapedReview = (login: string) => ({
+    user: { login, type: 'Bot' },
+    submitted_at: '2026-09-24T00:00:00Z',
+    commit_id: commitId,
+    body: 'Looks good.',
+  });
+
+  // Configured bot-suffixed, observed bare login: only matches with a
+  // proven Bot author type.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [restShapedReview('coderabbitai')],
+      'coderabbitai[bot]',
+    ),
+    commitId,
+  );
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          ...restShapedReview('coderabbitai'),
+          user: { login: 'coderabbitai', type: 'User' },
+        },
+      ],
+      'coderabbitai[bot]',
+    ),
+    '',
+  );
+
+  // Configured bare, observed bot-suffixed login: matches regardless of type.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [restShapedReview('coderabbitai[bot]')],
+      'coderabbitai',
+    ),
+    commitId,
+  );
+
+  // Same-spelling equality (configured bot-suffixed, observed bot-suffixed)
+  // is unchanged by this issue and still matches a body-less review, same
+  // as before #3262.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          user: { login: 'coderabbitai[bot]', type: 'Bot' },
+          submitted_at: '2026-09-24T00:00:00Z',
+          commit_id: commitId,
+        },
+      ],
+      'coderabbitai[bot]',
+    ),
+    commitId,
+  );
+});
+
 test('advisory wait summary resolves coverage against a configured primary bot', () => {
   const headSha = 'b'.repeat(40);
   const input = {

@@ -15,6 +15,12 @@
 // the canonical spec and fallback; this helper only removes the ad hoc
 // `node -e` hand-transcription error surface that motivated this issue.
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { selectDesyncedIndex } from './policy-helpers.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -34,7 +40,13 @@ const SELECT_DESYNCED_INDEX_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('select-desynced-index', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
@@ -51,12 +63,15 @@ function runCli() {
   // otherwise it would silently degrade to the same output as `off`/no-tie
   // instead of surfacing the caller's mistake.
   if (args.token === null || args.token === '') {
-    throw new Error('--token is required');
+    throw markCliUsageError(new Error('--token is required'));
   }
   if (args.bandSize === null) {
-    throw new Error('--band-size is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--band-size is required and must be a positive integer'),
+    );
   }
   process.stdout.write(`${selectDesyncedIndex(args.token, args.bandSize)}\n`);
+  return 0;
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, SELECT_DESYNCED_INDEX_FLAG_SPEC);

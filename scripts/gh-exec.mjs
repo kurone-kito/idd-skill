@@ -29,6 +29,68 @@ import { promisify } from 'node:util';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
+ * Tag a thrown `gh`-invocation error with a non-enumerable `ghCommand:
+ * true` property so `helper-cli-runner.mts`'s `classifyHelperError`
+ * (#3342) can recognize it structurally -- `deriveGhHttpStatus` plus this
+ * property -- instead of guessing from message text. Every function in
+ * this module that shells out to `gh` and can throw applies this to the
+ * error before rethrowing it, so a migrated helper's `transport` /
+ * `not-found` classification works regardless of which wrapper the
+ * failure came through.
+ *
+ * Non-enumerable on purpose: `util.inspect`'s own Error-object rendering
+ * (what Node's default uncaught-exception crash text uses) prints every
+ * OWN ENUMERABLE property trailing an Error, so a plain `error.ghCommand
+ * = true` assignment would add a visible `{ ghCommand: true }` block to
+ * this module's ~20 existing callers' crash output the moment such an
+ * error is left to propagate uncaught -- verified empirically.
+ * `enumerable: false` keeps the property readable
+ * (`error.ghCommand === true`) while leaving every existing caller's
+ * byte-for-byte crash text unchanged. A no-op (not re-defined) when the
+ * error already carries the tag, or is not an object at all (a rejection
+ * reason that is not an `Error`, defensively).
+ */
+export function tagGhCommandError(error) {
+  if (
+    error &&
+    typeof error === 'object' &&
+    !Object.hasOwn(error, 'ghCommand')
+  ) {
+    Object.defineProperty(error, 'ghCommand', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return error;
+}
+/**
+ * Rebuild the historical `gh command failed: <stderr>` error a helper
+ * throws for compatibility, without dropping the original stderr stream.
+ *
+ * `deriveGhHttpStatus` recognizes a bare `gh: HTTP NNN` line only when
+ * that line starts the scanned text. A message that merely prefixes the
+ * same text (`gh command failed: gh: HTTP 404`) does not match, so a real
+ * 404 is classified as `transport` with `httpStatus: null`. Copying the
+ * original stderr onto the new error, non-enumerable, lets the classifier
+ * read that line. Node's uncaught crash text still prints only `.message`,
+ * so the unset-envelope output stays the compatibility sentence (Copilot
+ * review, PR #3442).
+ */
+export function wrapGhCompatibilityError(error) {
+  const rawStderr = error?.stderr;
+  const stderr = String(rawStderr ?? '').trim();
+  const wrapped = new Error(`gh command failed: ${stderr}`);
+  if (rawStderr != null && String(rawStderr).length > 0) {
+    Object.defineProperty(wrapped, 'stderr', {
+      value: rawStderr,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return tagGhCommandError(wrapped);
+}
+/**
  * Default `execFileSync`/`execFile` timeout (ms) applied when a caller
  * supplies none — the existing 30s convention already used at 54+
  * `GH_TEXT_LOOP_TIMEOUT_OPTIONS` call sites (#1675). Without this, a
@@ -131,15 +193,19 @@ function withResolvedApiHostname(args) {
  * or {@link ghApiJson}'s `allowStatuses` option instead.
  */
 export function ghText(args, options = {}) {
-  return execFileSync('gh', withResolvedApiHostname(args), {
-    encoding: 'utf8',
-    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-    ...(options.stdio ? { stdio: options.stdio } : {}),
-    ...(options.input !== undefined ? { input: options.input } : {}),
-    ...(options.maxBuffer !== undefined
-      ? { maxBuffer: options.maxBuffer }
-      : {}),
-  }).trim();
+  try {
+    return execFileSync('gh', withResolvedApiHostname(args), {
+      encoding: 'utf8',
+      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+      ...(options.stdio ? { stdio: options.stdio } : {}),
+      ...(options.input !== undefined ? { input: options.input } : {}),
+      ...(options.maxBuffer !== undefined
+        ? { maxBuffer: options.maxBuffer }
+        : {}),
+    }).trim();
+  } catch (error) {
+    throw tagGhCommandError(error);
+  }
 }
 /**
  * Sibling of {@link ghText} for a response with no safely-guessable size
@@ -181,6 +247,8 @@ export function ghTextUnbounded(args, options = {}) {
         stdio: ['ignore', fd, 'pipe'],
         timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
       });
+    } catch (error) {
+      throw tagGhCommandError(error);
     } finally {
       closeSync(fd);
     }
@@ -251,8 +319,12 @@ export async function ghTextAsync(args, options = {}) {
       : {}),
   });
   run.child.stdin?.end();
-  const { stdout } = await run;
-  return stdout.trim();
+  try {
+    const { stdout } = await run;
+    return stdout.trim();
+  } catch (error) {
+    throw tagGhCommandError(error);
+  }
 }
 function parseIncludedGhApiResponse(raw) {
   const sections = raw.split(/\r?\n\r?\n/);
@@ -298,12 +370,17 @@ export function ghApiJsonWithHeaders(path, options = {}) {
     ...(options.extraArgs ?? []),
     '--include',
   ];
-  const raw = execFileSync('gh', args, {
-    encoding: 'utf8',
-    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-    stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    ...(options.input !== undefined ? { input: options.input } : {}),
-  });
+  let raw;
+  try {
+    raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(options.input !== undefined ? { input: options.input } : {}),
+    });
+  } catch (error) {
+    throw tagGhCommandError(error);
+  }
   return parseIncludedGhApiResponse(raw);
 }
 /**
@@ -478,11 +555,11 @@ export function ghApiJson(path, options = {}) {
     const failure = error;
     const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
-      throw error;
+      throw tagGhCommandError(error);
     }
     const stdout = String(failure?.stdout ?? '');
     if (!/^\s*[[{]/.test(stdout)) {
-      throw error;
+      throw tagGhCommandError(error);
     }
     raw = stdout;
   }

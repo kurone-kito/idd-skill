@@ -29,14 +29,17 @@ import {
 } from './policy-helpers.mts';
 import type {
   ClaimValidationSummary,
+  ExternalCheckWaiverAuthorityLookup,
   ExternalCheckWaiverEvidence,
 } from './protocol-helpers.mts';
 import {
+  buildEffectiveTrustedMarkerLogins,
   digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
+  resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
 import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
@@ -465,6 +468,19 @@ interface RunExternalCheckWaiverOptions {
     prNumber: number,
     body: string,
   ) => Promise<PostedCommentPayload> | PostedCommentPayload;
+  /**
+   * kurone-kito/idd-skill#3250: injected authority resolver for the reuse
+   * scan / post-write reconcile's consume-time authority check, so a test
+   * can classify a waiver author's authority deterministically without a
+   * live `gh api .../collaborators/.../permission` call. The production
+   * default (undefined here) resolves the CURRENT `actor`/`authority`
+   * (already known from this invocation's own authoring-side check, no
+   * new lookup) and falls back to a live `resolveCollaboratorAuthority`
+   * lookup for any other waiver author found in the scanned comments.
+   */
+  resolveWaiverAuthority?: (
+    authorLogin: string,
+  ) => ExternalCheckWaiverAuthorityLookup | null;
 }
 
 const APPROVAL_ACTOR_POLICIES = new Set([
@@ -1031,10 +1047,24 @@ export async function runExternalCheckWaiver(
         'could not determine current GitHub user; ensure gh is authenticated',
       );
     }
-    if (args.apply && args.actor && actor !== viewerLogin && viewerLogin) {
-      throw new Error(
-        `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
-      );
+    if (args.apply && args.actor) {
+      // kurone-kito/idd-skill#3250: an empty `viewerLogin` (the
+      // authenticated-user lookup failed or returned nothing) must not
+      // silently skip this mismatch guard -- the pre-#3250 condition's
+      // trailing `&& viewerLogin` made it fall through exactly there,
+      // trusting `--actor` unverified. Throw instead: `--actor` under
+      // `--apply` requires proof it matches the authenticated identity,
+      // and an unresolved identity can never supply that proof.
+      if (!viewerLogin) {
+        throw new Error(
+          `--actor ${args.actor} requires the authenticated user to verify against, but the authenticated-user lookup returned no login; ensure gh is authenticated`,
+        );
+      }
+      if (actor !== viewerLogin) {
+        throw new Error(
+          `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
+        );
+      }
     }
     authority =
       options.authority ??
@@ -1365,6 +1395,56 @@ export async function runExternalCheckWaiver(
     report.body,
     new Date().toISOString(),
   );
+  // kurone-kito/idd-skill#3250: resolves one waiver author's authority for
+  // the consume-time check below, matching what the gates
+  // (`pre-merge-readiness.mts`, `advisory-convergence.mts`) now enforce.
+  // The production default reuses this invocation's OWN already-resolved
+  // `actor`/`authority` for the common case (the waiver being scanned was
+  // posted by this same actor) instead of a second live lookup, and falls
+  // back to a live `resolveCollaboratorAuthority` call for any other
+  // author found in the scanned comments.
+  const resolveWaiverAuthority: (
+    authorLogin: string,
+  ) => ExternalCheckWaiverAuthorityLookup | null =
+    options.resolveWaiverAuthority ??
+    ((login: string): ExternalCheckWaiverAuthorityLookup => {
+      const normalizedLogin = String(login ?? '')
+        .trim()
+        .toLowerCase();
+      if (
+        normalizedLogin &&
+        normalizedLogin ===
+          String(actor ?? '')
+            .trim()
+            .toLowerCase()
+      ) {
+        return {
+          outcome: 'found',
+          permission: String(authority.permission ?? ''),
+          roleName: String(
+            authority.roleName ??
+              authority.role_name ??
+              authority.user?.role_name ??
+              '',
+          ),
+        };
+      }
+      const live = resolveCollaboratorAuthority({
+        owner,
+        repo: name,
+        actor: login,
+      });
+      return live.known
+        ? {
+            outcome: 'found',
+            permission: live.permission,
+            roleName: live.roleName,
+          }
+        : { outcome: 'error' };
+    });
+  const externalCheckWaiverAuthorityPolicy =
+    normalizePolicyConfig(rawConfig).ciGate.externalCheckWaivers
+      .authorityPolicy;
   // One evidence build for both the pre-write scan and the post-write
   // reconcile, so the two can never classify the same marker differently.
   const buildWaiverEvidence = (
@@ -1386,15 +1466,26 @@ export async function runExternalCheckWaiver(
           // classified unauthorized here while the gate — which derives
           // trust from the final comments — accepts their waiver, so the
           // reconcile would miss exactly the duplicate it exists to find.
-          trustedMarkerLogins: [
-            ...buildTrustedMarkerLogins({
-              owner,
-              repo: name,
+          // kurone-kito/idd-skill#3250: built from the shared
+          // `buildEffectiveTrustedMarkerLogins` (no implicit owner entry),
+          // matching the gates -- distinct from `buildTrustedMarkerLogins`
+          // (this file's own AUTHORING-side self-authorization check,
+          // still used unchanged by `resolveLinkedIssueCandidates`).
+          trustedMarkerLogins: buildEffectiveTrustedMarkerLogins({
+            viewerLogin: actor,
+            configuredTrustedActors: resolveTrustedMarkerActors({
+              envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+              config: rawConfig as { trustedMarkerActors?: unknown } | null,
+            }).actors,
+            collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
               rawConfig,
-              viewerLogin: actor,
-              issueComments: comments,
-            }),
-          ],
+              process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+            )
+              ? resolveTrustedCollaboratorMarkerLogins(owner, name, comments)
+              : [],
+          }),
+          authorityPolicy: externalCheckWaiverAuthorityPolicy,
+          resolveAuthority: resolveWaiverAuthority,
           now: (options.now instanceof Date
             ? options.now
             : new Date()

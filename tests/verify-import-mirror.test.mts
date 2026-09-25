@@ -551,6 +551,262 @@ test('rule 3 fail (Copilot review, PR #3225): code hidden after a false 4-space-
 });
 
 // ---------------------------------------------------------------------------
+// Rule 3 -- Markdown list-item/list-nesting structure preservation
+// (Copilot review, PR #3225; issue #3233)
+// ---------------------------------------------------------------------------
+
+test('normalizeProseWhitespace does NOT tolerate a flattened list-item nesting change (issue #3233 worked example)', () => {
+  // Regression: an earlier version collapsed ALL whitespace within a
+  // blank-line-delimited paragraph -- including the newline separating a
+  // nested list item from its parent -- so these two normalized
+  // identically despite the second being a real structural edit (the
+  // nested "- child" item is flattened into the parent's own text).
+  const nested = '- parent\n  - child\n';
+  const flattened = '- parent - child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test('normalizeProseWhitespace tolerates a list item merely reflowed at a different wrap width', () => {
+  const wrapped = '- this is a long\n  line that wraps\n';
+  const rewrapped = '- this is a\n  long line that wraps\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace tolerates a non-"1" ordered marker reflowed across a line-wrap mid-paragraph (CommonMark: only a bullet or "1." can interrupt an open paragraph)', () => {
+  // Regression: an earlier version treated ANY parseListItemMatch hit as a
+  // genuine list-item boundary regardless of context, so "5. That is fine"
+  // appearing as ordinary paragraph continuation text (no blank line
+  // before it) was misread as a fresh list item -- even though CommonMark
+  // only lets a bullet or an ordered marker numbered exactly 1 interrupt
+  // an already-open paragraph; "5." here is plain text, and moving it
+  // across a line-wrap is mere reflow, not a structural change.
+  const wrapped = 'costs about\n5. That is fine\n';
+  const rewrapped = 'costs about 5.\nThat is fine\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace still tolerates an ordered list item ("1.") merely reflowed at a different wrap width', () => {
+  const wrapped = '1. this is a long\n   line that wraps\n';
+  const rewrapped = '1. this is a\n   long line that wraps\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('normalizeProseWhitespace does NOT tolerate a flattened ordered-list nesting change', () => {
+  const nested = '1. parent\n   1. child\n';
+  const flattened = '1. parent 1. child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test('rule 3 pass (issue #3233): a non-"1" ordered marker reflowed mid-paragraph is still tolerated, not a false content-mismatch', () => {
+  const upstream = Buffer.from('costs about\n5. That is fine\n');
+  const target = Buffer.from('costs about 5.\nThat is fine\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'prose-reflow-match');
+});
+
+test('normalizeProseWhitespace tolerates a non-"1" ordered marker reflowed WITHIN an enclosing list item\'s own content zone, not only at the top level (Copilot review, PR #3417)', () => {
+  // Regression: an earlier version treated ANY marker as a genuine
+  // boundary once the CURRENT chunk was already a list item, regardless
+  // of whether the new marker's own indent still falls inside that
+  // item's content zone. CommonMark's paragraph-interruption rule
+  // (only a bullet, or "1.", can interrupt an open paragraph) applies
+  // recursively inside a list item's own content too -- verified via
+  // `gh api /markdown`: "- costs about\n  5. that is fine\n" renders as
+  // ONE list item with "5. that is fine" as literal continuation text,
+  // not a nested ordered list. So this must normalize identically to
+  // the fully flattened single-line form.
+  const nestedInZone = '- costs about\n  5. that is fine\n';
+  const flattened = '- costs about 5. that is fine\n';
+  assert.equal(
+    normalizeProseWhitespace(nestedInZone),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test("normalizeProseWhitespace still treats a marker that EXITS the enclosing item's content zone as a genuine boundary, even when non-interrupting (Copilot review, PR #3417)", () => {
+  // The counterpart to the previous test: at column 0 (shallower than
+  // "- "'s own content indent of 2), "5." no longer falls inside the
+  // bullet item's content zone at all -- the item (and its list) have
+  // already ended, so unrestricted parsing resumes and ANY marker,
+  // interrupting or not, opens a fresh block. Verified via `gh api
+  // /markdown`: "- costs about\n5. That is fine\n" renders as TWO
+  // separate lists (a bullet list, then a start=5 ordered list) --
+  // genuinely different from the single-item flattened form, so these
+  // must NOT normalize the same way.
+  const exitsZone = '- costs about\n5. That is fine\n';
+  const flattened = '- costs about 5. That is fine\n';
+  assert.notEqual(
+    normalizeProseWhitespace(exitsZone),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test("normalizeProseWhitespace computes a list item's content-indent from its ACTUAL spacing width, not an assumed single space (Copilot review, PR #3417)", () => {
+  // Regression: an earlier version approximated a newly opened chunk's
+  // own content-indent as "markerIndent columns + marker length + 1",
+  // silently assuming exactly one separating space after the marker.
+  // CommonMark's real rule (markdown-code.mts's own
+  // parseListItemContainer) counts the ACTUAL separating width (up to
+  // 4 columns; 5+ collapses to 1). Here "1." is followed by TWO spaces
+  // before "parent", so the real content-indent is 4, not 3 -- a "5."
+  // marker indented 3 columns therefore falls OUTSIDE that zone (exits
+  // it, becoming a genuine boundary) even though 3 >= the assumed-wrong
+  // indent of 3 would have wrongly kept it "inside". Verified via `gh
+  // api /markdown`: this renders as two separate list items, not one.
+  const nested = '1.  parent\n   5. child\n';
+  const flattened = '1.  parent 5. child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattened),
+  );
+});
+
+test("normalizeProseWhitespace preserves the emitted prefix's own separating width, not just the content-indent used to decide boundaries (CodeRabbit review, PR #3417)", () => {
+  // Regression (false PASS, the dangerous direction): an earlier version
+  // used parseListItemContainer's real content-indent to decide list
+  // BOUNDARIES, but still always EMITTED exactly one canonical space in
+  // the prefix regardless of the real width. That let two structurally
+  // different documents collapse to the identical normalized string: per
+  // CommonMark, "1. parent\n   - child\n" (one separating space after
+  // "1.") nests the "- child" item under "parent", but "1.  parent\n
+  // - child\n" (two separating spaces) does NOT -- verified via `gh api
+  // /markdown` (an ordered list followed by a SEPARATE bullet list, not
+  // one nested item). Both must therefore normalize differently.
+  const nestedOneSpace = '1. parent\n   - child\n';
+  const siblingTwoSpaces = '1.  parent\n   - child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nestedOneSpace),
+    normalizeProseWhitespace(siblingTwoSpaces),
+  );
+});
+
+test('rule 3 fail (CodeRabbit review, PR #3417): a marker-spacing change that flips nested-vs-sibling structure is a genuine mismatch, not tolerated', () => {
+  const upstream = Buffer.from('1. parent\n   - child\n');
+  const target = Buffer.from('1.  parent\n   - child\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('normalizeProseWhitespace recognizes a bare marker with nothing after it as a genuine empty list item (Copilot review, PR #3417)', () => {
+  // Regression (false PASS, the dangerous direction): parseListItemMatch
+  // requires at least one separating character after the marker, so a
+  // bare "-" with NOTHING after it at all (not even a trailing space)
+  // never matched -- an earlier version therefore folded that line into
+  // the preceding chunk as ordinary continuation text. CommonMark still
+  // treats a bare marker as a valid, empty list item: "- parent\n-\n"
+  // (a genuine second, empty sibling item) and its flattened
+  // "- parent -\n" (one item whose own text ends in a literal "-") are
+  // structurally different documents -- verified via `gh api /markdown`
+  // (two list items vs one) -- so these must not normalize the same way.
+  const twoItems = '- parent\n-\n';
+  const oneItem = '- parent -\n';
+  assert.notEqual(
+    normalizeProseWhitespace(twoItems),
+    normalizeProseWhitespace(oneItem),
+  );
+});
+
+test('rule 3 fail (Copilot review, PR #3417): a bare empty list-item marker folded into the preceding text is a genuine mismatch, not tolerated', () => {
+  const upstream = Buffer.from('- parent\n-\n');
+  const target = Buffer.from('- parent -\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
+  // "- child" indented under "- parent" (a genuine nested item) versus
+  // "- child" at column 0 (a sibling of "- parent", not nested under it)
+  // is a real structural difference -- the indent is what encodes which
+  // parent (if any) a list item nests under -- not incidental whitespace
+  // rule 3's reflow tolerance may collapse away.
+  const nested = '- parent\n  - child\n';
+  const sibling = '- parent\n- child\n';
+  assert.notEqual(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(sibling),
+  );
+});
+
+test('normalizeProseWhitespace does not yet distinguish a third-level nested item from being flattened into its parent (disclosed limitation: a marker nested 4+ raw columns is not recognized)', () => {
+  // A marker indented 4+ raw columns falls outside parseListItemMatch's
+  // 0-3-column recognition window (see its own doc comment in
+  // markdown-code.mts), so a grandchild item still normalizes the same
+  // whether it sits on its own line or is flattened onto its parent's
+  // line -- no worse than before this change, just not yet covered by
+  // it. Pinned here so a future change cannot silently regress this
+  // disclosed limitation further without a test noticing.
+  const nested = '- parent\n  - child\n    - grandchild\n';
+  const flattenedGrandchild = '- parent\n  - child - grandchild\n';
+  assert.equal(
+    normalizeProseWhitespace(nested),
+    normalizeProseWhitespace(flattenedGrandchild),
+  );
+});
+
+test('normalizeProseWhitespace still separates a list from immediately preceding prose with no blank line between them, tolerating reflow on each side', () => {
+  const wrapped = 'Intro text.\n- item one\n- item two\n';
+  const rewrapped = 'Intro\ntext.\n- item one\n- item two\n';
+  assert.equal(
+    normalizeProseWhitespace(wrapped),
+    normalizeProseWhitespace(rewrapped),
+  );
+});
+
+test('rule 3 fail (issue #3233): flattening nested list-item structure into one line is a genuine mismatch, not a tolerated reflow', () => {
+  const upstream = Buffer.from('- parent\n  - child\n');
+  const target = Buffer.from('- parent - child\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('rule 3 pass (issue #3233): a list item merely reflowed at a different wrap width is still tolerated', () => {
+  const upstream = Buffer.from('- this is a long\n  line that wraps\n');
+  const target = Buffer.from('- this is a\n  long line that wraps\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'prose-reflow-match');
+});
+
+// ---------------------------------------------------------------------------
 // Rule 4 -- git file mode comparison
 // ---------------------------------------------------------------------------
 

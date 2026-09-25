@@ -85,6 +85,14 @@ export interface ReviewPayload {
    * `isCopilotErrorReviewBody` (copilot-review-body.mts, re-exported from
    * protocol-helpers.mts, #3258). */
   body?: string | null;
+  /** #3262: `true` when every one of this review's comments is a reply to
+   * an existing thread (a bot replying inside a thread instead of posting
+   * a fresh review), as derived by the GitHub adapter from the GraphQL
+   * `comments { nodes { replyTo { id } } }` selection. A review with no
+   * comments, or with a truncated comments connection, is never
+   * reply-only. Absent/`null`/`undefined` means "not reply-only" (a fake
+   * or older fixture that doesn't set this field behaves as before). */
+  replyOnly?: boolean | null;
 }
 
 /** Latest-review clause evidence (Clause 1 of `advisory-convergence.mts`'s
@@ -102,9 +110,13 @@ export interface AdvisoryConvergenceReviewClause {
   matchesHead: boolean;
   itemCount: number | null;
   submittedAt: string;
-  /** #1880: count parsed from a `Suppressed comments (N)` heading in the
-   * review body, `0` when no such section is present (or the review is
-   * off-HEAD). See {@link parseSuppressedCommentCount}. */
+  /** #1880: count of thread-less findings parsed from the latest review
+   * body, `0` when no recognized section is present (or the review is
+   * off-HEAD). The three recognized sources are the current
+   * `ccr-overview-v2` shape's `Previously missed (N)` section, the legacy
+   * overview's `### Suppressed comments (N)` heading, and the original
+   * August `<summary>Suppressed comments (N)</summary>` form. See
+   * {@link parseSuppressedCommentCount}. */
   suppressedCount: number;
   /** kurone-kito/idd-skill#3258: the recognized review-body shape
    * {@link parseSuppressedCommentCount} used to compute `suppressedCount`
@@ -159,10 +171,10 @@ export function isVerifiedCopilotAuthor(
   author: GhAuthorPayload | null | undefined,
   primaryBotLogin: string,
 ): boolean {
-  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin)) {
+  const typename = author?.__typename;
+  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  const typename = author?.__typename;
   return typename === undefined || typename === null || typename === 'Bot';
 }
 
@@ -191,7 +203,13 @@ export function isVerifiedCopilotAuthor(
  * exist, not merely as an off-HEAD review -- so it can neither win this
  * "latest" selection itself nor mask an earlier genuine review of the same
  * HEAD underneath it. See that function's doc comment for the observed
- * incident and matching rationale. */
+ * incident and matching rationale.
+ *
+ * #3262: a reply-only review (every comment a reply to an existing
+ * thread, {@link ReviewPayload.replyOnly}) is excluded the same way --
+ * it originates no thread of its own, so it can never satisfy the
+ * item-count/thread-count parity `advisory-convergence.mts` checks, and
+ * would otherwise mask an earlier genuine full review of the same HEAD. */
 export function resolveLatestCopilotReviewClause(
   reviews: ReviewPayload[],
   prHeadSha: string,
@@ -201,7 +219,8 @@ export function resolveLatestCopilotReviewClause(
     .filter(
       (review) =>
         isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
-        !isCopilotErrorReviewBody(review.body),
+        !isCopilotErrorReviewBody(review.body) &&
+        review.replyOnly !== true,
     )
     .at(-1);
   if (!latest) {
@@ -281,6 +300,7 @@ export function fetchReviewsAndHeadCommit(
     commitId: node.commitId,
     itemCount: node.commentCount,
     body: node.body,
+    replyOnly: node.replyOnly,
   }));
   return { reviews, headCommittedAt };
 }

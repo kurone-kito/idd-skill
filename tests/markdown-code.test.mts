@@ -1424,6 +1424,169 @@ test('maskMarkdownForScan does not mask an indented continuation of an open list
   assert.equal(maskMarkdownForScan(body), body);
 });
 
+test('maskMarkdownForScan keeps a nested list item real after an inner list closes via a lazy paragraph dedent (kurone-kito/idd-skill#3283)', () => {
+  // A prior bug: `findIndentedCodeRanges` closed the *outer* list's
+  // content-indent tracking on the "text after inner" line below,
+  // because that line is a CommonMark *lazy continuation* of the
+  // "inner" list item's own paragraph (no blank line precedes it), not
+  // a genuine dedent that should end the outer list. Losing the outer
+  // list's content indent made the later, blank-separated, still-nested
+  // list item at absolute indent 4 fall back to the top-level 4-column
+  // threshold and get mis-masked as an indented code block, hiding its
+  // real link.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  text after inner',
+    '',
+    '    - [workshop #1](https://example.com/workshop)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan masks a nested list item as code once a heading genuinely closes the enclosing list (C1 critique, round 2)', () => {
+  // The first version of the #3283 fix above checked only the
+  // *preceding* line's shape for its laziness exception, not whether
+  // the *current* under-indented line was itself block-start-shaped.
+  // A heading, verified against commonmark.js, always ends an
+  // in-progress paragraph and genuinely closes the enclosing list
+  // (CommonMark laziness never applies to it), so the later, still
+  // blank-separated indented line is real indented code once the list
+  // has closed -- unlike the sibling test above, where nothing
+  // block-start-shaped ever appears and the outer list stays open.
+  const body = [
+    '- outer',
+    '  - inner',
+    '  para continuation of inner, then heading follows',
+    '# Heading #1',
+    '',
+    '    - [not-a-link #1](https://example.com/should-be-code)',
+    '',
+  ].join('\n');
+  const masked = maskMarkdownForScan(body);
+  assert.equal(masked.includes('not-a-link'), false);
+  assert.equal(masked.includes('- outer'), true);
+  assert.equal(masked.includes('Heading #1'), true);
+});
+
+test('maskMarkdownForScan still masks a nested list item as code once a real HTML block genuinely closes the list', () => {
+  // An OPENING raw-text tag (real CommonMark type 1) and a real type-6
+  // closing tag (not one of the four raw-text names) unconditionally
+  // interrupt an open paragraph and close the enclosing list.
+  const openTag = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '<script>',
+    '',
+    '    - [not-a-link #4](https://example.com/should-be-code-4)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(openTag).includes('not-a-link'), false);
+
+  const closeDiv = [
+    '- outer',
+    '  - inner',
+    '  para',
+    '</div>',
+    '',
+    '    - [not-a-link #5](https://example.com/should-be-code-5)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(closeDiv).includes('not-a-link'), false);
+});
+
+test('maskMarkdownForScan masks a nested list item as code once a dedent follows an open HTML block body (kurone-kito/idd-skill#3283, round 5)', () => {
+  // C1 critique round 4 found a fifth gap in the rounds 1-4 laziness
+  // *heuristic*: none of its signals (previous line blank, previous line
+  // block-boundary-shaped, current line block-start-shaped) know that
+  // the line right before a dedent was itself content of an
+  // ALREADY-OPEN HTML block, not an open paragraph -- and unlike a
+  // paragraph, an HTML block never gets CommonMark's laziness exception.
+  // Verified against commonmark.js: "text at zero" and everything after
+  // it sit outside every list once the <div> block's own container
+  // requirement fails, so the later indented line is real code, not a
+  // list item. Rather than patch a fifth exception into the heuristic,
+  // findIndentedCodeRanges was rewritten to track open list levels with
+  // a stack instead of guessing whether a paragraph is open -- see its
+  // own doc comment for why that sidesteps this whole class of gap.
+  const body = [
+    '- outer',
+    '  - inner',
+    '    <div>',
+    '    html body',
+    'text at zero',
+    '',
+    '    - [not-a-link #6](https://example.com/should-be-code-6)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body).includes('not-a-link'), false);
+});
+
+test('maskMarkdownForScan masks a dedent after a fresh paragraph the same way main does, a known non-regression trade-off (kurone-kito/idd-skill#3283, round 5)', () => {
+  // Canonical commonmark.js actually keeps this whole example open (the
+  // fresh paragraph "deep code" lazily continues into "text at zero",
+  // and the trailing item stays a real nested list item) -- the rounds
+  // 1-4 heuristic happened to get this one right (by accident: "deep
+  // code" isn't itself block-start-shaped, so its "is the current/
+  // previous line block-start-shaped" checks stayed silent). The round-5
+  // stack has no paragraph-openness signal at all, so it pops on any
+  // dedent regardless of what block type preceded it, landing on the
+  // same (canonically imperfect) answer `main` already gives here --
+  // confirmed byte-identical to `main`'s own compiled output for this
+  // exact input. Not a regression (this issue's own bar, set after C1
+  // critique round 4: no worse than `main`), just a known limitation to
+  // record rather than silently lose track of.
+  const body = [
+    '- outer',
+    '  - inner',
+    '',
+    '      deep code',
+    'text at zero',
+    '',
+    '    - [not-a-link #7](https://example.com/should-be-code-7)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body).includes('not-a-link'), false);
+});
+
+test('maskMarkdownForScan recognizes a list item nested two levels deep under a wide ordered marker (Copilot review, PR #3424, round 6)', () => {
+  // parseListItemMatch's own LIST_ITEM_PATTERN caps a recognized
+  // marker's own leading indent at 0-3 ABSOLUTE columns -- correct for
+  // a marker at the top level, but not relative to an already-open
+  // container. Once an outer level's own content column reaches 4 (a
+  // two-digit ordered marker like `10.` already does: 3 marker
+  // characters + 1 space), a further-nested marker's own absolute
+  // indent is necessarily >= 4 too, so the un-adjusted 0-3 cap always
+  // rejected it -- even though CommonMark treats it as a real nested
+  // list item, not indented code. Verified against commonmark.js: the
+  // whole thing stays open list nesting, and the trailing link is
+  // real. Also confirmed non-regressing (this exact input previously
+  // matched `main`'s own wrong answer here, unlike the round-5
+  // trade-off cases above, which stay unchanged).
+  const body = [
+    '10. outer',
+    '      - inner',
+    '',
+    '          - [workshop](docs/workshop/README.md)',
+    '',
+  ].join('\n');
+  assert.equal(maskMarkdownForScan(body), body);
+});
+
+test('maskMarkdownForScan still masks indented code that is too deep even for a further-nested list item', () => {
+  // Control for the test above: relative-column recognition must still
+  // reject a marker indented too far past the enclosing level's own
+  // content column (>= 4 relative columns) to open a further-nested
+  // item -- that content is genuinely indented code, unchanged by the
+  // round-6 fix.
+  const body = ['10. outer', '', '          deep code #1'].join('\n');
+  const masked = maskMarkdownForScan(body);
+  assert.equal(masked.includes('deep code'), false);
+  assert.equal(masked.includes('10. outer'), true);
+});
+
 test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a code span', () => {
   const body = 'text \\`escaped #1\\` tail';
   assert.equal(maskMarkdownForScan(body), body);
@@ -1462,6 +1625,23 @@ test('maskMarkdownForScan keeps inline code when inlineCode: "keep" is requested
     masked,
     ['see `code #1` here', '   ', '         ', '   '].join('\n'),
   );
+});
+
+test('maskMarkdownForScan ignores a literal <!-- inside a kept inline code span as a comment opener (Copilot review, PR #3424)', () => {
+  // inlineCode: 'keep' leaves the code span's own text visible in the
+  // output, but a caller that also masks HTML comments must not read a
+  // `<!--` that appears only inside that (unmasked) code span as a real
+  // comment opener -- doing so would mask everything up to the next
+  // real `-->`, hiding genuine content the same way an unmasked fenced
+  // or indented code region's own `<!--` never would.
+  const body = ['`<!--`', 'real content', '-->'].join('\n');
+  const masked = maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  });
+  assert.equal(masked.includes('real content'), true);
+  // The inline code span's own text stays visible (inlineCode: 'keep').
+  assert.equal(masked.includes('`<!--`'), true);
 });
 
 test('mergeMarkdownCodeRanges coalesces overlapping and touching ranges, sorted by start', () => {

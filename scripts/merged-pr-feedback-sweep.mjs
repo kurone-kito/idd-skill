@@ -23,6 +23,7 @@ import { classifyCopilotReviewBody } from './copilot-review-body.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
+  classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
   hasTrustedReviewAckAfter,
@@ -32,7 +33,6 @@ import {
   isKnownReviewBot,
   isReviewSummaryComment,
   normalizeTrustedMarkerLogins,
-  operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
@@ -88,6 +88,18 @@ function maxTimestamp(values) {
   }
   return best;
 }
+const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
+// #3267 (Copilot review, PR #3437): this account must not receive the
+// blanket IDD-author exclusion. Callers may list it in iddAgentLogins
+// (the CLI defaults that set from trusted marker actors), but only the
+// narrow classifyIddPrComment shapes are bookkeeping. A general
+// operational prefix from this login stays review feedback.
+function isBlanketIddAuthor(login, isIdd) {
+  if (login.trim().toLowerCase() === GITHUB_ACTIONS_BOT_LOGIN) {
+    return false;
+  }
+  return isIdd(login);
+}
 function isDispositionBody(body) {
   const trimmed = String(body ?? '').trimStart();
   return (
@@ -104,22 +116,21 @@ function resolveLoginList(value) {
     .filter(Boolean);
   return tokens.length > 0 ? normalizeTrustedMarkerLogins(tokens) : null;
 }
-// IDD bookkeeping comments are not reviewer feedback.
-function isIddBookkeeping(body, author, isTrusted) {
-  // IDD HTML-comment bookkeeping markers (cleanup-evidence, plan, digest,
-  // roadmap-audit, …) are posted by the agent or by CI automation such as
-  // github-actions, never by a reviewer; exclude them regardless of author.
-  if (
-    String(body ?? '')
-      .trimStart()
-      .startsWith('<!-- idd-')
-  ) {
-    return true;
-  }
-  // Operational-state markers (claimed-by / review-watermark / advisory-wait
-  // / …) count only from a trusted marker author; an untrusted look-alike is
-  // left in as surfacing context.
-  return operationalMarkerPrefix(body ?? '') !== null && isTrusted(author);
+// IDD bookkeeping comments are not reviewer feedback (kurone-kito/idd-skill#3267:
+// routed through the shared `classifyIddPrComment` instead of the former
+// unconditional `body.startsWith('<!-- idd-')` short-circuit, which dropped
+// EVERY `<!-- idd-…` -shaped comment regardless of author -- an untrusted
+// look-alike now surfaces as feedback instead of being silently swallowed,
+// while a trusted actor's operational marker, live-status digest (any of
+// its three forms), or the CI-posted cleanup-evidence marker still counts
+// as bookkeeping, matching every other consumer's rule).
+function isIddBookkeeping(body, author, trustedMarkerLogins, iddAgentLogins) {
+  return (
+    classifyIddPrComment(
+      { body, author: { login: author } },
+      { trustedMarkerLogins, iddAgentLogins },
+    ) === 'idd-operational'
+  );
 }
 // ---------------------------------------------------------------------------
 // Pure sweep builder (the testable core — no network)
@@ -127,9 +138,6 @@ function isIddBookkeeping(body, author, isTrusted) {
 export function buildMergedPrFeedbackSweep(prs, options) {
   const idd = new Set(
     options.iddAgentLogins.map((login) => login.toLowerCase()),
-  );
-  const trusted = new Set(
-    options.trustedMarkerActors.map((login) => login.toLowerCase()),
   );
   const advisory = new Set(
     options.advisoryBotLogins.map((login) => login.toLowerCase()),
@@ -149,16 +157,21 @@ export function buildMergedPrFeedbackSweep(prs, options) {
     options.advisoryBotLogins.map(advisoryBotIdentityToken),
   );
   const isIdd = (login) => idd.has(login);
-  const isTrusted = (login) => trusted.has(login);
   const isAdvisoryBot = (login) =>
     isKnownReviewBot(login) || advisory.has(login);
   const isConfiguredAdvisoryBotIdentity = (login) =>
     advisoryIdentities.has(advisoryBotIdentityToken(login));
-  // #3259: a normalized (trimmed, lower-cased) trusted-logins ARRAY, distinct
-  // from the `isTrusted` predicate above -- `hasTrustedReviewAckAfter`
-  // (protocol-helpers.mts) needs the list itself, not a membership test.
+  // #3259: a normalized (trimmed, lower-cased) trusted-logins ARRAY --
+  // `hasTrustedReviewAckAfter` (protocol-helpers.mts) needs the list itself,
+  // not a membership test. #3267: also reused by `isIddBookkeeping` below via
+  // `classifyIddPrComment`.
   const trustedMarkerLoginsForAck = normalizeTrustedMarkerLogins(
     options.trustedMarkerActors,
+  );
+  // #3267: `classifyIddPrComment` (via `isIddBookkeeping` below) also needs
+  // the raw iddAgentLogins array, not just the `isIdd` membership predicate.
+  const iddAgentLoginsForBookkeeping = normalizeTrustedMarkerLogins(
+    options.iddAgentLogins,
   );
   // #3259: defaults to Copilot exactly like `isCopilotReviewerLogin`'s own
   // `primaryBotLogin` parameter normalizes an absent/blank configured value,
@@ -179,11 +192,11 @@ export function buildMergedPrFeedbackSweep(prs, options) {
       pr.reviews ?? [],
       pr.threads ?? [],
       isIdd,
-      isTrusted,
       isAdvisoryBot,
       isConfiguredAdvisoryBotIdentity,
       primaryBotLogin,
       trustedMarkerLoginsForAck,
+      iddAgentLoginsForBookkeeping,
     );
     if (unresolvedThreads.length === 0 && unaddressedComments.length === 0) {
       continue;
@@ -223,7 +236,7 @@ function collectUnresolvedThreads(threads, isIdd, isAdvisoryBot) {
     const origin = nodes[0];
     const originAuthor = authorLogin(origin);
     // A thread the IDD agent itself opened is not reviewer feedback.
-    if (originAuthor && isIdd(originAuthor)) {
+    if (originAuthor && isBlanketIddAuthor(originAuthor, isIdd)) {
       continue;
     }
     out.push({
@@ -276,11 +289,11 @@ function collectUnaddressedComments(
   reviews,
   threads,
   isIdd,
-  isTrusted,
   isAdvisoryBot,
   isConfiguredAdvisoryBotIdentity,
   primaryBotLogin,
   trustedMarkerLoginsForAck,
+  iddAgentLoginsForBookkeeping,
 ) {
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
@@ -312,13 +325,19 @@ function collectUnaddressedComments(
     // comment with "**Rejected**" is still surfaced as feedback. A
     // missing/unknown author (deleted user / ghost comment) is surfaced with
     // `author: null` rather than dropped, to avoid a false negative.
-    if (isIdd(author)) {
+    if (isBlanketIddAuthor(author, isIdd)) {
       continue;
     }
     // IDD bookkeeping is not feedback: a trusted operational-state marker,
-    // or any `<!-- idd-… -->` comment (e.g. cleanup-evidence / plan / digest,
-    // which CI automation such as github-actions also posts).
-    if (isIddBookkeeping(comment.body, author, isTrusted)) {
+    // digest, or the CI-posted cleanup-evidence marker.
+    if (
+      isIddBookkeeping(
+        comment.body,
+        author,
+        trustedMarkerLoginsForAck,
+        iddAgentLoginsForBookkeeping,
+      )
+    ) {
       continue;
     }
     // The CodeRabbit summary-walkthrough comment is auto-generated
@@ -368,7 +387,7 @@ function collectUnaddressedComments(
     const author = authorLogin(review);
     // Same author rule as comments: exclude only explicit IDD agents; a
     // missing/unknown author is surfaced with `author: null`.
-    if (isIdd(author)) {
+    if (isBlanketIddAuthor(author, isIdd)) {
       continue;
     }
     const isChangesRequested = review.state === 'CHANGES_REQUESTED';

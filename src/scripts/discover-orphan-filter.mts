@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/discover-orphan-filter.mts
 //
 // The scripts/discover-orphan-filter.mjs copy is generated from the .mts
@@ -6,7 +7,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { existsSync } from 'node:fs';
-
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -35,6 +35,13 @@ import {
   type LeafActiveClaim,
 } from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { createMarkerRegex } from './marker-regex.mts';
@@ -438,7 +445,16 @@ interface ParsedArgs {
 }
 
 if (import.meta.main) {
-  await runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-orphan-filter', runCli);
+  } else {
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 
 /**
@@ -1320,7 +1336,7 @@ export async function filterOrphanIssues(
   };
 }
 
-async function runCli() {
+async function runCli(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -1433,6 +1449,7 @@ async function runCli() {
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 // Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
@@ -1479,7 +1496,9 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     if (token === '--pr') {
       const parsedNumber = Number.parseInt(String(value ?? ''), 10);
       if (!Number.isInteger(parsedNumber) || parsedNumber <= 0) {
-        throw new Error(`invalid --pr value: ${value ?? ''}`);
+        throw markCliUsageError(
+          new Error(`invalid --pr value: ${value ?? ''}`),
+        );
       }
       parsed.pr = parsedNumber;
       index += 1;
@@ -1515,7 +1534,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
       parsed.help = true;
       continue;
     }
-    throw new Error(`unknown argument: ${token}`);
+    throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
   return parsed;
 }

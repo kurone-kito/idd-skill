@@ -404,6 +404,95 @@ test('excludes an IDD bookkeeping marker even from CI automation', () => {
   assert.equal(result.prs.length, 0);
 });
 
+// kurone-kito/idd-skill#3267: isIddBookkeeping routed through the shared
+// classifyIddPrComment, in place of the former unconditional
+// `body.startsWith('<!-- idd-')` short-circuit.
+
+test('excludes a trusted historical live-status digest', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 14,
+      comments: [
+        {
+          body: '<!-- idd-live-status: historical -->\n\n| Field | Value |\n| --- | --- |\n| Phase | E1 |\n',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('surfaces a github-actions claimed-by comment when that login is an IDD agent', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 16,
+      comments: [
+        {
+          body: '<!-- claimed-by: github-actions[bot] claim-abc supersedes: none 2026-06-09T00:00:00Z branch: issue/1-test -->\n\n_note_',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'github-actions[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, {
+    ...OPTIONS,
+    trustedMarkerActors: ['kurone-kito', 'github-actions[bot]'],
+    iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
+  });
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'github-actions[bot]',
+  );
+});
+
+test('still excludes github-actions cleanup evidence when that login is an IDD agent', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 17,
+      comments: [
+        {
+          body: '<!-- idd-cleanup-evidence: applied applied:1 failed:0 -->\n\n_evidence_',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'github-actions[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, {
+    ...OPTIONS,
+    iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
+  });
+  assert.equal(result.prs.length, 0);
+});
+
+test('surfaces an untrusted <!-- idd- comment instead of unconditionally dropping it', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 15,
+      comments: [
+        {
+          body: '<!-- idd-live-status: historical -->\n\n| Field | Value |\n| --- | --- |\n| Phase | E1 |\n',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'a-random-outsider' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'a-random-outsider',
+  );
+});
+
 // --- #1488: reuse isReviewSummaryComment so the sweep and E6 agree --------
 
 test('excludes a CodeRabbit summary-walkthrough comment from unaddressedComments', () => {

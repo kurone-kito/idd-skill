@@ -24,6 +24,8 @@ import {
   isDispositionComment,
   isReviewSummaryComment,
   isTerminalAdvisoryNonReviewNotice,
+  renderLiveStatusDigest,
+  retireLiveStatusDigestBody,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -998,6 +1000,41 @@ test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is true o
   );
 });
 
+// Copilot review (PR #3422): a bare `/completed/i` substring test would
+// wrongly accept "Not Completed" or "Uncompleted" (both contain the
+// substring "completed"). Anchor to the exact bolded status word instead.
+test('#3261 (Copilot review, PR #3422): isCodexReviewSummaryCompleteForHeadSha is false for a "Not Completed" status row (substring-match false positive)', () => {
+  const notCompletedBody =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    '| 📝 **Code Review** | ⚠️ **Not Completed** | `abc1234` | PR opened |\n';
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(notCompletedBody, 'abc1234'),
+    false,
+  );
+});
+
+// Copilot review (PR #3422, second round): the first-round fix
+// (`/\*\*\s*completed\s*\*\*/i.test()`) was still an unanchored substring
+// search -- it would still match a malformed cell carrying a separately
+// bolded "Completed" segment embedded after other bolded text, since
+// `.test()` searches anywhere in the string. Extracting only the FIRST
+// bolded segment and comparing it exactly closes this.
+test('#3261 (Copilot review, PR #3422, round 2): isCodexReviewSummaryCompleteForHeadSha is false for a malformed cell with a separately bolded "Completed" segment', () => {
+  const malformedBody =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    '| 📝 **Code Review** | **Not **Completed** | `abc1234` | PR opened |\n';
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(malformedBody, 'abc1234'),
+    false,
+  );
+});
+
 test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a Completed row naming a different (stale) commit', () => {
   // A stale summary left over from a prior HEAD must not be mistaken for
   // completion at the CURRENT HEAD merely because some row says Completed.
@@ -1382,6 +1419,81 @@ test('buildDispositionPlan re-plans a summary whose acceptance an older non-agen
   );
   // The acceptance (id 3) could be stolen by the older human comment (id 1), so
   // the summary (id 2) is re-planned rather than skipped.
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
+// kurone-kito/idd-skill#3267: markerCouldBeStolen routed through the shared
+// classifyIddPrComment, in place of the former blanket
+// `!trustedMarkerLogins.has(other.login)` check that skipped every comment
+// by a trusted marker login regardless of its body.
+
+test('buildDispositionPlan: a trusted historical live-status digest older than the disposition cannot steal it', () => {
+  const digestBody = retireLiveStatusDigestBody(
+    renderLiveStatusDigest({
+      phase: 'E1 snapshot',
+      claim: 'claim-test0001',
+      branch: 'issue/1-test',
+      lastChecked: '2026-05-11T00:00:00Z',
+      openBlockers: 'none',
+      nextAction: 'E2 critique',
+      authoritativeBy: 'this comment',
+    }),
+  );
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        // A trusted-author digest, older than the disposition -- IDD's own
+        // operational bookkeeping, not a genuine review comment.
+        notice(1, 'kurone-kito', digestBody, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // The digest cannot steal the disposition's pairing slot, so the summary
+  // (id 2) is correctly recognized as already covered -- skipped, not
+  // re-planned.
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [2],
+  );
+});
+
+test('buildDispositionPlan: an untrusted <!-- idd- shaped comment still counts as a genuine steal candidate', () => {
+  const spoofedBody =
+    '<!-- idd-live-status: historical -->\n\n| Field | Value |\n| --- | --- |\n';
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        // An UNTRUSTED author's marker-shaped comment, older than the
+        // disposition -- never given the operational pass.
+        notice(1, 'a-random-outsider', spoofedBody, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // Real, unaddressed activity -- it can steal the disposition's pairing
+  // slot, so the summary is re-planned rather than skipped.
   assert.deepEqual(
     plan.planned.map((entry) => entry.noticeId),
     [2],

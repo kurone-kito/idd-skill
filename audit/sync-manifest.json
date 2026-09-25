@@ -1016,5 +1016,353 @@
     ],
     "templateRoot": "idd-template/",
     "distributedFileSetBlockId": "idd-template-core-files"
-  }
+  },
+  "liteGateParity": [
+    {
+      "id": "closing-set-reverify",
+      "phase": "F2",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "heading": "F2 — Pre-merge condition check",
+        "contains": "Closing-set and impact-checklist re-verification"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+        "heading": "F2 — Pre-merge readiness (helper-read only)",
+        "contains": "When D3 step 6 (\"Multiple closes\") closed more than one"
+      }
+    },
+    {
+      "id": "commit-message-closing-scan",
+      "phase": "D3.5",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
+        "heading": "D3.5 — Verify closing keyword detection",
+        "contains": "Scan the branch's own commit messages"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+        "heading": "D3.5 — Verify closing keyword detection",
+        "contains": "A commit message closing keyword counts too: never place one next"
+      }
+    },
+    {
+      "id": "required-checks-unreadable",
+      "phase": "D4",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-ci.instructions.md",
+        "heading": "Required-check discovery",
+        "contains": "protection/ruleset unreadable\" and stop"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-ci-lite.instructions.md",
+        "heading": "Required-check discovery",
+        "contains": "`unreadable`: stop and ask"
+      }
+    },
+    {
+      "id": "separate-merge-agent-claim-release",
+      "phase": "F2.5",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-merge-handoff.instructions.md",
+        "heading": "F2.5 — Resolve merge policy route",
+        "contains": "release the worker claim with `unclaimed-by` using the"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+        "heading": "F2.5 — Draft and post the handoff comment",
+        "contains": "the only case that releases"
+      }
+    },
+    {
+      "id": "pre-push-validate-before-push",
+      "phase": "D2",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
+        "heading": "D2 — Verify claim, lint, test, push",
+        "contains": "Run **pre-push-validate**."
+      },
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "D1 — Sync main before first push",
+          "contains": "continue at D2 (claim re-read, **pre-push-validate**, then a"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "D2 — Verify claim, lint, push",
+          "contains": "Run **pre-push-validate**. (E2E tests are verified by CI; do not run"
+        }
+      ]
+    },
+    {
+      "id": "validation-exit-status",
+      "phase": "B3",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "heading": "Project commands",
+        "contains": "Judge a command-set run by exit status"
+      },
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+          "heading": "B3 — Implement",
+          "contains": "check `${PIPESTATUS[0]}` or use `set -o pipefail`"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Helper runtime contract",
+          "contains": "Judge each run by exit status (Bash"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+          "heading": "Helper runtime contract",
+          "contains": "Judge each run by exit status (Bash"
+        }
+      ]
+    },
+    {
+      "id": "awaiting-decision-regular-comment",
+      "phase": "E1",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-review-snapshot.instructions.md",
+        "heading": "E1 — Fetch review items into ReviewItems_snapshot",
+        "contains": "regardless of the last-speaker exclusion"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+        "heading": "Step 3 — Filter into ReviewItems_snapshot",
+        "contains": "with `**Awaiting maintainer decision**` — exclude periodic"
+      }
+    },
+    {
+      "id": "e10-no-progress-hold",
+      "phase": "E10",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-review-fix.instructions.md",
+        "heading": "E10 — Validate fixes with critique pass",
+        "contains": "If the same Accepted findings recur for"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+        "heading": "E10 — Validate fixes with critique pass",
+        "contains": "If the same Accepted findings recur for"
+      }
+    },
+    {
+      "id": "e13-reply-identity-stamp",
+      "phase": "E13",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-review-fix.instructions.md",
+        "heading": "E13 — Reply to feedback",
+        "contains": "reply-identity stamp exactly as"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+        "heading": "E13 — Reply to feedback",
+        "contains": "followed by the reply-identity stamp"
+      }
+    },
+    {
+      "id": "e14-helper-owned-advisory-window",
+      "phase": "E14",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-advisory-wait.instructions.md",
+        "heading": "Caller mapping",
+        "contains": "continue polling | poll then restart F2 from top"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+        "heading": "E14 — Re-review request",
+        "contains": "Otherwise keep polling — the helper already folds"
+      }
+    },
+    {
+      "id": "b1-primary-worktree-exemption",
+      "phase": "B1",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "heading": "Claim revalidation gate",
+        "contains": "B1 setup commands on the primary worktree's `main`"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+        "heading": "Pre-mutation guard",
+        "contains": "Every B1 step — including the step 10 and step 31 hold-comment posts —"
+      }
+    },
+    {
+      "id": "claim-id-revalidation",
+      "phase": "B-F",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "heading": "Claim revalidation gate",
+        "contains": "The active claim must still use your"
+      },
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's `{claim-id}`. If it is"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "The active claim still uses this session's claim id."
+        }
+      ]
+    },
+    {
+      "id": "activation-nonce-recheck",
+      "phase": "B-F",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "heading": "Claim revalidation gate",
+        "contains": "If you posted an activation nonce, confirm it still wins"
+      },
+      "lite": [
+        {
+          "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        },
+        {
+          "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+          "heading": "Pre-mutation guard",
+          "contains": "If this session posted an activation nonce for the current claim,"
+        }
+      ]
+    },
+    {
+      "id": "review-currency",
+      "phase": "F2",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "heading": "F2 — Pre-merge condition check",
+        "contains": "**Review currency** (live re-fetch required, freshness gate)"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+        "heading": "F2 — Pre-merge readiness (helper-read only)",
+        "contains": "for a `review-currency`"
+      },
+      "helperGate": {
+        "source": "src/scripts/protocol-helpers.mts",
+        "gate": "review-currency"
+      }
+    },
+    {
+      "id": "unresolved-threads",
+      "phase": "F2",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "heading": "F2 — Pre-merge condition check",
+        "contains": "**Unresolved threads = 0** (backlog gate)"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+        "heading": "F2 — Pre-merge readiness (helper-read only)",
+        "contains": "every entry in `blockers[]`"
+      },
+      "helperGate": {
+        "source": "src/scripts/protocol-helpers.mts",
+        "gate": "unresolved-threads"
+      }
+    },
+    {
+      "id": "trusted-marker-filtering",
+      "phase": "E1",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "heading": "Trusted marker actors",
+        "contains": "Treat a marker as trusted only when the comment author is one of:"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md",
+        "heading": "Step 1 — Snapshot the activity universe",
+        "contains": "Never exclude an untrusted-author marker-shaped comment; flag it as"
+      }
+    },
+    {
+      "id": "f2-prose-fallback-omitted-from-lite",
+      "phase": "F2",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "heading": "F2 — Pre-merge condition check",
+        "contains": "fall back to the discard-and-fetch-directly"
+      },
+      "omittedByDesign": {
+        "reason": "The lite profile depends entirely on helper runtime and has no written, non-helper fallback of its own: discarding a broken helper's output and judging live-fetched GitHub state directly needs exactly the prose-heavy human-grade judgment the lite profile is designed to avoid, so a broken helper is a stop-and-ask condition there instead.",
+        "lite": {
+          "file": "idd-template/.github/instructions/lite/idd-pre-merge-lite.instructions.md",
+          "heading": "IDD — Pre-Merge Conditions Phase (Lite) (F1-F2)",
+          "contains": "is out of scope for this file"
+        }
+      }
+    },
+    {
+      "id": "f3-f5-merge-execution-omitted-from-lite",
+      "phase": "F2.5",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-merge.instructions.md",
+        "heading": "IDD — Merge Execution Phase (F3–F5)",
+        "contains": "Covers executing the merge (F3),"
+      },
+      "omittedByDesign": {
+        "reason": "Executing the merge itself (F3), its cleanup (F4), and the discover loop-back (F5) require interpreting a non-ready blocker and choosing a recovery path -- the same judgment-heavy territory the lite profile stops short of at F2.5, handing the decision to a human or a designated merge-capable session instead.",
+        "lite": {
+          "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+          "heading": "IDD — Merge Policy Handoff Phase (Lite) (F2.5)",
+          "contains": "never continues to `idd-merge.instructions.md` (F3-F5)"
+        }
+      }
+    },
+    {
+      "id": "f25-step5-prose-actor-subcases-omitted-from-lite",
+      "phase": "F2.5",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-merge-handoff.instructions.md",
+        "heading": "F2.5 — Resolve merge policy route",
+        "contains": "If the merge-capable actor or resume condition is not recorded"
+      },
+      "omittedByDesign": {
+        "reason": "Whether the current session is the repository's documented merge-capable actor, and whether its resume condition is satisfied, are prose-recorded facts a lite profile has no reliable way to read; the lite file resolves separate_merge_agent from the machine-readable mergePolicy value alone and accepts the resulting claim-release/no-designated-merger churn as a known tradeoff instead.",
+        "lite": {
+          "file": "idd-template/.github/instructions/lite/idd-merge-handoff-lite.instructions.md",
+          "heading": "IDD — Merge Policy Handoff Phase (Lite) (F2.5)",
+          "contains": "not evaluate the standard file's step 5 prose-recorded sub-cases"
+        }
+      }
+    }
+  ]
 }

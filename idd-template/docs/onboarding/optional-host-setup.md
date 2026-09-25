@@ -517,12 +517,12 @@ drives every live GitHub API call the script makes (reviews, threads,
 comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
-Two automatic trigger types keep the required verdict current for now
-(see below): `pull_request` for the normal push case, and
-`pull_request_target` as its tamper-resistant counterpart (a
-same-repository PR cannot edit `pull_request_target`'s own copy of
-this workflow file, unlike `pull_request`; see Trusted-code checkout
-above). Review-thread comments and Copilot's review submission
+Only `pull_request_target` triggers the verdict now (see below):
+evaluated against the base branch's copy, so a same-repository PR
+cannot edit its own copy to force the check green (see Trusted-code
+checkout above). A PR that first adds this workflow gets no run --
+register the check only once it exists on the default branch.
+Review-thread comments and Copilot's review submission
 (`pull_request_review`) are **not** on that required job — both
 instead refresh the existing HEAD-associated required run via the
 non-required companion `idd-advisory-convergence-comment.yml`

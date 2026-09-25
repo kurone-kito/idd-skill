@@ -20,6 +20,13 @@
 //     `unknown_phase_id`) rather than being added here.
 
 import { parseCliArgs } from './cli-args.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
@@ -114,7 +121,13 @@ const PHASE_ID_RESOLVER_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('phase-id-resolver', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export function resolvePhaseId(
@@ -278,14 +291,14 @@ export function normalizePhaseIdToken(
   return normalized;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (!args.phaseId) {
-    throw new Error('--phase-id is required');
+    throw markCliUsageError(new Error('--phase-id is required'));
   }
 
   const resolver = createPhaseIdResolver();
@@ -299,6 +312,7 @@ function runCli(): void {
     legacyAliasMap: args.verbose ? resolver.legacyAliasMap : undefined,
   };
   process.stdout.write(`${JSON.stringify(compactObject(output), null, 2)}\n`);
+  return 0;
 }
 
 function parseArgs(argv: string[]): {

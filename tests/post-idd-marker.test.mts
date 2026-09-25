@@ -883,8 +883,10 @@ test('--apply CLI POSTs via gh api --input - and prints the apply envelope', () 
 const args = process.argv.slice(2);
 fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args));
 if (args[0] === 'api' && args.includes('--input') && args[args.indexOf('--input') + 1] === '-') {
-  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
-  process.stdout.write(JSON.stringify({ id: 4242, html_url: 'https://github.com/o/r/issues/1047#issuecomment-4242' }));
+  const raw = fs.readFileSync(0, 'utf8');
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, raw);
+  const sent = JSON.parse(raw);
+  process.stdout.write(JSON.stringify({ id: 4242, html_url: 'https://github.com/o/r/issues/1047#issuecomment-4242', body: sent.body }));
   process.exit(0);
 }
 process.stderr.write('unexpected gh invocation: ' + args.join(' '));
@@ -2383,8 +2385,9 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
 } else if (args[0] === 'api' && typeof args[1] === 'string' && args[1].indexOf('/comments') !== -1 && args.indexOf('--paginate') !== -1) {
   out(priorComments.map((c) => JSON.stringify(c)).join('\\n') + '\\n');
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.readFileSync(0, 'utf8');
-  out(JSON.stringify({ id: newCommentId, html_url: 'https://github.com/o/r/issues/1#issuecomment-' + newCommentId }));
+  const raw = fs.readFileSync(0, 'utf8');
+  const sent = JSON.parse(raw);
+  out(JSON.stringify({ id: newCommentId, html_url: 'https://github.com/o/r/issues/1#issuecomment-' + newCommentId, body: sent.body }));
 } else if (args[0] === 'api' && args[1] === 'graphql') {
   const fValues = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -3210,8 +3213,9 @@ const args = process.argv.slice(2);
 function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.readFileSync(0, 'utf8');
-  out(JSON.stringify({ id: 9800, html_url: 'https://github.com/o/r/issues/1#issuecomment-9800' }));
+  const raw = fs.readFileSync(0, 'utf8');
+  const sent = JSON.parse(raw);
+  out(JSON.stringify({ id: 9800, html_url: 'https://github.com/o/r/issues/1#issuecomment-9800', body: sent.body }));
 } else {
   fail('unexpected gh invocation: ' + args.join(' '));
 }
@@ -4569,8 +4573,10 @@ function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
   out(JSON.stringify({ number: 42, body: ${JSON.stringify(LIVE_BODY)} }));
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
-  out(JSON.stringify({ id: 555, html_url: 'https://github.com/o/r/issues/42#issuecomment-555' }));
+  const raw = fs.readFileSync(0, 'utf8');
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, raw);
+  const sent = JSON.parse(raw);
+  out(JSON.stringify({ id: 555, html_url: 'https://github.com/o/r/issues/42#issuecomment-555', body: sent.body }));
 } else {
   fail('unexpected gh invocation: ' + args.join(' '));
 }
@@ -4827,8 +4833,10 @@ function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args[0] === 'api' && args[1] === 'user') {
   out(${JSON.stringify(login)});
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
-  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
-  out(JSON.stringify({ id: 777, html_url: 'https://github.com/${owner}/${repo}/issues/${number}#issuecomment-777' }));
+  const raw = fs.readFileSync(0, 'utf8');
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, raw);
+  const sent = JSON.parse(raw);
+  out(JSON.stringify({ id: 777, html_url: 'https://github.com/${owner}/${repo}/issues/${number}#issuecomment-777', body: sent.body }));
 } else {
   fail('unexpected gh invocation: ' + args.join(' '));
 }

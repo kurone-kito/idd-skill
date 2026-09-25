@@ -488,30 +488,46 @@ could ever observe it as 'alive'".
    change has nothing to stash: `stash push` reports no local changes
    to save and creates no new entry, so step 4 skips the stash check
    for it.
-4. **Remove.** Immediately before removing anything — not step 1's
-   earlier read — re-run its confirm-the-block check, using the same
+4. **Remove.** Acquire the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) before
+   either branch's fresh claim/lock re-check, and hold it through that
+   re-check and the mutation that follows — the checkout on the
+   primary-worktree branch, or `git worktree remove` on the ordinary
+   linked-worktree branch. Do not re-check and then wait to acquire
+   the lock: a concurrent session can acquire or replace
+   `idd-claim.lock` during that wait, so a re-check that already
+   passed before the lock is held is stale. The lock serializes
+   `worktree add`/`remove` and `fetch` against the shared primary
+   clone (`src/scripts/clone-lock.mts`'s own documented scope). Step
+   3's stash, update-ref, and copy operations never touch that
+   topology, so nothing before this step needs the lock.
+
+   While that lock is already held — not step 1's earlier read —
+   re-run the confirm-the-block check, using the same
    profile-selected `resume-claim-routing` and `claim-lock` helper
    forms step 1 above resolves (a bare `resume-claim-routing.mjs`
    invocation is not portable outside the source-repo/vendored-node
-   profile). Stop if the result no longer matches: a live session
-   resumed the claim, a different claim-id now holds the lock, or the
-   branch no longer reports `local_worktree_occupied` — the situation
-   changed since step 1, and `idd-merge.instructions.md`'s own F4
-   worktree-removal step revalidates the claim and lock before every
-   removal for the same reason. Then
-   confirm each step 3 action actually succeeded — the `<tag>` entry
-   count in `git -C <path> stash list` (and each submodule's) rose by
-   exactly one past the baseline only where step 3 found a change to
-   stash, any unmerged-path fallback copy landed outside `<path>`,
-   any `-` submodule's copied files landed outside `<path>`,
-   `git -C <path> rev-parse --verify refs/idd-lwr/<branch>` resolves
-   **to the recorded tip OID** — not merely that it resolves at all,
-   which a stale ref could also satisfy — (or the submodule-scoped
-   equivalent) only where step 3 found unpushed commits to back up,
-   and any copied-out ignored files
-   landed outside the worktree — before removing anything. Stop and do
-   not run `git worktree remove`, `--force` included, if any of them
-   failed.
+   profile). This is the fresh re-check for the ordinary
+   linked-worktree branch: it runs only after the lock is held, not
+   only before `git worktree remove`. Stop if the result no longer
+   matches: a live session resumed the claim, a different claim-id
+   now holds the lock, or the branch no longer reports
+   `local_worktree_occupied` — the situation changed since step 1,
+   and `idd-merge.instructions.md`'s own F4 worktree-removal step
+   revalidates the claim and lock before every removal for the same
+   reason. Then confirm each step 3 action actually succeeded — the
+   `<tag>` entry count in `git -C <path> stash list` (and each
+   submodule's) rose by exactly one past the baseline only where
+   step 3 found a change to stash, any unmerged-path fallback copy
+   landed outside `<path>`, any `-` submodule's copied files landed
+   outside `<path>`, `git -C <path> rev-parse --verify
+   refs/idd-lwr/<branch>` resolves **to the recorded tip OID** — not
+   merely that it resolves at all, which a stale ref could also
+   satisfy — (or the submodule-scoped equivalent) only where step 3
+   found unpushed commits to back up, and any copied-out ignored
+   files landed outside the worktree — before removing anything.
+   Stop and do not run `git worktree remove`, `--force` included, if
+   any of them failed.
 
    If `<path>` is the primary worktree — the path the first `worktree`
    line of `git worktree list --porcelain` reports, distinct from
@@ -521,26 +537,20 @@ could ever observe it as 'alive'".
    removal (`src/scripts/claim-lock.mts`'s own documented scope). This
    is typically the anti-pattern §W7 warns against (checking out the
    issue branch directly in the primary worktree instead of adding a
-   linked one). Acquire the
-   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) before
-   this branch's first mutation to the shared primary clone's own
-   topology or checked-out branch below — the checkout — and hold it
-   through the final lock check and deletion: the clone-scoped lock
-   serializes `worktree add`/`remove` and `fetch` against exactly that
-   shared topology (`src/scripts/clone-lock.mts`'s own documented
-   scope), which step 3's stash/update-ref/copy operations never touch, so
-   nothing before the checkout needs it. A concurrent session can use
-   the shared primary clone's topology at any point between the
-   checkout and the deletion otherwise. Re-run step 1's
-   profile-selected `claim-lock` check form on the primary worktree
-   now, immediately
-   before acting — not step 1's earlier read or this step's own
-   opening re-check above, both stale by the time a concurrent session
-   could have acquired or replaced this shared admin directory's lock.
-   Only if that fresh check still matches this primary worktree's lock
-   to the claim-id being recovered, or — for a legacy release — still
-   finds no lock at all (matching step 1's own absent-lock finding):
-   run `git -C <path> checkout
+   linked one). The clone-scoped lock is already held, so this
+   branch's fresh `claim-lock` re-check runs only after that
+   acquisition, not before it and not only before the checkout.
+   Re-run step 1's profile-selected `claim-lock` check form on the
+   primary worktree now, immediately before acting — not step 1's
+   earlier read, which is stale once a concurrent session could have
+   replaced this shared admin directory's lock during the wait to
+   acquire the clone-scoped lock. Hold the lock through the final
+   lock check and deletion. A concurrent session can use the shared
+   primary clone's topology at any point between the checkout and
+   the deletion otherwise. Only if that fresh check still matches
+   this primary worktree's lock to the claim-id being recovered, or
+   — for a legacy release — still finds no lock at all (matching
+   step 1's own absent-lock finding): run `git -C <path> checkout
    {development-branch}` there to release the branch — re-resolve
    `{development-branch}` per §CSA's note above if this file is
    entered without a fresh B1 pass — confirm `resume-claim-routing.mjs`
@@ -557,16 +567,16 @@ could ever observe it as 'alive'".
    and `claim-lock.mts` already documents it as never expected to be
    cleaned up.
 
-   Otherwise, behind the
-   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock)
-   — as F4's own step 5 (`idd-merge.instructions.md`) — run `git
-   worktree remove <path>`, then `git worktree prune`. If it fails
-   with `fatal: working trees containing submodules cannot be moved or
-   removed`, retry `git worktree remove --force <path>` after
-   confirming step 3's preservation already succeeded — the only case
-   `--force` is warranted here, mirroring F4's own retry rule. This
-   also deletes that worktree's claim lock and generated-tokens
-   record, since both live in its own private git-admin directory.
+   Otherwise the same lock is already held, and the confirm-the-block
+   re-check above already ran while holding it. Run `git worktree
+   remove <path>`, then `git worktree prune` — as F4's own step 5
+   (`idd-merge.instructions.md`). If it fails with `fatal: working
+   trees containing submodules cannot be moved or removed`, retry
+   `git worktree remove --force <path>` after confirming step 3's
+   preservation already succeeded — the only case `--force` is
+   warranted here, mirroring F4's own retry rule. This also deletes
+   that worktree's claim lock and generated-tokens record, since both
+   live in its own private git-admin directory.
 5. **Re-enter.** Re-run Resume from Step 0. A now-`absent` worktree
    lets a stale claim take the normal stale-takeover path through A5,
    and a released claim take a fresh A5 claim. Route any preserved
