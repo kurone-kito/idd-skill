@@ -72,7 +72,9 @@ If stalled-session routing returns hold/inconclusive, stop.
   `npm run idd:force-handoff` under `package-manager`); under
   `instructions-only` (no helper runtime vended), the operator instead
   posts the manual consent text and marker documented in
-  `docs/customization.md` themselves.
+  `docs/customization.md` themselves. If no successor is known yet,
+  tell them to answer `release` at that prompt (posts `unclaimed-by`,
+  not a same-agent transfer).
 
 ### Operator-present release
 
