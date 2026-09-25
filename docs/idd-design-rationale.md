@@ -151,57 +151,46 @@ comment as a non-stale foreign claim and moved on to the next
 candidate, per the pre-scan rule above, exactly as the rule is
 designed to behave for two genuinely different sessions. Only a
 follow-up review of the transcript caught it; a manual
-`claim-lock.mjs --read-tokens` check against both the primary and
-sibling worktree then found a recorded token matching the "foreign"
-claim-id, prompting the operator to resume it correctly by hand.
+`claim-lock.mjs --read-tokens` check found a recorded token matching
+the "foreign" claim-id, prompting the operator to resume it correctly
+by hand.
 
-`claim-lock.mts`'s own "Scope of the ownership proof" header comment
-(#2879 review, Codex P1) is explicit that a `--read-tokens` hit against
-the **shared primary** worktree path is corroborating bootstrap
-evidence only, not sole proof of current-session ownership — under
-this repository's own heavy-concurrency dogfooding (several independent
-sessions sharing one clone), a different, still-live sibling session's
-own A5 claim can leave an indistinguishable record at that same shared
-path. Step 1.5's own new check therefore does **not** conclude
-ownership from `present: true` and adopt the recorded pair outright;
-it only stops Step 1.5 from silently discarding the candidate as an
-ordinary foreign claim, and routes it to `idd-resume.instructions.md`
-instead, so that file's own GitHub-authoritative claim-state rules —
-not a local file alone — make the actual ownership call. Resume's own
-Step 1 table already treats an active non-stale claim from another
-session as "STOP — not inheritable even if agent-id matches," and
-only continues with the same `{claim-id}` once independently verified
-as this session's own; a genuinely foreign, still-live claim with no
-forced-handoff evidence still lands on one of those existing
-STOP/quiet-window routes, unchanged from today. Until `#3273` closes
-its own gap, Resume's mechanized path does not yet consume this
-session's on-disk record either, so a genuine same-machine recovery
-surfaces as a reported stop rather than a silent auto-resume — a
-strict improvement over today's silent skip regardless, since a human
-or a later pass can now act on it instead of it vanishing from view.
-This keeps the original pre-scan mitigation intact for the
-two-different-sessions case it exists for, while replacing today's
-silent skip with a real, GitHub-authoritative investigation for the
-same-machine-recovery case.
-
-**Why checking a candidate's worktree from Discover is a deliberate,
-narrow exception, not a violation, of the "own current cwd" guidance
-(#3420 review, Copilot).** `docs/idd-helper-scripts.md`'s own
-`--read-tokens` scope note says every caller must resolve it "against
-the caller's own current cwd, never an explicit different worktree's
-path." That guidance was written for the existing mutation-gating
-callers (B2, B3, C5, D, E, F2/F3), which use a `present: true` hit to
-authorize a **mutation** from inside the worktree it names — there,
-checking a different path would misattribute someone else's mutation
-authority. Step 1.5 is a different kind of caller: it runs from the
-primary worktree by construction (Discover has no "own" implementation
-worktree to compare against yet) and never authorizes a mutation from
-`present: true` alone — it only feeds a **soft investigative signal**
-into a separate GitHub-authoritative check, exactly as `claim-lock.mts`'s
-own comment describes this record's job as "narrower and complementary
-... not adjudicating between two sessions." No existing caller's
-mutation-authority guarantee is weakened by adding this second,
-lower-trust use.
+The fix checks `idd-claim.instructions.md`'s `--read-tokens` form
+against Discover's **own current cwd** — the primary worktree, since
+Discover has no per-issue implementation worktree of its own yet —
+never an explicit different worktree's path, so it needs no exception
+to the existing `--read-tokens` scope contract (`claim-lock.mts`'s own
+"Scope of the ownership proof" header comment, #2879 review, Codex P1;
+`docs/idd-helper-scripts.md`'s matching note). A fresh `A5` claim
+always records its token into the primary worktree's admin directory
+before any sibling worktree exists, so this check reaches the same
+recovery evidence the original incident found by hand, without probing
+a worktree Discover isn't running from. That same header comment is
+also explicit that a hit is corroborating bootstrap evidence only, not
+sole proof of current-session ownership by itself — under this
+repository's heavy-concurrency dogfooding, a different, still-live
+sibling session's own A5 claim can leave an indistinguishable record
+at that same shared path. Step 1.5's check therefore does **not**
+conclude ownership from `present: true` and adopt the recorded pair
+outright; it only stops Step 1.5 from silently discarding the
+candidate as an ordinary foreign claim, and routes it to
+`idd-resume.instructions.md` instead, so that file's own
+GitHub-authoritative claim-state rules — not a local file alone — make
+the actual ownership call. Resume's own Step 1 table already treats an
+active non-stale claim from another session as "STOP — not inheritable
+even if agent-id matches," and only continues with the same
+`{claim-id}` once independently verified as this session's own; a
+genuinely foreign, still-live claim with no forced-handoff evidence
+still lands on one of those existing STOP/quiet-window routes,
+unchanged from today. Until `#3273` closes its own gap, Resume's
+mechanized path does not yet consume this session's on-disk record
+either, so a genuine same-machine recovery surfaces as a reported stop
+rather than a silent auto-resume — a strict improvement over today's
+silent skip regardless, since a human or a later pass can now act on
+it instead of it vanishing from view. This keeps the original pre-scan
+mitigation intact for the two-different-sessions case it exists for,
+while replacing today's silent skip with a real, GitHub-authoritative
+investigation for the same-machine-recovery case.
 
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to
