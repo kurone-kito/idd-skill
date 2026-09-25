@@ -420,13 +420,43 @@
       }
     },
     "idd-provider-health.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "transport"
+        }
+      }
     },
     "idd-provider-outage-declaration.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-provider-outage-park.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "transport"
+        }
+      }
     },
     "idd-rerun-advisory-convergence.mjs": {
       "migrated": true,

@@ -211,7 +211,7 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: the first, discover/claim, review/merge, and marker/handoff batches are marked migrated', () => {
+test('helper-cli-contract fixture: the first, discover/claim, review/merge, marker/handoff, and provider batches are marked migrated', () => {
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
@@ -247,6 +247,9 @@ test('helper-cli-contract fixture: the first, discover/claim, review/merge, and 
     'idd-phase-id-resolver.mjs',
     'idd-post-idd-marker.mjs',
     'idd-pre-merge-readiness.mjs',
+    'idd-provider-health.mjs',
+    'idd-provider-outage-declaration.mjs',
+    'idd-provider-outage-park.mjs',
     'idd-rerun-advisory-convergence.mjs',
     'idd-resolve-review-thread.mjs',
     'idd-resume-claim-routing.mjs',

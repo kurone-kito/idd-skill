@@ -43,6 +43,12 @@ import {
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { ghApiJson, ghText } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
@@ -753,17 +759,21 @@ const PROVIDER_HEALTH_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-health', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 
-function main(): void {
+function main(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     PROVIDER_HEALTH_FLAG_SPEC,
   );
   if (help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
 
   const owner =
@@ -775,6 +785,7 @@ function main(): void {
 
   const report = buildProviderHealthReport(owner, repo);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 
 function printHelp(): void {
