@@ -1619,10 +1619,17 @@ export function resolveLinkedIssueCandidates({
   // is now required -- this write-gate caller previously omitted it and
   // silently used the hardcoded 24h default.
   const staleAgeMs = readClaimStaleAgeMs(rawConfig);
+  // An empty candidate list is the claimless / filtered-out path. Loading
+  // trust state here would turn that no-op into a default-branch or
+  // Contents API read, and an unavailable ref would throw (Copilot review,
+  // PR #3464).
+  if (issueRefs.length === 0) {
+    return results;
+  }
   // #3454: the trusted-actor config and the collaborator-trust decision
   // do not depend on a linked issue's comments, so load them once per
-  // invocation. Collaborator logins stay inside the loop: they are
-  // derived from each issue's own comments.
+  // invocation that still has candidates. Collaborator logins stay inside
+  // the loop: they are derived from each issue's own comments.
   const trustConfig = loadTrustedActorConfig({
     owner,
     repo,

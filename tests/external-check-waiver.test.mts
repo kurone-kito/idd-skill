@@ -3891,6 +3891,50 @@ test('operationalMarkerPrefix still recognizes an ordinary external-check-waiver
   );
 });
 
+test('resolveLinkedIssueCandidates skips the trusted-config read when no linked issues remain (#3454)', () => {
+  const stubGhScript = `
+process.stderr.write('unexpected gh invocation: ' + process.argv.slice(2).join(' ') + '\\n');
+process.exit(1);
+`;
+  const restore = stubExecutable('gh', stubGhScript);
+  try {
+    assert.deepEqual(
+      resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'ada',
+        baseRefName: '',
+        linkedIssues: [],
+        issueNumber: 0,
+        expectedClaimId: '',
+        headRefName: 'issue/3454-example',
+        enforceBranchMatch: true,
+        prNumber: 99,
+      }),
+      [],
+    );
+    assert.deepEqual(
+      resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'ada',
+        baseRefName: '',
+        linkedIssues: [{ number: 11, url: 'https://example.test/11' }],
+        issueNumber: 99,
+        expectedClaimId: '',
+        headRefName: 'issue/3454-example',
+        enforceBranchMatch: true,
+        prNumber: 99,
+      }),
+      [],
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('resolveLinkedIssueCandidates loads trusted actor config once for two linked issues (#3454)', () => {
   const logPath = join(
     mkdtempSync(join(tmpdir(), 'idd-waiver-trust-load-')),
