@@ -146,8 +146,8 @@ name: IDD advisory-convergence gate
 # generic "re-run failed jobs".
 #
 # Bounded poll for the "not reviewed yet" race (#2015): the
-# `pull_request`/`pull_request_target` `synchronize` trigger above
-# fires the instant a push lands, well before the primary bot's own
+# `pull_request_target` `synchronize` trigger above fires the instant a
+# push lands, well before the primary bot's own
 # review typically lands (10-40s later) -- originally via the separate
 # `pull_request_review` trigger this workflow declared directly; that
 # trigger moved to the companion workflow in #2764 Phase 1, but the
@@ -173,9 +173,9 @@ name: IDD advisory-convergence gate
 # not landed by the end of the window, or lands with outstanding items,
 # the job fails exactly as it always has.
 #
-# Known residual (PR #2023 review), reshaped by #2764 Phase 1: this
-# job's own concurrency group (below) is keyed by PR number ALONE
-# across all three of its triggers, with `cancel-in-progress: true`.
+# Known residual (PR #2023 review), reshaped by #2764 Phase 1 and 2:
+# this job's own concurrency group (below) is keyed by PR number ALONE
+# across each of its triggers, with `cancel-in-progress: true`.
 # Originally, if the primary bot's review landed WHILE this poll was
 # asleep, that submission started a fresh `pull_request_review`-triggered
 # run directly in the SAME group, cancelling this run before its next
