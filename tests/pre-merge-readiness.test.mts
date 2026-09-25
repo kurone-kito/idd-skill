@@ -15,6 +15,7 @@ import {
 import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
+  renderOutOfLoopMarker,
   renderReviewReplyStamp,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
@@ -65,7 +66,10 @@ import {
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
-import type { ProviderPort } from '../src/scripts/provider-port.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+} from '../src/scripts/provider-port.mts';
 import {
   computeClosingSetEvidence,
   findStrayCommitCloses,
@@ -11327,6 +11331,414 @@ test('collectPreMergeReadiness: a clean commit list and matching closingIssuesRe
     !(report.blockers as { gate: string }[]).some(
       (blocker) => blocker.gate === 'closing-set',
     ),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#3328: --claimless out-of-loop-authorized adoption.
+// ---------------------------------------------------------------------------
+
+const OUT_OF_LOOP_VIEWER_LOGIN = 'claude-ad242b1f';
+
+function outOfLoopFakePort(
+  overrides: {
+    prComments?: ProviderComment[];
+    closingIssueComments?: ProviderComment[];
+  } = {},
+): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: overrides.prComments ?? [],
+      7: overrides.closingIssueComments ?? [],
+    },
+  });
+}
+
+const OUT_OF_LOOP_ARGV = [
+  '--pr',
+  '1',
+  '--claimless',
+  '--owner',
+  'o',
+  '--repo',
+  'r',
+  '--now',
+  '2026-08-01T00:00:00Z',
+];
+
+test('collectPreMergeReadiness: --claimless accepts a PR with a closing reference, no active claim, and a valid trusted out-of-loop marker (#3328)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = outOfLoopFakePort({
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+    closingIssueComments: [],
+  });
+  const report = collectPreMergeReadiness(
+    OUT_OF_LOOP_ARGV,
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    missing: number[];
+  };
+  assert.equal(closingSet.status, 'match');
+  assert.deepEqual(closingSet.missing, []);
+  assert.ok(
+    !(report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'closing-set',
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: --claimless still refuses the same PR without a valid out-of-loop marker (#2017 regression)', () => {
+  const port = outOfLoopFakePort({ prComments: [], closingIssueComments: [] });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless refuses a closing reference whose issue has an active claim, even with a valid marker (#3328)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = outOfLoopFakePort({
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+    closingIssueComments: [
+      {
+        id: 2,
+        body: `<!-- claimed-by: other-agent clm-1 supersedes: none 2026-07-01T00:00:00Z branch: issue/7-x -->\n\n_other-agent: issue claim — IDD automation marker. Do not edit._`,
+        createdAt: '2026-07-01T00:00:00Z',
+        updatedAt: '2026-07-01T00:00:00Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+      },
+    ],
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /active claim state is present/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless still refuses a PR whose only closing reference is cross-repo, even with a valid marker (C1 critique regression guard)', () => {
+  // A same-repo-only extraction fed straight to the classifier would
+  // otherwise silently read this as "no closing references" (the #2017
+  // claimless case), accepting --claimless with no marker required --
+  // the pre-#3328 code always refused ANY non-empty raw
+  // closingIssuesReferences regardless of repo. Confirms
+  // resolveClosingIssueNumbersForClassifier's null (unreadable) signal
+  // actually reaches this end-to-end path.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless still refuses when a collaborator-trusted claim lives only on the closing issue, not the PR (C1 critique round 2 regression guard)', () => {
+  // The claimed path's own collaborator-trust auto-discovery scans both
+  // the PR's comments and the claimed issue's comments -- but under
+  // --claimless, the (nonexistent) "claimed issue" comments are always
+  // [], so before this fix a collaborator whose only claim comment lived
+  // on the CLOSING issue was invisible to trustedMarkerLogins, letting a
+  // valid out-of-loop marker silently override their real active claim.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    collaboratorPermissions: {
+      'collab-user': {
+        outcome: 'found',
+        permission: 'write',
+        roleName: 'write',
+      },
+    },
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+      7: [
+        {
+          id: 2,
+          body: '<!-- claimed-by: collab-agent clm-collab supersedes: none 2026-07-01T00:00:00Z branch: issue/7-x -->\n\n_collab-agent: issue claim — IDD automation marker. Do not edit._',
+          createdAt: '2026-07-01T00:00:00Z',
+          updatedAt: '2026-07-01T00:00:00Z',
+          authorLogin: 'collab-user',
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({ markerTrust: { allowCollaboratorMarkers: true } }),
+      ),
+    /active claim state is present/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless refuses a PR whose closingIssuesReferences field is unreadable (non-array), even with a valid marker (Copilot review, PR #3421)', () => {
+  // A non-array closingIssuesReferences must not silently read as "no
+  // closing references" (the ordinary #2017 claimless fast path) --
+  // that would skip classification entirely and accept --claimless with
+  // no marker required for a PR whose closing-reference field could not
+  // even be read.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        // Malformed on purpose: a real `gh pr view` failure mode this
+        // repo has seen elsewhere (a non-array where an array was
+        // expected), not a valid closingIssuesReferences shape.
+        closingIssuesReferences: null as unknown as unknown[],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
+  );
+});
+
+test('collectPreMergeReadiness: --claimless refuses a PR with a mix of same-repo and cross-repo closing references, even with a valid marker (Copilot review, PR #3421)', () => {
+  // A partial same-repo match must not silently drop the unresolved
+  // cross-repo entry and proceed on the resolved subset alone -- the
+  // dropped entry's own claim state (unknowable to this repo) was never
+  // checked.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [
+          { number: 7 },
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      1: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+      7: [],
+    },
+  });
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        OUT_OF_LOOP_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    /closing issue references are unreadable/,
   );
 });
 
