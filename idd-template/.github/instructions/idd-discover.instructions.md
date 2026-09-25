@@ -566,9 +566,10 @@ ascending issue-number order:
   worktree probe finds a live match or is unreadable without verified owner
   resume or authorized handoff (#3141, Round 21 report). Otherwise it
   **remains eligible**.
-- **Own-claim check:** before ruling non-stale foreign, apply
-  `idd-claim.instructions.md`'s `--read-tokens` check (helper
-  runtime only); `present: true` (not malformed) routes to
+- **Own-claim check:** before ruling non-stale foreign, run
+  `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
+  fallback) with `--worktree`=own cwd, `--claim-id`=candidate's;
+  `present: true` (not malformed) routes to
   `idd-resume.instructions.md`.
 
 After scanning the current batch:
