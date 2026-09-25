@@ -670,22 +670,28 @@ error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
-  replacing a manual walkthrough of the checklist below with five check
+  replacing a manual walkthrough of the checklist below with six check
   groups: manifest completeness (reusing `--import`'s own file-set
-  resolution), placeholder residue (reusing `--substitute`'s scanner), a
-  helper-load check (`vendored-node` only: spawns each cataloged helper
-  under `--target` with `--help`), an informational stale-import signal,
-  and a non-blocking package-pin advisory (flags an
-  `ephemeral-npx`/`package-manager` helper runtime profile with no
-  configured `helperRuntime.packageSpec` — see
-  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)).
-  A missing manifest file, leftover placeholder, or helper-load failure
-  is blocking; the stale-import signal and package-pin advisory are
-  never blocking.
+  resolution; `--hold` does not shrink this set), placeholder residue
+  (reusing `--substitute`'s scanner), a helper-load check
+  (`vendored-node` only: spawns each cataloged helper under `--target`
+  with `--help`), an informational stale-import signal, a non-blocking
+  package-pin advisory (flags an `ephemeral-npx`/`package-manager`
+  helper runtime profile with no configured `helperRuntime.packageSpec`
+  — see
+  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
+  and a non-blocking held-schema drift advisory (a schema or fixture
+  `--import` would update, while a held `src/scripts` module or a held
+  vendored `scripts` module still names it). A missing manifest file,
+  leftover placeholder, or helper-load failure is blocking; the
+  stale-import signal, package-pin
+  advisory, and held-schema drift advisory are never blocking. Repeat
+  `--hold` with a manifest target path to name content left unchanged;
+  an unknown path is a usage error.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>]
+    --target <target-repo> [--profile <name>] [--hold <target-path>]
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
