@@ -657,7 +657,7 @@ matches, after desync and before effort — see
 [rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-milestone-scope-preference).
 
 **Author-recorded effort hint (soft tie-breaker).** When tied after
-score/desync, prefer **lower-effort** before lowest-issue-number.
+score/desync/milestone, prefer **lower-effort**, then lowest issue number.
 Read the `<!-- {{PROJECT_MARKER_PREFIX}}-effort: S|M|L -->` footer (or
 `discover-roadmap-graph`'s `effort`): `S` < `M` < `L`; missing/invalid
 is **neutral** (`M`). **Soft**: reorders only within one score tie
