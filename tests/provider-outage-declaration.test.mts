@@ -16,6 +16,7 @@ import {
   parseArgs,
   renderText,
   resolveProviderOutageDeclaration,
+  runProviderOutageDeclaration,
   trustedLoginsForProviderOutageAdvancements,
 } from '../src/scripts/provider-outage-declaration.mts';
 
@@ -681,6 +682,43 @@ function advancedBy(login: string): CommentLike {
     author: { login },
   };
 }
+
+test('list-advanced refuses an empty trusted-marker set instead of listing every author', async () => {
+  const args = parseArgs([
+    '--list-advanced',
+    '--repo',
+    'acme/widgets',
+    '--target-issue',
+    '9',
+  ]);
+  const previousActors = process.env.IDD_TRUSTED_MARKER_ACTORS;
+  const previousCollaborators = process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  delete process.env.IDD_TRUSTED_MARKER_ACTORS;
+  delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+  try {
+    await assert.rejects(
+      () =>
+        runProviderOutageDeclaration({
+          args,
+          comments: [advancedBy('stranger')],
+          viewerLogin: '',
+          trustConfig: {},
+        }),
+      /empty trusted-marker set/,
+    );
+  } finally {
+    if (previousActors === undefined) {
+      delete process.env.IDD_TRUSTED_MARKER_ACTORS;
+    } else {
+      process.env.IDD_TRUSTED_MARKER_ACTORS = previousActors;
+    }
+    if (previousCollaborators === undefined) {
+      delete process.env.IDD_TRUST_COLLABORATOR_MARKERS;
+    } else {
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS = previousCollaborators;
+    }
+  }
+});
 
 test('list-advanced: a repository owner absent from trustedMarkerActors and not the viewer is not trusted', () => {
   const logins = trustedLoginsForProviderOutageAdvancements({

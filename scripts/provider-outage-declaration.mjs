@@ -588,6 +588,16 @@ export async function runProviderOutageDeclaration(options = {}) {
         ? resolveTrustedCollaboratorMarkerLogins(owner, name, comments)
         : [],
     });
+    // An empty set used to mean "do not filter" inside
+    // listProviderOutageAdvancements (`trustedSet.size > 0`). The old
+    // builder always inserted the repository owner, so list-advanced
+    // never hit that branch. The shared gate builder does not, and an
+    // empty result would list every author's advancement marker.
+    if (trustedMarkerLogins.length === 0) {
+      throw new Error(
+        'list-advanced refuses an empty trusted-marker set; an empty set would list every author',
+      );
+    }
     const result = listProviderOutageAdvancements(comments, {
       trustedMarkerLogins,
     });
