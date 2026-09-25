@@ -579,9 +579,16 @@ function isWithinOpenHtmlBlock(
  * `+`, `*`, `1.`, `1)`) -- unlike {@link parseListItemContainer}, which
  * accepts any ordered-list digit. CommonMark allows a non-"1" ordered
  * marker (e.g. `2.`) to appear mid-paragraph without interrupting it, so
- * such a marker must never anchor list-content-indent tracking.
+ * such a marker must never anchor list-content-indent tracking. Exported
+ * for `verify-import-mirror.mts`'s rule 3 (issue #3233): a
+ * {@link parseListItemMatch} hit on a line that continues an
+ * already-open PLAIN PARAGRAPH (not already inside a list item) is only a
+ * genuine block boundary when the marker actually satisfies this same
+ * CommonMark restriction -- otherwise a non-"1" ordered marker like `5.`
+ * appearing mid-paragraph would be misread as a fresh list item instead
+ * of ordinary continuation text.
  */
-function isInterruptingListMarker(marker: string): boolean {
+export function isInterruptingListMarker(marker: string): boolean {
   return (
     marker === '-' ||
     marker === '+' ||
@@ -1052,7 +1059,18 @@ type ContainerLine = {
   listContentIndent: number | null;
 };
 
-type ListItemMatch = {
+/** One line's MARKER-SHAPED list-item syntax (see {@link parseListItemMatch}):
+ * the raw leading indent, the marker token itself, the required
+ * separating whitespace after it, and the item's own first-line content.
+ * A non-`null` match here does NOT by itself mean the marker can
+ * interrupt an open paragraph -- {@link isInterruptingListMarker} is the
+ * separate, narrower check for that (Copilot review, PR #3417); this
+ * type's own shape includes every non-`1` ordered marker (e.g. `5.`)
+ * too. Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233),
+ * which reuses `markerIndent`/`marker` to keep a list item's own
+ * boundary and nesting indent significant -- never reflow-collapsed the
+ * way ordinary wrapped prose is. */
+export type ListItemMatch = {
   marker: string;
   markerIndent: string;
   spacing: string;
@@ -1061,7 +1079,14 @@ type ListItemMatch = {
 
 const LIST_ITEM_PATTERN = /^([ \t]{0,3})([-+*]|\d{1,9}[.)])([ \t]+)(.*)$/u;
 
-function indentationColumns(text: string, initialColumns = 0): number {
+/**
+ * Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233), which
+ * needs each side of a list-item-boundary comparison expressed in the
+ * same column units this module's own container/list-depth tracking
+ * already uses internally (tabs expand to the next 4-column stop, matching
+ * every other indentation computation in this file).
+ */
+export function indentationColumns(text: string, initialColumns = 0): number {
   let columns = initialColumns;
   for (const character of text) {
     if (character === ' ') {
@@ -1075,7 +1100,36 @@ function indentationColumns(text: string, initialColumns = 0): number {
   return columns;
 }
 
-function parseListItemMatch(content: string): ListItemMatch | null {
+/**
+ * Non-`null` iff `content` opens MARKER-SHAPED syntax (`-`, `+`, `*`, or
+ * an ordered `N.`/`N)` marker) at 0-3 leading columns, followed by
+ * required separating whitespace and item content -- the same shape this
+ * module's own container/list-depth tracking already relies on
+ * internally. Deliberately permissive on the marker's own number/char:
+ * this predicate answers only "does this line's own syntax LOOK like a
+ * list-item opener," not "can it actually interrupt an already-open
+ * paragraph" -- {@link isInterruptingListMarker} is the separate,
+ * narrower check for that (Copilot review, PR #3417): a non-`null`
+ * result here still includes `5. text` and other non-`1` ordered markers
+ * that cannot interrupt a paragraph per CommonMark, so a caller that
+ * needs the interruption distinction must apply that check itself
+ * rather than assuming a match here already implies it.
+ *
+ * Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233): a
+ * list-item boundary is significant Markdown block structure, not the
+ * kind of incidental whitespace rule 3's prose-reflow tolerance already
+ * collapses -- reusing this already-reviewed per-line detector avoids
+ * hand-rolling a second, narrower block parser there. Deliberately does
+ * not resolve a NESTED item's own list-content zone the way
+ * {@link findEnclosingListContentZone} does (that scan answers a
+ * different question -- whether a LATER line still continues an EARLIER
+ * opener -- not "what does this line's own raw indentation look like"):
+ * a marker nested 4+ raw columns deep (a third list level, or a wide
+ * marker's own continuation) is not distinguished from ordinary wrapped
+ * prose by this shallow, per-line check alone. See the caller's own doc
+ * comment for how it discloses that limitation.
+ */
+export function parseListItemMatch(content: string): ListItemMatch | null {
   const match = content.match(LIST_ITEM_PATTERN);
   if (!match || indentationColumns(match[1]) >= 4) {
     return null;
@@ -1088,7 +1142,21 @@ function parseListItemMatch(content: string): ListItemMatch | null {
   };
 }
 
-function parseListItemContainer(content: string): number | null {
+/**
+ * Exported for `verify-import-mirror.mts`'s rule 3 (issue #3233), which
+ * needs the same content-indent computation this module's own
+ * list-content-indent tracking already uses internally, rather than a
+ * hand-derived approximation: an earlier version of that caller assumed
+ * a marker's separating whitespace is always exactly one column, which
+ * disagrees with this function's own CommonMark-correct handling of 2-4
+ * separating spaces (`5+` collapses to one column of padding) -- a
+ * marker like `5.` indented 3 columns under a `1.  ` opener (two
+ * separating spaces, real content-indent 4) was wrongly read as still
+ * inside that item's zone under the 1-column assumption, when it is
+ * actually outside it (Copilot review, PR #3417; verified via `gh api
+ * /markdown`).
+ */
+export function parseListItemContainer(content: string): number | null {
   const listItem = parseListItemMatch(content);
   if (!listItem) {
     return null;
