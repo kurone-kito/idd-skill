@@ -43,7 +43,13 @@ jobs:
     # Imported from kurone-kito/pnpm-project-template push workflow shape
     # and adapted as a reusable workflow with repository-specific guards.
     runs-on: ${{ inputs.runner || 'ubuntu-slim' }}
-    timeout-minutes: 10
+    # Observed 2026-09-25, the required job sat in a roughly 6 to 10
+    # minute band. Run 36163057010 job 108164078287 was cancelled at
+    # the 10-minute cap. A same-day success, run 36167309736, took
+    # about 9m36s. Twenty minutes bounds a hang. It is not a
+    # performance target and it is not permission to let the suite
+    # grow without a new measurement.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
