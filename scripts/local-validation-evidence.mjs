@@ -51,10 +51,12 @@ import {
 } from './policy-helpers.mjs';
 import {
   composeGateTrustedMarkerLogins,
+  classifyCommentEditState,
   parseLocalValidationEvidenceComment,
   parsePaginatedGhNdjson,
   renderLocalValidationEvidenceComment,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import { resolveProviderOutageDeclaration } from './provider-outage-declaration.mjs';
 
 const EVIDENCE_MARKER_START = /^<!--\s*idd-local-validation-evidence:/i;
@@ -141,6 +143,7 @@ export function resolveLocalValidationEvidence(input) {
   const partialCoverage = [];
   const outcomeFail = [];
   const malformed = [];
+  const edited = [];
   let shapedCount = 0;
   for (const comment of input.comments ?? []) {
     const body = String(comment?.body ?? '');
@@ -159,6 +162,12 @@ export function resolveLocalValidationEvidence(input) {
     }
     if (!trustedSet.has(authorLogin)) {
       untrusted.push({ authorLogin, headSha: parsed.headSha });
+      continue;
+    }
+    // #3249: an edited (or edit-state-unresolved) evidence marker must
+    // never be counted as a pass, even from a trusted actor.
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      edited.push({ authorLogin, headSha: parsed.headSha });
       continue;
     }
     const createdAtMs = Date.parse(parsed.createdAt);
@@ -190,6 +199,7 @@ export function resolveLocalValidationEvidence(input) {
       partialCoverage,
       outcomeFail,
       malformed,
+      edited,
       outageDeclarationActive,
     };
   }
@@ -225,6 +235,9 @@ export function resolveLocalValidationEvidence(input) {
   } else if (untrusted.length > 0) {
     const latest = untrusted[untrusted.length - 1];
     reason = `${latest.authorLogin} is not a trusted marker actor`;
+  } else if (edited.length > 0) {
+    const latest = edited[edited.length - 1];
+    reason = `${latest.authorLogin}'s local validation evidence was edited after posting and is no longer trusted`;
   } else if (wrongHead.length > 0) {
     reason = `local validation evidence is bound to a different HEAD than ${prHeadSha || '(unknown)'}`;
   } else if (malformed.length > 0) {
@@ -241,6 +254,7 @@ export function resolveLocalValidationEvidence(input) {
     partialCoverage,
     outcomeFail,
     malformed,
+    edited,
     outageDeclarationActive,
   };
 }
@@ -387,7 +401,30 @@ function fetchPrComments({ owner, repo, prNumber }) {
       ],
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
-    return parsePaginatedGhNdjson(payload);
+    const comments = parsePaginatedGhNdjson(payload);
+    // #3249: REST has no edit-timestamp field -- resolve it via one
+    // follow-up GraphQL batch read keyed by each comment's own `node_id`,
+    // same template as `external-check-waiver.mts`'s `fetchPrComments`.
+    if (comments.length === 0) return comments;
+    const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((id) => id === '')) {
+      throw new Error(
+        `pull request #${prNumber} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+    return comments.map((comment, index) => {
+      const nodeId = nodeIds[index];
+      if (!lastEditedAtByNodeId.has(nodeId)) {
+        throw new Error(
+          `missing edit-state resolution for comment node ${nodeId} on PR #${prNumber}`,
+        );
+      }
+      return {
+        ...comment,
+        last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+      };
+    });
   } catch (error) {
     throw new Error(
       `could not read pull request #${prNumber} comments to resolve local validation evidence`,
