@@ -152,6 +152,7 @@ function recoveryComment(overrides: {
     author: { login },
     body: renderAdvisoryWaitRecoveryMarker(payload),
     createdAt,
+    lastEditedAt: null,
   };
 }
 

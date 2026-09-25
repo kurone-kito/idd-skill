@@ -8,12 +8,17 @@ import {
   compareClaimEventOrder,
   compareClaimIds,
   computePreMergeReadinessBlockers,
+  detectMalformedReviewWatermarkComments,
   EDITED_AFTER_DISPOSITION_HINT,
+  hasFreshDisposition,
+  hasTrustedReviewAckAfter,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
   resolveActiveClaim,
+  resolveLatestReviewWatermark,
+  summarizeAdvisoryWaitMarkers,
   summarizeDispositionEvidenceForGate,
   summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
@@ -3690,9 +3695,13 @@ test('disposition evidence hints at an edited-after-disposition notice when the 
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           // Well-formed and genuinely postdated the comment's original
-          // review-finding content at reply time.
+          // review-finding content at reply time. #3249: `lastEditedAt:
+          // null` is the minimized/genuinely-unedited shape -- without it
+          // this disposition's edit state reads as `unknown`, which no
+          // longer counts as evidence either.
           body: '**Accepted** — looks correct.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -4279,4 +4288,309 @@ test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field bef
     ),
     true,
   );
+});
+
+// #3249: reject edited review, evidence, and disposition markers. Each
+// family below proves (a) an edited trusted marker no longer satisfies the
+// reader, (b) an edit-state-unresolved (`unknown`, missing `lastEditedAt`)
+// trusted marker doesn't either -- distinct from `unedited` -- and (c) the
+// minimized shape (`lastEditedAt: null`, `updatedAt` later than `createdAt`)
+// is still honored.
+
+test('resolveLatestReviewWatermark: rejects an edited or edit-state-unresolved trusted watermark, honors the minimized shape', () => {
+  const isTrustedAuthor = () => true;
+  const watermarkBody = (claimId: string) =>
+    [
+      `<!-- review-watermark: claude-x ${claimId} ${'a'.repeat(
+        40,
+      )} none 0 none -->`,
+      '',
+      '_claude-x: review triage snapshot — IDD automation marker. Do not edit._',
+    ].join('\n');
+
+  // (a) edited
+  assert.equal(
+    resolveLatestReviewWatermark(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: watermarkBody('claim-edited'),
+          createdAt: '2026-05-10T00:00:00Z',
+          updatedAt: '2026-05-10T01:00:00Z',
+          lastEditedAt: '2026-05-10T01:00:00Z',
+        },
+      ],
+      { expectedClaimId: 'claim-edited', isTrustedAuthor },
+    ),
+    null,
+  );
+
+  // (b) unknown (no lastEditedAt at all)
+  assert.equal(
+    resolveLatestReviewWatermark(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: watermarkBody('claim-unknown'),
+          createdAt: '2026-05-10T00:00:00Z',
+        },
+      ],
+      { expectedClaimId: 'claim-unknown', isTrustedAuthor },
+    ),
+    null,
+  );
+
+  // (c) minimized shape (lastEditedAt: null, updatedAt later than createdAt)
+  const minimized = resolveLatestReviewWatermark(
+    [
+      {
+        author: { login: 'claude-x' },
+        body: watermarkBody('claim-minimized'),
+        createdAt: '2026-05-10T00:00:00Z',
+        updatedAt: '2026-05-10T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    { expectedClaimId: 'claim-minimized', isTrustedAuthor },
+  );
+  assert.ok(minimized, 'the minimized-shape watermark must still parse');
+});
+
+test('detectMalformedReviewWatermarkComments: an edited or edit-state-unresolved malformed-shaped comment no longer counts as evidence', () => {
+  const gluedNoteBody = [
+    `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(40)} none 0 none -->`,
+    '_IDD note glued directly to the leading underscore, no space before it_',
+  ].join('\n');
+
+  // (a) edited
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+          lastEditedAt: '2026-05-10T01:00:00Z',
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    false,
+  );
+
+  // (b) unknown
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    false,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+          updatedAt: '2026-05-10T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    true,
+  );
+});
+
+test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted marker no longer satisfies the gate, minimized shape still honored', () => {
+  const headSha = 'b'.repeat(40);
+  const markerBody = `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`;
+
+  // (a) edited
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    false,
+  );
+
+  // (b) unknown
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    false,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    true,
+  );
+});
+
+test('hasTrustedReviewAckAfter: an edited or edit-state-unresolved trusted review-ack no longer satisfies, minimized shape still honored', () => {
+  const commitSha = 'c'.repeat(40);
+  const reviewSubmittedAt = '2026-05-12T00:00:00Z';
+  const ackBody = `review-ack: agent-x ${commitSha} 2026-05-12T00:30:00Z`;
+
+  // (a) edited
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+          lastEditedAt: '2026-05-12T00:45:00Z',
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    false,
+  );
+
+  // (b) unknown
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    false,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    true,
+  );
+});
+
+test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply no longer counts, and advances freshness like ordinary feedback', () => {
+  const editedThread = {
+    id: 'T-edited',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+          lastEditedAt: '2026-05-12T00:02:00Z',
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(editedThread), false);
+
+  const unknownThread = {
+    id: 'T-unknown',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(unknownThread), false);
+
+  const minimizedThread = {
+    id: 'T-minimized',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+          updatedAt: '2026-05-12T00:03:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(minimizedThread), true);
 });

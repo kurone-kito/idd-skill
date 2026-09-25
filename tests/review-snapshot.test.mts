@@ -93,6 +93,7 @@ test('indexThreadsByReview honors an IDD-scoped disposition-author predicate', (
             body: '**Accepted** — looks fine',
             createdAt: '2026-05-12T00:00:01Z',
             pullRequestReview: { id: 'REVIEW-9' },
+            lastEditedAt: null,
           },
         ],
       },
@@ -214,6 +215,7 @@ test('classifyRegularBotComment honors an IDD-scoped disposition-author predicat
             author: { login: 'reviewer-a' },
             body: '**Accepted** — done',
             createdAt: '2026-05-12T00:00:02Z',
+            lastEditedAt: null,
           },
         ],
       },
@@ -247,6 +249,7 @@ test('classifyRegularBotComment IDD-scopes the explicit-disposition path', () =>
     author: { login: 'reviewer-a' },
     body: '**Accepted** — CodeRabbit summary acknowledged',
     createdAt: '2026-05-12T00:01:00Z',
+    lastEditedAt: null,
   };
   const comments = [summary, reviewerDisposition];
 

@@ -539,7 +539,15 @@ export function runImportOnlyProbe(
 /** Builds a merged-pr-feedback-sweep review-thread fixture. */
 export function buildCommentThread(
   isResolved: boolean,
-  comments: { login: string; body: string; createdAt: string; url?: string }[],
+  comments: {
+    login: string;
+    body: string;
+    createdAt: string;
+    url?: string;
+    /** #3249: defaults to `null` (genuinely unedited) -- pass an ISO
+     * timestamp to build an edited-comment fixture instead. */
+    lastEditedAt?: string | null;
+  }[],
   path = 'src/x.mts',
 ) {
   return {
@@ -551,6 +559,7 @@ export function buildCommentThread(
         url: c.url ?? 'https://example/thread',
         createdAt: c.createdAt,
         author: { login: c.login },
+        lastEditedAt: c.lastEditedAt === undefined ? null : c.lastEditedAt,
       })),
     },
   };

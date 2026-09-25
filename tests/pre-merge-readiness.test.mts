@@ -761,6 +761,7 @@ test('buildPreMergeReadinessSummary: a malformed review-watermark comment surfac
             '_IDD note glued directly to the leading underscore, no space before it_',
           ].join('\n'),
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -794,6 +795,7 @@ test('buildPreMergeReadinessSummary: a review-watermark comment with a too-short
             12,
           )} none 0 none -->`,
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -822,6 +824,7 @@ test('buildPreMergeReadinessSummary: a review-watermark comment with an invalid 
           author: { login: 'kurone-kito' },
           body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} not-a-timestamp 0 none -->`,
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -851,6 +854,7 @@ test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays mi
           author: { login: 'kurone-kito' },
           body: 'just an ordinary regular comment, not marker-shaped at all',
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -2154,11 +2158,13 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
           body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`,
           createdAt: '2026-05-12T00:00:00Z',
           author: { login: 'kurone-kito' },
+          lastEditedAt: null,
         },
         {
           body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00.100Z`,
           createdAt: '2026-05-12T00:00:00.100Z',
           author: { login: 'kurone-kito' },
+          lastEditedAt: null,
         },
       ],
       headSha,
@@ -3020,6 +3026,7 @@ test('disposition evidence clears a Copilot thread with a stamped Accepted reply
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:00:02Z',
                 body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                lastEditedAt: null,
               },
             ],
           },
@@ -3053,6 +3060,7 @@ test('disposition evidence clears a Copilot thread with a legacy trusted Accepte
                 author: { login: 'maintainer' },
                 createdAt: '2026-05-12T00:00:02Z',
                 body: '**Accepted** — extracted in abc123',
+                lastEditedAt: null,
               },
             ],
           },
@@ -3330,6 +3338,7 @@ test('disposition evidence accepts a resolved Rejection-confirmed-by-maintainer 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:05:00Z',
                 body: '**Rejection confirmed by maintainer** — out of scope; tracked separately.',
+                lastEditedAt: null,
               },
             ],
           },
@@ -4986,6 +4995,7 @@ test('disposition evidence carries a persistent non-review notice forward across
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5012,6 +5022,7 @@ test('disposition evidence carries a re-posted CodeRabbit rate-limit notice forw
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — coderabbitai[bot] (CodeRabbit) did not review HEAD abc1234 (review limit reached); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 2,
@@ -5061,6 +5072,7 @@ test('disposition evidence credits both bots when one trusted reply names both b
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
           author: { login: 'trusted-second-session' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5107,6 +5119,7 @@ test('disposition evidence carries both notices forward when one agent reply nam
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5213,6 +5226,7 @@ test('disposition evidence hints at the required phrase when a wrong-phrase **Re
           // issue's own example) but never says "did not review HEAD".
           body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5295,6 +5309,7 @@ test('a hinted missingRegularComments entry validates against pre-merge-readines
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -11113,17 +11128,27 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     body: '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->',
     author: { login: 'coderabbitai[bot]' },
   });
-  const summaryDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+  const summaryDisp = (
+    author: string,
+    at = '2026-07-01T12:00:00Z',
+    lastEditedAt: string | null = null,
+  ) => ({
     id: 10,
     createdAt: at,
     body: '**Accepted** — coderabbitai[bot] summary walkthrough; no action required',
     author: { login: author },
+    lastEditedAt,
   });
-  const noticeDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+  const noticeDisp = (
+    author: string,
+    at = '2026-07-01T12:00:00Z',
+    lastEditedAt: string | null = null,
+  ) => ({
     id: 11,
     createdAt: at,
     body: '**Rejected** — coderabbitai[bot] did not review HEAD abc (rate limited); this is not a completed review',
     author: { login: author },
+    lastEditedAt,
   });
   const human = (id: number, body: string, at: string) => ({
     id,
@@ -11171,6 +11196,25 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
   ];
   assert.equal(proceeds(twoSummaries), false);
   assert.equal(unreplied(twoSummaries), 1);
+
+  // #3249: an EDITED (or edit-state-unresolved) trusted machine disposition
+  // must never clear a sticky either -- editing it after posting could
+  // otherwise let a stale acceptance re-satisfy the gate in place.
+  const editedSummaryDisp = summaryDisp(
+    'kurone-kito',
+    '2026-07-01T12:00:00Z',
+    '2026-07-01T12:30:00Z',
+  );
+  assert.equal(proceeds([summarySticky(1), editedSummaryDisp]), false);
+  const editedNoticeDisp = noticeDisp(
+    'kurone-kito',
+    '2026-07-01T12:00:00Z',
+    '2026-07-01T12:30:00Z',
+  );
+  assert.equal(proceeds([noticeSticky(1), editedNoticeDisp]), false);
+  // The minimized shape (`lastEditedAt: null`) is still honored (control case
+  // for the two edited assertions above).
+  assert.equal(proceeds([summarySticky(1), summaryDisp('kurone-kito')]), true);
 
   // #1122 stale-summary guard: a summary sticky EDITED after the disposition
   // (its `updatedAt` post-dates the `**Accepted**`) is not cleared by that stale
@@ -11286,6 +11330,7 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     createdAt: '2026-07-01T01:00:00Z',
     body,
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   });
   const classify = (dispositionBody: string) =>
     classifyRegularBotComment(

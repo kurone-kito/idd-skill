@@ -945,6 +945,7 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
                 body: '**Rejected** — not applicable to this change.',
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },
@@ -1024,6 +1025,7 @@ test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted
                 body: `**Accepted** — extracted in abc123\n\n${stamp}`,
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },
@@ -3154,6 +3156,7 @@ for (const [label, body, expectedSuppressedCount, expectedShape] of [
             author: { login: TRUSTED },
             body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
             createdAt: ackAfterReview,
+            lastEditedAt: null,
           },
         ],
       }),
@@ -3249,6 +3252,7 @@ test('review-body shape (#3258): an on-HEAD Copilot review with an unrecognized 
           author: { login: TRUSTED },
           body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
           createdAt: ackAfterReview,
+          lastEditedAt: null,
         },
       ],
     }),
@@ -3328,7 +3332,12 @@ const ACK_BEFORE_REVIEW = OLD; // well before RECENT
  * anchors on the comment's own `createdAt`, never the embedded text). */
 function reviewAckComment(
   createdAt: string,
-  overrides: { login?: string; headSha?: string; embeddedAt?: string } = {},
+  overrides: {
+    login?: string;
+    headSha?: string;
+    embeddedAt?: string;
+    lastEditedAt?: string | null;
+  } = {},
 ) {
   const headSha = overrides.headSha ?? HEAD;
   const embeddedAt = overrides.embeddedAt ?? createdAt;
@@ -3336,6 +3345,8 @@ function reviewAckComment(
     author: { login: overrides.login ?? TRUSTED },
     body: `review-ack: ${AGENT_ID} ${headSha} ${embeddedAt}`,
     createdAt,
+    lastEditedAt:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -3365,6 +3376,7 @@ test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread
                 body: '**Rejected** — not applicable to this change.',
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },

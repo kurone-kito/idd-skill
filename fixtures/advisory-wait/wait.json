@@ -10,7 +10,8 @@
           "login": "idd-bot"
         },
         "body": "advisory-wait: idd-bot eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee 2026-05-11T17:05:00Z",
-        "createdAt": "2026-05-11T17:05:00Z"
+        "createdAt": "2026-05-11T17:05:00Z",
+        "lastEditedAt": null
       }
     ],
     "trustedMarkerLogins": [
