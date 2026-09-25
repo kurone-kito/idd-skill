@@ -992,6 +992,20 @@ test('findTrustedSuitabilityRejection: a long-named failing check adjacent to "f
   assert.equal(result?.check, 'Check 4 (Duplicate or Superseded Work)');
 });
 
+// #3249: a suitability-rejection record is one of the issue's own explicit
+// restrict-only exceptions -- ignoring an edited record would let a
+// candidate the gate already rejected re-enter Discover's candidate set, so
+// an edited trusted rejection must still be returned exactly like the
+// unedited case, keeping the candidate excluded.
+test('findTrustedSuitabilityRejection: an edited trusted rejection is still returned (restrict-only, unchanged)', () => {
+  const result = findTrustedSuitabilityRejection(
+    [makeRejectionComment({ last_edited_at: '2026-08-05T04:30:00Z' })],
+    ['kurone-kito'],
+  );
+  assert.notEqual(result, null);
+  assert.equal(result?.author, 'kurone-kito');
+});
+
 test('findTrustedSuitabilityRejection: the same rejection-shaped comment from an untrusted actor is not surfaced', () => {
   const result = findTrustedSuitabilityRejection(
     [makeRejectionComment({ user: { login: 'random-untrusted-user' } })],
