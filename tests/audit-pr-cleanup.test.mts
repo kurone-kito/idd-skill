@@ -1417,6 +1417,100 @@ test('evaluateReviewComment still skips a genuinely missing disposition (#2618)'
   );
 });
 
+// #3249: an edited (or edit-state-unresolved) trusted disposition reply
+// must no longer satisfy `hasFreshDisposition` -- proven here with NO
+// advisory-bot reply after it, so the ack-only-post-disposition carve-out
+// (which does not gate on edit state) cannot mask the regression the other
+// two `evaluateReviewComment` disposition tests above would otherwise miss.
+test('evaluateReviewComment treats an edited or edit-state-unresolved disposition as a missing disposition (#3249)', () => {
+  const comment = {
+    id: 'EE-1',
+    url: 'https://pr#EE-1',
+    author: { login: 'copilot' },
+    body: 'nit: consider extracting this into a helper',
+    createdAt: '2026-05-12T00:00:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const buildThread = (
+    id: string,
+    disposition: Record<string, unknown>,
+  ): ReviewThreadNode => ({
+    id,
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [comment, disposition],
+    },
+  });
+
+  const editedThread = buildThread('THREAD-EE-EDITED', {
+    id: 'EE-2',
+    url: 'https://pr#EE-2',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — extracted.',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+    lastEditedAt: '2026-05-12T00:02:00Z',
+  });
+  const editedReport = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+  evaluateReviewComment(
+    comment,
+    editedThread,
+    mergedPr,
+    noGatingReviews,
+    editedReport,
+  );
+  assert.equal(editedReport.candidates.length, 0);
+  assert.equal(
+    editedReport.skipped[0]?.skipReason,
+    'review thread is missing an IDD accept/reject disposition',
+  );
+
+  const unknownThread = buildThread('THREAD-EE-UNKNOWN', {
+    id: 'EE-3',
+    url: 'https://pr#EE-3',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — extracted.',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+  });
+  const unknownReport = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+  evaluateReviewComment(
+    comment,
+    unknownThread,
+    mergedPr,
+    noGatingReviews,
+    unknownReport,
+  );
+  assert.equal(unknownReport.candidates.length, 0);
+
+  // Minimized shape (`lastEditedAt: null`) is still honored (control case).
+  const uneditedThread = buildThread('THREAD-EE-UNEDITED', {
+    id: 'EE-4',
+    url: 'https://pr#EE-4',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — extracted.',
+    createdAt: '2026-05-12T00:01:00Z',
+    viewerCanMinimize: true,
+    isMinimized: false,
+    lastEditedAt: null,
+  });
+  const uneditedReport = createAuditReport({
+    trustedMarkerActors: ['idd-bot'],
+  });
+  evaluateReviewComment(
+    comment,
+    uneditedThread,
+    mergedPr,
+    noGatingReviews,
+    uneditedReport,
+  );
+  assert.equal(uneditedReport.candidates.length, 1);
+});
+
 test('evaluateReviewComment excludes the PR author from ack-only blocking feedback (#2618, Codex P2)', () => {
   // The PR author's own post-disposition reply must not count as blocking
   // feedback -- mirroring F2/F3's `prAuthorLogin` exclusion -- so a

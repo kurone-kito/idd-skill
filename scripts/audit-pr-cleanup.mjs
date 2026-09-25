@@ -82,6 +82,7 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
   viewerCanMinimize
   author{login}
   pullRequestReview{id}
+  lastEditedAt
 `;
 // #2478: a thread with more than 100 comments needs its own continuation
 // query -- `node(id)` re-entry is the only way to page an inner connection
@@ -1182,6 +1183,7 @@ function fetchIssueComments(owner, repo, number, options = {}) {
             minimizedReason
             viewerCanMinimize
             author{login}
+            lastEditedAt
           }
           pageInfo{hasNextPage endCursor}
         }
