@@ -8,9 +8,11 @@ import {
   parseArgs,
   renderText,
   resolveLocalValidationEvidence,
+  trustedLoginsForLocalValidationEvidence,
 } from '../src/scripts/local-validation-evidence.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
+  composeGateTrustedMarkerLogins,
   parseLocalValidationEvidenceComment,
   renderLocalValidationEvidenceComment,
 } from '../src/scripts/protocol-helpers.mts';
@@ -680,4 +682,60 @@ test('hideSupersededLocalValidationEvidenceMarkers never calls runMinimizeFn whe
     }),
   );
   assert.equal(called, false);
+});
+
+test('an evidence marker from a repository owner absent from trustedMarkerActors and not the viewer is not trusted', () => {
+  const logins = trustedLoginsForLocalValidationEvidence({
+    viewerLogin: 'someone-else',
+    config: { trustedMarkerActors: ['listed-bot'] },
+  });
+  const resolved = resolveLocalValidationEvidence({
+    comments: [
+      evidenceComment({ actor: 'repo-owner', authorLogin: 'repo-owner' }),
+    ],
+    prHeadSha: HEAD,
+    requiredCheckNames: REQUIRED_CHECKS,
+    trustedMarkerLogins: logins,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(resolved.present, false);
+  assert.equal(resolved.untrusted.length, 1);
+  assert.equal(resolved.untrusted[0]?.authorLogin, 'repo-owner');
+});
+
+test('the same evidence marker is trusted once the repository owner is listed', () => {
+  const logins = trustedLoginsForLocalValidationEvidence({
+    viewerLogin: 'someone-else',
+    config: { trustedMarkerActors: ['repo-owner'] },
+  });
+  const resolved = resolveLocalValidationEvidence({
+    comments: [
+      evidenceComment({ actor: 'repo-owner', authorLogin: 'repo-owner' }),
+    ],
+    prHeadSha: HEAD,
+    requiredCheckNames: REQUIRED_CHECKS,
+    trustedMarkerLogins: logins,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(resolved.present, true);
+});
+
+test('local-validation evidence trust matches the gate trusted-marker composition', () => {
+  const config = { trustedMarkerActors: ['listed-bot'] };
+  assert.deepEqual(
+    trustedLoginsForLocalValidationEvidence({
+      viewerLogin: 'viewer',
+      config,
+      collaboratorMarkerLogins: ['collab-writer'],
+    }),
+    composeGateTrustedMarkerLogins({
+      viewerLogin: 'viewer',
+      config,
+      collaboratorMarkerLogins: ['collab-writer'],
+    }),
+  );
 });

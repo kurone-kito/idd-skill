@@ -21,9 +21,9 @@
 
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mts';
 import {
   type AuthorityEvidence,
-  buildTrustedMarkerLogins,
   matchCheckSelector,
   normalizeAuthorityEvidence,
   resolveActorLogin,
@@ -35,11 +35,14 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mts';
+import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
+  resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
 import {
+  composeGateTrustedMarkerLogins,
   type ParsedProviderOutageAdvancement,
   type ParsedProviderOutageDeclaration,
   parsePaginatedGhNdjson,
@@ -368,6 +371,34 @@ export function evaluateProviderOutageRelief(input: {
  * sweep re-requests review per recorded HEAD, not merely per pull request
  * number.
  */
+/**
+ * Trusted logins for `idd-provider-outage-advanced` markers. Same
+ * composition the merge gate uses. No implicit repository owner.
+ * Config for a repository-scoped read comes from the live default
+ * branch, not the local worktree.
+ */
+export function trustedLoginsForProviderOutageAdvancements({
+  viewerLogin,
+  config,
+  flagValue = '',
+  envValue = '',
+  collaboratorMarkerLogins = [],
+}: {
+  viewerLogin: string;
+  config: { trustedMarkerActors?: unknown } | null;
+  flagValue?: string | string[];
+  envValue?: string | string[];
+  collaboratorMarkerLogins?: readonly unknown[];
+}): string[] {
+  return composeGateTrustedMarkerLogins({
+    viewerLogin,
+    flagValue,
+    envValue,
+    config,
+    collaboratorMarkerLogins,
+  });
+}
+
 export function listProviderOutageAdvancements(
   comments: CommentLike[] | null | undefined,
   options: { trustedMarkerLogins?: unknown[] } = {},
@@ -635,6 +666,9 @@ export async function runProviderOutageDeclaration(
     isTTY?: boolean;
     prompt?: PromptFn;
     comments?: CommentLike[];
+    viewerLogin?: string;
+    /** Trusted-ref config. Omit to load it from the live default branch. */
+    trustConfig?: { trustedMarkerActors?: unknown } | null;
     authorityOf?: (actorLogin: string) => AuthorityEvidence;
     postComment?: typeof postComment;
   } = {},
@@ -699,15 +733,39 @@ export async function runProviderOutageDeclaration(
     const comments =
       options.comments ??
       fetchIssueComments({ owner, repo: name, issueNumber: targetIssue });
-    const trustedMarkerLogins = buildTrustedMarkerLogins({
-      owner,
-      repo: name,
-      rawConfig,
-      viewerLogin: '',
-      issueComments: comments,
+    const viewerLogin = (
+      options.viewerLogin ??
+      String(safeGhText(['api', 'user', '--jq', '.login']))
+    )
+      .trim()
+      .toLowerCase();
+    const trustConfig =
+      options.trustConfig !== undefined
+        ? options.trustConfig
+        : loadTrustedActorConfig({ owner, repo: name, baseRefName: '' });
+    const trustedMarkerLogins = trustedLoginsForProviderOutageAdvancements({
+      viewerLogin,
+      config: trustConfig,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
+        trustConfig,
+        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+      )
+        ? resolveTrustedCollaboratorMarkerLogins(owner, name, comments)
+        : [],
     });
+    // An empty set used to mean "do not filter" inside
+    // listProviderOutageAdvancements (`trustedSet.size > 0`). The old
+    // builder always inserted the repository owner, so list-advanced
+    // never hit that branch. The shared gate builder does not, and an
+    // empty result would list every author's advancement marker.
+    if (trustedMarkerLogins.length === 0) {
+      throw new Error(
+        'list-advanced refuses an empty trusted-marker set; an empty set would list every author',
+      );
+    }
     const result = listProviderOutageAdvancements(comments, {
-      trustedMarkerLogins: [...trustedMarkerLogins],
+      trustedMarkerLogins,
     });
     render(result, args.format);
     return { exitCode: 0, result };
