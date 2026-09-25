@@ -77,6 +77,26 @@ The secondary critique pass must be agent-neutral:
   equivalent review primitive, it may use that
 - otherwise, the agent performs an explicit self-critique pass locally
 
+When that primitive is a subagent, prefer a non-context-inheriting
+mechanism whenever the calling tool offers one. The same preference
+covers any other subagent dispatch this skill makes for verification
+or research that must not mutate GitHub state. A context-inheriting
+mechanism is a fallback only, used when no non-context-inheriting
+option exists. Claude Code's `fork` subagent type is the concrete
+example this preference routes around: it inherits the calling
+session's conversation, so a prose-only restriction in the dispatch
+prompt is not a reliable boundary against the delegate completing the
+calling session's broader task. Three in-session incidents motivate
+the preference. On 2026-09-17 a worker's research-only verification
+subagent published a roadmap plus 4 child issues and posted journal
+markers. The same day, a top-level orchestrator's read-only
+verification subagent ran a gist-triage pass, publishing a roadmap
+plus 4 child issues and rewriting a personal gist. On 2026-09-24/25 a
+read-only verification subagent, sent to fact-check two drafted issue
+bodies, executed the full Stage 1 publish protocol instead. Each
+dispatch prompt said not to mutate anything, and each delegate was a
+context-inheriting subagent type.
+
 Clarification must converge. The skill should:
 
 - use a bounded number of clarification rounds, with a default maximum
