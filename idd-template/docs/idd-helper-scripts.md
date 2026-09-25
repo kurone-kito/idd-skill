@@ -91,6 +91,116 @@ posting), which does not affect `status`; `resolve-review-thread.mjs`
 returns `mode` (`dry-run`/`apply`) alongside its own separate
 `status?` (`applied`/`failed`).
 
+## Error envelope (kurone-kito/idd-skill#3342)
+
+A migrated helper's failure output has no shared result contract by
+default: a bad flag, a `gh` transport outage, and a genuine gate
+verdict all surface as nothing more than "non-zero exit", which a
+polling caller cannot mechanically tell apart. Two field incidents
+motivate this: a polling loop re-hit the same uncaught
+missing-argument exception for roughly 90 minutes (issue #2707), and
+a transient `gh: HTTP 503` produced output shaped like a gate failure
+(issue #2806). The error envelope is an additive, opt-in fix for
+this, layered on top of every migrated helper's existing stdout,
+stderr text, and exit codes -- none of which change when the
+envelope is left off.
+
+### Opt-in variable
+
+Set `IDD_HELPER_ERROR_ENVELOPE=1` (an environment variable, not a
+flag, so an older or not-yet-migrated helper ignores it instead of
+crashing with `unknown argument: --envelope`). With the variable
+unset, a migrated helper's stdout, stderr, and exit code are
+byte-identical to before migration -- this variable changes nothing
+by default. With it set, a migrated helper appends exactly one line
+to stderr on a non-zero exit: a single-line JSON object, always the
+**last** stderr line, including when the failure is an uncaught
+exception. In that uncaught-exception case specifically, the crash
+text preceding the envelope line is close to, but not literally
+identical to, Node's own default rendering: it prints the error's
+stack (name, message, and every frame), but not Node's additional
+decoration around it (a source-line preview, caret, and version
+footer) -- appending genuinely after that decoration is not possible,
+so this is a deliberate, disclosed trade-off (see
+`RunHelperCliIo.takeOverUncaughtCrash`'s doc comment in
+`src/scripts/helper-cli-runner.mts` for why). A caller parsing the
+envelope line itself is unaffected either way.
+
+### Shape
+
+```json
+{"iddHelperError":{"version":1,"helper":"<name>","kind":"<kind>","exitCode":<n>,"message":"<text>","httpStatus":<n|null>}}
+```
+
+`kind` is one of:
+
+- `usage` -- invalid arguments, before any network call.
+- `not-found` -- a `gh` failure whose derived status is 404.
+- `transport` -- any other `gh` failure: 5xx, 429, 401, 403
+  (including a secondary rate limit), 422 and other 4xx, a timeout or
+  killed child, a failed spawn, or a failure with no derivable status
+  (`httpStatus: null`). A caller that must tell an auth/permission
+  failure from an outage reads `httpStatus`.
+- `gate` -- the helper completed and its verdict is the non-zero
+  exit.
+- `internal` -- an unexpected exception none of the above classifies,
+  so the envelope is always present when opted in.
+
+### Wrapper pass-through
+
+Every packaged command runs through `runHelper` (`src/bin/run-helper.mts`
+/ `bin/run-helper.mjs`), which buffers a failing child's stderr briefly
+and, for a shaped CLI parse error, replaces the captured stderr with
+just the clean one-line message plus a `--help` usage line. That
+replacement re-appends the envelope line afterward when the child wrote
+one, so it stays the last line rather than being dropped along with the
+rest of the raw stderr the shaping discards.
+
+### Shared runner
+
+`src/scripts/helper-cli-runner.mts` (`scripts/helper-cli-runner.mjs`)
+exports `runHelperCli(helperName, main)`. `main` returns an exit code
+(`0` for success, any other value classified `gate`) or a
+pre-classified outcome object, or throws. The runner classifies a
+thrown `CliUsageError` (or a plain `Error` tagged via
+`markCliUsageError`) as `usage`; a `gh-exec.mts`-tagged error as
+`not-found` or `transport` (via `deriveGhHttpStatus`); and anything
+else as `internal`. It keeps each helper's existing exit code for
+every case. `classifyHelperError(error)` is also exported directly for
+a helper whose entrypoint already catches errors to render its own
+compatibility output (see `pre-merge-readiness.mjs` below) --
+classifying the error itself and reporting the result as an outcome
+object keeps that existing rendering unchanged while still giving the
+runner a real `kind` instead of the generic `gate` a returned non-zero
+exit code would otherwise get.
+
+### Migrated helpers (first batch)
+
+Only the six helpers below are migrated onto `runHelperCli` so far;
+every other packaged command is unaffected by the variable (it still
+crashes with a raw, unshaped stack trace on failure, exactly as
+before this track). Three follow-up tracks in the parent roadmap
+migrate the rest. For all six, `exitCode` is `0` on success (including
+`--help`, which exits `0` before `runHelperCli` ever sees an outcome)
+and `1` on any failure; none of the six currently returns a non-zero
+exit code as its own verdict, so none of them produces `kind: "gate"`
+today.
+
+| Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
+| -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, or an unknown flag                        | a `gh` failure resolving claim state                                                                                                     | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                        | a `gh` failure resolving comment/marker history                                                                                          | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                           | a `gh` failure resolving CI state                                                                                                        | an unexpected exception |
+
+`tests/helper-cli-contract.test.mts` (source repo only) enumerates
+every `bin/idd-*.mjs` and checks this table mechanically against a
+committed fixture (`tests/fixtures/helper-cli-contract.json`), so it
+cannot silently drift out of sync with which helpers are actually
+migrated.
+
 ## Contents API permission-masking probe (kurone-kito/idd-skill#2716)
 
 `loadTrustedIddConfig` (`src/scripts/idd-config.mts`) fetches
