@@ -244,6 +244,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       "Compare a live issue body sha256 against that same issue's own trusted mode=acquire authoring-owner marker digest (review-fix-loop-cutoff provenance check).",
   },
   {
+    id: 'authoring-set-members',
+    scriptName: 'idd:authoring-set-members',
+    binName: 'idd-authoring-set-members',
+    entryPath: 'scripts/authoring-set-members.mjs',
+    vendoredCommand: 'node scripts/authoring-set-members.mjs',
+    description:
+      'List issues whose unedited trusted authoring-owner markers carry one exact set, and exit non-zero when that listing does not finish.',
+  },
+  {
     id: 'branch-conflict-state',
     scriptName: 'idd:branch-conflict-state',
     binName: 'idd-branch-conflict-state',

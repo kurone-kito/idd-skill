@@ -79,6 +79,9 @@
         }
       }
     },
+    "idd-authoring-set-members.mjs": {
+      "migrated": false
+    },
     "idd-branch-conflict-state.mjs": {
       "migrated": true,
       "runs": {
