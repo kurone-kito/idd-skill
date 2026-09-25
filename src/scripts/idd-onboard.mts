@@ -33,7 +33,7 @@
 //
 // --verify: mechanical pass/fail for a target tree after --import and
 // --substitute have run, replacing a manual walkthrough of
-// `idd-template/ONBOARDING.md` Step 6 with five check groups: manifest
+// `idd-template/ONBOARDING.md` Step 6 with six check groups: manifest
 // completeness (reuses --import's own manifest resolution — no second file
 // list), placeholder residue (reuses --substitute's scanner — no second
 // scan), a helper-load check (#3238: for --profile vendored-node only,
@@ -41,12 +41,14 @@
 // any that fail to load), a stale-import signal (re-runs idd-doctor's
 // content-based drift detector against the target's imported files
 // instead of forking its logic, the #1208 shared-module convention
-// `check-pnpm-boundary.mts` already uses), and a package-pin advisory
+// `check-pnpm-boundary.mts` already uses), a package-pin advisory
 // (#2987: warns, but never blocks, when the target's effective
 // `helperRuntime.profile` is `ephemeral-npx`/`package-manager` with no
 // `helperRuntime.packageSpec` configured, so helper commands silently
 // resolve against the mutable default archive URL instead of an audited
-// pin).
+// pin), and a held-schema drift advisory (#3215: warns, but never
+// blocks, when --hold leaves a src/scripts module behind while a schema
+// or fixture it textually references would be updated).
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -2440,6 +2442,266 @@ export function checkPackagePinWarning(
   return { profile, applicable, packageSpecConfigured, warning };
 }
 
+// ---------------------------------------------------------------------------
+// Wave 3 --verify: held schema/fixture drift advisory (#3215)
+// ---------------------------------------------------------------------------
+
+/**
+ * This repository's schema and fixture paths, as they appear in the
+ * vendored helper bundle (`schemas/*.json`, and JSON under `fixtures/`).
+ * A manifest entry outside both shapes is never a drift candidate.
+ */
+const SCHEMA_MANIFEST_PATH = /^schemas\/[^/]+\.json$/;
+const FIXTURE_MANIFEST_PATH = /^fixtures\/.+\.json$/;
+
+/** One held module that still names a schema or fixture `--import` would update. */
+export interface HeldSchemaDriftFinding {
+  /** Manifest target path of the schema or fixture whose content differs. */
+  schemaOrFixturePath: string;
+  /** Held src/scripts module (.mts) that textually references it. */
+  heldModulePath: string;
+}
+
+/**
+ * Non-blocking held-schema drift advisory (#3215). `findings` is empty
+ * when nothing qualifies; `warning` is the same list as one sentence
+ * per finding, or `null` when the list is empty — the same
+ * `warning !== null` gate `PackagePinWarningResult` uses.
+ */
+export interface HeldSchemaDriftResult {
+  findings: HeldSchemaDriftFinding[];
+  warning: string | null;
+}
+
+function isSchemaOrFixtureManifestPath(targetPath: string): boolean {
+  return (
+    SCHEMA_MANIFEST_PATH.test(targetPath) ||
+    FIXTURE_MANIFEST_PATH.test(targetPath)
+  );
+}
+
+/**
+ * True when `--import` would copy this manifest entry because the two
+ * trees disagree. A missing source file is not drift (manifest
+ * completeness already reports it). A target path that exists but is
+ * not a regular file is a non-file collision, not a content change.
+ */
+function manifestContentDiffers(
+  sourceRoot: string,
+  targetRoot: string,
+  file: ManifestFile,
+): boolean {
+  if (!fileExists(sourceRoot, file.sourcePath)) {
+    return false;
+  }
+  // A symlinked ancestor is not a content change. Import classifies it
+  // as blocked-non-file and never reads through it; fileExists only
+  // lstats the leaf, so without this guard readFileSync would follow
+  // the link outside the root.
+  if (
+    hasNonDirectoryAncestor(sourceRoot, file.sourcePath) ||
+    hasNonDirectoryAncestor(targetRoot, file.targetPath)
+  ) {
+    return false;
+  }
+  if (!fileExists(targetRoot, file.targetPath)) {
+    return !pathExists(targetRoot, file.targetPath);
+  }
+  return !readFileSync(join(sourceRoot, file.sourcePath)).equals(
+    readFileSync(join(targetRoot, file.targetPath)),
+  );
+}
+
+/**
+ * Regular `.mts` files under `targetRoot/src/scripts`. A symlinked
+ * ancestor (`src` or `src/scripts`) is refused the same way
+ * `hasNonDirectoryAncestor` refuses an import path: `lstat` of the
+ * joined leaf would otherwise follow that ancestor out of the target.
+ */
+function listTargetScriptModules(
+  targetRoot: string,
+): { path: string; text: string }[] {
+  if (hasNonDirectoryAncestor(targetRoot, 'src/scripts/module.mts')) {
+    return [];
+  }
+  const scriptsRoot = join(targetRoot, 'src', 'scripts');
+  let rootStat: ReturnType<typeof lstatSync>;
+  try {
+    rootStat = lstatSync(scriptsRoot);
+  } catch {
+    return [];
+  }
+  if (!rootStat.isDirectory()) {
+    return [];
+  }
+  const modules: { path: string; text: string }[] = [];
+  const walk = (dir: string): void => {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort(
+      (left, right) => {
+        if (left.name < right.name) {
+          return -1;
+        }
+        return left.name > right.name ? 1 : 0;
+      },
+    );
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      const absolute = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SCAN_EXCLUDED_DIRS.has(entry.name)) {
+          walk(absolute);
+        }
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.mts')) {
+        continue;
+      }
+      modules.push({
+        path: relative(targetRoot, absolute).split('\\').join('/'),
+        text: readFileSync(absolute, 'utf8'),
+      });
+    }
+  };
+  walk(scriptsRoot);
+  return modules;
+}
+
+/**
+ * Held manifest entries the src/scripts walk does not see. A
+ * vendored-node import's helpers land as `scripts/*.mjs`, and `--hold`
+ * names those target paths. Source-tree `.mts` modules stay covered by
+ * `listTargetScriptModules`.
+ */
+function isHeldDistributedScript(targetPath: string): boolean {
+  return /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath);
+}
+
+function readHeldModule(
+  targetRoot: string,
+  targetPath: string,
+): { path: string; text: string } | null {
+  if (!isHeldDistributedScript(targetPath)) {
+    return null;
+  }
+  if (hasNonDirectoryAncestor(targetRoot, targetPath)) {
+    return null;
+  }
+  if (!fileExists(targetRoot, targetPath)) {
+    return null;
+  }
+  return {
+    path: targetPath,
+    text: readFileSync(join(targetRoot, targetPath), 'utf8'),
+  };
+}
+
+function moduleReferencesManifestPath(
+  text: string,
+  targetPath: string,
+): boolean {
+  const basename = targetPath.slice(targetPath.lastIndexOf('/') + 1);
+  return text.includes(targetPath) || text.includes(basename);
+}
+
+function formatHeldSchemaDriftWarning(
+  findings: readonly HeldSchemaDriftFinding[],
+): string | null {
+  if (findings.length === 0) {
+    return null;
+  }
+  return findings
+    .map(
+      (finding) =>
+        `${finding.schemaOrFixturePath} changed while held module ${finding.heldModulePath} still references it`,
+    )
+    .join('; ');
+}
+
+/**
+ * Report a partial import that updates a schema or fixture while a
+ * module that names that file stays on `--hold` (#3215). The walk
+ * covers `src/scripts` `.mts` files. A held `scripts/*.mjs` entry — the
+ * path a vendored-node import actually copies — is read directly.
+ *
+ * The scan is a static text match against the entry's manifest path or
+ * its basename — the same grep-level proxy the Groom hearing adopted.
+ * It cannot see a semantic dependency that no source text names. An
+ * empty `hold` list short-circuits to no findings, so a verify that
+ * never passes `--hold` keeps the previous cost and result.
+ *
+ * An unknown `--hold` path throws the same usage error
+ * `buildImportPlan` throws, including the skip when manifest resolution
+ * already reported `missingSource`.
+ */
+export function checkHeldSchemaDrift(
+  sourceRoot: string,
+  targetRoot: string,
+  { profile, hold = [] }: { profile?: string; hold?: readonly string[] } = {},
+): HeldSchemaDriftResult {
+  if (hold.length === 0) {
+    return { findings: [], warning: null };
+  }
+  const resolved = resolveImportFiles(sourceRoot, profile);
+  const holdSet = new Set(hold);
+  if (resolved.missingSource.length === 0) {
+    const knownTargets = new Set(resolved.files.map((file) => file.targetPath));
+    const unknown = [...holdSet].filter((target) => !knownTargets.has(target));
+    if (unknown.length > 0) {
+      throw new Error(
+        `unknown --hold path(s), not present in the resolved manifest for this --profile: ${unknown.join(', ')}`,
+      );
+    }
+  }
+  const changed = resolved.files.filter(
+    (file) =>
+      !holdSet.has(file.targetPath) &&
+      isSchemaOrFixtureManifestPath(file.targetPath) &&
+      manifestContentDiffers(sourceRoot, targetRoot, file),
+  );
+  if (changed.length === 0) {
+    return { findings: [], warning: null };
+  }
+  const findings: HeldSchemaDriftFinding[] = [];
+  const modules = listTargetScriptModules(targetRoot);
+  const seen = new Set(modules.map((module) => module.path));
+  for (const heldPath of holdSet) {
+    if (seen.has(heldPath)) {
+      continue;
+    }
+    const heldModule = readHeldModule(targetRoot, heldPath);
+    if (heldModule !== null) {
+      modules.push(heldModule);
+      seen.add(heldPath);
+    }
+  }
+  for (const module of modules) {
+    if (!holdSet.has(module.path)) {
+      continue;
+    }
+    for (const file of changed) {
+      if (!moduleReferencesManifestPath(module.text, file.targetPath)) {
+        continue;
+      }
+      findings.push({
+        schemaOrFixturePath: file.targetPath,
+        heldModulePath: module.path,
+      });
+    }
+  }
+  findings.sort((left, right) => {
+    if (left.schemaOrFixturePath !== right.schemaOrFixturePath) {
+      return left.schemaOrFixturePath < right.schemaOrFixturePath ? -1 : 1;
+    }
+    if (left.heldModulePath === right.heldModulePath) {
+      return 0;
+    }
+    return left.heldModulePath < right.heldModulePath ? -1 : 1;
+  });
+  return { findings, warning: formatHeldSchemaDriftWarning(findings) };
+}
+
 /** The combined wave-3 verify verdict for one target tree. */
 export interface VerifyResult {
   manifestCompleteness: ManifestCompletenessResult;
@@ -2449,22 +2711,28 @@ export interface VerifyResult {
   staleImportSignal: StaleImportSignalResult;
   /** Non-blocking package-pin advisory (#2987); never contributes to `blocking`. */
   packagePinWarning: PackagePinWarningResult;
+  /** Non-blocking held schema/fixture drift advisory (#3215); never contributes to `blocking`. */
+  heldSchemaDrift: HeldSchemaDriftResult;
   /** True when a blocking finding exists (manifest gap, placeholder residue, or a helper-load failure). */
   blocking: boolean;
 }
 
 /**
- * Run all five wave-3 check groups against one target tree. Neither the
- * stale-import signal nor the package-pin advisory ever contributes to
- * `blocking` (see `checkStaleImportSignal`'s and
- * `checkPackagePinWarning`'s doc comments); a manifest gap, placeholder
- * residue, or a helper-load failure can fail verify, matching the exit
- * contract in `runVerifyCli`.
+ * Run all six wave-3 check groups against one target tree. The
+ * stale-import signal, the package-pin advisory, and the held-schema
+ * drift advisory never contribute to `blocking` (see
+ * `checkStaleImportSignal`, `checkPackagePinWarning`, and
+ * `checkHeldSchemaDrift`); a manifest gap, placeholder residue, or a
+ * helper-load failure can fail verify, matching the exit contract in
+ * `runVerifyCli`. `hold` is the same repeatable `--hold` target-path
+ * list `--import` accepts; an empty list leaves the drift advisory
+ * with no findings.
  */
 export function runVerify(
   sourceRoot: string,
   targetRoot: string,
   profile?: string,
+  hold: readonly string[] = [],
 ): VerifyResult {
   const manifestCompleteness = checkManifestCompleteness(
     sourceRoot,
@@ -2488,6 +2756,10 @@ export function runVerify(
   const helperLoad = checkHelperLoad(targetRoot, profile);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
   const packagePinWarning = checkPackagePinWarning(targetRoot);
+  const heldSchemaDrift = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    profile,
+    hold,
+  });
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
     manifestCompleteness.missingTarget.length > 0 ||
@@ -2499,6 +2771,7 @@ export function runVerify(
     helperLoad,
     staleImportSignal,
     packagePinWarning,
+    heldSchemaDrift,
     blocking,
   };
 }
@@ -4078,11 +4351,10 @@ function recordPolicyOnlyFlagsPresent(args: ParsedArgs): string[] {
 
 /**
  * Flags --verify does not accept: every substitute-only override flag (verify
- * never substitutes), plus `--force`, `--dry-run` (verify never writes, so
+ * never substitutes), plus `--force` and `--dry-run` (verify never writes, so
  * "allow overwriting" and "print the plan without writing" are both
- * meaningless for it), and `--hold` (verify checks manifest completeness
- * against the full resolved file set; it never builds an import plan that a
- * hold could exclude an entry from).
+ * meaningless for it). `--hold` is accepted: it does not exclude files from
+ * the completeness check, and it feeds the held-schema drift advisory.
  */
 function verifyForeignFlagsPresent(args: ParsedArgs): string[] {
   const present = substituteOnlyFlagsPresent(args);
@@ -4091,9 +4363,6 @@ function verifyForeignFlagsPresent(args: ParsedArgs): string[] {
   }
   if (args.dryRun) {
     present.push('--dry-run');
-  }
-  if (args.hold.length > 0) {
-    present.push('--hold');
   }
   return present;
 }
@@ -4430,7 +4699,7 @@ function runVerifyCli(args: ParsedArgs): void {
     '--target',
     args.allowRoots,
   );
-  const result = runVerify(sourceDir, targetDir, args.profile);
+  const result = runVerify(sourceDir, targetDir, args.profile, args.hold);
   const verdict = {
     protocolVersion: '1',
     mode: 'verify',
@@ -4442,14 +4711,16 @@ function runVerifyCli(args: ParsedArgs): void {
     helperLoad: result.helperLoad,
     staleImportSignal: result.staleImportSignal,
     packagePinWarning: result.packagePinWarning,
+    heldSchemaDrift: result.heldSchemaDrift,
     blocking: result.blocking,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   // Blocking findings (manifest gap, placeholder residue, or a helper-load
   // failure) signal via exit 1, matching --substitute / --import's
-  // contract; the stale-import signal and the package-pin advisory are
-  // both informational only and never flip this exit code (see
-  // checkStaleImportSignal / checkPackagePinWarning / runVerify).
+  // contract; the stale-import signal, the package-pin advisory, and the
+  // held-schema drift advisory are informational only and never flip this
+  // exit code (see checkStaleImportSignal / checkPackagePinWarning /
+  // checkHeldSchemaDrift / runVerify).
   process.exit(result.blocking ? 1 : 0);
 }
 
@@ -4552,21 +4823,28 @@ nothing in that case); 2 usage or configuration error.
 
 --verify (wave 3): mechanical pass/fail for a target tree after --import and
 --substitute have run, in place of a manual walkthrough of
-idd-template/ONBOARDING.md Step 6. Reports five check groups:
+idd-template/ONBOARDING.md Step 6. Reports six check groups:
 manifestCompleteness (every file --import would copy for --source /
 --profile exists under --target, reusing that same manifest resolution —
-missing files are blocking), placeholderResidue (leftover {{...}} tokens via
---substitute's own scanner — a remaining onboarding placeholder is blocking
-residue, any other {{...}}-shaped token stays informational), helperLoad
-(--profile vendored-node only: spawns every cataloged helper under
---target's own tree with --help and reports any that fail to load — a
-failure is blocking; not applicable, and spawns nothing, for any other
-profile), staleImportSignal (idd-doctor's content-based stale-import
-detector re-run against the target's imported files — informational only,
-never blocking), and packagePinWarning (advisory only, never blocking:
-flags an ephemeral-npx/package-manager helperRuntime.profile with no
-configured helperRuntime.packageSpec, so helper commands silently resolve
-against the mutable default archive URL instead of an audited pin).
+missing files are blocking; --hold does not shrink this set),
+placeholderResidue (leftover {{...}} tokens via --substitute's own scanner
+— a remaining onboarding placeholder is blocking residue, any other
+{{...}}-shaped token stays informational), helperLoad (--profile
+vendored-node only: spawns every cataloged helper under --target's own
+tree with --help and reports any that fail to load — a failure is
+blocking; not applicable, and spawns nothing, for any other profile),
+staleImportSignal (idd-doctor's content-based stale-import detector re-run
+against the target's imported files — informational only, never blocking),
+packagePinWarning (advisory only, never blocking: flags an
+ephemeral-npx/package-manager helperRuntime.profile with no configured
+helperRuntime.packageSpec, so helper commands silently resolve against the
+mutable default archive URL instead of an audited pin), and
+heldSchemaDrift (advisory only, never blocking: for each schema
+(schemas/*.json) or fixture (fixtures/**/*.json) manifest entry that
+--hold does not exclude and whose content differs between --source and
+--target, reports each held src/scripts .mts module, and each held
+scripts/*.mjs module a vendored import copies, that textually
+references that entry's path or basename).
 
 Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest
 gap, placeholder residue, or a helper-load failure); 2 usage or
@@ -4584,6 +4862,13 @@ configuration error.
                                       broad value (e.g. a home directory)
                                       substantially widens it instead.
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
+  --hold <target-path>               name a manifest entry left at its
+                                      current target content (repeatable).
+                                      Completeness still requires the file;
+                                      the held-schema drift advisory uses
+                                      the list. A value that matches no
+                                      resolved manifest path is a usage
+                                      error (exit 2).
   --help, -h                         show this help
 
 --hear (#2281): the operator-facing hearing CLI over the catalog and
