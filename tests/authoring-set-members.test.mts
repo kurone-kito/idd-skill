@@ -162,6 +162,21 @@ test('an edited trusted marker for a different set fails closed', () => {
   assert.deepEqual(result.issues, []);
 });
 
+test('an unedited unparseable trusted marker fails closed', () => {
+  const rewritten = marker(3469).replace('<!--', '');
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [comment(3468, marker(3468)), comment(3469, rewritten)],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.reason, 'unparseable trusted authoring-owner marker');
+});
+
 test('an unfinished enumeration is not a sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,

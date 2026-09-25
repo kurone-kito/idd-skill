@@ -259,10 +259,10 @@ export function evaluateAuthoringSetMembers(input: {
     if (!trusted.has(login)) {
       continue;
     }
-    if (
-      looksLikeOwnerMarker(comment.body, input.markerPrefix) &&
-      comment.lastEditedAt !== null
-    ) {
+    if (!looksLikeOwnerMarker(comment.body, input.markerPrefix)) {
+      continue;
+    }
+    if (comment.lastEditedAt !== null) {
       return {
         complete: false,
         soleMember: false,
@@ -271,7 +271,15 @@ export function evaluateAuthoringSetMembers(input: {
       };
     }
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
-    if (!parsed || parsed.set !== input.set) {
+    if (!parsed) {
+      return {
+        complete: false,
+        soleMember: false,
+        issues: [],
+        reason: 'unparseable trusted authoring-owner marker',
+      };
+    }
+    if (parsed.set !== input.set) {
       continue;
     }
     issues.add(comment.issueNumber);
