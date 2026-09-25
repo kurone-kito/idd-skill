@@ -1733,6 +1733,80 @@ test('getReviewThreadCommentUserContentEdits: an incomplete history reports tota
   assert.equal(result[0].edits.length, 1);
 });
 
+test('getReviewThreadCommentUserContentEdits: throws when a revision is missing the deletedAt key entirely (Copilot review, PR #3430)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_missing_key',
+                userContentEdits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body',
+                      editor: { login: 'coderabbitai' },
+                      // deletedAt key entirely absent.
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getReviewThreadCommentUserContentEdits(['PRRC_missing_key']),
+    /malformed userContentEdits entry/,
+  );
+});
+
+test('getReviewThreadCommentUserContentEdits: throws when deletedAt is present but neither null nor a string (Copilot review, PR #3430, round 2)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'PRRC_wrong_type',
+                userContentEdits: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      editedAt: '2026-09-20T07:17:38Z',
+                      diff: 'body',
+                      editor: { login: 'coderabbitai' },
+                      // A malformed/partial response could plausibly
+                      // return something other than null/string here --
+                      // a number, an object, or a boolean -- for a
+                      // present key. This must never be silently
+                      // coerced to the same `null` a genuine "not
+                      // deleted" answer produces.
+                      deletedAt: 12345,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getReviewThreadCommentUserContentEdits(['PRRC_wrong_type']),
+    /non-string, non-null deletedAt/,
+  );
+});
+
 test('fetchReviewThreadCommentUserContentEdits: chunks a 101-id batch into two requests of 100 and 1', () => {
   const nodeIds = Array.from({ length: 101 }, (_, i) => `PRRC_${i}`);
   const calls: string[][] = [];

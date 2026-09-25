@@ -268,6 +268,24 @@ export function fetchReviewThreadCommentUserContentEdits(ghTextFn, nodeIds) {
           );
         }
         const typedEdit = raw;
+        // Copilot review, PR #3430 (round 2): the key-presence check above
+        // only rules out an ENTIRELY missing `deletedAt` field -- it says
+        // nothing about the VALUE once the key exists. GraphQL's `DateTime`
+        // type is either `null` or a string for a well-formed response, so
+        // any OTHER type (a number, object, boolean, or an explicit
+        // `undefined` value on an otherwise-present key) is just as
+        // malformed as a missing key, and mapping it to the same `null` a
+        // genuine "not deleted" answer produces would be exactly the bug
+        // this whole check exists to close. Reject it explicitly rather
+        // than silently coercing.
+        if (
+          typedEdit.deletedAt !== null &&
+          typeof typedEdit.deletedAt !== 'string'
+        ) {
+          throw new Error(
+            `fetchReviewThreadCommentUserContentEdits: node ${expectedId} has a non-string, non-null deletedAt value`,
+          );
+        }
         return {
           editedAt:
             typeof typedEdit.editedAt === 'string' ? typedEdit.editedAt : null,
@@ -276,10 +294,7 @@ export function fetchReviewThreadCommentUserContentEdits(ghTextFn, nodeIds) {
             typedEdit.editor?.login == null
               ? null
               : String(typedEdit.editor.login),
-          deletedAt:
-            typeof typedEdit.deletedAt === 'string'
-              ? typedEdit.deletedAt
-              : null,
+          deletedAt: typedEdit.deletedAt,
         };
       });
       result.push({ commentId: expectedId, totalCount, edits });
