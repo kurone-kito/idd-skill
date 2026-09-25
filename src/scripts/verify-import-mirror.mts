@@ -589,6 +589,83 @@ function normalizeProseSegment(content: string): string {
  * extending to fully general nested-zone tracking is left as a follow-up
  * rather than folded into this change's scope.
  */
+/**
+ * One line's resolved list-item-opener shape for
+ * {@link normalizeParagraphPreservingListStructure}'s own boundary
+ * decision: the raw indent and marker (kept verbatim in the emitted
+ * prefix), the item's own first-line content, and the content-indent
+ * used both to decide whether a LATER line still falls inside this
+ * item's zone and to size the prefix's own separating padding.
+ */
+interface ListItemOpener {
+  markerIndent: string;
+  marker: string;
+  content: string;
+  contentIndent: number;
+}
+
+/**
+ * A marker with NOTHING after it at all -- not even the separating
+ * whitespace `parseListItemMatch`'s own `LIST_ITEM_PATTERN` requires.
+ * CommonMark still treats this as a valid, empty list item (Copilot
+ * review, PR #3417): upstream `- parent\n-\n` (a genuine second, empty
+ * sibling item) and its flattened `- parent -\n` (one item whose own
+ * text ends in a literal `-`) are structurally different documents --
+ * verified via `gh api /markdown` -- but `parseListItemMatch` alone
+ * cannot tell them apart, since it requires at least one separating
+ * character after the marker before content (even empty content).
+ * Matched here with a narrow, LOCAL pattern rather than widening
+ * `parseListItemMatch`'s own shared regex, which many other consumers
+ * throughout `markdown-code.mts` also rely on in its exact current
+ * shape -- keeping this bounded fix's blast radius limited to this one
+ * call site.
+ */
+const BARE_LIST_MARKER_PATTERN = /^([ \t]{0,3})([-+*]|\d{1,9}[.)])$/u;
+
+/**
+ * Resolves `line`'s list-item-opener shape, if any, via
+ * {@link parseListItemMatch} (the common case) first and
+ * {@link BARE_LIST_MARKER_PATTERN} as a fallback for the empty-marker
+ * gap above -- both paths report the same {@link ListItemOpener} shape
+ * so the caller's boundary logic never needs to special-case either one.
+ * `contentIndent` is `markdown-code.mts`'s own
+ * {@link parseListItemContainer} result for the common case (an empty
+ * first line uses CommonMark's own special-cased width -- marker width
+ * plus one column -- the same fallback `parseListItemContainer` itself
+ * is guaranteed never to need here, since it only returns `null` when
+ * `parseListItemMatch` also returns `null`, which cannot happen for a
+ * `line` that already matched above).
+ */
+function detectListItemOpener(line: string): ListItemOpener | null {
+  const listItem = parseListItemMatch(line);
+  if (listItem !== null) {
+    const markerEndColumns =
+      indentationColumns(listItem.markerIndent) + listItem.marker.length;
+    const contentIndent = parseListItemContainer(line) ?? markerEndColumns + 1;
+    return {
+      markerIndent: listItem.markerIndent,
+      marker: listItem.marker,
+      content: listItem.content,
+      contentIndent,
+    };
+  }
+  const bareMatch = BARE_LIST_MARKER_PATTERN.exec(line);
+  if (bareMatch === null) {
+    return null;
+  }
+  const markerIndent = bareMatch[1] ?? '';
+  const marker = bareMatch[2] ?? '';
+  if (indentationColumns(markerIndent) >= 4) {
+    return null;
+  }
+  return {
+    markerIndent,
+    marker,
+    content: '',
+    contentIndent: indentationColumns(markerIndent) + marker.length + 1,
+  };
+}
+
 function normalizeParagraphPreservingListStructure(paragraph: string): string {
   const lines = paragraph.split('\n');
   const chunks: string[] = [];
@@ -611,7 +688,7 @@ function normalizeParagraphPreservingListStructure(paragraph: string): string {
   };
 
   for (const line of lines) {
-    const listItem = parseListItemMatch(line);
+    const listItem = detectListItemOpener(line);
     const exitsCurrentListZone =
       listItem !== null &&
       currentChunkContentIndent !== null &&
@@ -623,18 +700,11 @@ function normalizeParagraphPreservingListStructure(paragraph: string): string {
         isInterruptingListMarker(listItem.marker));
     if (isGenuineListBoundary && listItem !== null) {
       flushCurrentChunk();
-      const contentIndent = parseListItemContainer(line);
       const markerEndColumns =
         indentationColumns(listItem.markerIndent) + listItem.marker.length;
-      // parseListItemContainer re-derives from the same parseListItemMatch
-      // shape that already matched `line` above (listItem !== null), so it
-      // is guaranteed non-null here too -- guarded defensively (falling
-      // back to the single-space width) rather than asserted, in case that
-      // invariant ever changes.
-      const paddingColumns =
-        contentIndent === null ? 1 : contentIndent - markerEndColumns;
+      const paddingColumns = listItem.contentIndent - markerEndColumns;
       currentPrefix = `${listItem.markerIndent}${listItem.marker}${' '.repeat(paddingColumns)}`;
-      currentChunkContentIndent = contentIndent ?? markerEndColumns + 1;
+      currentChunkContentIndent = listItem.contentIndent;
       currentContentLines = [listItem.content];
       hasCurrentChunk = true;
     } else if (hasCurrentChunk) {

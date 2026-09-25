@@ -712,6 +712,37 @@ test('rule 3 fail (CodeRabbit review, PR #3417): a marker-spacing change that fl
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('normalizeProseWhitespace recognizes a bare marker with nothing after it as a genuine empty list item (Copilot review, PR #3417)', () => {
+  // Regression (false PASS, the dangerous direction): parseListItemMatch
+  // requires at least one separating character after the marker, so a
+  // bare "-" with NOTHING after it at all (not even a trailing space)
+  // never matched -- an earlier version therefore folded that line into
+  // the preceding chunk as ordinary continuation text. CommonMark still
+  // treats a bare marker as a valid, empty list item: "- parent\n-\n"
+  // (a genuine second, empty sibling item) and its flattened
+  // "- parent -\n" (one item whose own text ends in a literal "-") are
+  // structurally different documents -- verified via `gh api /markdown`
+  // (two list items vs one) -- so these must not normalize the same way.
+  const twoItems = '- parent\n-\n';
+  const oneItem = '- parent -\n';
+  assert.notEqual(
+    normalizeProseWhitespace(twoItems),
+    normalizeProseWhitespace(oneItem),
+  );
+});
+
+test('rule 3 fail (Copilot review, PR #3417): a bare empty list-item marker folded into the preceding text is a genuine mismatch, not tolerated', () => {
+  const upstream = Buffer.from('- parent\n-\n');
+  const target = Buffer.from('- parent -\n');
+  const result = classifyFileContent({
+    path: 'docs/readme.md',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 test('normalizeProseWhitespace distinguishes a nested child item from a sibling item at the same wording', () => {
   // "- child" indented under "- parent" (a genuine nested item) versus
   // "- child" at column 0 (a sibling of "- parent", not nested under it)
