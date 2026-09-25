@@ -198,11 +198,12 @@ HEAD-preserving command and is safe there). If a local branch named
   worktree (HEAD-preserving):
   `git branch -f {branch} origin/{branch}`, then create the sibling
   worktree: `git worktree add <sibling-worktree-path> {branch}`.
+  Then go to Step 3.
 
 If no local branch named `{branch}` exists, create from remote (still
 from the primary worktree, HEAD-preserving): `git branch {branch}
 origin/{branch}`, then create the sibling worktree:
-`git worktree add <sibling-worktree-path> {branch}`.
+`git worktree add <sibling-worktree-path> {branch}`. Then go to Step 3.
 
 `<sibling-worktree-path>` follows the B1 naming convention (sibling
 of the repository root, with `/` in branch name replaced by `-`).
