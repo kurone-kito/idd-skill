@@ -4079,6 +4079,10 @@ export function isAdvisoryNonReviewNotice(body: unknown): boolean {
   );
 }
 
+// See "Bot-comment wording matchers need a real-sample evidence bar" in
+// docs/idd-design-rationale.md for why every wording-based classifier
+// below is registered in one place and pinned against a real corpus.
+
 /** A single bot-comment fixture's own login + body -- {@link
  * BOT_WORDING_CLASSIFIERS}' uniform input shape, normalizing each
  * classifier's own distinct call signature (most take a bare body string;
