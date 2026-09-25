@@ -31,8 +31,9 @@ distributed template. It keeps the current behavior:
 
 - E14 can request a Copilot re-review for the current PR head.
 - F2 and F3 can wait or hold based on Copilot advisory state.
-- Copilot and CI advisory comments are handled as PATH B feedback during
-  review triage.
+- Copilot's inline review-thread comments are PATH A; Copilot's other
+  comments and CI advisory comments are handled as PATH B feedback
+  during review triage.
 
 Use this profile when GitHub Copilot pull request review is available
 and the operator accepts it as an advisory signal rather than a required
@@ -295,8 +296,12 @@ warning.
 - **Advisory-bot threads still need an IDD disposition.** A Copilot
   or configured-advisory-bot thread still requires a stamped or
   legacy trusted IDD disposition, or resolution for
-  `advisory-convergence` Clause 2. An unmarked human `ok` does not
-  clear those threads.
+  `advisory-convergence` Clause 2. The stamp only counts when its
+  author is also a trusted marker actor or IDD agent login -- it is
+  utterance identity among already-trusted accounts, never an
+  independent trust signal, so a stamped reply from any other account
+  is ordinary external feedback, not a disposition. An unmarked human
+  `ok` does not clear those threads either.
 - **Required-check trigger.** The required
   `idd-advisory-convergence` job is **not** created by an unmarked
   human `pull_request_review_comment`. IDD-originated comments

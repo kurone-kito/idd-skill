@@ -1,0 +1,28 @@
+{
+  "id": "2734",
+  "category": "merged",
+  "note": "Merged/ready real issue fixing suitability-triage.mts's OWN Check 3 false-positive on a skip-condition's prose; today's A4.5 trust_safety and actionability checks false-positive on this issue's own self-referential discussion of that same check's trigger vocabulary -- a textbook case of the exact lexical-gate boundary-gap class this corpus exists to catch (known gap, not a snapshot-tool bug).",
+  "title": "fix(suitability-triage): Check 3 false-positives on a new check's own skip-condition prose",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`suitability-triage.mjs`'s Check 3 (Trust/Safety) false-positived on\nissue #2697 (\"feat(audit-docs): detect a bundle `limitBytes` raise that\nviolates the near-ceiling exception\"), classifying it `invalid` with\nevidence: `Policy-override directive detected: \"Skip the check\".\nUntrusted policy-manipulation instructions cannot be processed.`\n\nThe triggering text is item 4 of the issue's own \"Proposed change\"\nnumbered list, describing the *new* audit-docs check function's own\nskip condition, grammatically parallel to item 3's \"fail the check with\na message\":\n\n> 4. Skip the check cleanly (not a failure) for a brand-new bundle with\n>    no base-ref entry, and for a bundle whose `limitBytes` did not\n>    change or only decreased.\n\nThis is ordinary engineering prose specifying when a to-be-implemented\nlint/audit check should no-op — not an instruction addressed to the\ntriaging agent. `POLICY_OVERRIDE_PATTERN`\n(`src/scripts/suitability-triage.mts`) matches a verb\n(`skip|bypass|ignore|override|disable|turn off|suppress`) within 60\ncharacters of a noun (`repo|repository|policy|workflow|idd|process|\ncheck|gate|requirement`), with negation and heading-boundary guards, but\nno exception for a feature-spec sentence describing a *new* check's own\nconditional skip logic. \"Skip the check cleanly for X\" is a completely\nordinary way to spec any lint/audit/CI check, and will recur every time\nsomeone proposes a new check with a skip/exemption condition (see also\n#2729, a different but same-shaped \"helper's mechanical heuristic\ndoesn't recognize a legitimate, common phrasing\" gap).\n\nResolved for #2697 itself via a documented, evidence-backed manual\nCheck 3 override (confirmed no genuine trust/safety signal in the\nissue body: the flagged phrase describes new code, and the issue's\nthree HTML-comment markers are all recognized, legitimate IDD authoring\nmarkers with no URLs, credentials, or forged operational markers) — see\nthat issue's claim/triage trail. This issue tracks the mechanical false\npositive itself.\n\n## Suggested direction\n\nAdd an exception to `findPolicyOverrideMatch` (or its noun/verb\nclassification helpers) for a \"skip/fail the check\" pair appearing as\nparallel items in a numbered/bulleted list that is itself specifying a\nnew check's own pass/fail/skip conditions — or, if that shape is too\nnarrow to detect reliably, consider narrowing the bare `check` noun\nmatch to require closer additional context (e.g. an adjacent\nfirst/second-person imperative, or proximity to \"you\"/\"your\"/\"this\nsession\") rather than firing on any freestanding \"skip/fail/disable ...\ncheck\" pairing regardless of grammatical subject.\n\n## Evidence\n\n- `src/scripts/suitability-triage.mts` — `POLICY_OVERRIDE_PATTERN`,\n  `findPolicyOverrideMatch`.\n- Observed on issue #2697's own body via\n  `node scripts/suitability-triage.mjs --issue 2697 --verbose`.\n",
+  "bodySha256": "949dabe3834aaf6399b9b6c9eb02317db3763ee7dcb15744f5c0992b7c422032",
+  "fetchedAt": "2026-09-24T04:42:45.844Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "fail",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

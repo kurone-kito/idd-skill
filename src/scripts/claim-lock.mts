@@ -1494,13 +1494,15 @@ the worktree -- no separate release step is needed.
 round-trip -- this is the fast path used before every mutation. A different
 --claim-id is always reported as a collision, regardless of how old the
 existing lock is: this helper never judges staleness locally. Pass
---takeover only after independently re-verifying live GitHub claim state
-(e.g. via \`resume-claim-routing.mjs --fresh-claim-gate\` reporting
-\`claimable\`, \`stale-reclaimable\`, or \`already-claimed\` with a
-\`winning_claim_id\` that matches a \`claim-id\` the caller has already
-independently verified as its own) to override a collision; \`holder\`
-in the JSON output reports the previous occupant on both a plain collision
-and an authorized takeover.
+--takeover only after independently re-verifying live GitHub claim state:
+only an \`already-claimed\` verdict from
+\`resume-claim-routing.mjs --fresh-claim-gate\`, whose \`winning_claim_id\`
+matches a \`claim-id\` the caller has already independently verified as
+its own and whose top-level \`reason\` is not a \`released-claim-*\`
+reason, authorizes it to override a collision -- every other verdict or
+reason means the claim was lost instead. \`holder\` in the JSON output
+reports the previous occupant on both a plain collision and an
+authorized takeover.
 
 --check is read-only: it reports the current lock state without creating,
 mutating, or deleting anything. \`malformed: true\` means a lock file

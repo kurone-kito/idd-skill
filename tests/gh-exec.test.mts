@@ -25,6 +25,20 @@ import {
 } from '../src/scripts/gh-exec.mts';
 import { stubExecutable } from './test-utils.mts';
 
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and the other migrated-domain test files.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
+
 /**
  * Save/restore `GH_HOST` and `GITHUB_SERVER_URL` around a test body (the
  * `stubGh`/`process.env.PATH` pattern already used below) so a test that
@@ -50,6 +64,48 @@ function withGhHostEnv(
   }
   try {
     run();
+  } finally {
+    if (originalGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = originalGhHost;
+    }
+    if (originalServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = originalServerUrl;
+    }
+  }
+}
+
+/**
+ * Async sibling of {@link withGhHostEnv} for an `await`ing test body
+ * (`ghTextAsync`) -- same save/clear/restore contract for both `GH_HOST`
+ * and `GITHUB_SERVER_URL`. Without this, a table-driven or `ghTextAsync`
+ * test that only ever assigns `process.env.GITHUB_SERVER_URL` directly
+ * leaves an inherited `GH_HOST` in place, which makes
+ * `resolveGhApiHostname` intentionally return no override (`gh` already
+ * honors `GH_HOST` itself) -- silently testing nothing on a machine or
+ * runner where `GH_HOST` happens to be set (Copilot review, #3336).
+ */
+async function withGhHostEnvAsync(
+  overrides: { GH_HOST?: string; GITHUB_SERVER_URL?: string },
+  run: () => Promise<void>,
+): Promise<void> {
+  const originalGhHost = process.env.GH_HOST;
+  const originalServerUrl = process.env.GITHUB_SERVER_URL;
+  if (overrides.GH_HOST === undefined) {
+    delete process.env.GH_HOST;
+  } else {
+    process.env.GH_HOST = overrides.GH_HOST;
+  }
+  if (overrides.GITHUB_SERVER_URL === undefined) {
+    delete process.env.GITHUB_SERVER_URL;
+  } else {
+    process.env.GITHUB_SERVER_URL = overrides.GITHUB_SERVER_URL;
+  }
+  try {
+    await run();
   } finally {
     if (originalGhHost === undefined) {
       delete process.env.GH_HOST;
@@ -255,6 +311,74 @@ process.stdout.write('{}');
   try {
     withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
       ghText([
+        'api',
+        'graphql',
+        '--hostname',
+        'ghes.example.com',
+        '-f',
+        'query=query { viewer { login } }',
+      ]);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextUnbounded adds --hostname immediately after the api subcommand on a GHES GITHUB_SERVER_URL, and never on github.com (#3336)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghTextUnbounded(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      ghTextUnbounded(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+    });
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextUnbounded never adds a second --hostname when the caller already spliced its own resolved value (#3336)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://ghes.example.com' }, () => {
+      ghTextUnbounded([
         'api',
         'graphql',
         '--hostname',
@@ -727,6 +851,86 @@ process.stdout.write('{}');
   }
 });
 
+// #3336: table-driven guard covering every exported `gh api` transport
+// wrapper in this module under a GHES `GITHUB_SERVER_URL`, so a future
+// wrapper that skips host resolution fails this test instead of silently
+// querying github.com on a GHES Actions runner. Each per-wrapper test
+// above already pins the exact insertion position; this one only checks
+// presence, uniformly, across all six.
+test('every exported gh api wrapper resolves the GHES host (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const wrappers: { name: string; stdout: string; invoke: () => unknown }[] = [
+    {
+      name: 'ghText',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghText(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghTextAsync',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghTextAsync(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghTextUnbounded',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghTextUnbounded(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghApiJson',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghApiJson('repos/o/r/issues/1'),
+    },
+    {
+      name: 'ghApiJsonWithHeaders',
+      stdout: `process.stdout.write('HTTP/2.0 200 OK\\n\\n{}');`,
+      invoke: () => ghApiJsonWithHeaders('repos/o/r/issues/1'),
+    },
+    {
+      name: 'ghGraphql',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghGraphql('query { viewer { login } }', {}),
+    },
+  ];
+  try {
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        for (const wrapper of wrappers) {
+          const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+${wrapper.stdout}
+`);
+          try {
+            await wrapper.invoke();
+            const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+            // Exact-index adjacency, not a substring/membership check on
+            // the captured argv (CodeQL js/incomplete-url-substring-
+            // sanitization false positive on
+            // `argv.includes('ghes.example.com')`, #3336 review): confirms
+            // --hostname is immediately followed by exactly the resolved
+            // host token, not merely that both strings appear somewhere in
+            // argv independently.
+            const hostnameIndex = argv.indexOf('--hostname');
+            assert.ok(
+              hostnameIndex !== -1 &&
+                argv[hostnameIndex + 1] === 'ghes.example.com',
+              `${wrapper.name} did not include a resolved --hostname: ${JSON.stringify(
+                argv,
+              )}`,
+            );
+          } finally {
+            restore();
+          }
+        }
+      },
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson (paginated) parses NDJSON output, flattening array lines', () => {
   const restore = stubGh(`
 process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ id: 3 })].join('\\n'));
@@ -875,6 +1079,83 @@ process.stdout.write('  hello async  \\n');
       'view',
       '--json',
       'name',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextAsync adds --hostname immediately after the api subcommand on a GHES GITHUB_SERVER_URL, and never on github.com (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+      },
+    );
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      '--hostname',
+      'ghes.example.com',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://github.com' },
+      async () => {
+        await ghTextAsync(['api', 'repos/o/r/issues/1', '--jq', '.title']);
+      },
+    );
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'repos/o/r/issues/1',
+      '--jq',
+      '.title',
+    ]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghTextAsync never adds a second --hostname when the caller already spliced its own resolved value (#3336)', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('{}');
+`);
+  try {
+    await withGhHostEnvAsync(
+      { GITHUB_SERVER_URL: 'https://ghes.example.com' },
+      async () => {
+        await ghTextAsync([
+          'api',
+          'graphql',
+          '--hostname',
+          'ghes.example.com',
+          '-f',
+          'query=query { viewer { login } }',
+        ]);
+      },
+    );
+    assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+      'api',
+      'graphql',
+      '--hostname',
+      'ghes.example.com',
+      '-f',
+      'query=query { viewer { login } }',
     ]);
   } finally {
     restore();
@@ -1204,6 +1485,34 @@ test('viewerLoginFailureIsGraphqlEligible treats unclassified errors as fail-clo
     viewerLoginFailureIsGraphqlEligible(new Error('something went wrong')),
     false,
   );
+});
+
+// #3335: before deriveGhHttpStatus recognized gh's bare `HTTP NNN` form
+// (no JSON body, no `(HTTP NNN)` suffix -- e.g. an HTML 5xx page), this
+// shape derived a null status and fell through to the fail-closed
+// unclassified-error branch instead of the 5xx GraphQL fallback below.
+// No production-code change was needed here: viewerLoginFailureIsGraphqlEligible
+// already delegates its status check to deriveGhHttpStatus.
+test('resolveViewerLogin falls back to GraphQL on a bare "gh: HTTP 502" REST failure', () => {
+  const restError = Object.assign(new Error('HTTP 502'), {
+    stderr: ghErrorFixtureStderr('bare502'),
+  });
+  assert.equal(viewerLoginFailureIsGraphqlEligible(restError), true);
+  let graphqlCalls = 0;
+  const login = resolveViewerLogin(
+    {},
+    {
+      rest: () => {
+        throw restError;
+      },
+      graphql: () => {
+        graphqlCalls += 1;
+        return 'graphql-user';
+      },
+    },
+  );
+  assert.equal(login, 'graphql-user');
+  assert.equal(graphqlCalls, 1);
 });
 
 test('resolveViewerLogin does not fall back on an unclassified REST error', () => {

@@ -1,10 +1,59 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   createGithubProviderAdapter,
+  fetchLastEditedAtByNodeId,
   type GithubProviderAdapterDeps,
 } from '../src/scripts/provider-adapter-github.mts';
+
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and discover-readiness-check.test.mts.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixture(id: string): Error & { stderr?: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture, `missing gh-errors.json fixture: ${id}`);
+  // No `.status`/`.code` field: a real gh child-process error always exits
+  // `1` regardless of HTTP status, so a test-only `.status` would pin a
+  // classification path gh never actually exercises (#3335).
+  return Object.assign(new Error(`gh failed (fixture: ${id})`), {
+    stderr: fixture.stderr,
+  });
+}
+
+/**
+ * A fixture error's `.message` never modeled a real `ghTextAsync`
+ * rejection: Node's `execFile`/`util.promisify` synthesizes `.message` as
+ * `Command failed: <full command line>\n<stderr>`, which always embeds
+ * the invoked `repos/{owner}/{repo}/issues/{n}` endpoint regardless of
+ * what `wrapTraversalGhFailure` itself constructs. A test built only from
+ * `ghErrorFixture` cannot catch a wording-classification leak through
+ * `.message` (Copilot review, #3335) -- this constructs the real shape
+ * instead.
+ */
+function nodeExecFileShapedGhError(
+  owner: string,
+  repo: string,
+  number: number,
+  fixtureId: string,
+): Error & { stderr: string; stdout: string } {
+  const fixture = GH_ERROR_FIXTURES.cases[fixtureId];
+  assert.ok(
+    fixture?.stderr,
+    `missing gh-errors.json fixture stderr: ${fixtureId}`,
+  );
+  const cmd = `gh api repos/${owner}/${repo}/issues/${number} --jq .`;
+  return Object.assign(new Error(`Command failed: ${cmd}\n${fixture.stderr}`), {
+    stderr: fixture.stderr,
+    stdout: '',
+  });
+}
 
 function fakeDeps(
   overrides: Partial<GithubProviderAdapterDeps>,
@@ -837,6 +886,182 @@ test('getConnectedPullRequestEventsPage throws when the connection itself is nul
   );
 });
 
+// #3276: a genuine `gh` process failure (not merely a malformed/null JSON
+// body) during the connected-PR lookup must also propagate, not read as an
+// empty event list. resume-claim-routing.mts's `fetchOpenLinkedPrReferences`
+// is this method's sole caller and relies on that propagation to
+// distinguish "lookup failed" (PR state unknown) from "no connected PR"
+// (a genuinely empty, successful result) -- see `getConnectedPullRequestEventsSingle`'s
+// doc comment on this file's own `getConnectedPullRequestEventsSingle`
+// implementation for the fail-open shape this method deliberately does not
+// share.
+test('getConnectedPullRequestEventsPage propagates a gh process failure instead of swallowing it as an empty result', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('gh: simulated process failure');
+      },
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /simulated process failure/,
+  );
+});
+
+// #3276 (Copilot review, PR #3386): a present `timelineItems` connection
+// with a missing `nodes` or `pageInfo` field is malformed GraphQL data, not
+// a legitimately empty terminal page. Before the fix, each field defaulted
+// independently (`[]`, `false`, `null`), so this shape read as a successful
+// empty page instead of throwing -- exactly the ambiguity
+// fetchOpenLinkedPrReferences (resume-claim-routing.mts) relies on this
+// method NOT having.
+test('getConnectedPullRequestEventsPage throws when the connection is present but nodes is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+test('getConnectedPullRequestEventsPage throws when the connection is present but pageInfo is missing', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+// #3276 round 2 (Copilot review, PR #3386): `pageInfo` being present is not
+// enough -- a `pageInfo: {}` shape (missing `hasNextPage`) previously passed
+// the bare-truthiness check above and `hasNextPage ?? false` silently read
+// unknown pagination state as a terminal page. Validate `hasNextPage` as an
+// actual boolean.
+test('getConnectedPullRequestEventsPage throws when pageInfo is present but hasNextPage is not a boolean', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [{ __typename: 'ConnectedEvent' }],
+                  pageInfo: { endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /malformed \(missing nodes\/pageInfo\/hasNextPage\)/,
+  );
+});
+
+// A non-string endCursor (e.g. a stray number) must not be trusted verbatim
+// as the pagination cursor either -- normalize to null rather than passing
+// through a malformed value.
+test('getConnectedPullRequestEventsPage normalizes a non-string endCursor to null', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: 12345 },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.deepEqual(port.getConnectedPullRequestEventsPage(1048, null), {
+    events: [],
+    hasNextPage: false,
+    endCursor: null,
+  });
+});
+
+// #3276 round 3 (Copilot review, PR #3386, High severity): a top-level
+// GraphQL `errors` entry can accompany a partial `data` object that still
+// looks like a valid connection -- this method must check `errors` first,
+// the same choke point every other GraphQL-backed method in this file uses
+// (`assertNoGraphqlErrors`), so a failed lookup never falls through to the
+// connection validation as though it had succeeded.
+test('getConnectedPullRequestEventsPage throws on a top-level GraphQL errors entry even with a valid-looking connection', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+          errors: [{ message: 'simulated partial-failure GraphQL error' }],
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getConnectedPullRequestEventsPage(1048, null),
+    /getConnectedPullRequestEventsPage failed: simulated partial-failure GraphQL error/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // getWorkItemForTraversalAsync (#2266): the bounded-retry (#1394) and
 // no-retry-on-404/inaccessible classification discover-roadmap-graph.mts's
@@ -926,10 +1151,7 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 404') as Error & { stderr?: string };
-        error.stderr =
-          'HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)';
-        throw error;
+        throw ghErrorFixture('notFoundWithUrl404');
       },
     }),
   );
@@ -938,7 +1160,12 @@ test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, with
   assert.equal(calls, 1);
 });
 
-test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, without retry', async () => {
+// #3335: previously set `error.status = 403` directly, a shape a real gh
+// child-process error never produces (its exit status is always `1`
+// regardless of HTTP status) -- the dead exit-code-based branch this
+// test exercised passed only because of that fabricated shape. Rewritten
+// onto a realistic stderr-text fixture instead.
+test('getWorkItemForTraversalAsync resolves inaccessible on a SAML-enforcement 403 immediately, without retry', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
     'o',
@@ -946,15 +1173,86 @@ test('getWorkItemForTraversalAsync resolves inaccessible on a 403 immediately, w
     fakeDeps({
       ghTextAsync: async () => {
         calls += 1;
-        const error = new Error('HTTP 403') as Error & { status?: number };
-        error.status = 403;
-        throw error;
+        throw ghErrorFixture('samlEnforcement403');
       },
     }),
   );
   const result = await port.getWorkItemForTraversalAsync(900);
   assert.deepEqual(result, { outcome: 'inaccessible' });
   assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync resolves inaccessible on a deleted-issue 410 immediately, without retry', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('deletedIssue410');
+      },
+    }),
+  );
+  const result = await port.getWorkItemForTraversalAsync(900);
+  assert.deepEqual(result, { outcome: 'inaccessible' });
+  assert.equal(calls, 1);
+});
+
+// A 403 secondary-rate-limit must keep retrying then rethrowing, never
+// downgrade to 'inaccessible' -- the shared classifier's wording check
+// deliberately excludes it (#3335).
+test('getWorkItemForTraversalAsync rethrows a secondary-rate-limit 403 after exhausting retries', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw ghErrorFixture('secondaryRateLimit403');
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
+});
+
+// Copilot + CodeRabbit review, #3335: a repo/owner name containing
+// "visibility" must never leak into the 403 wording classification via
+// either wrapTraversalGhFailure's own wrapped error text or Node's own
+// `execFile`/`ghTextAsync` `.message` synthesis (`Command failed: <full
+// command line>\n<stderr>`, which embeds the endpoint regardless of what
+// this file constructs) -- this still rethrows after bounded retries,
+// exactly like the non-"visibility"-named case above, never downgrading
+// to 'inaccessible'. Uses the realistic Node execFile error shape (not
+// the plain `ghErrorFixture`, whose synthetic `.message` never modeled
+// the endpoint at all and so could not have caught this).
+test('getWorkItemForTraversalAsync does not let an owner/repo name containing "visibility" leak into 403 wording classification', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'visibility-org',
+    'visibility-repo',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw nodeExecFileShapedGhError(
+          'visibility-org',
+          'visibility-repo',
+          900,
+          'secondaryRateLimit403',
+        );
+      },
+    }),
+  );
+  await assert.rejects(
+    () => port.getWorkItemForTraversalAsync(900),
+    /secondary rate limit/,
+  );
+  assert.equal(calls, 3);
 });
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1384,242 @@ test('listWorkItemCommentsWithRetryAsync retries once past a transient page-fetc
     },
   ]);
   assert.equal(calls, 2);
+});
+
+// ---------------------------------------------------------------------------
+// listWorkItemComments / listWorkItemCommentsWithRetryAsync:
+// includeEditState opt-in (#3246) -- lastEditedAt's three-state contract.
+// ---------------------------------------------------------------------------
+
+function graphqlNodesLastEditedAtBody(
+  entries: { id: string; lastEditedAt: unknown }[],
+): string {
+  return JSON.stringify({ data: { nodes: entries } });
+}
+
+test('listWorkItemComments: a call that does not ask for edit state leaves lastEditedAt undefined, even when updated_at differs from created_at (#3246)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          // Simulates the GitHub minimizeComment shape (#3173): updated_at
+          // moved, but that must never be read as evidence of an edit --
+          // and this REST-only read never even resolves lastEditedAt.
+          updated_at: '2026-01-05T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () => {
+        throw new Error('ghText must not be called without includeEditState');
+      },
+    }),
+  );
+  const result = port.listWorkItemComments(900);
+  assert.equal(result.length, 1);
+  assert.equal(Object.hasOwn(result[0], 'lastEditedAt'), false);
+  assert.equal(result[0].updatedAt, '2026-01-05T00:00:00Z');
+});
+
+test('listWorkItemComments: includeEditState maps a stubbed GraphQL null lastEditedAt to null', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () =>
+        graphqlNodesLastEditedAtBody([{ id: 'IC_1', lastEditedAt: null }]),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0].lastEditedAt, null);
+});
+
+test('listWorkItemComments: includeEditState maps a stubbed GraphQL timestamp lastEditedAt to that timestamp', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:05:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () =>
+        graphqlNodesLastEditedAtBody([
+          { id: 'IC_1', lastEditedAt: '2026-01-01T00:05:00Z' },
+        ]),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0].lastEditedAt, '2026-01-01T00:05:00Z');
+});
+
+test('listWorkItemComments: includeEditState throws when the GraphQL batch read fails', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+      ghText: () => {
+        throw new Error('gh api graphql failed');
+      },
+    }),
+  );
+  assert.throws(() =>
+    port.listWorkItemComments(900, { includeEditState: true }),
+  );
+});
+
+test('listWorkItemComments: includeEditState throws when a comment is missing node_id', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 1,
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+        },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    port.listWorkItemComments(900, { includeEditState: true }),
+  );
+});
+
+test('listWorkItemCommentsWithRetryAsync: a call that does not ask for edit state leaves last_edited_at absent (#3246)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify([
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]),
+    }),
+  );
+  const result = (await port.listWorkItemCommentsWithRetryAsync(900)) as Record<
+    string,
+    unknown
+  >[];
+  assert.equal(Object.hasOwn(result[0], 'last_edited_at'), false);
+});
+
+test('listWorkItemCommentsWithRetryAsync: includeEditState merges last_edited_at from the GraphQL batch read', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        if (args[1] === 'graphql') {
+          return graphqlNodesLastEditedAtBody([
+            { id: 'IC_1', lastEditedAt: null },
+          ]);
+        }
+        return JSON.stringify([
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]);
+      },
+    }),
+  );
+  const result = (await port.listWorkItemCommentsWithRetryAsync(900, {
+    includeEditState: true,
+  })) as Record<string, unknown>[];
+  assert.equal(result[0].last_edited_at, null);
+});
+
+test('fetchLastEditedAtByNodeId: chunks a 101-id batch into two requests of 100 and 1 (C1 review)', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `IC_${i}`);
+  const calls: string[][] = [];
+  const ghTextStub = (args: string[]): string => {
+    calls.push(args);
+    const idArgs = args.filter((arg) => arg.startsWith('ids[]='));
+    return graphqlNodesLastEditedAtBody(
+      idArgs.map((arg) => ({
+        id: arg.slice('ids[]='.length),
+        lastEditedAt: null,
+      })),
+    );
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    nodeIds,
+  );
+  assert.equal(calls.length, 2, 'expected exactly two chunked requests');
+  assert.equal(
+    calls[0].filter((arg) => arg.startsWith('ids[]=')).length,
+    100,
+    'first request carries 100 ids',
+  );
+  assert.equal(
+    calls[1].filter((arg) => arg.startsWith('ids[]=')).length,
+    1,
+    'second request carries the remaining 1 id',
+  );
+  assert.equal(result.size, 101);
+  for (const id of nodeIds) {
+    assert.equal(
+      result.get(id),
+      null,
+      `missing/incorrect resolution for ${id}`,
+    );
+  }
+});
+
+test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
+  const ghTextStub = (): string => {
+    throw new Error('ghText must not be called for an empty id list');
+  };
+  const result = fetchLastEditedAtByNodeId(
+    ghTextStub as unknown as typeof import('../src/scripts/gh-exec.mts').ghText,
+    [],
+  );
+  assert.equal(result.size, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -1269,6 +1803,9 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
                       url: 'https://example.invalid/c/1',
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
+                      // #3246: proves the field is selected and mapped,
+                      // not merely tolerated when absent.
+                      lastEditedAt: '2026-01-01T00:05:00Z',
                       author: { login: 'reviewer' },
                       pullRequestReview: { id: 'PRR_1' },
                     },
@@ -1307,6 +1844,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
           updatedAt: '2026-01-01T00:00:00Z',
           authorLogin: 'reviewer',
           pullRequestReviewId: 'PRR_1',
+          lastEditedAt: '2026-01-01T00:05:00Z',
         },
       ],
     },
@@ -1322,6 +1860,7 @@ test('listChangeRequestReviewThreadsWithComments and listChangeRequestReviewThre
           createdAt: '2026-01-01T00:00:00Z',
           updatedAt: '2026-01-01T00:00:00Z',
           authorLogin: 'reviewer',
+          lastEditedAt: '2026-01-01T00:05:00Z',
         },
       ],
     },
@@ -2066,6 +2605,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
                       updatedAt: '2026-01-01T00:00:00Z',
                       author: { login: 'copilot', __typename: 'Bot' },
                       pullRequestReview: { id: 'PRR_1' },
+                      lastEditedAt: null,
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -2103,6 +2643,7 @@ test('listChangeRequestReviewThreadsWithAuthorType selects author.__typename, di
           authorLogin: 'copilot',
           authorTypename: 'Bot',
           pullRequestReviewId: 'PRR_1',
+          lastEditedAt: null,
         },
       ],
     },
@@ -2794,6 +3335,232 @@ test('getChangeRequestReviewsWithHeadCommitDate throws on a GraphQL errors paylo
   );
 });
 
+// getChangeRequestHeadObservedAt (kurone-kito/idd-skill#3253): the earliest
+// GitHub-recorded check-suite createdAt for the PR's current HEAD commit --
+// a GitHub-observed anchor, unlike getChangeRequestReviewsWithHeadCommitDate's
+// headCommittedAt. Deliberately fail-closed (never throws) on every failure
+// mode, unlike the structurally similar listCheckRunWorkflowPaths above.
+function headObservedAtPage({
+  headRefOid = 'deadbeef',
+  commitOid = 'deadbeef',
+  createdAts = [],
+  hasNextPage = false,
+  endCursor = null as string | null,
+}: {
+  headRefOid?: string;
+  commitOid?: string | null;
+  createdAts?: string[];
+  hasNextPage?: boolean;
+  endCursor?: string | null;
+} = {}): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid,
+          commits: {
+            nodes:
+              commitOid === null
+                ? [{ commit: null }]
+                : [
+                    {
+                      commit: {
+                        oid: commitOid,
+                        checkSuites: {
+                          nodes: createdAts.map((createdAt) => ({
+                            createdAt,
+                          })),
+                          pageInfo: { hasNextPage, endCursor },
+                        },
+                      },
+                    },
+                  ],
+          },
+        },
+      },
+    },
+  });
+}
+
+test('getChangeRequestHeadObservedAt returns the earliest check-suite createdAt across pages', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:35:21Z', '2026-09-22T01:36:00Z'],
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '2026-09-22T01:35:21Z');
+});
+
+test('getChangeRequestHeadObservedAt paginates checkSuites to completion, threading endCursor forward', () => {
+  let call = 0;
+  const capturedArgsByCall: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgsByCall.push(args);
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              createdAts: ['2026-09-22T01:00:00Z'],
+              hasNextPage: false,
+              endCursor: null,
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '2026-09-22T01:00:00Z');
+  assert.equal(call, 2);
+  assert.ok(
+    capturedArgsByCall[1]?.some((arg) => arg === 'after=CURSOR_1'),
+    `expected page 1's endCursor threaded into page 2's variables, got: ${capturedArgsByCall[1]?.join(' ')}`,
+  );
+});
+
+test('getChangeRequestHeadObservedAt returns empty when the queried commit oid no longer matches headRefOid', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          headRefOid: 'newsha',
+          commitOid: 'oldsha',
+          createdAts: ['2026-09-22T01:00:00Z'],
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt aborts with empty on a HEAD move detected mid-walk (not only on the first page)', () => {
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              headRefOid: 'sha1',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              // A push landed between page 1 and page 2's fetch.
+              headRefOid: 'sha2',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T01:00:00Z'],
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+  assert.equal(call, 2);
+});
+
+test('getChangeRequestHeadObservedAt aborts with empty when the HEAD moves and both oids advance together (kurone-kito/idd-skill#3253, Copilot review, PR #3404)', () => {
+  // Page 1 is internally consistent (sha1/sha1), and so is page 2
+  // (sha2/sha2, since a push landed between fetches and each fetch
+  // re-reads the PR's now-current headRefOid) -- the per-page equality
+  // check alone cannot catch this; only pinning the first page's
+  // headRefOid and rejecting a later page that disagrees with it does.
+  let call = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        call += 1;
+        return call === 1
+          ? headObservedAtPage({
+              headRefOid: 'sha1',
+              commitOid: 'sha1',
+              createdAts: ['2026-09-22T02:00:00Z'],
+              hasNextPage: true,
+              endCursor: 'CURSOR_1',
+            })
+          : headObservedAtPage({
+              headRefOid: 'sha2',
+              commitOid: 'sha2',
+              createdAts: ['2026-09-22T01:00:00Z'],
+            });
+      },
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+  assert.equal(call, 2);
+});
+
+test('getChangeRequestHeadObservedAt returns empty when the commit has no check suites', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => headObservedAtPage({ createdAts: [] }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty when a page reports hasNextPage without an endCursor', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:00:00Z'],
+          hasNextPage: true,
+          endCursor: null,
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty rather than throwing when the check-suite page walk exceeds its page budget', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        headObservedAtPage({
+          createdAts: ['2026-09-22T01:00:00Z'],
+          hasNextPage: true,
+          endCursor: 'CURSOR_NEXT',
+        }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
+test('getChangeRequestHeadObservedAt returns empty rather than throwing on a GraphQL errors payload', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({ errors: [{ message: 'boom' }], data: null }),
+    }),
+  );
+  assert.equal(port.getChangeRequestHeadObservedAt(7), '');
+});
+
 // listChangeRequestGraphqlComments / listChangeRequestGraphqlReviews
 // (Codex review, PR #2429): a missing pullRequest node or connection must
 // fail fast rather than silently read as zero comments/reviews, matching
@@ -2818,6 +3585,9 @@ test('listChangeRequestGraphqlComments returns nodes on a normal payload', () =>
                       createdAt: '2026-01-01T00:00:00Z',
                       updatedAt: '2026-01-01T00:00:00Z',
                       author: { login: 'octocat' },
+                      // #3246: proves the field is selected and mapped,
+                      // not merely tolerated when absent.
+                      lastEditedAt: '2026-01-01T00:05:00Z',
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -2835,6 +3605,7 @@ test('listChangeRequestGraphqlComments returns nodes on a normal payload', () =>
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
       authorLogin: 'octocat',
+      lastEditedAt: '2026-01-01T00:05:00Z',
     },
   ]);
 });
@@ -2868,6 +3639,87 @@ test('listChangeRequestGraphqlComments throws on a null comments connection', ()
     () => port.listChangeRequestGraphqlComments(7),
     /null comments connection/,
   );
+});
+
+// kurone-kito/idd-skill#3259: the query must select the reviewed commit's
+// oid so `merged-pr-feedback-sweep.mts` can bind a `review-ack:` marker to
+// the SPECIFIC review it acknowledges, not just the PR's current HEAD.
+test('listChangeRequestGraphqlReviews selects the commit oid and maps it to commitOid', () => {
+  let capturedQuery: string | undefined;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        capturedQuery = args.find((arg) => arg.startsWith('query=query('));
+        return JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      url: 'https://example.invalid',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                      commit: {
+                        oid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      },
+    }),
+  );
+  assert.deepEqual(port.listChangeRequestGraphqlReviews(7), [
+    {
+      body: 'hi',
+      url: 'https://example.invalid',
+      state: 'COMMENTED',
+      submittedAt: '2026-01-01T00:00:00Z',
+      authorLogin: 'octocat',
+      commitOid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+    },
+  ]);
+  assert.match(capturedQuery ?? '', /commit \{ oid \}/);
+});
+
+test('listChangeRequestGraphqlReviews maps a missing commit oid to null', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'hi',
+                      url: 'https://example.invalid',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.equal(port.listChangeRequestGraphqlReviews(7)[0].commitOid, null);
 });
 
 test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {
@@ -2912,7 +3764,9 @@ test('postWorkItemComment retries once after a transient failure and returns the
       ghText: () => {
         ghTextCalls += 1;
         if (ghTextCalls === 1) {
-          throw new Error('transient: HTTP 401');
+          // A retryable 5xx -- HTTP 401 is now classified non-retryable
+          // (#3275) and covered by its own dedicated test below.
+          throw new Error('transient: (HTTP 502)');
         }
         return JSON.stringify({ id: 42, html_url: 'https://example/42' });
       },
@@ -2925,6 +3779,57 @@ test('postWorkItemComment retries once after a transient failure and returns the
   const result = port.postWorkItemComment(9, 'marker body');
   assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
   assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment retries and succeeds on a no-derivable-status failure after a successful no-match duplicate check (Copilot review, #3275)', () => {
+  // Distinct from the (HTTP 502) case above (a derivable status) and from
+  // the "duplicate-check itself fails" case elsewhere: here the POST
+  // failure carries no derivable HTTP status at all (e.g. a transport
+  // timeout), and the duplicate-body re-read completes successfully with
+  // no match, so the retry must proceed and the second POST must succeed
+  // -- proving null status is treated as retryable, not fail-fast.
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          throw new Error('ETIMEDOUT');
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+});
+
+test('postWorkItemComment parses the id/html_url from a real `gh api --include` HTTP-header envelope, not just a bare JSON body (Copilot review, #3275)', () => {
+  // Every other success-path test mocks `ghText` returning a bare JSON
+  // body, which only exercises `extractIncludedResponseBody`'s tolerant
+  // fallback. This is the one test that mocks the actual `--include`
+  // envelope shape `gh` produces (status line + header block + blank
+  // line + JSON body), proving the header-stripping branch itself works.
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        [
+          'HTTP/2.0 201 Created',
+          'content-type: application/json; charset=utf-8',
+          'x-ratelimit-remaining: 4999',
+          '',
+          JSON.stringify({ id: 42, html_url: 'https://example/42' }),
+        ].join('\r\n'),
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
 });
 
 test('postWorkItemComment returns the existing comment instead of double-posting when a retry finds an exact-body match', () => {
@@ -2962,7 +3867,9 @@ test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never 
       ghText: () => {
         ghTextCalls += 1;
         if (ghTextCalls === 1) {
-          throw new Error('transient: HTTP 401');
+          // A retryable 5xx -- HTTP 401 is now classified non-retryable
+          // (#3275).
+          throw new Error('transient: (HTTP 502)');
         }
         return JSON.stringify({ id: 42, html_url: 'https://example/42' });
       },
@@ -2975,6 +3882,155 @@ test('postWorkItemComment: a malformed row (e.g. null) in the dedupe scan never 
   const result = port.postWorkItemComment(9, 'marker body');
   assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
   assert.equal(ghTextCalls, 2);
+});
+
+// --- postWorkItemComment failure classification / Retry-After (#3275) ------
+
+for (const status of [401, 404, 422]) {
+  test(`postWorkItemComment fails immediately with no retry on a non-retryable HTTP ${status}`, () => {
+    let ghTextCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => {
+          ghTextCalls += 1;
+          throw new Error(`gh: HTTP ${status}`);
+        },
+        // The duplicate-check dependency is deliberately left without a
+        // stub -- a non-retryable status must never reach it.
+      }),
+    );
+    assert.throws(
+      () => port.postWorkItemComment(9, 'marker body'),
+      new RegExp(`HTTP ${status}`),
+    );
+    assert.equal(ghTextCalls, 1);
+  });
+}
+
+test('postWorkItemComment throws "not verified" instead of retrying when a possibly-landed failure\'s duplicate-check re-read itself fails', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error('read ECONNRESET');
+      },
+      // ghApiJson intentionally left without a stub -- fakeDeps' default
+      // throws, simulating a failed duplicate-body re-read after the
+      // ambiguous POST failure above.
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghTextCalls, 1);
+});
+
+test('postWorkItemComment honors a Retry-After header before retrying', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          const error = new Error('gh: HTTP 403') as Error & {
+            stderr?: string;
+          };
+          error.stderr = 'gh: HTTP 403\nretry-after: 2';
+          throw error;
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(ghTextCalls, 2);
+  assert.equal(sleepDelays.length, 1);
+  assert.ok(
+    sleepDelays[0] >= 2000,
+    `expected sleepSync to wait at least 2000ms, got ${sleepDelays[0]}`,
+  );
+});
+
+test('postWorkItemComment fails closed instead of sleeping past the Retry-After cap', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        const error = new Error('gh: HTTP 403') as Error & {
+          stderr?: string;
+        };
+        error.stderr = 'gh: HTTP 403\nretry-after: 30';
+        throw error;
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified|exceeding the.*cap/i,
+  );
+  assert.equal(ghTextCalls, 1);
+  assert.equal(sleepDelays.length, 0);
+});
+
+test('postWorkItemComment derives a rate-limit-reset wait from x-ratelimit-reset when x-ratelimit-remaining is 0', () => {
+  let ghTextCalls = 0;
+  const sleepDelays: number[] = [];
+  const nowMs = 1_000_000_000_000;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        if (ghTextCalls === 1) {
+          const error = new Error('gh: HTTP 403') as Error & {
+            stderr?: string;
+          };
+          error.stderr = [
+            'gh: HTTP 403',
+            'x-ratelimit-remaining: 0',
+            `x-ratelimit-reset: ${Math.floor(nowMs / 1000) + 3}`,
+          ].join('\n');
+          throw error;
+        }
+        return JSON.stringify({ id: 42, html_url: 'https://example/42' });
+      },
+      ghApiJson: () => [],
+      sleepSync: (ms: number) => {
+        sleepDelays.push(ms);
+      },
+      now: () => nowMs,
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 42, htmlUrl: 'https://example/42' });
+  assert.equal(sleepDelays.length, 1);
+  assert.ok(
+    sleepDelays[0] >= 2900 && sleepDelays[0] <= 3000,
+    `expected sleepSync to wait ~3000ms, got ${sleepDelays[0]}`,
+  );
 });
 
 test('postWorkItemComment throws on a malformed successful response instead of returning a bad result', () => {
@@ -3029,6 +4085,85 @@ test('postWorkItemComment throws the last error once retries are exhausted with 
     () => port.postWorkItemComment(9, 'marker body'),
     /persistent: HTTP 500/,
   );
+});
+
+test('postWorkItemComment returns the comment instead of throwing when the FINAL exhausted attempt actually landed (code review, #3275)', () => {
+  // Every attempt fails ambiguously (a 5xx), but the duplicate-body
+  // re-read only ever finds a match starting on the third (final)
+  // check -- simulating the last POST attempt's write having landed
+  // server-side despite the client seeing a failure. Without a
+  // post-exhaustion duplicate check, this would incorrectly throw
+  // "all attempts failed" instead of returning the comment that was
+  // actually posted.
+  let ghApiJsonCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('persistent: HTTP 500');
+      },
+      ghApiJson: () => {
+        ghApiJsonCalls += 1;
+        if (ghApiJsonCalls < 3) {
+          return [];
+        }
+        return [{ id: 9, body: 'marker body', html_url: 'https://example/9' }];
+      },
+    }),
+  );
+  const result = port.postWorkItemComment(9, 'marker body');
+  assert.deepEqual(result, { id: 9, htmlUrl: 'https://example/9' });
+  assert.equal(ghApiJsonCalls, 3);
+});
+
+test('postWorkItemComment throws "not verified" when the FINAL exhausted attempt\'s own duplicate re-read fails (code review, #3275)', () => {
+  let ghApiJsonCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('persistent: HTTP 500');
+      },
+      ghApiJson: () => {
+        ghApiJsonCalls += 1;
+        if (ghApiJsonCalls < 3) {
+          return [];
+        }
+        throw new Error('read failed on the final check');
+      },
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghApiJsonCalls, 3);
+});
+
+test('postWorkItemComment: a non-iterable duplicate-check result (e.g. a malformed API response) is classified check-failed, not thrown uncaught (code review, #3275)', () => {
+  let ghTextCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error('ambiguous: ETIMEDOUT');
+      },
+      // A non-array, non-iterable value from ghApiJson (e.g. a malformed
+      // GraphQL-shaped object) must not escape as an uncaught TypeError
+      // from the `for...of` loop -- it should be classified the same as
+      // any other duplicate-check failure.
+      ghApiJson: () => ({ unexpected: 'shape' }) as unknown as never[],
+    }),
+  );
+  assert.throws(
+    () => port.postWorkItemComment(9, 'marker body'),
+    /may have landed.*not verified/i,
+  );
+  assert.equal(ghTextCalls, 1);
 });
 
 test('postWorkItemComment always throws a real Error, even when the underlying failure is a non-Error value (Copilot review, #2504)', () => {
@@ -3140,4 +4275,41 @@ test('listChangeRequestRenamedFromPaths returns empty for a PR with no renames',
   );
 
   assert.deepEqual(port.listChangeRequestRenamedFromPaths(42), []);
+});
+
+// #3336: `gh pr list --limit 100` silently capped listOpenChangeRequests at
+// 100 rows, so findIssueRelatedOpenPrs (resume-route-selection.mts) could
+// miss an issue's own open PR in a repository with more than 100 open pull
+// requests. Verifies the paginated REST replacement returns every row and
+// maps `url` from the REST `html_url` field (the web URL `gh pr list --json
+// url` returned before this change), not the REST API `url` field.
+test('listOpenChangeRequests returns all 101 rows via the paginated REST endpoint, mapping url from html_url (#3336)', () => {
+  const calls: { path: string; options?: unknown }[] = [];
+  const rows = Array.from({ length: 101 }, (_, index) => ({
+    number: index + 1,
+    title: `pr ${index + 1}`,
+    body: `references #${index + 1}`,
+    html_url: `https://github.com/o/r/pull/${index + 1}`,
+    url: `https://api.github.com/repos/o/r/pulls/${index + 1}`,
+  }));
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: (path: string, options?: unknown) => {
+        calls.push({ path, options });
+        return rows;
+      },
+    }),
+  );
+
+  const result = port.listOpenChangeRequests();
+
+  assert.equal(result.length, 101);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'repos/o/r/pulls?state=open&per_page=100');
+  assert.deepEqual(calls[0].options, { paginate: true });
+  assert.equal(result[0].url, 'https://github.com/o/r/pull/1');
+  assert.equal(result[100].url, 'https://github.com/o/r/pull/101');
+  assert.ok(result.every((pr, index) => pr.url === rows[index].html_url));
 });

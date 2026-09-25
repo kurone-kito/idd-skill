@@ -109,8 +109,22 @@ export interface ParsedReleaseMarker {
 /** Parsed claim-id-less marker retained for legacy routing compatibility. */
 export interface ParsedLegacyClaimMarker {
   agentId: string;
+  /**
+   * The comment's GitHub `created_at`, never the embedded timestamp --
+   * `idd-overview-core.instructions.md` ("Thresholds") and
+   * `idd-claim.instructions.md` ("Legacy claim migration") both require
+   * staleness and ordering decisions to ignore the embedded value, since it
+   * is chosen by the posting agent's own (potentially skewed) clock.
+   */
   createdAt: string;
   branch: string;
+  /**
+   * The raw timestamp embedded in the legacy marker body, retained only for
+   * marker-shape diagnostics. Never feed this into a staleness or ordering
+   * decision -- use `createdAt` instead. `null` when the embedded value did
+   * not parse as a valid timestamp.
+   */
+  embeddedTimestamp: string | null;
 }
 
 /** Minimal event shape consumed by the legacy claim-state resolver. */
@@ -240,6 +254,29 @@ export interface ParsedLocalValidationEvidence {
   commandSet: string;
   covers: string[];
   outcome: 'pass' | 'fail';
+  createdAt: string;
+}
+
+/**
+ * Parsed `<!-- idd-out-of-loop: ... -->` marker (kurone-kito/idd-skill#3328):
+ * dedicated, explicit authorization evidence that a PR runs outside the IDD
+ * claim loop (today, only the documented issue-mediated bootstrap PR --
+ * `reason` is a closed one-value enum on purpose, see
+ * {@link renderOutOfLoopMarker}). `prNumber` binds the marker to the exact
+ * PR it must be posted on -- `classifyPrLoopMembership`
+ * (`protocol-helpers.mts`) rejects a marker whose `prNumber` names a
+ * different PR, even one otherwise trusted and unedited. `at` is the
+ * poster-supplied authorization timestamp (never used for ordering or
+ * trust -- mirrors {@link ParsedProviderOutageAdvancement}'s `declaredAt`);
+ * `createdAt` is the comment's own GitHub `created_at`, which
+ * `isTrustEvidenceComment`'s edit-state check (via `lastEditedAt`, not this
+ * field) actually gates trust on.
+ */
+export interface ParsedOutOfLoopMarker {
+  agentId: string;
+  prNumber: number;
+  reason: string;
+  at: string;
   createdAt: string;
 }
 
@@ -509,6 +546,12 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
       /^<!--\s*idd-local-validation-evidence:\s+\S+\s+head:[0-9a-f]{40}\s+commands:\S+\s+covers:\S+\s+outcome:(?:pass|fail)\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*idd-local-validation-evidence:/i,
   },
+  {
+    label: '<!-- idd-out-of-loop:',
+    pattern:
+      /^<!--\s*idd-out-of-loop:\s+\S+\s+pr:\d+\s+reason:bootstrap\s+at:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-out-of-loop:/i,
+  },
 ];
 
 /**
@@ -692,6 +735,12 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
     policy: 'wired',
     reason:
       'idd-local-validation-evidence family, grouped by embedded HEAD SHA mismatch (mirroring the shipped advisory-wait AW3-H rule). Hidden at post time by local-validation-evidence.mts itself (code-automated, right after its own --record --apply POST succeeds) -- roadmap #2751 Track 3 (#2755).',
+  },
+  {
+    label: '<!-- idd-out-of-loop:',
+    policy: 'excluded',
+    reason:
+      'Live authorization evidence for the bootstrap PR, like the idd-external-check-waiver marker above (kurone-kito/idd-skill#3328) -- pre-merge-readiness/resolve-review-thread re-read it fresh on every --claimless call, so hiding it would remove active authorization state the same way hiding a still-relevant waiver would.',
   },
 ];
 
@@ -941,10 +990,20 @@ export function parseClaimComment(
   if (!match || !isValidIsoTimestamp(match[4])) {
     return null;
   }
+  // #3339: the grammar above is case-insensitive (`/i`), so a trusted,
+  // otherwise well-formed marker hand-composed with `supersedes: None` or
+  // `supersedes: NONE` parses successfully but carries a non-lowercase
+  // token. `applyClaimEvent` activates a fresh claim only when
+  // `claim.supersedes === 'none'` exactly, so leaving it verbatim would
+  // silently drop such a claim instead of activating it. Mirror
+  // `renderClaimedByMarker`'s emit-side normalization here on the parse
+  // side; a real claim ID (never a case-variant of `none`) passes through
+  // unchanged.
+  const supersedes = match[3].toLowerCase() === 'none' ? 'none' : match[3];
   return {
     agentId: match[1],
     claimId: match[2],
-    supersedes: match[3],
+    supersedes,
     branch: match[5],
     createdAt,
   };
@@ -1058,18 +1117,24 @@ export function parseLegacyClaimComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Age this claim by the comment's own GitHub `created_at`, never the
+    // embedded timestamp (see the field doc on `ParsedLegacyClaimMarker`).
+    // Fall back to the raw value only when it fails to normalize, mirroring
+    // the fail-open formatting behavior this replaces.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
     branch: match[3],
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
 export function parseLegacyReleaseComment(
   body: string,
   createdAt: string,
-): { agentId: string; createdAt: string } | null {
+): {
+  agentId: string;
+  createdAt: string;
+  embeddedTimestamp: string | null;
+} | null {
   const match = String(body ?? '')
     .trimEnd()
     .match(LEGACY_RELEASE_PATTERN);
@@ -1078,20 +1143,31 @@ export function parseLegacyReleaseComment(
   }
   return {
     agentId: match[1],
-    createdAt:
-      normalizeLegacyTimestamp(match[2]) ??
-      normalizeLegacyTimestamp(createdAt) ??
-      createdAt,
+    // Order this release by the comment's own GitHub `created_at`, never
+    // the embedded timestamp -- same rationale as the claim parser above.
+    createdAt: normalizeLegacyTimestamp(createdAt) ?? createdAt,
+    embeddedTimestamp: normalizeLegacyTimestamp(match[2]),
   };
 }
 
-/** Resolve the latest legacy claim and its matching later release. */
+/**
+ * Resolve the latest legacy claim and its matching later release.
+ *
+ * Both inputs and the "later" comparison below are keyed on each comment's
+ * GitHub `created_at` (via `parseLegacyClaimComment` /
+ * `parseLegacyReleaseComment`), never the embedded timestamp -- a release
+ * is treated as later than its claim only when the release comment's own
+ * `created_at` strictly postdates the claim comment's `created_at`.
+ */
 export function resolveLegacyClaimState(
   events: readonly LegacyClaimEventLike[],
 ): LegacyClaimState {
   let latestClaim: ParsedLegacyClaimMarker | null = null;
-  let latestMatchingRelease: { agentId: string; createdAt: string } | null =
-    null;
+  let latestMatchingRelease: {
+    agentId: string;
+    createdAt: string;
+    embeddedTimestamp: string | null;
+  } | null = null;
   const orderedEvents = events
     .map((event, index) => ({ event, index }))
     .sort((left, right) => {
@@ -1801,6 +1877,65 @@ export function parseLocalValidationEvidenceComment(
   };
 }
 
+/**
+ * Render a `<!-- idd-out-of-loop: ... -->` marker (kurone-kito/idd-skill#3328).
+ * `reason` is a closed one-value enum (`'bootstrap'` only) on purpose: the
+ * Groom-hearing ruling this issue implements authorizes the marker "only for
+ * the bootstrap PR", so the grammar accepts exactly `reason:bootstrap` --
+ * widening this would need a fresh maintainer decision, not a payload
+ * change here.
+ */
+export function renderOutOfLoopMarker(payload: {
+  agentId?: unknown;
+  prNumber?: unknown;
+  reason?: unknown;
+  at?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const prNumber = normalizePositiveIntegerToken(payload?.prNumber);
+  const reason = String(payload?.reason ?? '').trim();
+  const at = normalizeSecondPrecisionIsoTimestamp(payload?.at);
+  if (!agentId || prNumber === null || reason !== 'bootstrap' || !at) {
+    throw new Error('invalid out-of-loop marker payload');
+  }
+  return [
+    `<!-- idd-out-of-loop: ${agentId} pr:${prNumber} reason:${reason} at:${at} -->`,
+    '',
+    `_${agentId}: this PR runs outside the IDD claim loop -- IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function parseOutOfLoopMarker(
+  body: string,
+  createdAt: string,
+): ParsedOutOfLoopMarker | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-out-of-loop:\\s+(\\S+)\\s+pr:(\\d+)\\s+reason:(bootstrap)\\s+at:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match) {
+    return null;
+  }
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const prNumber = normalizePositiveIntegerToken(match[2]);
+  const reason = match[3].toLowerCase();
+  const at = normalizeSecondPrecisionIsoTimestamp(match[4]);
+  if (!agentId || prNumber === null || !at) {
+    return null;
+  }
+  return {
+    agentId,
+    prNumber,
+    reason,
+    at,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
 // --- Issue-authoring owner/publication markers (#2621) ---
 //
 // Three markers from the issue-authoring skill's "Authoring label lifecycle"
@@ -2336,7 +2471,18 @@ function resolveAuthoringMarkerIdentity(
     return parseAuthoringOwnerComment(body, markerPrefix)?.target ?? null;
   }
   const parsed = parseAuthoringPublicationIntentComment(body, markerPrefix);
-  return parsed ? `${parsed.target} ${parsed.token}` : null;
+  // #3374: a raw NUL join is not injective -- a field value containing an
+  // embedded NUL byte (parseSemicolonFieldMarker trims but does not reject
+  // one) can make two DIFFERENT (target, token) pairs join to the same
+  // string, e.g. target="A\0X",token="Y" and target="A",token="X\0Y" both
+  // join to "A\0X\0Y". JSON.stringify of a fixed 2-element string array is
+  // injective for ANY string content (including an empty string or one
+  // containing NUL): JSON.parse is a left-inverse of JSON.stringify for a
+  // well-formed string array, so its quote/backslash/control-character
+  // escaping always round-trips back to the exact same two strings --
+  // never a shortcut that merely happens to work because target/token are
+  // non-empty here.
+  return parsed ? JSON.stringify([parsed.target, parsed.token]) : null;
 }
 
 /**
@@ -2392,14 +2538,22 @@ export function classifyAuthoringMarkerFamily(
   // fail-closed synthetic per-index key stands in for an unresolvable
   // identity, so such a candidate is never compared against -- and never
   // treated as superseding or superseded by -- any other candidate.
-  const groups = new Map<string, number[]>();
+  // #3374: the fallback key is a per-index Symbol() rather than a
+  // NUL-prefixed string -- a Symbol can never collide with a real
+  // resolved identity string (or with another index's own Symbol), so
+  // this stays exactly as unique as the prior per-index string while
+  // dropping the same class of NUL-collision risk resolveAuthoringMarker
+  // Identity's own join had. `groups` never escapes this function (only
+  // `.values()` is read below), so widening its key type has no
+  // consumer to update.
+  const groups = new Map<string | symbol, number[]>();
   for (const index of trustedMatchIndexes) {
     const identity = resolveAuthoringMarkerIdentity(
       comments[index].body,
       markerPrefix,
       family,
     );
-    const key = identity ?? ` unresolved-${index}`;
+    const key = identity ?? Symbol(`unresolved-${index}`);
     const group = groups.get(key);
     if (group) {
       group.push(index);
@@ -2447,6 +2601,143 @@ export function classifyAuthoringMarkerFamily(
     alreadyMinimizedIndexes,
     untrustedIndexes,
   };
+}
+
+// --- Shared markerPrefix / marker-occurrence helpers, and the
+// authoring-bucket marker (moved from audit-authored-issue.mts, #3289)
+// ---
+//
+// suitability-triage.mts already needed normalizeMarkerPrefix and
+// parseAuthoringBucketMarker (both originally defined in
+// audit-authored-issue.mts) to run its own local evaluators
+// (evaluateSuitabilityLocal). Once audit-authored-issue.mts started
+// running suitability-triage.mts's evaluateSuitabilityLocal /
+// evaluateA4Viability at authoring time (#3289) to catch an A4/A4.5
+// triage failure before publish instead of only at Discover time, an
+// import straight back from audit-authored-issue.mts to
+// suitability-triage.mts would have closed an import cycle between the
+// two modules. Moving the shared pieces to this leaf module (imports
+// only marker-regex.mts and node:crypto -- see the module header above)
+// breaks the cycle: both audit-authored-issue.mts and
+// suitability-triage.mts import from here instead of from each other.
+// audit-authored-issue.mts re-exports the two functions (and the two
+// types below) to keep its own pre-#3289 public surface unchanged for
+// any other caller.
+
+/** Distributed default `markerPrefix` when config is absent. */
+export const DEFAULT_MARKER_PREFIX = 'idd-skill';
+
+/**
+ * Normalize an arbitrary config/CLI `markerPrefix` value: trim, and fall
+ * back to {@link DEFAULT_MARKER_PREFIX} for an empty or non-string value --
+ * a value with accidental leading/trailing whitespace (e.g. "idd-skill ")
+ * would otherwise become a distinct prefix that never matches any real
+ * marker, producing confusing false failures across every marker check.
+ */
+export function normalizeMarkerPrefix(prefix: unknown): string {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 ? trimmed : DEFAULT_MARKER_PREFIX;
+}
+
+/**
+ * Count every occurrence of the `<!-- {markerPrefix}-{suffix} ... -->`
+ * marker in `text`. `text` should already be code-fence/inline-span-masked
+ * by the caller (e.g. `stripMarkdownCodeRegions` in
+ * audit-authored-issue.mts), so a marker merely quoted in a pasted
+ * template/example snippet does not count as a real occurrence.
+ */
+export function countMarkerOccurrences(
+  text: string,
+  markerPrefix: string,
+  suffix: string,
+): number {
+  const base = createMarkerRegex(markerPrefix, suffix);
+  const global = new RegExp(base.source, `${base.flags}g`);
+  return [...text.matchAll(global)].length;
+}
+
+/** The two axes `authoring-bucket` may declare (#2639). */
+export type AuthoringBucketMarkerValue = 'needs-decision' | 'blocked-by-human';
+
+/**
+ * Detection shape for the authored
+ * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
+ * marker, mirroring the autopilot-suitability marker's own detection
+ * shape (`AutopilotSuitabilityMarkerDetection` in autopilot-suitability.mts):
+ * `present` is false only when no marker appears; `value` is the single
+ * coherent enum value or null (fail-safe = "no bucket") when the marker is
+ * absent, an unrecognized token, or repeated with disagreeing values;
+ * `malformed` is true when a marker is present but its value is not one of
+ * the two recognized tokens (including a value-less marker with no token
+ * at all), or it is repeated with a disagreeing value.
+ */
+export interface AuthoringBucketMarkerDetection {
+  present: boolean;
+  value: AuthoringBucketMarkerValue | null;
+  malformed: boolean;
+}
+
+export function isAuthoringBucketValue(
+  value: string,
+): value is AuthoringBucketMarkerValue {
+  return value === 'needs-decision' || value === 'blocked-by-human';
+}
+
+/**
+ * Canonical parser for the authored
+ * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
+ * marker. `text` must already be `stripMarkdownCodeRegions`-masked (every
+ * caller in audit-authored-issue.mts passes the shared masked text, not
+ * the raw body), so a marker merely quoted in prose cannot be mistaken
+ * for a real one.
+ *
+ * Uses the same rawCount-vs-coherent-count gap the effort-marker check in
+ * audit-authored-issue.mts closes for the `effort` marker: the
+ * value-capturing regex below requires a non-empty token (`[^\s>]+`), so a
+ * value-less marker like `<!-- {prefix}-authoring-bucket: -->` would
+ * otherwise never match it at all and read as `present: false` --
+ * indistinguishable from no marker (#2648 review, Copilot).
+ * `countMarkerOccurrences`'s detection-only regex matches regardless of
+ * value, so comparing the two counts recovers the distinction.
+ */
+export function parseAuthoringBucketMarker(
+  text: string,
+  markerPrefix: string,
+): AuthoringBucketMarkerDetection {
+  const rawCount = countMarkerOccurrences(
+    text,
+    markerPrefix,
+    'authoring-bucket',
+  );
+  if (rawCount === 0) {
+    return { present: false, value: null, malformed: false };
+  }
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
+    'gi',
+  );
+  let coherentCount = 0;
+  let value: AuthoringBucketMarkerValue | null = null;
+  let match = regex.exec(text);
+  while (match) {
+    coherentCount += 1;
+    const raw = match[1];
+    const parsed = isAuthoringBucketValue(raw) ? raw : null;
+    // Fail-safe: any invalid token, or a value disagreeing with an
+    // earlier coherent one, yields no bucket.
+    if (parsed === null || (value !== null && parsed !== value)) {
+      return { present: true, value: null, malformed: true };
+    }
+    value = parsed;
+    match = regex.exec(text);
+  }
+  if (coherentCount !== rawCount) {
+    // At least one occurrence matched the raw (any-value) scan but not
+    // the value-capturing one -- a value-less or otherwise malformed-shape
+    // marker.
+    return { present: true, value: null, malformed: true };
+  }
+  return { present: true, value, malformed: false };
 }
 
 // --- Per-cycle marker body renderers (#900) ---
@@ -2535,11 +2826,12 @@ export function renderClaimedByMarker(payload: {
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const supersedesToken = normalizeNonWhitespaceToken(payload?.supersedes);
   // Normalize any case-variant of the sentinel to lowercase `none`. The claim
-  // parser matches case-insensitively, but the claim lifecycle
+  // grammar matches case-insensitively on both the emit side (here) and the
+  // parse side (`parseClaimComment`, #3339), but the claim lifecycle
   // (`applyClaimEvent`) accepts a fresh claim only when `supersedes === 'none'`
-  // exactly, so an emitted `None`/`NONE` would round-trip into a claim that is
-  // silently ignored. Real claim IDs (never a case-variant of `none`) pass
-  // through verbatim.
+  // exactly, so an unnormalized `None`/`NONE` on either side would round-trip
+  // into a claim that is silently ignored. Real claim IDs (never a
+  // case-variant of `none`) pass through verbatim.
   const supersedes =
     supersedesToken === '' || supersedesToken.toLowerCase() === 'none'
       ? 'none'
@@ -3122,6 +3414,174 @@ export function parseCopilotUnavailableComment(
     ...parsed,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
+}
+
+/** The `advisory-wait:` marker family's four recognized shapes (#3338). */
+export type AdvisoryWaitMarkerFamily =
+  | 'advisory-wait'
+  | 'advisory-wait-recovery'
+  | 'advisory-reroll'
+  | 'advisory-wait-html';
+
+/** Result of `parseAdvisoryWaitFamilyMarker`. */
+export interface ParsedAdvisoryWaitFamilyMarker {
+  family: AdvisoryWaitMarkerFamily;
+  agentId: string;
+  headSha: string;
+  timestamp: string;
+}
+
+// Maps each advisory-wait-family member to its OPERATIONAL_MARKERS label
+// (the single source of grammar truth) and a loose field-extraction regex
+// that only ever runs AFTER that entry's own `pattern` has already
+// validated the body -- so the extraction regex only needs to locate the
+// three fields inside an already-known-valid string, not re-validate the
+// grammar itself (#3338: this is what keeps OPERATIONAL_MARKERS the one
+// canonical grammar instead of a duplicated fifth regex).
+const ADVISORY_WAIT_FAMILY_ENTRIES: {
+  family: AdvisoryWaitMarkerFamily;
+  label: string;
+  extract: RegExp;
+}[] = [
+  {
+    family: 'advisory-wait',
+    label: 'advisory-wait:',
+    extract: /^advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+)\s*$/,
+  },
+  {
+    family: 'advisory-wait-recovery',
+    label: 'advisory-wait-recovery:',
+    // The optional ` claim:{id} attempt:{n}` suffix (#1572) is deliberately
+    // not captured here -- this shared parser only ever needs the agent,
+    // SHA, and timestamp fields common to the whole family; the bound
+    // recovery form's own suffix is parsed separately by
+    // `parseAdvisoryRecoveryComment` above. `(\S+)` for the timestamp group
+    // naturally stops at the following whitespace (before `claim:` or end
+    // of string) without needing its own trailing anchor.
+    extract: /^advisory-wait-recovery:\s+(\S+)\s+(\S+)\s+(\S+)/,
+  },
+  {
+    family: 'advisory-reroll',
+    label: 'advisory-reroll:',
+    extract: /^advisory-reroll:\s+(\S+)\s+(\S+)\s+(\S+)\s*$/,
+  },
+  {
+    family: 'advisory-wait-html',
+    label: '<!-- advisory-wait:',
+    // Greedy timestamp capture, `$`-anchored to the true end of the
+    // (already `trimEnd()`'d) body -- mirroring the canonical entry's own
+    // `pattern` (`\S+\s*-->\s*$`) exactly, including its end anchor,
+    // rather than stopping at the first `-->`. The canonical grammar's
+    // last field is an unrestricted `\S+` token, so it can itself contain
+    // the literal sequence `-->` (Copilot review, PR #3380: a body like
+    // `<!-- advisory-wait: agent sha foo-->bar -->` is well-formed with
+    // timestamp `foo-->bar`). A non-`$`-anchored lazy `(\S+?)\s*-->`
+    // previously stopped at the FIRST `-->` instead, truncating that
+    // field to `foo` -- wrong per the parser's own field contract, and a
+    // regression: the pre-shared-grammar provider-health regex required
+    // its captured field to be a complete ISO timestamp immediately
+    // followed by `-->`, so it already rejected this exact adversarial
+    // shape outright (see the regression corpus rows below) rather than
+    // silently truncating it into a spurious ISO match. Since this regex
+    // only ever runs after `marker.pattern.test()` has already validated
+    // the body via that same `$`-anchored canonical pattern, backtracking
+    // here is guaranteed to find a match, and greedy + `$` forces it to
+    // the FINAL `-->` -- the correct field boundary.
+    extract: /^<!--\s*advisory-wait:\s+(\S+)\s+(\S+)\s+(\S+)\s*-->\s*$/,
+  },
+];
+
+/**
+ * Shared parser for the whole `advisory-wait:` marker family --
+ * `advisory-wait:`, `advisory-wait-recovery:` (legacy or bound form),
+ * `advisory-reroll:`, and the `<!-- advisory-wait: ... -->` HTML form
+ * (#3338). Anchors at byte 0 (`trimEnd()` only, never `trimStart()`),
+ * matching the canonical `OPERATIONAL_MARKERS` entries this delegates to
+ * for validation -- a body only reaches field extraction after its
+ * family's own `pattern` already matched it in full, so this function's
+ * notion of "well-formed" is identical to `operationalMarkerPrefix`'s for
+ * these four labels by construction. Returns `null` when no family's
+ * `pattern` matches.
+ */
+export function parseAdvisoryWaitFamilyMarker(
+  body: string,
+): ParsedAdvisoryWaitFamilyMarker | null {
+  const normalized = body.trimEnd();
+  for (const entry of ADVISORY_WAIT_FAMILY_ENTRIES) {
+    const marker = OPERATIONAL_MARKERS.find((m) => m.label === entry.label);
+    if (!marker?.pattern.test(normalized)) {
+      continue;
+    }
+    const match = entry.extract.exec(normalized);
+    if (!match) {
+      // Unreachable given `marker.pattern` already validated the same
+      // shape this loose regex only re-locates fields within; kept as
+      // defense-in-depth against a future divergence between the two.
+      return null;
+    }
+    return {
+      family: entry.family,
+      agentId: match[1],
+      headSha: match[2].toLowerCase(),
+      timestamp: match[3],
+    };
+  }
+  return null;
+}
+
+/**
+ * Byte-0-anchored, prefix-only predicate over the same four
+ * `advisory-wait:` family labels as `parseAdvisoryWaitFamilyMarker`, using
+ * each entry's `startPattern` (not `pattern` -- no field validation, so a
+ * structurally incomplete body such as `advisory-wait: agent-id` alone
+ * still matches, same as `advisoryMarkerComment`'s pre-#3338 `startsWith`
+ * checks). Deliberately does not route through
+ * `operationalMarkerPrefixByStart`, which `trimStart()`s the body first --
+ * that would accept a marker that does not start at byte 0, which is
+ * exactly the drift this issue fixes.
+ */
+export function advisoryWaitFamilyMarkerStart(
+  body: string,
+): AdvisoryWaitMarkerFamily | null {
+  const normalized = String(body ?? '');
+  for (const entry of ADVISORY_WAIT_FAMILY_ENTRIES) {
+    const marker = OPERATIONAL_MARKERS.find((m) => m.label === entry.label);
+    if (marker?.startPattern.test(normalized)) {
+      return entry.family;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse a trusted `advisory-wait:` REQUEST marker's own embedded
+ * `{ISO8601-requested-at}` field -- the plain `advisory-wait:` and HTML
+ * `<!-- advisory-wait: ... -->` forms only, not `advisory-wait-recovery:`
+ * or `advisory-reroll:` (#3338, replacing `provider-health.mts`'s former
+ * private copy of this same grammar). The plain form's timestamp is
+ * already ISO-shaped by construction (`OPERATIONAL_MARKERS` validated it),
+ * but the HTML form's last field accepts any non-whitespace token in the
+ * canonical grammar -- so this layers an explicit ISO check on top for
+ * that form only. Deliberately not `isValidIsoTimestamp`: that helper
+ * round-trips through `Date#toISOString()` and rejects a well-formed but
+ * non-3-digit fractional value (e.g. `...00.1Z`) that the marker family's
+ * own `(?:\.\d+)?Z` grammar accepts, which would wrongly discard a genuine
+ * request marker's timing evidence.
+ */
+export function parseAdvisoryWaitRequestMarker(body: string): string | null {
+  const parsed = parseAdvisoryWaitFamilyMarker(body);
+  if (
+    !parsed ||
+    (parsed.family !== 'advisory-wait' &&
+      parsed.family !== 'advisory-wait-html')
+  ) {
+    return null;
+  }
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
+    parsed.timestamp,
+  )
+    ? parsed.timestamp
+    : null;
 }
 
 export function operationalMarkerPrefix(body: string): string | null {

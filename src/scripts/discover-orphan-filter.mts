@@ -22,6 +22,7 @@ import {
   type CollaboratorPermissionCache,
   collaboratorPermission,
 } from './collaborator-permission.mts';
+import { extractDependencyReferences } from './dependency-grammar.mts';
 import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
@@ -35,7 +36,7 @@ import {
 } from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
@@ -214,7 +215,25 @@ export type OrphanClassification =
     }
   | { orphan: false; reason: 'blocked_by_open_reference'; details: number }
   | { orphan: false; reason: 'open_dependency_reference'; details: number }
-  | { orphan: false; reason: 'unresolvable_reference'; details: number[] };
+  | {
+      orphan: false;
+      reason: 'unresolvable_reference';
+      details: OrphanUnresolvedReference[];
+    };
+
+/**
+ * One reference `classifyIssue` could not resolve, fail-safe (#3284,
+ * Copilot review PR #3415): a local `#N` the issue-state lookup could not
+ * resolve (`issue-not-found-or-inaccessible`, the pre-existing case), or a
+ * `dependency-grammar.mts` token naming a repository other than
+ * `options.currentRepo` (`cross_repository_reference`) -- previously
+ * silently dropped from `blockedRefs`/`dependencyRefs` instead of keeping
+ * the issue non-selectable.
+ */
+export interface OrphanUnresolvedReference {
+  reference: number | string;
+  reason: 'issue-not-found-or-inaccessible' | 'cross_repository_reference';
+}
 
 interface OrphanIssueInput {
   number: number;
@@ -264,6 +283,11 @@ interface ClassifyIssueOptions {
    * only to decide whether a `runtime_observation_precondition` hit
    * demotes to a warned orphan instead of a hard filter. */
   structuralEvidence?: StructuralEvidence;
+  /** #3284: the current repository as `"owner/repo"`, threaded to
+   * `extractBlockedByReferences`/`extractDependencyIssueNumbers` so a
+   * qualified `owner/repo#N`/URL token naming this repository resolves to
+   * a local number instead of being silently excluded. */
+  currentRepo?: string;
 }
 
 interface FilterOrphanIssuesOptions {
@@ -281,6 +305,8 @@ interface FilterOrphanIssuesOptions {
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
   autopilot?: boolean;
+  /** See {@link ClassifyIssueOptions.currentRepo}. */
+  currentRepo?: string;
   now?: Date | string;
   /**
    * Opt-in active-claim annotation (`--with-claim-state`, #1395). Gated the
@@ -361,7 +387,7 @@ interface FilteredIssueEntry {
   title: unknown;
   state: unknown;
   reason: OrphanFilteredReason;
-  details: string | number | number[] | null;
+  details: string | number | number[] | OrphanUnresolvedReference[] | null;
   url: unknown;
 }
 
@@ -420,11 +446,23 @@ if (import.meta.main) {
  * readiness composer's `extractBlockedByIssueNumbers` (#1311) instead of a
  * second inline "Blocked by" regex, so this filter and the readiness gate
  * share one dependency-line primitive — including its colon tolerance
- * (`Blocked by: #123`), blockquote/list-bullet prefix tolerance, and
- * code-region stripping.
+ * (`Blocked by: #123`), blockquote/list-bullet/ordered-list prefix
+ * tolerance, and code-region stripping (`dependency-grammar.mts`, #3284).
+ * `currentRepo` (`"owner/repo"`) resolves a qualified `owner/repo#N`/URL
+ * token naming this repository to a local number; a token naming another
+ * repository (or a qualified token when `currentRepo` is unset) is
+ * excluded from this function's own return value the same fail-safe way
+ * an unrecognized token always has been. `classifyIssue` (below) does not
+ * rely on this function alone for that case: it separately collects the
+ * shared grammar's own `unresolvable`/`cross_repository_reference` detail
+ * and routes it through the `unresolvable_reference` outcome, so a
+ * cross-repository-only reference still keeps the issue non-selectable.
  */
-export function extractBlockedByReferences(body: unknown): number[] {
-  return extractBlockedByIssueNumbers(String(body ?? ''));
+export function extractBlockedByReferences(
+  body: unknown,
+  currentRepo?: string,
+): number[] {
+  return extractBlockedByIssueNumbers(String(body ?? ''), currentRepo);
 }
 
 // A negation ("does not need to be confirmed in production") within the
@@ -629,7 +667,7 @@ export function detectRuntimeObservationPrecondition(
   body: unknown,
   selfIssueNumber?: number,
 ): boolean {
-  const stripped = stripMarkdownCodeRegions(String(body ?? ''));
+  const stripped = maskMarkdownForScan(String(body ?? ''));
   for (const pattern of RUNTIME_OBSERVATION_PATTERNS) {
     pattern.lastIndex = 0;
     let match = pattern.exec(stripped);
@@ -701,12 +739,19 @@ export function classifyIssue(
   );
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
+  // #3281: these two marker tests previously ran against the raw body,
+  // unlike the rest of this function's later checks — an issue that only
+  // *quotes* a `roadmap-id`/`blocked-by` marker as an example (inside a
+  // code span, fence, or indented code block) was wrongly classified as
+  // a real roadmap node or blocked leaf. Mask first, HTML comments kept
+  // (the default): the markers themselves are HTML comments.
+  const bodyForMarkerTests = maskMarkdownForScan(body);
 
-  if (roadmapMarkerRegex.test(body)) {
+  if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
 
-  if (blockedMarkerRegex.test(body)) {
+  if (blockedMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'blocked_by_marker' };
   }
 
@@ -759,13 +804,41 @@ export function classifyIssue(
   // the original single-list order) so an issue that carries both kinds
   // reports the same `blocked_by_open_reference` / `unresolvable_reference`
   // reason it always has when that reference alone already blocks.
-  const blockedRefs = extractBlockedByReferences(body);
-  const dependencyRefs = extractDependencyIssueNumbers(body);
-  if (blockedRefs.length === 0 && dependencyRefs.length === 0) {
+  const blockedRefs = extractBlockedByReferences(body, options.currentRepo);
+  const dependencyRefs = extractDependencyIssueNumbers(
+    body,
+    options.currentRepo,
+  );
+  // #3284 (Copilot review, PR #3415): `blockedRefs`/`dependencyRefs` above
+  // only ever carry resolved *local* numbers -- a `Blocked by`/`Depends
+  // on` line naming another repository (or a qualified token when
+  // `options.currentRepo` is unset) resolves to nothing there, so without
+  // this the issue's own dependency-grammar fail-safe contract (a
+  // cross-repository blocker keeps the issue non-selectable) was silently
+  // lost here: an issue whose only declared dependency was cross-repo
+  // read as having no dependencies at all.
+  const crossRepoUnresolvable = [
+    ...extractDependencyReferences(body, 'Blocked by', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+    ...extractDependencyReferences(body, 'Depends on', {
+      currentRepo: options.currentRepo,
+    }).unresolvable,
+  ];
+  if (
+    blockedRefs.length === 0 &&
+    dependencyRefs.length === 0 &&
+    crossRepoUnresolvable.length === 0
+  ) {
     return { orphan: true, reason: 'orphan', ...demotionWarning };
   }
 
-  const unresolved: number[] = [];
+  const unresolved: OrphanUnresolvedReference[] = crossRepoUnresolvable.map(
+    (token) => ({
+      reference: token.token,
+      reason: 'cross_repository_reference',
+    }),
+  );
 
   for (const ref of blockedRefs) {
     const state = resolveIssueState(
@@ -781,7 +854,10 @@ export function classifyIssue(
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
 
@@ -802,15 +878,27 @@ export function classifyIssue(
       };
     }
     if (state === 'UNRESOLVABLE') {
-      unresolved.push(ref);
+      unresolved.push({
+        reference: ref,
+        reason: 'issue-not-found-or-inaccessible',
+      });
     }
   }
 
   if (unresolved.length > 0) {
+    const dedupeKeys = new Set<string>();
+    const details = unresolved.filter((entry) => {
+      const key = `${entry.reason}:${entry.reference}`;
+      if (dedupeKeys.has(key)) {
+        return false;
+      }
+      dedupeKeys.add(key);
+      return true;
+    });
     return {
       orphan: false,
       reason: 'unresolvable_reference',
-      details: [...new Set(unresolved)],
+      details,
     };
   }
 
@@ -885,7 +973,7 @@ export async function filterOrphanIssues(
   const orphans: OrphanCandidate[] = [];
   const unresolvable: {
     issue: number;
-    reference: number;
+    reference: number | string;
     reason: string;
   }[] = [];
   const warnings: (
@@ -941,6 +1029,7 @@ export async function filterOrphanIssues(
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
+      currentRepo: options.currentRepo,
     };
     let result = classifyIssue(issue, classifyOptions);
     // #2767: only a `runtime_observation_precondition` filter can ever be
@@ -1001,11 +1090,11 @@ export async function filterOrphanIssues(
     }
 
     if (result.reason === 'unresolvable_reference') {
-      for (const number of result.details ?? []) {
+      for (const entry of result.details ?? []) {
         unresolvable.push({
           issue: issue.number,
-          reference: number,
-          reason: 'issue-not-found-or-inaccessible',
+          reference: entry.reference,
+          reason: entry.reason,
         });
       }
     }
@@ -1283,6 +1372,7 @@ async function runCli() {
   const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 
   const result = await filterOrphanIssues(openIssues, {
+    currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
       fetchIssueState(port, issueNumber),

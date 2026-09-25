@@ -2,13 +2,16 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
+import {
+  evaluateQuietWindow,
+  resolveWindowFromPolicy,
+} from '../src/scripts/stalled-session-quiet-check.mts';
 import { stubExecutable } from './test-utils.mts';
 
 describe('stalled-session-quiet-check', () => {
@@ -123,6 +126,38 @@ describe('stalled-session-quiet-check', () => {
       () => evaluateQuietWindow({ now: 'invalid-timestamp', activities: [] }),
       /input\.now must be a valid ISO8601 timestamp/u,
     );
+  });
+});
+
+describe('resolveWindowFromPolicy (#3270)', () => {
+  // Was a loose, case-insensitive local `parseDurationToMs` copy -- a
+  // duplicate of the identical bug in resume-claim-routing.mts's own local
+  // copy (different config key, same shape): a lowercase `pt45m` parsed to
+  // 45 minutes instead of falling back to the documented `PT30M` default.
+  // Replaced with the shared strict parser applied to the normalized
+  // policy, so a schema-invalid value now falls back like every other
+  // duration in this codebase.
+  it('resolves a schema-invalid stallRecovery.quietWindow ("pt45m") to the documented 30m default', () => {
+    const tempRoot = mkdtempSync(
+      join(tmpdir(), 'idd-stalled-session-quiet-check-policy-'),
+    );
+    const policyPath = join(tempRoot, 'config.json');
+    try {
+      writeFileSync(
+        policyPath,
+        JSON.stringify({ stallRecovery: { quietWindow: 'pt45m' } }),
+      );
+      assert.strictEqual(resolveWindowFromPolicy(policyPath), 30 * 60 * 1000);
+
+      // A well-formed, case-correct value still parses normally.
+      writeFileSync(
+        policyPath,
+        JSON.stringify({ stallRecovery: { quietWindow: 'PT45M' } }),
+      );
+      assert.strictEqual(resolveWindowFromPolicy(policyPath), 45 * 60 * 1000);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 

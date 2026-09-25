@@ -19,6 +19,8 @@
 // Like the suitability score it is fail-safe on absence — a missing or
 // invalid marker means "no effort hint" and selection behaves exactly as
 // it does today.
+import { maskMarkdownForScan } from './markdown-code.mjs';
+
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 /** The authored effort bands, smallest to largest. */
 export const EFFORT_HINTS = ['S', 'M', 'L'];
@@ -47,6 +49,12 @@ export const NEUTRAL_EFFORT_ORDINAL = 2;
  *
  * Mirrors `parseAutopilotSuitabilityMarker` so the regex and fail-safe
  * rules stay aligned between the two authored footers.
+ *
+ * The body is masked with {@link maskMarkdownForScan} before the scan
+ * (#3281), so a marker merely *quoted* in prose (inside backticks or a
+ * fenced or indented code block -- for example an issue describing this
+ * marker's own syntax) cannot be mistaken for a real one and poison an
+ * otherwise valid footer marker elsewhere in the body.
  */
 export function parseEffortMarker(body, markerPrefix = DEFAULT_MARKER_PREFIX) {
   const prefix =
@@ -57,7 +65,7 @@ export function parseEffortMarker(body, markerPrefix = DEFAULT_MARKER_PREFIX) {
     `<!--\\s*${escapeRegex(prefix)}-effort:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  const text = String(body ?? '');
+  const text = maskMarkdownForScan(String(body ?? ''));
   // Stream matches with regex.exec so an untrusted, marker-heavy body stays
   // O(1) memory, and fail fast on the first invalid token or first value
   // that conflicts with an earlier one.

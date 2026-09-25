@@ -869,6 +869,13 @@ export interface AdvisoryConvergenceWaiverPrecondition {
   checkSelector: string;
   deadlineMinutes: number;
   headCommittedAt: string;
+  /** kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+   * `createdAt` for the current HEAD commit -- the actual clock
+   * `elapsedMinutes`/`deadlinePassed`/`deadlineOpensAt` are measured from.
+   * `headCommittedAt` above stays informational only: the committer-supplied
+   * timestamp, never the clock. `'none'` when unavailable, matching
+   * `headCommittedAt`'s own sentinel convention on this object. */
+  headObservedAt: string;
   elapsedMinutes: number | null;
   deadlinePassed: boolean;
   terminalUnavailable: boolean;
@@ -878,7 +885,8 @@ export interface AdvisoryConvergenceWaiverPrecondition {
 /**
  * Build the `idd-advisory-convergence` waiver precondition (#2021) from its
  * two independent openers: a deadline anchored on the current HEAD commit's
- * own timestamp, and proven terminal Copilot unavailability (#1570).
+ * GitHub-observed timestamp, and proven terminal Copilot unavailability
+ * (#1570).
  *
  * Extracted from `pre-merge-readiness`'s reducer (#2328) so every consumer
  * reads one implementation. `external-check-waiver.mts` accepted and posted
@@ -897,14 +905,23 @@ export interface AdvisoryConvergenceWaiverPrecondition {
  * unless the deadline itself has passed: the terminal path has no equivalent
  * anchor and intentionally falls back to the waiver comment's own
  * `createdAt`.
+ *
+ * kurone-kito/idd-skill#3253: `elapsedMinutes`/`deadlinePassed`/
+ * `deadlineOpensAt` are now measured from `headObservedAt` (the earliest
+ * GitHub-recorded check-suite `createdAt` for the current HEAD), not
+ * `headCommittedAt` (the committer-supplied timestamp, which GitHub never
+ * verifies and which can lag the actual push). `headCommittedAt` remains an
+ * accepted parameter and a reported field, purely informational.
  */
 export function buildAdvisoryConvergenceWaiverPrecondition({
   headCommittedAt,
+  headObservedAt,
   deadlineMinutes,
   terminalUnavailable = false,
   now,
 }: {
   headCommittedAt?: unknown;
+  headObservedAt?: unknown;
   deadlineMinutes?: unknown;
   terminalUnavailable?: boolean;
   now: string;
@@ -916,7 +933,8 @@ export function buildAdvisoryConvergenceWaiverPrecondition({
     ? Number(deadlineMinutes)
     : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const resolvedHeadCommittedAt = String(headCommittedAt ?? '');
-  const headCommittedAtValid = isValidIsoTimestamp(resolvedHeadCommittedAt);
+  const resolvedHeadObservedAt = String(headObservedAt ?? '');
+  const headObservedAtValid = isValidIsoTimestamp(resolvedHeadObservedAt);
   // Clamped exactly as `minutesBetweenIso` does, which is what
   // `pre-merge-readiness` used before this extraction and what
   // `advisory-convergence.mts` still uses: a HEAD commit dated ahead of the
@@ -924,9 +942,9 @@ export function buildAdvisoryConvergenceWaiverPrecondition({
   // would make this shared report disagree with the gate on a clock-skewed
   // or deliberately future-dated commit.
   const nowMs = Date.parse(now);
-  const headMs = Date.parse(resolvedHeadCommittedAt);
+  const headMs = Date.parse(resolvedHeadObservedAt);
   const elapsedMinutes =
-    headCommittedAtValid && Number.isFinite(nowMs) && Number.isFinite(headMs)
+    headObservedAtValid && Number.isFinite(nowMs) && Number.isFinite(headMs)
       ? nowMs < headMs
         ? 0
         : Math.floor((nowMs - headMs) / 60000)
@@ -940,15 +958,16 @@ export function buildAdvisoryConvergenceWaiverPrecondition({
       checkSelector: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       deadlineMinutes: resolvedDeadlineMinutes,
       headCommittedAt: resolvedHeadCommittedAt || 'none',
+      headObservedAt: resolvedHeadObservedAt || 'none',
       elapsedMinutes,
       deadlinePassed,
       terminalUnavailable: resolvedTerminalUnavailable,
       open: deadlinePassed || resolvedTerminalUnavailable,
     },
     deadlineOpensAt:
-      deadlinePassed && headCommittedAtValid
+      deadlinePassed && headObservedAtValid
         ? new Date(
-            new Date(resolvedHeadCommittedAt).getTime() +
+            new Date(resolvedHeadObservedAt).getTime() +
               resolvedDeadlineMinutes * 60000,
           ).toISOString()
         : '',

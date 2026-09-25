@@ -38,6 +38,7 @@ import {
   renderAuthoringPublicationIntentMarker,
   renderClaimedByMarker,
   renderCopilotUnavailableMarker,
+  renderOutOfLoopMarker,
   renderReviewAckMarker,
   renderReviewBaselineMarker,
   renderReviewWatermarkMarker,
@@ -76,6 +77,7 @@ export const MARKER_TYPES = [
   'advisory-reroll',
   'review-ack',
   'copilot-unavailable',
+  'out-of-loop',
   'authoring-owner',
   'authoring-publication-intent',
 ];
@@ -174,6 +176,15 @@ const REQUIRED_FIELDS_BY_TYPE = {
     'attempt',
     'timestamp',
   ],
+  // kurone-kito/idd-skill#3328: `pr` and `reason` are deliberately
+  // OMITTED here -- `pr` is CLI-injected from `--target pr <n>`'s own
+  // positional number (never a separately typed flag, which could
+  // otherwise disagree with the actual posting destination), and
+  // `reason` is hardcoded `'bootstrap'` by the renderer (see
+  // `buildMarkerBody`'s `'out-of-loop'` case and
+  // {@link renderOutOfLoopMarker}'s own doc comment for why it is a
+  // closed one-value enum), never user-supplied.
+  'out-of-loop': ['agent-id', 'timestamp'],
   'authoring-owner': [
     'marker-target',
     'anchor',
@@ -296,6 +307,17 @@ export function buildMarkerBody(type, fields) {
         headSha: fields['head-sha'],
         attempt: fields.attempt,
         timestamp: fields.timestamp,
+      });
+    case 'out-of-loop':
+      // #3328: `fields.pr` is CLI-injected from `--target pr <n>`'s own
+      // positional number (see the `import.meta.main` entry point below);
+      // `reason` is always the literal `'bootstrap'` -- a direct caller of
+      // this function bypassing the CLI must still supply both.
+      return renderOutOfLoopMarker({
+        agentId: fields['agent-id'],
+        prNumber: fields.pr,
+        reason: 'bootstrap',
+        at: fields.timestamp,
       });
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer
@@ -929,6 +951,8 @@ listed is required for that type):
   review-ack         --agent-id --head-sha --timestamp
                      (or --agent-id --from-pr <n> --timestamp)
   copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
+  out-of-loop        --agent-id --timestamp --target pr <n> (reason is always
+                     bootstrap; pr: is derived from <n>)
   authoring-owner    --marker-target --anchor --mode --marker-owner --set
                      --session --snapshot-sha256 --supersedes [--body-sha256]
                      [--marker-prefix]
@@ -1643,6 +1667,17 @@ if (import.meta.main) {
   if (args.number === null) {
     process.stderr.write('a positional issue/PR <number> is required\n');
     process.exit(1);
+  }
+  // #3328: the marker is only ever valid on the PR it names, so `pr:` is
+  // derived from `--target pr <n>`'s own positional number rather than a
+  // separately typed `--pr` flag, which could otherwise disagree with the
+  // actual posting destination.
+  if (args.type === 'out-of-loop') {
+    if (args.target !== 'pr') {
+      process.stderr.write('--type out-of-loop requires --target pr\n');
+      process.exit(1);
+    }
+    args.fields.pr = String(args.number);
   }
   // #2931: --marker-prefix defaults the same way
   // authoring-owner-provenance.mts's own normalizeMarkerPrefix does -- an

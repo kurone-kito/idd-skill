@@ -212,12 +212,10 @@ When in scope, run:
    sequence (each step must succeed before the next; `reacquired:
    true` required at both ends) -- else fails closed.
 
-**Recovery if a commit already landed on the wrong branch.** If this gate
-or `idd-doctor` finds a commit on the wrong branch, cherry-pick it onto
-the correct issue branch and restore the contaminated branch — **never**
-`git reset --hard` then force-push a pushed or shared branch to erase it.
-See [Wrong-branch commit recovery](../../docs/idd-design-rationale.md#wrong-branch-commit-recovery-cherry-pick-never-force-push)
-for the full procedure.
+**Wrong-branch recovery.** Cherry-pick onto the right branch and
+restore the contaminated one — never `git reset --hard` +
+force-push a pushed/shared branch;
+[full procedure](../../docs/idd-design-rationale.md#wrong-branch-commit-recovery-cherry-pick-never-force-push).
 
 Out of scope and explicitly **not** blocked:
 
@@ -289,6 +287,10 @@ commit before any push, rebase, or step needing a clean tree.
 `install-deps` must be idempotent: re-running it in fresh, reused, or
 recreated worktrees must not need manual cleanup or leave unexpected
 tracked changes.
+
+Judge a command-set run by exit status: run without a pipe, or in
+Bash check `${PIPESTATUS[0]}` or `set -o pipefail` — a
+`tail`/`head` filter can't prove success (#3139).
 
 **Tool availability**: run commands only when tools exist. For Node.js:
 prefer project scripts; use `npx <tool>` only when `npx` is available

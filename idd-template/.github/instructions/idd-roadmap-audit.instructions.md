@@ -72,21 +72,29 @@ on absence of candidates.
 
 Fetch the selected roadmap, its explicit child references, transitive
 descendants, GitHub sub-issue children, and linked or closing PR
-evidence for those child issues. Use the same outbound traversal
-sources as A2, including closed umbrella children, so open descendants
-cannot be hidden behind a closed direct child. This step must not use
-repo-wide search to add unrelated work to the roadmap. The only
-repo-wide search allowed in A1.5 is a narrow duplicate/reuse check for
-a specific autonomous gap before creating a follow-up issue; use those
-results only to link existing gap work or avoid creating a duplicate,
-not to widen A2 candidates.
+evidence for those child issues. For each closed child or descendant,
+also fetch its REST close reason, for example
+`gh api repos/<owner>/<repo>/issues/<n> --jq .state_reason` (lowercase
+`not_planned` / `duplicate` / `completed` — prefer this REST form over
+`gh issue view --json stateReason`, which returns the same value in
+SCREAMING_SNAKE_CASE), so the completion-audit evidence below can name
+a child closed as not planned or a duplicate instead of reporting it
+as completed. Use the same outbound traversal sources as A2, including
+closed umbrella children, so open descendants cannot be hidden behind
+a closed direct child. This step must not use repo-wide search to add
+unrelated work to the roadmap. The only repo-wide search allowed in
+A1.5 is a narrow duplicate/reuse check for a specific autonomous gap
+before creating a follow-up issue; use those results only to link
+existing gap work or avoid creating a duplicate, not to widen A2
+candidates.
 
 When the selected roadmap graph includes descendant issues that are
-themselves roadmap nodes, such as descendants carrying the configured
-roadmap label from `labels.roadmapLabelName` (default: `roadmap`) or a
-`{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, treat those
-descendants as **nested roadmaps** rather than as normal execution
-leaves. A nested roadmap is a coordination/audit node in the recursive
+themselves roadmap nodes — descendants carrying an
+`{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker (the configured roadmap
+label from `labels.roadmapLabelName`, default `roadmap`, is
+informational only) — treat those descendants as **nested roadmaps**
+rather than as normal execution leaves. A nested roadmap is a
+coordination/audit node in the recursive
 hierarchy: it may remain open while its own leaf descendants are still
 executing, and its presence does not by itself widen A2 candidates
 outside the selected roadmap graph.
@@ -191,7 +199,12 @@ Treat `stale` and `non-stale` in this section using the
   `roadmap-audit/<number>-<slug>` branch field. This is a logical
   coordination name, not a work branch, and it does not require
   creating a branch or worktree unless the audit also needs git
-  changes.
+  changes. Either case — a fresh claim on an unclaimed roadmap or a
+  takeover of a stale one — is a claim activation, so also post and
+  verify an
+  [activation-nonce marker](idd-claim.instructions.md#activation-nonce-format)
+  for the same `{claim-id}`, the same way an ordinary execution claim
+  does.
 - In recursive hierarchies, do not reuse one roadmap-audit claim across
   parent, child, or sibling roadmap mutations. Each roadmap comment,
   follow-up issue link, body edit, label change, or close action must
@@ -200,7 +213,8 @@ Treat `stale` and `non-stale` in this section using the
   previously recorded and verified `{claim-id}`, continue with that same
   claim and do not post a new claim.
 - Re-validate that roadmap claim before every roadmap comment,
-  follow-up issue creation, body edit, label change, or close action.
+  follow-up issue creation or sub-issue link, body edit, label change,
+  or close action.
 - If the roadmap remains open and no PR branch will continue from the
   audit, release the roadmap-audit claim before returning to A2,
   stopping, or invoking A0-O (trigger (d)).
@@ -216,25 +230,65 @@ input still matches the evidence.
 Apply one outcome:
 
 - **Audit passes**: post an `IDD roadmap completion audit` comment with
-  a concise evidence summary, then close the roadmap. In recursive
-  hierarchies, this outcome applies only when the selected roadmap is
-  the deepest remaining open roadmap on its path whose descendants are
-  all complete. After closing a nested roadmap, release that
-  roadmap-audit claim, re-fetch the ancestor graph, and return to
-  `idd-discover.instructions.md` (A1) so the parent roadmap can be
-  re-evaluated from fresh state. No child task issue is claimed.
+  a concise evidence summary, then close the roadmap. Every referenced
+  child and descendant is closed. If any child was closed as not
+  planned or a duplicate rather than completed, name it and its close
+  reason in the evidence summary (for example `#1234 (not_planned)`)
+  instead of folding it into an undifferentiated "closed or otherwise
+  complete" count. In recursive hierarchies, this outcome applies only
+  when the selected roadmap is the deepest remaining open roadmap on
+  its path whose descendants are all closed. After closing a nested
+  roadmap, release that roadmap-audit claim, re-fetch the ancestor
+  graph, and return to `idd-discover.instructions.md` (A1) so the
+  parent roadmap can be re-evaluated from fresh state. No child task
+  issue is claimed.
 - **Autonomous gaps found**: create or link follow-up issues using the
-  repository's issue-authoring rules, update the roadmap task list with
-  those links, and continue to A2 so the new work can be discovered.
-  Before creating a new issue, run the narrow A1.5 duplicate/reuse
-  check for that gap and link a matching existing issue instead. New
-  follow-up issue bodies must reference the roadmap (for example
-  `Refs #NNN`) so a later audit can rediscover them. After creating a
-  follow-up issue, update the roadmap task list with that link before
-  creating another. If the roadmap update fails or the roadmap claim is
-  lost after issue creation, create no more issues; report the created
-  issue link so the next audit can link it before considering
-  duplicates.
+  repository's issue-authoring rules, then continue to A2 so the new
+  work can be discovered. Before creating a new issue, run the narrow
+  A1.5 duplicate/reuse check for that gap and link a matching existing
+  issue instead.
+  1. First among the linking steps, once the duplicate/reuse check
+     above has decided create vs. reuse, link the follow-up as a
+     native GitHub sub-issue of the roadmap being mutated. Re-validate
+     the roadmap-audit claim immediately before this link call — the
+     duplicate check, and any issue-authoring creation step above, may
+     have taken long enough for the claim to have been lost. Create a
+     new follow-up only through the repository's issue-authoring
+     rules — never a bare `gh issue create` outside that flow
+     (`idd-pr-submit.instructions.md`'s D3 direct-creation rule). When
+     that flow's own creation call is `gh issue create`, pass
+     `--parent <number>` so the follow-up lands already linked. For a
+     reused existing follow-up, or when `--parent` was not applied to
+     a new one, run `gh issue edit <number> --add-sub-issue <n>`.
+     Only on an older `gh` without either flag, fall back to:
+
+     ```sh
+     gh api --method POST \
+       repos/{owner}/{repo}/issues/<number>/sub_issues \
+       -F sub_issue_id=<id>
+     ```
+
+     Here `<id>` is the integer REST id from
+     `gh api repos/{owner}/{repo}/issues/<n> --jq .id` — not the
+     GraphQL node id `gh issue view --json id` returns, which the
+     endpoint rejects with 422.
+  2. Then update the roadmap task list with that link before creating
+     another follow-up, as today.
+  3. If **both** the sub-issue link and the task-list edit fail,
+     create no more issues and report the follow-up issue link — the
+     newly created issue, or the reused existing one when the
+     duplicate/reuse check selected it. While the roadmap-audit claim
+     is still this session's, also route the gap through the existing
+     "Non-autonomous gaps found" outcome — comment with the decision,
+     naming the unlinked follow-up issue, apply the configured
+     needs-decision label, and stop before A2 for this roadmap exactly
+     as that outcome already does; if the claim was lost, skip that
+     outcome and only report. If just one of the two links fails,
+     report it and continue.
+  4. New follow-up issue bodies must still reference the roadmap (for
+     example `Refs #NNN`) as reader provenance (#1278); a later audit
+     now rediscovers the follow-up through the sub-issue link or the
+     task-list entry, not through this back-edge.
 - **Non-autonomous gaps found**: comment with the decision or human
   blocker, apply the configured needs-decision or blocked-by-human
   label when those labels exist, and do not close the roadmap. Stop

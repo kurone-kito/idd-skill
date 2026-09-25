@@ -1,0 +1,28 @@
+{
+  "id": "1697",
+  "category": "merged",
+  "note": "",
+  "title": "feat(audit): validate intra-repo markdown link anchors in audit-docs",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nThe 2026-07-28 audit found ~20 dead anchors/references that\n`audit-docs.mjs --check` cannot see: the tool validates mirror-pair\nbyte equality and file-set membership, but never resolves a relative\nmarkdown link's target file or its `#fragment` against the target's\nactual headings. The recurring defect class (a heading rename\norphaning every inbound anchor, a template link to an unshipped\nfile) is mechanical and preventable — the same \"everything the audit\ndoesn't check has drifted\" pattern this repository already fixed for\nmirror content.\n\n## Proposed change\n\n1. Add an anchor-validation pass to `src/scripts/audit-docs.mts`\n   (or a sibling module it invokes): for every markdown file in the\n   audited sets, resolve relative links; fail when the target file\n   does not exist, and when a `#fragment` does not match any\n   GitHub-slugged heading in the target (implement the GitHub\n   slugger rules: lowercase, spaces to hyphens, punctuation/em-dash\n   removal, duplicate-suffixing).\n2. Scope: `docs/**`, `idd-template/**`, `.github/instructions/**`,\n   `skills/**`, root-level markdown. External `http(s)` URLs are out\n   of scope (no network I/O). Support a narrowly-used inline\n   suppression comment for intentional exceptions, and document it\n   in `audit/README.md`.\n3. Validate template links in *template context*: a link from an\n   `idd-template/` file must resolve against the shipped template\n   tree, not the source repo tree (this is what let the\n   copilot-instructions.md and schemas/ links rot).\n4. Wire the pass into the existing `--check` output/remediation\n   format and the same CI lane that runs audit-docs today.\n5. Add unit tests with fixture files covering: valid anchor, renamed\n   heading, em-dash slugging, missing target file,\n   template-context-only miss, and a suppressed exception.\n\nBlocked by the dead-reference sweep issue in this roadmap: landing\nthe checker first would turn CI red on the ~20 known-broken links.\n\n## Acceptance criteria\n\n- [ ] `node scripts/audit-docs.mjs --check` fails on a markdown link\n      whose relative target or fragment does not resolve, with a\n      remediation message naming the file, line, and target.\n- [ ] Template-context resolution catches links from\n      `idd-template/**` to files the template does not ship.\n- [ ] The em-dash/punctuation slugging cases from the audit (the\n      `#a3--…` family) are covered by tests.\n- [ ] The full current tree passes the new check (after the sweep\n      issue lands).\n- [ ] `pnpm test` passes; generated `scripts/*.mjs` matches\n      `pnpm run build` output.\n\nBlocked by #1696\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "2a2736e62c79808e4b1a819ccc76ca982e7d4d6dc9d52439a98a8aa8a924f45f",
+  "fetchedAt": "2026-09-24T04:43:30.308Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

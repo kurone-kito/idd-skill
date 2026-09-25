@@ -1,0 +1,28 @@
+{
+  "id": "2592",
+  "category": "merged",
+  "note": "",
+  "title": "fix(marker-helpers): truncate fractional-second timestamps instead of rejecting them",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Background\n\nRefs #2586. `normalizeSecondPrecisionIsoTimestamp`\n(`src/scripts/marker-helpers.mts`) requires an exact\n`^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$` match — second precision only,\nrejecting any fractional-seconds component. This function gates 18\ncall sites in the same file: `claimed-by`, `unclaimed-by`,\n`activation-nonce`, `advisory-wait`, `advisory-wait-recovery`,\n`advisory-reroll`, `review-ack`, `copilot-unavailable`, and the\noutage-park marker fields (`startedAt`/`expiresAt`/`declaredAt`/\n`parkedAt`), all reachable from `post-idd-marker.mts`'s `--timestamp`\nflag, which forwards the CLI's value verbatim\n(`timestamp: fields.timestamp`) into every one of these constructors\nwith no normalization at the CLI boundary.\n\n`Date.prototype.toISOString()` — the idiomatic way to obtain \"the\ncurrent time\" in JavaScript — always emits millisecond precision\n(e.g. `2026-09-04T09:25:43.219Z`), which this validator rejects\noutright, throwing an aggregate `invalid {kind} marker payload` error.\n\nThe codebase already tolerates milliseconds for at least one other\nmarker type in the same file: `isValidIsoTimestamp` (used for\n`review-watermark` timestamps) accepts full ISO8601 including\nmilliseconds with no restriction, and the `advisory-wait-recovery`\nbound-claim parser's timestamp group is explicitly optional-fractional\n(`(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)`).\n\n`#2568` (closed, merged as part of this repository's own\n`normalizeApplyNow`/`toSecondPrecisionIso` consolidation) added a\ncanonical, exported `toSecondPrecisionIso(date: Date): string` helper\nin this same file — but that helper backs a different, narrower\n\"apply-time now\" pattern used by only four call sites\n(`idd-roadmap-audit-execute.mts`, `suitability-close-execute.mts`,\n`provider-outage-park.mts`, `provider-outage-declaration.mts`), and is\nnot wired into `normalizeSecondPrecisionIsoTimestamp` or\n`post-idd-marker.mts`'s `--timestamp` boundary. Verified on current\n`main`: `post-idd-marker.mts` still forwards `fields.timestamp`\nverbatim into every one of the 18 gated constructors with no\ntruncation.\n\nNot a duplicate of `#2247` (closed) — that issue only named the\n*missing*-field text in validation errors; it never touched the\nsecond-precision acceptance rule, and its reproduction case (an\nomitted flag) is a different failure shape than a present-but-wrong-\nprecision value.\n\n## Proposed change\n\nHave `normalizeSecondPrecisionIsoTimestamp` truncate a well-formed\nfractional-second ISO8601 timestamp down to second precision (reusing\nthe already-exported `toSecondPrecisionIso` helper from `#2568`, or an\nequivalent one-line truncation) before applying its strict\nsecond-precision match, rather than rejecting the whole payload. Apply\nthe same normalization at the `post-idd-marker.mts`/`emit-marker.mts`\nCLI boundary for the `--timestamp` flag so a caller does not have to\npre-strip milliseconds by hand before invoking either CLI.\n\n## Acceptance criteria\n\n- `normalizeSecondPrecisionIsoTimestamp('2026-09-04T09:25:43.219Z')`\n  returns `'2026-09-04T09:25:43Z'` instead of `''`/rejecting.\n- `node scripts/post-idd-marker.mjs claim ... --timestamp\n  \"$(node -e 'console.log(new Date().toISOString())')\"` (a raw,\n  millisecond-precision `toISOString()` value) succeeds and posts a\n  well-formed `claimed-by` marker, without the caller pre-stripping\n  milliseconds.\n- All 18 existing call sites gated by\n  `normalizeSecondPrecisionIsoTimestamp` continue to reject a\n  genuinely malformed (non-ISO8601, non-UTC-offset, or otherwise\n  unparseable) timestamp exactly as before — only the\n  fractional-seconds case changes behavior.\n- New unit test(s) in the relevant `tests/marker-helpers*.test.mts`\n  file(s) cover: a millisecond-precision `toISOString()` value\n  (accepted, truncated), a non-UTC-offset timestamp (still rejected),\n  and at least one existing second-precision-exact regression case\n  (unchanged pass).\n- `pnpm run test -- marker-helpers` and `pnpm run lint:minimum` pass.\n\n## Candidate files\n\n- `src/scripts/marker-helpers.mts`\n- `src/scripts/post-idd-marker.mts`\n- `tests/marker-helpers-timestamp.test.mts`\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "0bf58871a87298bfb9b27aeb5c2bb372f700a9121d16b6d365b28ab2d99e1e56",
+  "fetchedAt": "2026-09-24T04:42:52.859Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

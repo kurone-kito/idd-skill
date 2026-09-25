@@ -15,6 +15,7 @@ import {
   collectDuplicateSyncPairTargets,
   collectEnginesRangeMirrorViolations,
   collectGeneratedFromBannerViolations,
+  collectGeneratedSourceBannerViolations,
   collectInstructionSizeBudgetRatchetViolations,
   collectInstructionSizeBudgetViolations,
   collectNearCeilingRatchetViolations,
@@ -22,6 +23,7 @@ import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
+  GENERATED_SOURCE_BANNER_PATTERN,
   globFiles,
   isBannerScopedInstructionTarget,
   normalizeNonNegativeNumber,
@@ -38,7 +40,10 @@ import {
   collectHelperFlagDriftViolations,
 } from './helper-flag-drift.mjs';
 import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mjs';
-import { collectMarkdownLinkAuditViolations } from './markdown-link-audit.mjs';
+import {
+  collectMarkdownLinkAuditViolations,
+  resolveDistributedFileSet,
+} from './markdown-link-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -67,6 +72,12 @@ let changedFiles = null;
 // temporal dead zone when the trigger fires (see ci-wait-state.mts's
 // identical note).
 const readTextAtRefCache = new Map();
+// Kept identical to the `idd-generated-from` scan in build-ts.mts and
+// tests/inventory-ordering.test.mts so the audit, the build, and that test
+// all agree on one generated set. Declared here, above the
+// `import.meta.main` trigger below, for the same TDZ reason as
+// `readTextAtRefCache` immediately above.
+const GENERATED_MARKER_SCAN_BYTES = 200;
 // The fixed, known mirror set for this repository's engines.node range
 // (#1706) -- not manifest-configurable, since these are this repository's
 // own specific files, not an adopter-extensible convention.
@@ -176,7 +187,10 @@ function main() {
   checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
   checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
   checkOkfBundles(manifest.okfBundles ?? null);
-  checkMarkdownLinkAudit(manifest.markdownLinkAudit ?? null);
+  checkMarkdownLinkAudit(
+    manifest.markdownLinkAudit ?? null,
+    manifest.generatedBlocks ?? [],
+  );
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
@@ -208,9 +222,12 @@ function main() {
 // pure-`node:` existence check (no TypeScript dependency) so it runs in the
 // install-free bare-node CI lane alongside the rest of the audit.
 function checkGeneratedSourcePairs() {
-  const bannerPattern = /^\/\/ idd-generated-from:\s*(\S+)/m;
   const repoFileSet = new Set(repoFiles);
-  // Forward direction: each source has its generated counterpart.
+  // Forward direction: each source has its generated counterpart, and both
+  // the source and its emitted artifact carry a well-formed generated-from
+  // banner within the first GENERATED_MARKER_SCAN_BYTES bytes -- otherwise
+  // a source with no banner at all (#3294) silently escapes both this
+  // guard and the banner-derived .gitattributes/inventory checks below.
   for (const source of globFiles('src/**/*.mts', repoFiles)) {
     const emitted = emittedPathForSource(source);
     if (!emitted) {
@@ -223,7 +240,17 @@ function checkGeneratedSourcePairs() {
       errors.push(
         `${source}: missing generated artifact ${emitted}; run \`pnpm run build\` and commit the result`,
       );
+      continue;
     }
+    errors.push(
+      ...collectGeneratedSourceBannerViolations(
+        source,
+        readText(source),
+        emitted,
+        readText(emitted),
+        GENERATED_MARKER_SCAN_BYTES,
+      ),
+    );
   }
   // Reverse direction: each banner-marked artifact has its source, and the
   // banner resolves back to this exact file.
@@ -231,7 +258,7 @@ function checkGeneratedSourcePairs() {
     ...globFiles('scripts/**/*.mjs', repoFiles),
     ...globFiles('bin/**/*.mjs', repoFiles),
   ]) {
-    const match = bannerPattern.exec(readText(emitted));
+    const match = GENERATED_SOURCE_BANNER_PATTERN.exec(readText(emitted));
     if (!match) {
       continue;
     }
@@ -672,13 +699,23 @@ function checkOkfBundles(bundles) {
 // isolated from that file's other concurrent edits) so it can be
 // unit-tested without I/O; the audit pipeline supplies the live glob and
 // reader.
-function checkMarkdownLinkAudit(config) {
+function checkMarkdownLinkAudit(config, generatedBlocks) {
+  const distributedFileSet = resolveDistributedFileSet(config, generatedBlocks);
+  if (distributedFileSet && 'error' in distributedFileSet) {
+    const id =
+      config && typeof config.id === 'string' && config.id
+        ? config.id
+        : 'markdown-link-audit';
+    errors.push(`${id}: ${distributedFileSet.error}`);
+    return;
+  }
   errors.push(
     ...collectMarkdownLinkAuditViolations(
       config,
       repoFiles,
       (pattern) => globFiles(pattern, repoFiles),
       readText,
+      distributedFileSet ? distributedFileSet.paths : null,
     ),
   );
 }
@@ -911,7 +948,7 @@ function containsManifestListMismatch(currentErrors) {
 }
 function containsLinkAuditFailure(currentErrors) {
   return currentErrors.some((error) =>
-    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context/.test(
+    /-> missing file |-> missing directory |-> heading anchor #.* not found in |outside .* in template context|is not in the distributed core file set/.test(
       error,
     ),
   );

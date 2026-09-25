@@ -17,7 +17,9 @@ review-fix instructions instead.
 - **Command sets**: `fix-validate` (E9) and `post-fix-validate` (E12) are
   read from `.github/idd/config.json`'s `commands` mapping. If that file
   is missing or the command set cannot be read, stop and ask rather than
-  guessing a command.
+  guessing a command. Judge each run by exit status (Bash
+  `${PIPESTATUS[0]}`/`set -o pipefail`); a `tail`/`head` filter can't
+  prove success (#3139).
 
 ## Upstream-triage boundary
 
@@ -46,7 +48,7 @@ those are E4-E8 judgment calls, excluded from every lite profile.
   scope for this round (see Upstream-triage boundary).
 - The active claim is ambiguous, disputed, or lost.
 - A required helper is missing, fails, or disagrees with live state.
-- E10's critique loop repeats the same Accepted findings for more than
+- E10's critique loop repeats the same Accepted findings for
   `critiqueLoop.e10NoProgressHoldAfter` (default 3) passes without
   meaningful progress.
 - E10's `critiqueLoop.delegate` under `on-success` or `never` left no
@@ -92,11 +94,13 @@ other GitHub side effect, confirm all of the following:
 ## E9 — Fix accepted issues
 
 1. PATH A/PATH B (from `idd-review-triage.instructions.md` E4): PATH A
-   is actionable feedback needing a code change or maintainer decision
-   (human reviewer threads, regular comments, `CHANGES_REQUESTED`
-   bodies, critique-pass findings); PATH B is Copilot and CI advisory
-   bot comments included for traceability, even when they do not
-   require a code change.
+   is actionable feedback: human reviewer threads, regular comments,
+   `CHANGES_REQUESTED` bodies, critique-pass findings that require a
+   code change or maintainer decision, and Copilot inline
+   review-thread comments; PATH B is advisory feedback: Copilot's and
+   CI advisory bots' review-summary bodies and regular comments,
+   included for traceability, even when they do not require a code
+   change.
 2. Fix every Accepted PATH A item from the current ReviewItems_snapshot.
 3. Run `fix-validate`.
 4. Commit fixes atomically — one logical change per commit.
@@ -148,7 +152,7 @@ other GitHub side effect, confirm all of the following:
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate
    finding does not count.
-6. If the same Accepted findings recur for more than
+6. If the same Accepted findings recur for
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
    comment summarizing the repeated findings and attempted fixes, and
@@ -227,14 +231,12 @@ other GitHub side effect, confirm all of the following:
    touched-file scope from step 6; you have accumulated 3 additional
    commits; or 10 minutes have passed since the first accumulated
    commit.
-9. This allowance never delays, holds, or interrupts an in-flight CI
-   wait, and never changes PATH A/B routing or triage timing — only
-   push timing changes. A folded-in comment does **not** get a
-   disposition reply in this round — it keeps its formal PATH
-   classification and individual E6 disposition reply for the next
-   E1/E4-E7 pass, exactly like the standard file. E14 still requests a
-   fresh primary-bot re-review after every push. The per-HEAD
-   `review-watermark` still invalidates on this push.
+9. This never delays/holds/interrupts an in-flight CI wait, or changes
+   PATH A/B routing/triage timing — only push timing changes. A
+   folded-in comment gets **no** disposition reply this round; it
+   keeps its PATH classification and individual E6 reply for
+   E1/E4-E7. E14 still requests a fresh primary-bot re-review each
+   push; `review-watermark` still invalidates too.
 10. Apply the pre-mutation guard immediately before this push.
 11. Re-apply the pre-mutation guard immediately before this edit —
     it is a separate mutation after the already-guarded push. If this
@@ -258,15 +260,23 @@ other GitHub side effect, confirm all of the following:
    (review thread, review body, or regular comment), reply describing
    which commits fixed it and how.
 2. Start every reply with:
-   `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
-   Citing a commit that did not fix this item in the current round
-   requires it to have already passed the file-path-touch check (E9
-   item 7, or `idd-review-snapshot-lite.instructions.md`'s Cold-start
-   edge case 1).
-3. For a review thread, immediately resolve the thread after posting
-   the reply. Reply first, resolve second, so a failed reply never
-   leaves a silently-resolved thread.
-4. For a regular comment, reply only; do not resolve.
+   `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`,
+   followed by the reply-identity stamp
+   `<!-- {markerPrefix}-review-reply -->`
+   (`idd-review-triage.instructions.md` E6). Citing a commit that did
+   not fix this item in the current round requires it to have already
+   passed the file-path-touch check (E9 item 7, or
+   `idd-review-snapshot-lite.instructions.md`'s Cold-start edge case 1).
+3. For a review thread, post the reply and resolve it in one call with
+   the profile-selected `resolve-review-thread` helper (`--pr`,
+   `--comment-id`, `--body`, `--claim-issue`, `--claim-id`, `--apply`;
+   package-manager / ephemeral-npx equivalent in
+   `docs/idd-helper-scripts.md`), which appends the stamp and replies
+   before resolving, so a failed reply never leaves a silently-resolved
+   thread.
+4. For a regular comment, reply only and append the stamp yourself; do
+   not resolve. Any reply posted another way (the manual fallback)
+   must append the stamp itself too.
 5. If a non-review notice (rate-limit / usage-limit / review-limit) was
    already dispositioned `**Rejected** — {bot} did not review HEAD …` in
    a prior pass, carry that rejection forward. Do not re-post an
@@ -339,12 +349,7 @@ other GitHub side effect, confirm all of the following:
      cap-exhausted route. Then, if the helper's `capExhaustedRoute` is
      `hold`, post a hold comment and stop; otherwise (`phase-specific`,
      the default) continue to E15.
-   - `WAIT`: if `copilotPending` is true and elapsed time since
-     `earliestSameHeadAt` is at least the helper's
-     `pendingWindowMinutes`, apply step 10 first, then continue to
-     E15; if `copilotPending` is false and elapsed time is at least
-     `settledWindowMinutes`, do the same; otherwise go to the polling
-     loop below.
+   - `WAIT`: go to (or stay in) the polling loop below.
 5. The default primary advisory bot is Copilot: use `copilot` for
    `{primary-advisory-bot}` (the add/remove-reviewer login) and
    `copilot-pull-request-reviewer[bot]` for
@@ -380,14 +385,10 @@ other GitHub side effect, confirm all of the following:
    `PR_HEAD_SHA` disappeared during polling and stop. If `outcome` is
    now `SATISFIED`, apply step 10 first, then exit polling and continue
    to E15.
-9. Otherwise re-apply the elapsed-window check from step 4's `WAIT`
-   branch using the refreshed helper output: if the window is now
-   satisfied, apply step 10 first, then exit polling and continue to
-   E15 — the primary bot never reviewed this HEAD, which is exactly
-   the stalled/rate-limited case step 10 exists for. Else keep polling.
-   A stalled or silent advisory bot must not cause unbounded polling —
-   this elapsed-window re-check is what times the loop out even when
-   the bot never reviews the current HEAD.
+9. Otherwise keep polling — the helper already folds
+   `pendingWindowMinutes`/`settledWindowMinutes` into `outcome` on
+   every call, so a stalled or silent advisory bot still ends the loop
+   as `SATISFIED` without a hand-derived check.
 10. **Optional secondary advisory bot(s) (non-gating).** Use the most
     recent step-3/step-8 helper output's `secondaryRequestNeeded` and
     `secondaryRequestLogins` fields directly — do not re-derive the

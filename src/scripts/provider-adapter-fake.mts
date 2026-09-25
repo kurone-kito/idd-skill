@@ -102,6 +102,15 @@ export interface FakeProviderFixture {
       endCursor: string | null;
     }[]
   >;
+  /** Backs a thrown error from {@link ProviderPort.getConnectedPullRequestEventsPage}
+   * (#3276) -- checked before `connectedPrEventPages`, mirroring the
+   * `changeRequestHeadShas`-style absent-key/explicit-error fixture shape
+   * elsewhere in this file, so a test can simulate the real GitHub
+   * adapter's no-catch failure propagation (a `gh` error, or an absent
+   * connection) without a live `gh` process. Keyed by issue number; a call
+   * for an unconfigured issue number falls through to the
+   * `connectedPrEventPages` default unchanged. */
+  connectedPrEventPageErrors?: Record<number, string>;
   /** Backs {@link ProviderPort.listIssueNumbersClosedByOpenChangeRequests}. */
   issueNumbersClosedByOpenChangeRequests?: number[];
   issueBranchRefs?: string[];
@@ -287,6 +296,12 @@ export interface FakeProviderFixture {
   unresolvableReviewThreadIds?: Set<string>;
   /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
   reviewsWithHeadCommitDate?: Record<number, ProviderReviewsWithHeadCommitDate>;
+  /** Backs {@link ProviderPort.getChangeRequestHeadObservedAt}, keyed by PR
+   * number; absent key means `''` -- matches the port method's own
+   * fail-closed default for an unavailable anchor (kurone-kito/idd-skill#3253),
+   * unlike `reviewsWithHeadCommitDate`'s throw-on-missing-fixture style
+   * above. */
+  headObservedAtByChangeRequest?: Record<number, string>;
   /** Backs {@link ProviderPort.getChangeRequestAuthor}; absent key means `null`. */
   changeRequestAuthors?: Record<number, ProviderChangeRequestAuthor>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
@@ -450,6 +465,10 @@ export function createFakeProviderAdapter(
       hasNextPage: boolean;
       endCursor: string | null;
     } {
+      const errorMessage = fixture.connectedPrEventPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.connectedPrEventPages?.[number] ?? [];
       const index = connectedPageCallIndex[number] ?? 0;
       connectedPageCallIndex[number] = index + 1;
@@ -466,8 +485,18 @@ export function createFakeProviderAdapter(
       return fixture.issueBranchRefs ?? [];
     },
 
-    listWorkItemComments(number: number): ProviderComment[] {
-      return fixture.comments?.[number] ?? [];
+    listWorkItemComments(
+      number: number,
+      options?: { includeEditState?: boolean },
+    ): ProviderComment[] {
+      const rows = fixture.comments?.[number] ?? [];
+      // #3246: parity with the real adapter's opt-in contract -- a caller
+      // that does not request edit state must see `lastEditedAt` as
+      // `undefined`, even when the fixture happens to carry a value.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map(({ lastEditedAt: _lastEditedAt, ...rest }) => rest);
     },
 
     postWorkItemComment(number: number, body: string): ProviderPostedComment {
@@ -552,8 +581,25 @@ export function createFakeProviderAdapter(
 
     async listWorkItemCommentsWithRetryAsync(
       number: number,
+      options?: { includeEditState?: boolean },
     ): Promise<unknown[]> {
-      return fixture.traversalComments?.[number] ?? [];
+      const rows = fixture.traversalComments?.[number] ?? [];
+      // #3246: same opt-in parity as `listWorkItemComments`, but the
+      // snake_case `last_edited_at` key -- this method's fixture rows are
+      // a raw passthrough, not `ProviderComment`.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map((row) => {
+        if (row != null && typeof row === 'object' && 'last_edited_at' in row) {
+          const { last_edited_at: _lastEditedAt, ...rest } = row as Record<
+            string,
+            unknown
+          >;
+          return rest;
+        }
+        return row;
+      });
     },
 
     searchOpenWorkItems(): unknown[] {
@@ -1046,6 +1092,10 @@ export function createFakeProviderAdapter(
         );
       }
       return value;
+    },
+
+    getChangeRequestHeadObservedAt(number: number): string {
+      return fixture.headObservedAtByChangeRequest?.[number] ?? '';
     },
 
     resolveChangeRequestReviewThread(threadId: string): void {

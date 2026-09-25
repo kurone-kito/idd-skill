@@ -32,9 +32,13 @@ import {
   DEFAULT_STALE_AGE_MS,
   isStaleByAge,
   normalizeLinkedPrReference,
+  normalizeTrustedMarkerLogins,
+  orderClaimEvents,
   parseClaimComment,
   parseReleaseComment,
+  readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
+  resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -110,6 +114,22 @@ interface ResumeClaimRoutingOptions {
   inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
   /** Independently prove the active claim belongs to this session. */
   isCurrentSessionOwner?: (claim: ParsedClaimMarker) => boolean;
+  /**
+   * #3276: true when the caller's linked-PR lookup for this issue itself
+   * failed (PR state unknown), as opposed to succeeding with no connected
+   * PR. Only ever `true` when forced-handoff mode is enabled (the lookup
+   * only runs then), which lets {@link resolveClaimState}'s
+   * `onIgnoredForcedHandoff` handler distinguish this case from a genuinely
+   * disabled forced-handoff mode without a separate flag. When set, a
+   * trusted `issue-only` forced-handoff marker targeting the active claim
+   * is never honored (the gate the caller builds, e.g. via
+   * {@link buildForcedHandoffEnabledGate}, is expected to already encode
+   * that rejection), and {@link evaluateResumeClaimRouting} additionally
+   * routes a `--claim-id` check for either side of that blocked handoff to
+   * an explicit `stop` instead of an ordinary claim-state outcome -- see
+   * the override at the end of that function.
+   */
+  linkedPrLookupFailed?: boolean;
 }
 
 /**
@@ -142,6 +162,7 @@ interface ResumeClaimRoutingArgs {
   staleAgeMs: number;
   trustedMarkerLogins: string;
   freshClaimGate: boolean;
+  worktree: string;
   format: string;
   help: boolean;
 }
@@ -169,6 +190,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--stale-age-ms': { type: 'string' },
   '--trusted-marker-logins': { type: 'string' },
   '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--worktree': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -185,24 +207,43 @@ if (import.meta.main) {
  * evidence naming that PR:
  *
  * - forced-handoff mode disabled → never honor;
- * - no open linked PR backs the claim (`expectedLinkedPrReferences`
- *   empty, including the fail-safe lookup-error case) → honor an
- *   `issue-only` handoff as before;
+ * - no open linked PR backs the claim, and the lookup that produced that
+ *   empty result actually succeeded (`expectedLinkedPrReferences` empty,
+ *   `linkedPrLookupFailed` false/omitted) → honor an `issue-only` handoff
+ *   as before;
  * - an open linked PR backs the claim → require `contextScope` of
  *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
+ * - `linkedPrLookupFailed: true` (#3276, Groom hearing 2026-09-24): the
+ *   lookup itself failed, so PR state is unknown rather than genuinely
+ *   empty. An `issue-plus-pr` handoff still delegates to the shared gate
+ *   above unchanged -- this decision covers `issue-only` handoffs only,
+ *   and `expectedLinkedPrReferences` is empty either way on a failed
+ *   lookup, so an `issue-plus-pr` marker naming any PR would fail to
+ *   match a real backing PR regardless; that pre-existing shortcut is
+ *   left as-is rather than widened or narrowed here. An `issue-only`
+ *   handoff against an enabled mode is rejected outright instead of
+ *   falling into the empty-set-means-honor-it shortcut.
  */
 export function buildForcedHandoffEnabledGate(options: {
   forcedHandoffEnabled: boolean;
   expectedLinkedPrReferences: Set<string>;
+  linkedPrLookupFailed?: boolean;
 }): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
   // Delegate to the shared builder so resume routing and the merge-gate /
   // write-side helpers cannot drift. Resume routing never passes
   // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
   // an issue-only handoff against a PR-backed claim is rejected.
-  return buildForcedHandoffEnableGate({
+  const sharedGate = buildForcedHandoffEnableGate({
     forcedHandoffEnabled: options.forcedHandoffEnabled,
     expectedLinkedPrReferences: options.expectedLinkedPrReferences,
   });
+  if (!options.linkedPrLookupFailed) {
+    return sharedGate;
+  }
+  return (forcedHandoff: ParsedForcedHandoffMarker) =>
+    forcedHandoff.contextScope === 'issue-plus-pr'
+      ? sharedGate(forcedHandoff)
+      : false;
 }
 
 export function evaluateResumeClaimRouting(
@@ -228,9 +269,11 @@ export function evaluateResumeClaimRouting(
   const events = normalizeEvents(input.events).filter((event) =>
     trustedAuthor(event.author?.login ?? ''),
   );
+  const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
     isAuthorizedForcedHandoff,
+    linkedPrLookupFailed,
   });
   const claimIdChecked = normalizeToken(input.claimId);
   const sameSecondContenders = state.activeClaim
@@ -275,10 +318,19 @@ export function evaluateResumeClaimRouting(
     reason = 'no-active-claim';
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
     // Owner-resume path: the checking session already proved ownership of
-    // the active claim-id. A later competing claim disputes an owner
-    // unconditionally here, regardless of the active claim's own staleness
-    // (#1687 keeps this test-locked semantic byte-identical -- only the
-    // non-owner / fresh-claim-gate path below gains a staleness escape).
+    // the active claim-id. A later trusted `claimed-by` with a different
+    // claim-id never disputes an owner here (#3268): Claim-state parsing
+    // rules 4 and 6 could never have activated it (rule 4 rejects a
+    // `supersedes: none` competitor while a claim is already active; rule 6
+    // ignores a mismatched/already-superseded `supersedes:`), and
+    // `resolveActiveClaim` already proved that by leaving this owner's
+    // claim-id active. Surfacing it as a dispute only ever stopped the real
+    // owner while the loser still failed its own step 3 and returned to
+    // Discover unchanged -- so it is kept as diagnostics
+    // (`evidence.later_competing_claim` plus a warning below), not a route
+    // outcome. Only the non-owner / fresh-claim-gate path below still
+    // disputes on it, since a claim that never activated there has not yet
+    // been proven a loser.
     //
     // The claim-id matches, but claim-id alone cannot distinguish a second,
     // independent activation of the same id (the sticky forced-handoff
@@ -287,27 +339,16 @@ export function evaluateResumeClaimRouting(
     // require them to agree too. Either side being absent (no nonce posted
     // yet, or this caller never opted in) skips the comparison and keeps
     // the claim-id-only outcome, matching pre-#1522 behavior exactly.
-    //
-    // Computed unconditionally (not only when laterCompetingClaim is falsy)
-    // so a later-competing-claim dispute can still surface a concurrent
-    // nonce mismatch in `reason` (CodeRabbit, PR #1770) -- a caller that
-    // mechanically releases on "step 4 is the sole failing check" must be
-    // able to tell a step-4-only dispute apart from a dispute where step 5
-    // also fails, since releasing a claim-id/agent-id pair that a second,
-    // legitimate activation shares would evict that other session.
     const nonceMismatch =
       activationNonceWinner !== null &&
       nonceChecked &&
       activationNonceWinner !== nonceChecked;
-    if (laterCompetingClaim && nonceMismatch) {
-      routeState = 'disputed';
-      action = 'stop';
-      reason = 'later-competing-claim-and-activation-nonce-mismatch';
-    } else if (laterCompetingClaim) {
-      routeState = 'disputed';
-      action = 'stop';
-      reason = 'later-competing-claim';
-    } else if (nonceMismatch) {
+    if (laterCompetingClaim) {
+      warnings.push(
+        `later trusted claim ${laterCompetingClaim.claim_id} at ${laterCompetingClaim.created_at} cannot activate under Claim-state parsing rules 4/6 and is ignored on the owner path`,
+      );
+    }
+    if (nonceMismatch) {
       routeState = 'disputed';
       action = 'stop';
       reason = 'activation-nonce-mismatch';
@@ -345,7 +386,19 @@ export function evaluateResumeClaimRouting(
       // is no second session to disambiguate from, and requiring ownership
       // proof anyway would wrongly reject the successor's own
       // still-to-be-created worktree.
-      routeState = 'non_inheritable';
+      //
+      // A distinct state, not the reused `non_inheritable` (#3272): a
+      // claim-id match with no independent owner evidence is not the same
+      // fact as a genuinely disputed claim (a real later competing claim,
+      // handled below by the `laterCompetingClaim` branch, which this
+      // owner-resume path deliberately ignores per the comment above). Both
+      // used to report `non_inheritable`, which every consumer reads as "a
+      // live competitor claim" -- conflating "you haven't proven you're the
+      // owner yet" with "someone else genuinely holds this". Keeping the
+      // `action`/`reason` unchanged (`stop` /
+      // `claim-id-match-without-independent-owner-evidence`) preserves the
+      // fail-closed behavior; only `state` becomes distinguishable.
+      routeState = 'owner_evidence_required';
       action = 'stop';
       reason = 'claim-id-match-without-independent-owner-evidence';
     } else {
@@ -410,6 +463,31 @@ export function evaluateResumeClaimRouting(
     }
   }
 
+  // #3276: neither side of an issue-only forced handoff that was blocked
+  // solely because the linked-PR lookup failed (PR state unknown) may read
+  // as an ordinary claim-state outcome for a --claim-id check -- not the
+  // displaced original owner's `already_owned`, and not the would-be
+  // successor's generic non-stale/disputed stop. `resolveClaimState`
+  // already recorded every such blocked marker while folding events (see
+  // its `onIgnoredForcedHandoff` handler); only one whose `oldClaimId`
+  // still equals the (unchanged, since the transfer was blocked) final
+  // active claim is a live match -- a marker recorded earlier in history
+  // for a claim that has since moved on for an unrelated reason is not.
+  const linkedPrLookupFailureMatch =
+    claimIdChecked && state.activeClaim
+      ? (state.linkedPrLookupFailureRejections ?? []).find(
+          (forcedHandoff) =>
+            forcedHandoff.oldClaimId === state.activeClaim?.claimId &&
+            (forcedHandoff.oldClaimId === claimIdChecked ||
+              forcedHandoff.newClaimId === claimIdChecked),
+        )
+      : undefined;
+  if (linkedPrLookupFailureMatch) {
+    routeState = 'disputed';
+    action = 'stop';
+    reason = 'forced-handoff-linked-pr-lookup-failed';
+  }
+
   return {
     state: routeState,
     action,
@@ -441,7 +519,19 @@ export function evaluateResumeClaimRouting(
       later_competing_claim: laterCompetingClaim,
       activation_nonce_winner: activationNonceWinner,
       activation_nonce_count: activationNonces.length,
-      forced_handoff: toForcedHandoffEvidence(state.appliedForcedHandoff),
+      // #3276: explicitly null under the override above, not merely relying
+      // on state.appliedForcedHandoff already being null because the
+      // transfer never applied (true today, but this keeps the field
+      // correct even if a future change to the fold logic ever left a
+      // stale appliedForcedHandoff value around a blocked marker).
+      forced_handoff: linkedPrLookupFailureMatch
+        ? null
+        : toForcedHandoffEvidence(state.appliedForcedHandoff),
+      // #3276: always present (byte-stable), not only when a lookup was
+      // attempted -- 'ok' covers both "no lookup ran" (forced-handoff mode
+      // disabled) and "the lookup succeeded", matching the Proposed
+      // change's `evidence.linked_pr_lookup: "failed"` example field.
+      linked_pr_lookup: linkedPrLookupFailed ? 'failed' : 'ok',
       ...(state.releasedClaim
         ? {
             released_claim: {
@@ -502,6 +592,10 @@ export interface FreshClaimGateResult {
  * - `stale` → `stale-reclaimable`
  * - `non_inheritable` / `disputed` (a live competitor) → `already-claimed`
  *
+ * `owner_evidence_required` (#3272) is never produced here: that state only
+ * arises on the claim-id-match branch, and a fresh claim always passes
+ * `claimId: undefined` (below) so it can never reach that branch.
+ *
  * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
  * (the resolver's already-owned / same-second-loss branches need a checked id
  * and would otherwise mask pure contention). `winningClaimId` is the active
@@ -510,9 +604,13 @@ export interface FreshClaimGateResult {
  * when no active/released claim id exists. GitHub issue comments have no
  * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
  * closing it; the 24 h stale-takeover and same-second tie-break remain the
- * race-recovery backstop. A verified owner may use a retained released id
- * with the worktree-local lock takeover protocol; legacy releases remain
- * claim-id-less and require operator recovery before reuse.
+ * race-recovery backstop. A retained released claim's id is exposed here
+ * only for the A5(c) owner release-then-fresh retry -- by itself it never
+ * authorizes a worktree-local lock `--takeover`: the caller must also see
+ * a top-level `reason` that is not a `released-claim-*` reason
+ * (`idd-claim.instructions.md`'s Worktree-local lock file section).
+ * Legacy releases remain claim-id-less and require operator recovery
+ * before reuse.
  */
 export function evaluateFreshClaimGate(
   input: ResumeClaimRoutingInput,
@@ -532,9 +630,11 @@ export function evaluateFreshClaimGate(
   // caller would actually be taking over -- an `unreadable` result
   // (occupancy could not be inspected either way) must not expose either
   // the stale active claim's or the released claim's id as a trustworthy
-  // takeover target, since the claim instructions treat a matching
-  // winningClaimId as sufficient authorization for `claim-lock --takeover`
-  // without separately re-checking local_worktree.status (#3154 review).
+  // takeover target, since the claim instructions authorize
+  // `claim-lock --takeover` on a matching winningClaimId plus a
+  // top-level reason outside released-claim-*, without separately
+  // re-checking local_worktree.status (#3154 review; reason carve-out
+  // added by #3280).
   // This applies to `active_claim` too, not only the released-claim
   // fallback: a stale (not released) claim whose worktree probe comes back
   // unreadable still reaches `local_worktree_occupied` with `active_claim`
@@ -575,12 +675,25 @@ function runCli(): void {
   const port = createGithubProviderAdapter(owner, repo);
   const policy = loadPolicy(args.policy);
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
-  const trustedLogins = resolveTrustedLogins({
-    fromArgs: args.trustedMarkerLogins,
-    fromPolicy: policy.trustedMarkerActors,
-    currentLogin: port.resolveViewerLogin(),
-  });
-  const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
+  const viewerLogin = port.resolveViewerLogin();
+  // Same ladder shape as pre-merge-readiness.mts's own
+  // `resolveTrustedMarkerActors` call (#3272): a non-empty
+  // `--trusted-marker-logins` flag REPLACES both `IDD_TRUSTED_MARKER_ACTORS`
+  // and the config's `trustedMarkerActors` rather than adding to them, and
+  // `IDD_TRUSTED_MARKER_ACTORS` is now read at all (it previously never
+  // was here). The viewer login is still unconditionally added on top of
+  // the ladder result, same as pre-merge-readiness.mts.
+  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: { trustedMarkerActors: policy.trustedMarkerActors },
+    });
+  const trustedLogins = normalizeTrustedMarkerLogins([
+    viewerLogin,
+    ...configuredTrustedActors,
+  ]);
+  const trustedSet = new Set(trustedLogins);
   const comments = fetchIssueComments(port, args.issue);
   const rawIssue = port.getWorkItem(args.issue ?? 0);
   if (!rawIssue) {
@@ -602,12 +715,15 @@ function runCli(): void {
   const permissionCache: CollaboratorPermissionCache = new Map();
   // A forced handoff that displaces a PR-backed claim must carry
   // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
-  // so the gate below can enforce it (fail-safe to no enforcement). Skip
-  // the lookup entirely when forced-handoff mode is off — the gate never
+  // so the gate below can enforce it (fail-safe to no enforcement, except
+  // #3276's own new issue-only-on-failure rejection below). Skip the
+  // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
-  const expectedLinkedPrReferences = forcedHandoffEnabled
+  const linkedPrLookup = forcedHandoffEnabled
     ? fetchOpenLinkedPrReferences(port, args.issue)
-    : new Set<string>();
+    : { references: new Set<string>(), lookupFailed: false };
+  const expectedLinkedPrReferences = linkedPrLookup.references;
+  const linkedPrLookupFailed = linkedPrLookup.lookupFailed;
 
   const routingEvents = comments.map((comment) => ({
     body: comment.body ?? '',
@@ -624,6 +740,7 @@ function runCli(): void {
     isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
       forcedHandoffEnabled,
       expectedLinkedPrReferences,
+      linkedPrLookupFailed,
     }),
     isAuthorizedForcedHandoff: (forcedBy: string) =>
       isAuthorizedForcedHandoffActor(
@@ -636,7 +753,10 @@ function runCli(): void {
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
     isCurrentSessionOwner: (claim: ParsedClaimMarker) => {
-      const evidence = resolveCurrentSessionClaimEvidence(claim.claimId);
+      const evidence = resolveCurrentSessionClaimEvidence(
+        claim.claimId,
+        args.worktree || undefined,
+      );
       if (
         evidence === null ||
         evidence.agentId !== claim.agentId ||
@@ -651,6 +771,7 @@ function runCli(): void {
         inspectLocalWorktreeBranch(claim.branch),
       );
     },
+    linkedPrLookupFailed,
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -685,6 +806,7 @@ function runCli(): void {
       source: policy.source,
       stale_age_ms: staleAgeMs,
       trusted_marker_logins: trustedLogins,
+      trusted_marker_actors_source: trustedMarkerActorsSource,
       forced_handoff_mode: policy.forcedHandoff.mode,
       forced_handoff_authority_policy: forcedHandoffAuthorityPolicy,
     },
@@ -714,6 +836,8 @@ function resolveClaimState(
       forcedHandoff: ParsedForcedHandoffMarker,
       event: CommentEventLike,
     ) => boolean;
+    /** See {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}. */
+    linkedPrLookupFailed?: boolean;
   } = {},
 ) {
   const isForcedHandoffEnabled =
@@ -724,6 +848,7 @@ function resolveClaimState(
     typeof options.isAuthorizedForcedHandoff === 'function'
       ? options.isAuthorizedForcedHandoff
       : () => false;
+  const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
 
   // hasNewFormatClaim drives the new-format vs legacy-only mode. Detect
   // it by scanning before delegating to the canonical parser so the
@@ -743,6 +868,11 @@ function resolveClaimState(
   );
 
   const warnings: string[] = [];
+  // #3276: forced-handoff markers rejected specifically because
+  // `linkedPrLookupFailed` blocked an issue-only handoff (never a
+  // genuinely disabled mode -- see onIgnoredForcedHandoff below), for
+  // evaluateResumeClaimRouting's own --claim-id override.
+  const linkedPrLookupFailureRejections: ParsedForcedHandoffMarker[] = [];
   const onAnomalousHeartbeat = ({
     claimId,
     activeBranch,
@@ -766,6 +896,48 @@ function resolveClaimState(
     event: CommentEventLike;
   }) => {
     if (reason === 'mode-disabled') {
+      // The gate returns false for two distinct reasons that both surface
+      // here as the same generic 'mode-disabled' event (applyClaimEvent
+      // does not distinguish them): a genuinely disabled forced-handoff
+      // mode, or #3276's new lookup-failure rejection. `linkedPrLookupFailed`
+      // can only be true when the lookup actually ran, which only happens
+      // when forced-handoff mode is enabled -- so its presence here
+      // unambiguously means the latter, never the former, for an
+      // issue-only marker.
+      //
+      // #3276 (CodeRabbit review, PR #3386): applyClaimEvent checks
+      // isForcedHandoffEnabled BEFORE the author/forcedBy match and
+      // authorization checks (the 'author-forced-by-mismatch' /
+      // 'forced-by-unauthorized' branches below), so a forged or
+      // unauthorized issue-only marker would otherwise reach here too --
+      // recorded as though it were a genuinely valid handoff blocked only
+      // by the lookup failure, even though it would be rejected as forged/
+      // unauthorized regardless of the lookup outcome. Only record (and
+      // warn about) a lookup-failure rejection for a marker that is
+      // otherwise genuinely valid, by independently re-deriving the same
+      // two checks `resolveClaimState` always applies for this file
+      // (`requireAuthorMatchesForcedBy: true` below) before deciding.
+      const authorMatchesForcedBy =
+        String(event.author?.login ?? '')
+          .trim()
+          .toLowerCase() ===
+        String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+      const otherwiseValidHandoff =
+        authorMatchesForcedBy &&
+        isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event);
+      if (
+        linkedPrLookupFailed &&
+        forcedHandoff.contextScope !== 'issue-plus-pr' &&
+        otherwiseValidHandoff
+      ) {
+        linkedPrLookupFailureRejections.push(forcedHandoff);
+        warnings.push(
+          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: linked-PR lookup failed (PR state unknown), issue-only handoff not honored`,
+        );
+        return;
+      }
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
       );
@@ -816,10 +988,19 @@ function resolveClaimState(
       legacyClaim: null,
       legacyReleased: false,
       hasLegacyClaimMarker,
+      linkedPrLookupFailureRejections,
     };
   }
 
-  const orderedEvents = [...events].sort(compareEvents);
+  // kurone-kito/idd-skill#3266: shared with the new-format path above via
+  // the single `orderClaimEvents` primitive instead of this file's own
+  // near-duplicate comparator (removed). `events` here is already
+  // trust-filtered by `evaluateResumeClaimRouting`'s own top-level
+  // filter, so no claim-id tie-break can ever fire in practice (no
+  // legacy marker carries a claim-id) -- this is effectively the same
+  // `(second, time, index)` ordering `compareEvents` produced, just
+  // sharing the one implementation.
+  const orderedEvents = orderClaimEvents(events);
   const legacy = resolveLegacyClaimState(orderedEvents);
   return {
     mode: 'legacy-only',
@@ -830,6 +1011,7 @@ function resolveClaimState(
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
     hasLegacyClaimMarker,
+    linkedPrLookupFailureRejections,
   };
 }
 
@@ -962,34 +1144,6 @@ function normalizeEvents(events: unknown): NormalizedClaimEvent[] {
     .filter((event): event is NormalizedClaimEvent => event.createdAt !== null);
 }
 
-function compareEvents(
-  left: NormalizedClaimEvent,
-  right: NormalizedClaimEvent,
-): number {
-  const leftSecond = toSecond(left.createdAt);
-  const rightSecond = toSecond(right.createdAt);
-  if (
-    leftSecond !== null &&
-    rightSecond !== null &&
-    leftSecond !== rightSecond
-  ) {
-    return leftSecond - rightSecond;
-  }
-  if (leftSecond !== null && rightSecond === null) {
-    return -1;
-  }
-  if (leftSecond === null && rightSecond !== null) {
-    return 1;
-  }
-
-  const leftClaim = parseClaimComment(left.body, left.createdAt);
-  const rightClaim = parseClaimComment(right.body, right.createdAt);
-  if (leftClaim && rightClaim && leftClaim.claimId !== rightClaim.claimId) {
-    return leftClaim.claimId < rightClaim.claimId ? -1 : 1;
-  }
-  return compareIso(left.createdAt, right.createdAt);
-}
-
 function warnDeprecatedFlag(deprecated: string, canonical: string): void {
   process.stderr.write(
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
@@ -1089,6 +1243,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
     trustedMarkerLogins:
       (values['trusted-marker-logins'] as string | undefined) ?? '',
     freshClaimGate: values['fresh-claim-gate'] as boolean,
+    worktree: (values.worktree as string | undefined) ?? '',
     format,
     help,
   };
@@ -1096,7 +1251,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1114,23 +1269,42 @@ function printHelp(): void {
                       --> marker for that claim-id (lexicographically
                       earliest nonce among however many were posted). A
                       mismatch means a second, independent session activated
-                      the identical claim-id -- routes to "disputed" the same
-                      as a later-competing-claim loss. Omit --nonce when
+                      the identical claim-id -- routes to "disputed" with
+                      reason activation-nonce-mismatch. Omit --nonce when
                       the claim-id has 0 or 1 trusted nonce to skip the
                       comparison. Omit --nonce when 2+ trusted nonces exist
                       and this session has no local nonce: route to
                       disputed/stop (cold-recovery collision, #1529).
+  --worktree <path>   read the independent owner-evidence proof (the claim
+                      lock, the generated-tokens record, and the current
+                      branch) from this path instead of process.cwd() when
+                      --claim-id matches the active claim (#3272). Use this
+                      when running from the primary checkout, before the
+                      claimed branch's own worktree exists as the current
+                      directory -- the evidence bar is unchanged, only the
+                      path it is read from. Omit it to keep reading from
+                      process.cwd(), the prior behavior.
+  --trusted-marker-logins "<a,b,...>"
+                      a non-empty value REPLACES both the
+                      IDD_TRUSTED_MARKER_ACTORS env var and the config's
+                      trustedMarkerActors array, rather than adding to them
+                      (#3272; matches pre-merge-readiness.mts's own ladder:
+                      flag, then env, then config). The viewer login is
+                      always added on top of whichever source wins.
 
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
 {
-  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|disputed",
+  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|owner_evidence_required|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
   "evidence": {"...": "...", "activation_nonce_winner": "..."|null},
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
+
+policy.trusted_marker_actors_source reports which input supplied the
+trusted-marker-logins ladder's value: "flag" | "env" | "config" | "none".
 `);
 }
 
@@ -1157,7 +1331,7 @@ function fetchIssueComments(
 // loadPolicyConfig makes internally -- so the option (and this function's
 // own try/catch around the read) is no longer needed; a load failure now
 // propagates the shared reader's own error.
-function loadPolicy(policyPath: string) {
+export function loadPolicy(policyPath: string) {
   const { path: source, config } = loadPolicyConfig(policyPath);
   const typedConfig = config as {
     claimTiming?: { staleAge?: unknown } | null;
@@ -1166,9 +1340,14 @@ function loadPolicy(policyPath: string) {
   const normalized = normalizePolicyConfig(typedConfig);
   return {
     source,
-    staleAgeMs:
-      parseDurationToMs(typedConfig?.claimTiming?.staleAge) ??
-      DEFAULT_STALE_AGE_MS,
+    // #3270: was a loose, case-insensitive local `parseDurationToMs` copy
+    // applied to the RAW value -- a schema-invalid `pt12h` parsed to 12h
+    // here but fell back to the distributed 24h default in
+    // `pre-merge-readiness.mts` (case-sensitive). Now the same shared,
+    // strict `readClaimStaleAgeMs` every other caller uses, applied to the
+    // already-normalized `claimTiming.staleAge` (fail-safe to `PT24H`), so
+    // a schema-invalid value resolves identically everywhere.
+    staleAgeMs: readClaimStaleAgeMs(typedConfig),
     trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
       ? (typedConfig.trustedMarkerActors as unknown[])
           .map((value) => String(value ?? '').trim())
@@ -1179,47 +1358,6 @@ function loadPolicy(policyPath: string) {
       authorityPolicy: normalized.forcedHandoff.authorityPolicy,
     },
   };
-}
-
-function parseDurationToMs(value: unknown): number | null {
-  const text = String(value ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) {
-    return null;
-  }
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
-}
-
-function resolveTrustedLogins({
-  fromArgs,
-  fromPolicy,
-  currentLogin,
-}: {
-  fromArgs?: unknown;
-  fromPolicy?: string[] | null;
-  currentLogin?: unknown;
-}): string[] {
-  const fromCsv = String(fromArgs ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const merged = [
-    ...fromCsv,
-    ...(fromPolicy ?? []),
-    String(currentLogin ?? '').trim(),
-  ]
-    .map((value) => value.toLowerCase())
-    .filter(Boolean);
-  return [...new Set(merged)];
 }
 
 function normalizeStaleAgeMs(value: unknown): number {
@@ -1262,54 +1400,115 @@ function normalizeToken(value: unknown): string {
   return token.length > 0 ? token : '';
 }
 
+/** Fold one raw CONNECTED_EVENT/DISCONNECTED_EVENT timeline node into the
+ * running connected/state maps {@link fetchOpenLinkedPrReferences} reconciles
+ * afterward. The last connect/disconnect event per PR wins (the timeline is
+ * chronological, and pagination preserves that order across pages). */
+function applyConnectedPrEventNode(
+  node: unknown,
+  connected: Map<number, boolean>,
+  states: Map<number, string>,
+): void {
+  const record = node as {
+    __typename?: unknown;
+    subject?: { __typename?: unknown; number?: unknown; state?: unknown };
+  } | null;
+  const subject = record?.subject;
+  if (subject?.__typename !== 'PullRequest') {
+    return;
+  }
+  const number =
+    typeof subject.number === 'number' ? subject.number : Number.NaN;
+  if (!Number.isInteger(number)) {
+    return;
+  }
+  if (record?.__typename === 'ConnectedEvent') {
+    connected.set(number, true);
+    states.set(number, String(subject.state ?? ''));
+  } else if (record?.__typename === 'DisconnectedEvent') {
+    connected.set(number, false);
+  }
+}
+
 /**
  * Resolve the set of open pull requests that back this issue's claim, as
- * normalized PR references. Uses a precise signal — a PR connected to the
- * issue via `CONNECTED_EVENT` (reconciled against later
- * `DISCONNECTED_EVENT`s) that is currently `OPEN` — rather than a bare
- * cross-reference/mention, so an unrelated open PR merely mentioning the
- * issue does not falsely block a legitimate `issue-only` forced handoff.
- * Fails safe to an empty set (no enforcement) on any lookup error.
+ * normalized PR references, plus whether the lookup itself failed. Uses a
+ * precise signal — a PR connected to the issue via `CONNECTED_EVENT`
+ * (reconciled against later `DISCONNECTED_EVENT`s) that is currently `OPEN`
+ * — rather than a bare cross-reference/mention, so an unrelated open PR
+ * merely mentioning the issue does not falsely block a legitimate
+ * `issue-only` forced handoff.
+ *
+ * #3276: paginates {@link ProviderPort.getConnectedPullRequestEventsPage}
+ * (which throws on a failed or malformed page, matching
+ * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
+ * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle` --
+ * removing the prior silent `last:100` truncation as a side effect. A
+ * genuine lookup failure now surfaces as `lookupFailed: true` with an empty
+ * `references` set, distinct from a successful lookup that legitimately
+ * found no connected PR (`lookupFailed: false`, empty set). Callers must not
+ * treat the two the same -- see
+ * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
-function fetchOpenLinkedPrReferences(
+export function fetchOpenLinkedPrReferences(
   port: ProviderPort,
   issueNumber: number | null,
-): Set<string> {
+): { references: Set<string>; lookupFailed: boolean } {
   const references = new Set<string>();
   if (!Number.isInteger(issueNumber)) {
-    return references;
+    return { references, lookupFailed: false };
   }
-  // Number.isInteger(issueNumber) above already excludes null; TS can't
-  // narrow a plain boolean-returning call the way a type predicate would.
-  const nodes = port.getConnectedPullRequestEventsSingle(issueNumber as number);
-  // The last connect/disconnect event per PR wins (timeline is chronological).
   const connected = new Map<number, boolean>();
   const states = new Map<number, string>();
-  for (const node of nodes) {
-    const record = node as {
-      __typename?: unknown;
-      subject?: { __typename?: unknown; number?: unknown; state?: unknown };
-    } | null;
-    const subject = record?.subject;
-    if (subject?.__typename !== 'PullRequest') {
-      continue;
+  try {
+    let after: string | null = null;
+    // #3276 (CodeRabbit review, PR #3386): the adapter returns whatever
+    // cursor the GraphQL response carries with no progress guarantee of its
+    // own -- a repeated non-empty cursor (immediate or a multi-cursor
+    // cycle) would otherwise make this loop request the same page
+    // indefinitely. Track every cursor seen and throw on a repeat rather
+    // than imposing an arbitrary page cap, which could wrongly reject a
+    // genuinely long timeline.
+    const seenCursors = new Set<string>();
+    for (;;) {
+      // Number.isInteger(issueNumber) above already excludes null; TS can't
+      // narrow a plain boolean-returning call the way a type predicate would.
+      const page = port.getConnectedPullRequestEventsPage(
+        issueNumber as number,
+        after,
+      );
+      for (const node of page.events) {
+        applyConnectedPrEventNode(node, connected, states);
+      }
+      if (!page.hasNextPage) {
+        break;
+      }
+      const nextCursor = page.endCursor ?? null;
+      if (!nextCursor) {
+        // hasNextPage with no endCursor: reconciling a truncated timeline
+        // could miss a later CONNECTED/DISCONNECTED event and silently read
+        // as a smaller, wrong PR set -- exactly the ambiguity this issue
+        // exists to close. Throw so the caller treats it as a lookup
+        // failure instead of trusting the partial stream.
+        throw new Error(
+          'incomplete connected-PR pagination: hasNextPage with no endCursor',
+        );
+      }
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(
+          'non-progressing connected-PR pagination: repeated endCursor',
+        );
+      }
+      seenCursors.add(nextCursor);
+      after = nextCursor;
     }
-    const number =
-      typeof subject.number === 'number' ? subject.number : Number.NaN;
-    if (!Number.isInteger(number)) {
-      continue;
-    }
-    if (record?.__typename === 'ConnectedEvent') {
-      connected.set(number, true);
-      states.set(number, String(subject.state ?? ''));
-    } else if (record?.__typename === 'DisconnectedEvent') {
-      connected.set(number, false);
-    }
+  } catch {
+    return { references: new Set(), lookupFailed: true };
   }
   for (const [number, isConnected] of connected) {
     if (isConnected && states.get(number) === 'OPEN') {
       references.add(normalizeLinkedPrReference(number));
     }
   }
-  return references;
+  return { references, lookupFailed: false };
 }

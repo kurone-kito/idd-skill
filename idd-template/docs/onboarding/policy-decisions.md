@@ -623,16 +623,16 @@ When the repository uses a non-default merge, review, or thread policy,
 describe the local effect in prose near the selected value so future
 agents do not need to infer what changed.
 
-**Recording resolved placeholder values.** If you hand-add content to
-your recorded policy document — for example a table noting which
+**Recording resolved placeholder values.** If you hand-add content
+inside an imported template file — for example a table noting which
 placeholder resolved to which value — spell the placeholder name
-without doubled braces (for example `REPO_NAME`, not `{{REPO_NAME}}`).
-`idd-onboard.mjs --verify`'s placeholder-residue scan flags a literal,
-doubled-brace instance of a known placeholder name as leftover
-template residue; the conventional imported path
-(`docs/onboarding/policy-decisions.md`) is already one of the
-scanner's fixed exclusions, so a custom `--write-policy-doc` target is
-not protected. See
+without doubled braces (for example `REPO_NAME`, not `{{REPO_NAME}}`);
+`idd-onboard.mjs --verify` flags a doubled-brace token there as
+leftover residue. This policy document is a fixed scanner exclusion
+(tokens here are skipped, never scanned); a custom
+`--write-policy-doc` target sits outside the imported set unless its
+path matches one, so its token usually lands under
+`outOfScopeTokens` instead. See
 [Onboarding Reference — Placeholder Values](placeholders.md) for the
 full placeholder list.
 

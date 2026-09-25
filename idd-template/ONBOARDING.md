@@ -118,13 +118,12 @@ every phase. GitHub is IDD's only implemented provider today; see
 for the staged, provider-neutral adapter boundary this onboarding path
 does not depend on.
 
-Important: the distributed default workflow is cross-agent for
-execution, but its later PR phases still include a GitHub Copilot
-advisory review step by default. If the operator does not want that PR
-policy, choose another profile in `docs/idd-review-policy-profiles.md`
-and apply the matching artifact from `profiles/`. The artifact records
-the complete edit surface, adopter-owned values, and verification
-evidence for the selected non-default profile.
+Important: the distributed default workflow is cross-agent, but its
+later PR phases still include a GitHub Copilot advisory review step by
+default. If the operator does not want that PR policy, choose another
+profile in `docs/idd-review-policy-profiles.md` and apply the matching
+artifact from `profiles/`, which records the complete edit surface,
+adopter-owned values, and verification evidence for that profile.
 
 Also choose a review-thread resolution policy before treating the import
 as complete. The distributed default is `fast-agent-resolve`, where an
@@ -163,14 +162,13 @@ alongside the merge policy and point operators to
 such as `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
 `ciWait.rerunPolicy` are easy to find later.
 
-Also consider the AI model used for the IDD execution session. Large and
-premium reasoning models are more likely to trigger frequent context
-compaction when the full instruction file set is loaded, which can
-interrupt unattended IDD loops. For day-to-day execution, standard models
-(for example, models in the Sonnet class) handle the instruction overhead
-more efficiently and are the recommended choice. Reserve large or premium
-reasoning models for tasks that genuinely benefit from their extended
-reasoning depth, not for routine IDD loop execution.
+Also consider the AI model used for the IDD execution session. A
+premium reasoning model is more likely to trigger frequent context
+compaction when the full instruction set is loaded, interrupting
+unattended IDD loops; a standard model (for example, the Sonnet class)
+handles that overhead more efficiently and is the recommended default,
+reserving premium reasoning models for tasks that genuinely benefit from
+their extended reasoning depth.
 
 ## Your task
 
@@ -257,10 +255,10 @@ below instead.
    in `.github/idd/config.json` — dropping the flag loses them. Root
    `<path>` under `<target-repo>` explicitly — `--record-policy`
    resolves a relative path against the current working directory, not
-   `--target`, so a bare relative path run from this clone silently
-   writes into the clone instead of the target repository. Link the
-   written file from the repository's agent entry files (Step 5 below)
-   so future sessions can find it.
+   `--target`, and refuses (exit `2`) a path resolving outside
+   `--target` instead of silently writing there. Link the written file
+   from the repository's agent entry files (Step 5 below) so future
+   sessions can find it.
 
    ```sh
    node scripts/idd-onboard.mjs --record-policy \
@@ -572,9 +570,9 @@ for the same steps. See
 run order. `--import` and `--verify` both require
 `--source <path-to-a-cloned-idd-skill-tree>` and therefore only replace
 the Option B local-clone flow, never Option A's remote fetch;
-`--substitute` takes no `--source` at all (it only rewrites an already-
-imported `--target` tree) and works the same regardless of how that tree
-was populated. `--hear` and `--record-policy` also take no `--source`.
+`--substitute` takes no `--source` at all (it rewrites only already-
+imported files, scoped to the running clone's own core file set).
+`--hear` and `--record-policy` also take no `--source`.
 Each mode prints a JSON verdict and exits `0` (converged), `1` (a
 blocking or residue finding — nothing is written), or `2` (a usage
 error), so an agent can gate on the exit code without parsing prose.
@@ -636,9 +634,9 @@ error), so an agent can gate on the exit code without parsing prose.
   `--fix-validate-commands`, `--pre-push-validate-commands`,
   `--post-fix-validate-commands`, `--install-deps-command`, which always
   win over a transcript value when both are present), then rewrites
-  the target tree in place. Add `--dry-run` to print the plan without
-  writing; apply mode refuses to write anything while any placeholder
-  would remain unresolved.
+  only imported files, reporting the rest. Add `--dry-run` to print the
+  plan without writing; apply mode refuses to write anything while any
+  placeholder would remain unresolved.
 
   ```sh
   node scripts/idd-onboard.mjs --substitute --target <target-repo> \
@@ -660,9 +658,10 @@ error), so an agent can gate on the exit code without parsing prose.
   patch into `.github/idd/config.json` (omitting `helperRuntime` for a
   confirmed `instructions-only` profile, and writing
   `skipIssueAuthorApprovalGate` only when the operator opted out); add
-  `--write-policy-doc <path>` (with `--apply` — it has no effect during
-  the dry-run default) to also write the filled template to that path.
-  Never edits `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md`.
+  `--write-policy-doc <path>` (`--apply` only) to also write the
+  filled template to that path. Refuses an existing, non-generated
+  `ONBOARDING.md`, `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md` unless
+  `--force`d.
 
   ```sh
   node scripts/idd-onboard.mjs --record-policy --transcript <transcript-file> \
@@ -671,15 +670,17 @@ error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
-  replacing a manual walkthrough of the checklist below with four check
+  replacing a manual walkthrough of the checklist below with five check
   groups: manifest completeness (reusing `--import`'s own file-set
-  resolution), placeholder residue (reusing `--substitute`'s scanner), an
-  informational stale-import signal, and a non-blocking package-pin
-  advisory (flags an `ephemeral-npx`/`package-manager` helper runtime
-  profile with no configured `helperRuntime.packageSpec` — see
+  resolution), placeholder residue (reusing `--substitute`'s scanner), a
+  helper-load check (`vendored-node` only: spawns each cataloged helper
+  under `--target` with `--help`), an informational stale-import signal,
+  and a non-blocking package-pin advisory (flags an
+  `ephemeral-npx`/`package-manager` helper runtime profile with no
+  configured `helperRuntime.packageSpec` — see
   [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)).
-  A missing manifest file or a leftover onboarding placeholder is
-  blocking; the stale-import signal and the package-pin advisory are
+  A missing manifest file, leftover placeholder, or helper-load failure
+  is blocking; the stale-import signal and package-pin advisory are
   never blocking.
 
   ```sh

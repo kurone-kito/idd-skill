@@ -1,0 +1,27 @@
+{
+  "id": "2553",
+  "category": "merged",
+  "note": "",
+  "title": "docs(idd-design-rationale): record that documenting a script's output contract must trace to the literal print/return statement, not infer from a type or variable name",
+  "labels": [
+    "documentation"
+  ],
+  "body": "# docs(idd-design-rationale): record that documenting a script's output contract must trace to the literal print/return statement, not infer from a type or variable name\n\n## Background\n\nWhile drafting issue #2474's documentation of field-name variance\nacross this repository's evidence-collector helper scripts, an initial\ndraft made several confident, specific claims about which top-level\nJSON keys a given helper actually returns. An independent\nfact-checking critique pass found that roughly half of those claims\nwere wrong -- not because the underlying behavior was misunderstood,\nbut because a TypeScript **type name** or an internal **local\nvariable name** had been mistaken for an actual printed/returned\nfield. For example, `advisory-convergence.mts`'s printed object was\ndescribed as returning a `verdict` field: `verdict` is only the local\nvariable name holding the whole printed document\n(`AdvisoryConvergenceVerdict`, the type), never a key nested inside\nit. `discover-viability-gate.mts` was described as returning a\n`passed` field: `passed` exists only on an internal per-issue helper\nresult, consumed to sort into the actually-printed\n`viable`/`discarded` buckets, and is never copied into the printed\ntop-level object. A second, independent verification pass, re-tracing\nevery claim to the file's actual `JSON.stringify(...)` /\n`process.stdout.write(...)` call site rather than to the nearest\nplausible-looking name, caught and corrected every instance before the\ndocumentation merged (`kurone-kito/idd-skill#2474`).\n\nThis is a distinct trap from an ordinary factual error: the wrong name\nis often genuinely present in the same file, in a plausible-looking\nspot (a type declaration, a locally-scoped intermediate variable), so\na skim-level read of the source can produce a confident,\nspecific-sounding claim that is still wrong. Nothing in the shared\nwork guidance currently names this trap or the concrete verification\nhabit that catches it.\n\n## Proposed change\n\nAdd a dated entry under `docs/idd-design-rationale.md`'s (and its\ncanonical `idd-template/docs/idd-design-rationale.md` source's)\n\"## Documentation conventions\" section, alongside the existing \"Cite\nthe observed incident\" convention, recording this pattern with\n`kurone-kito/idd-skill#2474` cited per the established convention.\nState the actionable takeaway plainly: when documenting what a script\nor function actually returns or prints, trace every claimed field\nname to its literal `JSON.stringify(...)` / `process.stdout.write(...)`\n/ `return` call site in the current source -- never infer it from a\ntype name, an interface field, or a local variable name that merely\nlooks like it could be the same thing.\n\nDo not edit `.github/instructions/idd-work.instructions.md` to add\nthis guidance directly: `bundle-work` sits at 94.51% utilization as of\n2026-09-03, essentially no headroom before the 95% notice / 98%\nhard-fail thresholds, and this same convention already routes\ncitation-bearing rationale to the budget-exempt\n`docs/idd-design-rationale.md` instead.\n\nRefs #1596 (non-blocking) -- names the pre-existing citation\nconvention this entry follows; already merged, informational only.\n\n## Acceptance criteria\n\n- A new, dated entry exists under `docs/idd-design-rationale.md`'s\n  \"## Documentation conventions\" section (and its canonical\n  `idd-template/docs/idd-design-rationale.md` source) citing\n  `kurone-kito/idd-skill#2474`, following the established \"cite the\n  observed incident\" convention.\n- The entry states the actionable takeaway: trace a documented output\n  field to its literal print/return call site in the current source,\n  never to a type name, interface field, or local variable name\n  alone.\n- `node scripts/audit-docs.mjs --check` passes.\n- `pnpm run docs:sync:check` passes (structure-mode pairs are not\n  auto-checked for content; verify the canonical and generated copies\n  stay consistent by hand).\n\n## Candidate files\n\n- `idd-template/docs/idd-design-rationale.md`\n- `docs/idd-design-rationale.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "641254e8ce59acfc51e62ce6a15147c4b847837ed80202c231bfe4569ddbb5fa",
+  "fetchedAt": "2026-09-24T04:42:53.811Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

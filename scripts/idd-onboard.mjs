@@ -33,18 +33,22 @@
 //
 // --verify: mechanical pass/fail for a target tree after --import and
 // --substitute have run, replacing a manual walkthrough of
-// `idd-template/ONBOARDING.md` Step 6 with four check groups: manifest
+// `idd-template/ONBOARDING.md` Step 6 with five check groups: manifest
 // completeness (reuses --import's own manifest resolution — no second file
 // list), placeholder residue (reuses --substitute's scanner — no second
-// scan), a stale-import signal (re-runs idd-doctor's content-based
-// drift detector against the target's imported files instead of forking its
-// logic, the #1208 shared-module convention `check-pnpm-boundary.mts`
-// already uses), and a package-pin advisory (#2987: warns, but never
-// blocks, when the target's effective `helperRuntime.profile` is
-// `ephemeral-npx`/`package-manager` with no `helperRuntime.packageSpec`
-// configured, so helper commands silently resolve against the mutable
-// default archive URL instead of an audited pin).
-import { execFileSync } from 'node:child_process';
+// scan), a helper-load check (#3238: for --profile vendored-node only,
+// spawns every cataloged helper under --target with --help and reports
+// any that fail to load), a stale-import signal (re-runs idd-doctor's
+// content-based drift detector against the target's imported files
+// instead of forking its logic, the #1208 shared-module convention
+// `check-pnpm-boundary.mts` already uses), and a package-pin advisory
+// (#2987: warns, but never blocks, when the target's effective
+// `helperRuntime.profile` is `ephemeral-npx`/`package-manager` with no
+// `helperRuntime.packageSpec` configured, so helper commands silently
+// resolve against the mutable default archive URL instead of an audited
+// pin).
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -58,9 +62,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { NON_TTY_ERROR } from './force-handoff.mjs';
 import { safeGhText } from './gh-exec.mjs';
 import {
+  buildCommandCatalog,
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
   PROFILE_NAMES,
@@ -763,7 +770,11 @@ function isProbablyBinary(content) {
  * binary files and `SCAN_EXCLUDED_PATHS`) and collect every
  * placeholder-shaped `{{...}}` token per file, in ascending path order.
  * Symlinks are deliberately not followed: imported template files are
- * regular files, and following links could escape the target tree.
+ * regular files, and following links could escape the target tree. This
+ * function stays whole-tree and scope-agnostic on purpose (#3291): a
+ * caller that needs to distinguish an imported file from an adopter-owned
+ * one narrows the result afterward via `partitionScansByScope`, so the
+ * walk itself never has to know the manifest.
  */
 export function scanPlaceholderTokens(targetDir) {
   const results = [];
@@ -1089,21 +1100,55 @@ function assertSafeGuardWorkflowDestination(targetDir, path) {
   if (!isSafeRelativePath(path)) {
     throw new Error(`refusing to write an unsafe path: ${path}`);
   }
-  if (hasNonDirectoryAncestor(targetDir, path)) {
+  assertSafePlainFileDestination(targetDir, path);
+}
+/**
+ * Whether `error` (from a caught `fs` call) is exactly Node's "no such
+ * file or directory" errno -- the only failure that legitimately means
+ * "this path doesn't exist yet," as opposed to `EACCES`/`EPERM` (exists,
+ * but this process can't read it) or another I/O error. A caller
+ * conflating any of those with "absent" can silently treat a real,
+ * unreadable file as safe to overwrite (#3292 review, Copilot).
+ */
+function isEnoent(error) {
+  return error?.code === 'ENOENT';
+}
+/**
+ * Fail closed (throw) unless `relativePath` (already confirmed safe and
+ * `targetDir`-relative by the caller — this does not itself run
+ * {@link isSafeRelativePath}) has no symlinked or otherwise
+ * non-directory ancestor under `targetDir`, and its leaf is either
+ * absent or a plain file. Generalized out of
+ * {@link assertSafeGuardWorkflowDestination} (#3292) so the
+ * `--write-policy-doc` destination guard and the `.github/idd/config.json`
+ * write guard share the same ancestor/leaf check instead of each writing
+ * their own. A non-`ENOENT` `lstatSync` failure (for example `EACCES` on
+ * the leaf itself) is never treated as "absent" -- it fails closed with
+ * its own error instead, rather than silently letting an unreadable
+ * existing entry through as if nothing were there (#3292 review,
+ * Copilot).
+ */
+function assertSafePlainFileDestination(targetDir, relativePath) {
+  if (hasNonDirectoryAncestor(targetDir, relativePath)) {
     throw new Error(
-      `refusing to write ${path}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
+      `refusing to write ${relativePath}: a non-directory (e.g. a symlink) sits on its path under ${targetDir}`,
     );
   }
-  const absolute = resolve(targetDir, path);
+  const absolute = resolve(targetDir, relativePath);
   let leafStat;
   try {
     leafStat = lstatSync(absolute);
-  } catch {
+  } catch (error) {
+    if (!isEnoent(error)) {
+      throw new Error(
+        `refusing to write ${relativePath}: could not stat the destination under ${targetDir} (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
     leafStat = null;
   }
   if (leafStat !== null && !leafStat.isFile()) {
     throw new Error(
-      `refusing to write ${path}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
+      `refusing to write ${relativePath}: an existing non-plain-file entry (e.g. a symlink) already occupies that path under ${targetDir}`,
     );
   }
 }
@@ -1564,21 +1609,211 @@ export function checkManifestCompleteness(sourceRoot, targetRoot, profile) {
   return { missingSource, missingTarget };
 }
 /**
- * Scan the target tree for leftover `{{...}}` tokens after onboarding.
- * Reuses wave 1's `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner
- * rather than a new scan: verify mode has no resolved substitution values to
- * consult (an empty resolution), so `buildSubstitutionPlan` puts every
- * occurrence of one of the seven onboarding placeholder tokens into
- * `residue` — the correct outcome here, since a converged onboarding run
- * should have already replaced them. Other `{{...}}`-shaped tokens land in
- * `unknownTokens`, informational just as they are for `--substitute`.
+ * The set of target-relative paths the placeholder scanner treats as
+ * in-scope (#3291): exactly the imported manifest's own target paths,
+ * minus `SCAN_EXCLUDED_PATHS`. Built from `resolveImportFiles`'s already-
+ * resolved file list -- callers do that I/O and pass `.files` in, so this
+ * stays a pure set-builder with no filesystem access of its own. The
+ * `SCAN_EXCLUDED_PATHS` subtraction lives here (not left to each caller)
+ * because several of its entries -- the `docs/onboarding/*.md` meta-docs
+ * -- ARE part of the core manifest, so omitting the subtraction here
+ * would silently widen scope back to files the scanner must still never
+ * read for substitution purposes.
  */
-export function checkPlaceholderResidue(targetRoot) {
-  const plan = buildSubstitutionPlan(scanPlaceholderTokens(targetRoot), {
+export function resolvePlaceholderScanScope(files) {
+  const scope = new Set();
+  for (const file of files) {
+    if (!SCAN_EXCLUDED_PATHS.has(file.targetPath)) {
+      scope.add(file.targetPath);
+    }
+  }
+  return scope;
+}
+/**
+ * Split `scans` into the files `scope` covers and everything else,
+ * flattening every out-of-scope file's tokens into `outOfScopeTokens`
+ * (#3291). `scanPlaceholderTokens`/`buildSubstitutionPlan` keep scanning
+ * and planning exactly as before -- this is a thin pre-filter in front of
+ * them, not a change to either, so no existing direct caller of either
+ * function is affected.
+ */
+export function partitionScansByScope(scans, scope) {
+  const inScope = [];
+  const outOfScopeTokens = [];
+  for (const scan of scans) {
+    if (scope.has(scan.file)) {
+      inScope.push(scan);
+      continue;
+    }
+    for (const [token, occurrences] of scan.tokens) {
+      outOfScopeTokens.push({ file: scan.file, token, occurrences });
+    }
+  }
+  return { inScope, outOfScopeTokens };
+}
+/**
+ * Scan the target tree for leftover `{{...}}` tokens after onboarding,
+ * scoped to `scope` (#3291: the imported manifest's own target paths --
+ * see `resolvePlaceholderScanScope`). Reuses wave 1's
+ * `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner rather than a
+ * new scan: verify mode has no resolved substitution values to consult
+ * (an empty resolution), so `buildSubstitutionPlan` puts every occurrence
+ * of one of the seven onboarding placeholder tokens found in an IN-SCOPE
+ * file into `residue` -- the correct outcome here, since a converged
+ * onboarding run should have already replaced them. An in-scope file's
+ * other `{{...}}`-shaped tokens land in `unknownTokens`; ANY token found
+ * outside `scope` lands in `outOfScopeTokens` instead, informational only
+ * and never blocking, matching `--substitute`'s own scope contract.
+ */
+export function checkPlaceholderResidue(targetRoot, scope) {
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scanPlaceholderTokens(targetRoot),
+    scope,
+  );
+  const plan = buildSubstitutionPlan(inScope, {
     values: {},
     unresolved: [],
   });
-  return { residue: plan.residue, unknownTokens: plan.unknownTokens };
+  return {
+    residue: plan.residue,
+    unknownTokens: plan.unknownTokens,
+    outOfScopeTokens,
+  };
+}
+/** Per-helper `--help` timeout: generous relative to the ~60ms/helper the
+ * full 50-helper sweep took in the issue's own reproduction, so only a
+ * genuine hang trips it, not ordinary process-startup variance. */
+const HELPER_LOAD_TIMEOUT_MS = 15_000;
+/** `HELPER_COMMANDS` id of the one cataloged helper that is an
+ * interactive-only wizard: it rejects non-TTY stdin with its exported
+ * `NON_TTY_ERROR` before parsing any argument (including `--help`), in the
+ * source repository too, so its expected "loaded successfully" outcome is
+ * exit 1 with that message on stderr, never exit 0 with stdout. */
+const FORCE_HANDOFF_HELPER_ID = 'force-handoff';
+/**
+ * Whether `targetRoot`/`entryPath`'s REALPATH (symlinks resolved) still
+ * resolves inside `targetRoot`'s own realpath. `fileExists`'s `lstatSync`
+ * only protects the leaf path component -- a symlinked ANCESTOR directory
+ * (for example `targetRoot/scripts` itself) is still followed during
+ * ordinary path resolution, so a real file reached only through such a
+ * symlink would otherwise be spawned from outside the confined `--target`
+ * root (Copilot review, PR #3303). Mirrors `resolveConfinedDirectory`'s
+ * own realpath-boundary check (`isWithinBoundary`), reused here for one
+ * helper entry instead of the whole `--target` root. Fails closed
+ * (`false`) on any `realpathSync` error, e.g. a dangling symlink.
+ */
+function isHelperEntryConfined(targetRoot, entryPath) {
+  try {
+    const realTarget = realpathSync(targetRoot);
+    const realEntry = realpathSync(resolve(targetRoot, entryPath));
+    return isWithinBoundary(realEntry, realTarget);
+  } catch {
+    return false;
+  }
+}
+/** Spawn one cataloged helper's `entryPath` under `targetRoot` with
+ * `--help`, working directory `targetRoot`, stdin ignored (so a
+ * TTY-sensitive helper like `force-handoff` observes a non-TTY stdin the
+ * same way a real onboarding session's non-interactive shell would). */
+function spawnHelperHelp(targetRoot, entryPath) {
+  const result = spawnSync(
+    process.execPath,
+    [resolve(targetRoot, entryPath), '--help'],
+    {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      timeout: HELPER_LOAD_TIMEOUT_MS,
+      // node:child_process's `timeout` option only *sends* `killSignal`
+      // once the deadline elapses -- it is not itself a hard deadline.
+      // The default killSignal is SIGTERM, which a cataloged helper (or
+      // one of its imports) can install its own handler for and ignore,
+      // leaving this synchronous call blocked indefinitely despite the
+      // configured timeout (Copilot review, PR #3303). --verify executes
+      // target-owned code, so this check cannot assume every helper
+      // cooperates with SIGTERM the way this repository's own helpers do
+      // -- force termination instead.
+      killSignal: 'SIGKILL',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return {
+    status: result.status,
+    signal: result.signal,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    timedOut: result.error?.code === 'ETIMEDOUT',
+  };
+}
+/** Describe why one probe did not match its expected outcome, for
+ * `HelperLoadFailure.reason`. */
+function describeHelperLoadFailure(probe) {
+  if (probe.timedOut) {
+    return `timed out after ${HELPER_LOAD_TIMEOUT_MS}ms (signal ${String(probe.signal)})`;
+  }
+  if (probe.signal !== null) {
+    return `killed by signal ${probe.signal}`;
+  }
+  const stderrSnippet = probe.stderr.trim().split('\n')[0] ?? '';
+  return `exited ${String(probe.status)}${stderrSnippet ? `: ${stderrSnippet}` : ' with no stderr'}`;
+}
+/**
+ * For `--profile vendored-node`, spawn every cataloged helper's
+ * `entryPath` under `targetRoot` with `--help` and report any that fail
+ * to load (#3238: many vendored helpers cannot even print `--help` in a
+ * target with no `package.json` before the `bundle-root.mts` fix this
+ * issue also lands). `--verify` reports a clean `manifestCompleteness`
+ * while the helpers cannot start is the exact gap this check exists to
+ * close.
+ *
+ * Reads the catalog from `helper-runtime-manifest.mts`'s
+ * `buildCommandCatalog` (a pure map over the static `HELPER_COMMANDS`
+ * table, not a filesystem walk) rather than `collectVendoredFiles`, since
+ * only the cataloged top-level entry points are spawned here, not every
+ * file their import graphs transitively touch.
+ *
+ * Skips (never probes, never fails) an entryPath absent under
+ * `targetRoot` — that is `checkManifestCompleteness`'s own
+ * `missingTarget` finding; probing a file that does not exist would only
+ * duplicate it under a different name. An entryPath present under
+ * `targetRoot` only through a symlinked ancestor directory is a blocking
+ * failure instead (`isHelperEntryConfined`), never spawned: `fileExists`'s
+ * leaf-only `lstatSync` cannot by itself prove the resolved path stays
+ * inside `--target`.
+ */
+export function checkHelperLoad(targetRoot, profile) {
+  if (profile !== 'vendored-node') {
+    return { applicable: false, probed: [], failed: [] };
+  }
+  const probed = [];
+  const failed = [];
+  for (const command of buildCommandCatalog()) {
+    if (!fileExists(targetRoot, command.entryPath)) {
+      continue;
+    }
+    if (!isHelperEntryConfined(targetRoot, command.entryPath)) {
+      failed.push({
+        id: command.id,
+        entryPath: command.entryPath,
+        reason:
+          'resolves outside --target through a symlinked ancestor directory; refusing to spawn it',
+      });
+      continue;
+    }
+    probed.push(command.entryPath);
+    const probe = spawnHelperHelp(targetRoot, command.entryPath);
+    const loaded =
+      command.id === FORCE_HANDOFF_HELPER_ID
+        ? probe.status === 1 && probe.stderr.includes(NON_TTY_ERROR)
+        : probe.status === 0 && probe.stdout.trim() !== '';
+    if (!loaded) {
+      failed.push({
+        id: command.id,
+        entryPath: command.entryPath,
+        reason: describeHelperLoadFailure(probe),
+      });
+    }
+  }
+  return { applicable: true, probed, failed };
 }
 /**
  * Re-run idd-doctor's content-based stale-import detector
@@ -1696,12 +1931,12 @@ export function checkPackagePinWarning(targetRoot) {
   return { profile, applicable, packageSpecConfigured, warning };
 }
 /**
- * Run all four wave-3 check groups against one target tree. Neither the
+ * Run all five wave-3 check groups against one target tree. Neither the
  * stale-import signal nor the package-pin advisory ever contributes to
  * `blocking` (see `checkStaleImportSignal`'s and
- * `checkPackagePinWarning`'s doc comments); only a manifest gap or
- * placeholder residue can fail verify, matching the exit contract in
- * `runVerifyCli`.
+ * `checkPackagePinWarning`'s doc comments); a manifest gap, placeholder
+ * residue, or a helper-load failure can fail verify, matching the exit
+ * contract in `runVerifyCli`.
  */
 export function runVerify(sourceRoot, targetRoot, profile) {
   const manifestCompleteness = checkManifestCompleteness(
@@ -1709,16 +1944,32 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     targetRoot,
     profile,
   );
-  const placeholderResidue = checkPlaceholderResidue(targetRoot);
+  // #3291: a second `resolveImportFiles` call, deliberately -- keeping
+  // `checkManifestCompleteness`'s own `(sourceRoot, targetRoot, profile?)`
+  // signature untouched (5 tests call it directly) costs one extra
+  // manifest resolution per `--verify` run rather than a signature change
+  // that would ripple through those callers. `--verify` is not a hot
+  // loop, and the vendored-node profile's extra helper-bundle walk this
+  // duplicates is a small, bounded read.
+  const placeholderScanScope = resolvePlaceholderScanScope(
+    resolveImportFiles(sourceRoot, profile).files,
+  );
+  const placeholderResidue = checkPlaceholderResidue(
+    targetRoot,
+    placeholderScanScope,
+  );
+  const helperLoad = checkHelperLoad(targetRoot, profile);
   const staleImportSignal = checkStaleImportSignal(targetRoot);
   const packagePinWarning = checkPackagePinWarning(targetRoot);
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
     manifestCompleteness.missingTarget.length > 0 ||
-    placeholderResidue.residue.length > 0;
+    placeholderResidue.residue.length > 0 ||
+    helperLoad.failed.length > 0;
   return {
     manifestCompleteness,
     placeholderResidue,
+    helperLoad,
     staleImportSignal,
     packagePinWarning,
     blocking,
@@ -2448,8 +2699,10 @@ function buildFilledPolicyDocument(answers, options = {}) {
   ).map((row) => {
     const transcriptValue = valueById.get(row.id);
     const value =
-      options.issueMediated && row.id === 'issue-authoring-companion'
-        ? 'not installed'
+      row.id === 'issue-authoring-companion'
+        ? options.issueMediated
+          ? 'not installed'
+          : normalizeCompanionStatusDisplay(transcriptValue)
         : transcriptValue;
     const rawBody = row.renderBody
       ? row.renderBody(value)
@@ -2471,6 +2724,191 @@ function buildFilledPolicyDocument(answers, options = {}) {
   ].join('\n');
 }
 /**
+ * Map the `issue-authoring-companion` catalog's enum value
+ * (`hearing-catalog.json`'s `not-installed` / `installed` options) to the
+ * documented display form the rest of the template ecosystem uses
+ * (`{installed | not installed}` in `policy-decisions.md`,
+ * `issue-mediated-bootstrap.md`, and `--issue-mediated`'s own override
+ * above). Only `not-installed` has a differing display form; `installed`
+ * is already identical either way (#3292).
+ */
+function normalizeCompanionStatusDisplay(value) {
+  return value === 'not-installed' ? 'not installed' : value;
+}
+/**
+ * HTML-comment marker naming the generator, so a re-run can recognize its
+ * own prior output (see {@link buildPolicyDocWithSentinel}). Not a secret
+ * or a security boundary by itself -- only the accompanying content hash
+ * proves the body is unedited.
+ */
+const POLICY_DOC_SENTINEL_TAG = 'idd-onboard-generated-policy-document';
+/** The literal text preceding the sentinel's hex digest, used by both render and parse. */
+const POLICY_DOC_SENTINEL_MARKER = `\n\n<!-- ${POLICY_DOC_SENTINEL_TAG}\nsha256: `;
+/**
+ * Append a trailing sentinel to `body` (the rendered
+ * {@link buildFilledPolicyDocument} output) before it is written to
+ * `--write-policy-doc`'s destination (#3292): an HTML comment naming the
+ * generator and carrying a SHA-256 of `body` on its own line, so every
+ * sentinel line stays well inside `MD013`'s 80-column limit. Placed after
+ * a blank line at the very end of the document -- never at the top --
+ * so it cannot interfere with #3227's first-line `# IDD Policy
+ * Configuration Record` heading. `body` itself (the return value of
+ * `buildFilledPolicyDocument`) is never mutated; only the file this
+ * function's result is written to carries the sentinel -- the JSON
+ * verdict's `policyDocument` field stays sentinel-free.
+ */
+function buildPolicyDocWithSentinel(body) {
+  const hash = createHash('sha256').update(body).digest('hex');
+  return `${body}${POLICY_DOC_SENTINEL_MARKER}${hash}\n-->\n`;
+}
+/**
+ * Parse a previously written {@link buildPolicyDocWithSentinel} document
+ * back into its pre-sentinel `body` and the hex digest the sentinel
+ * carries, or `null` when no well-formed sentinel is found at the end of
+ * `content` (absent, truncated, or followed by anything other than the
+ * closing `-->` and an optional trailing newline). Uses the *last*
+ * occurrence of the marker so a coincidental match earlier in `content`
+ * (never expected in practice — the rendered template does not contain
+ * this literal text) cannot be mistaken for the real, trailing sentinel.
+ */
+function parsePolicyDocSentinel(content) {
+  const markerIndex = content.lastIndexOf(POLICY_DOC_SENTINEL_MARKER);
+  if (markerIndex === -1) {
+    return null;
+  }
+  const afterMarker = content.slice(
+    markerIndex + POLICY_DOC_SENTINEL_MARKER.length,
+  );
+  const match = /^([0-9a-f]{64})\n-->\n?$/.exec(afterMarker);
+  if (!match) {
+    return null;
+  }
+  return { body: content.slice(0, markerIndex), hash: match[1] };
+}
+/**
+ * Whether `content` is exactly this generator's own, unedited prior
+ * output: it carries a well-formed {@link parsePolicyDocSentinel} sentinel
+ * whose embedded hash matches a fresh SHA-256 of its own preceding body.
+ * A hand-edited former generated document (body changed without touching
+ * or recomputing the sentinel) or a file this generator never wrote both
+ * return `false` here -- the anti-clobber check
+ * ({@link assertPolicyDocNotClobbered}) refuses to overwrite either
+ * without `--force` (#3292).
+ */
+function isUneditedGeneratedPolicyDoc(content) {
+  const parsed = parsePolicyDocSentinel(content);
+  return (
+    parsed !== null &&
+    createHash('sha256').update(parsed.body).digest('hex') === parsed.hash
+  );
+}
+/**
+ * Resolve and validate `--write-policy-doc`'s raw argument as a write
+ * destination confined to `targetDir` (#3292). `rawPath` is resolved
+ * against the current working directory exactly as the write itself
+ * already did (documented in `ONBOARDING.md`'s Step 5 -- a relative path
+ * is not rooted at `--target`), then the result must land inside
+ * `targetDir` itself: a path resolving outside it (an absolute path
+ * elsewhere, or enough `..` segments to escape) is refused before any
+ * write, rather than silently writing there. `assertSafePlainFileDestination`
+ * then applies the same ancestor/leaf checks
+ * `assertSafeGuardWorkflowDestination` uses for the guard-workflow write
+ * (no symlinked or otherwise non-directory ancestor below `targetDir`,
+ * and a leaf that is either absent or a plain file) -- reused rather than
+ * duplicated, per this issue's own proposed change. Every violation here
+ * is a usage error (thrown, exit `2`), matching `resolveConfinedDirectory`'s
+ * own convention for `--target`/`--source`/`--allow-root`.
+ */
+function resolvePolicyDocDestination(targetDir, rawPath) {
+  const absolute = resolve(rawPath);
+  const relativeToTarget = relative(targetDir, absolute);
+  if (
+    relativeToTarget === '' ||
+    relativeToTarget === '..' ||
+    relativeToTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeToTarget)
+  ) {
+    throw new Error(
+      `--write-policy-doc must resolve inside --target, not outside it: ${rawPath}`,
+    );
+  }
+  assertSafePlainFileDestination(
+    targetDir,
+    relativeToTarget.split(sep).join('/'),
+  );
+  return absolute;
+}
+/**
+ * Fail closed (throw, usage error, exit `2`) when writing `content` to
+ * `absolutePath` would silently destroy content this generator did not
+ * itself produce (#3292): an absent destination is always safe (first
+ * write); an existing plain file is safe to overwrite only when it is
+ * already this generator's own unedited output
+ * ({@link isUneditedGeneratedPolicyDoc}) or `force` was passed. A
+ * non-plain-file leaf (a symlink, a directory) is never reachable here --
+ * `resolvePolicyDocDestination`'s own `assertSafePlainFileDestination`
+ * call already refused it earlier, and unlike this content check,
+ * `force` cannot override that one (matching `--import`'s own
+ * non-file-collision convention). A non-`ENOENT` read failure (for
+ * example `EACCES` on an existing-but-unreadable file) is never treated
+ * as "absent" either -- silently doing so would let this process
+ * overwrite content it never actually verified was safe to overwrite
+ * (#3292 review, Copilot).
+ */
+function assertPolicyDocNotClobbered(absolutePath, force) {
+  if (force) {
+    return;
+  }
+  let existing;
+  try {
+    existing = readFileSync(absolutePath, 'utf8');
+  } catch (error) {
+    if (!isEnoent(error)) {
+      throw new Error(
+        `refusing to write ${absolutePath}: could not read the existing destination to verify it is safe to overwrite (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    existing = null;
+  }
+  if (existing === null || isUneditedGeneratedPolicyDoc(existing)) {
+    return;
+  }
+  throw new Error(
+    `refusing to overwrite ${absolutePath}: it already exists and is not ` +
+      'an unedited idd-onboard --record-policy generated document -- pass ' +
+      '--force to overwrite it anyway, or choose a different --write-policy-doc path',
+  );
+}
+/**
+ * Whether `pathA` and `pathB` -- both already confirmed to exist and be
+ * plain files by the caller -- denote the same underlying file, by
+ * comparing device/inode identity rather than a literal string or
+ * `realpathSync` comparison (#3292 review, Copilot, two rounds):
+ * `realpathSync` alone still misses a hard link, since a hard link is a
+ * second directory entry pointing at the same inode with no symlink for
+ * `realpathSync` to resolve through -- it has its own fully-canonical
+ * path, distinct from the original's. Comparing `lstatSync(...).dev`/
+ * `.ino` instead catches both that case and the earlier
+ * case-insensitive-filesystem alias (`.github/idd/CONFIG.JSON` and
+ * `.github/idd/config.json` on Windows/macOS share one directory entry,
+ * hence one inode) with a single mechanism -- the identity test Node's
+ * own `fs.Stats` documentation recommends for this exact purpose.
+ * Returns `false` on any `lstatSync` failure (for example one path no
+ * longer exists by the time this runs) rather than throwing here -- the
+ * caller's own ancestor/leaf checks are the authoritative existence
+ * guard; this helper only decides sameness for two paths already known
+ * to exist.
+ */
+function isSameExistingFile(pathA, pathB) {
+  try {
+    const statA = lstatSync(pathA);
+    const statB = lstatSync(pathB);
+    return statA.dev === statB.dev && statA.ino === statB.ino;
+  } catch {
+    return false;
+  }
+}
+/**
  * Exported (not just called from the CLI dispatcher below) so the
  * `readers` parameter is a genuine injection point unit tests can reach
  * directly, matching {@link OnboardEvidenceReaders.readRemoteBranchExists}'s
@@ -2486,6 +2924,12 @@ export function runRecordPolicyCli(args, readers = {}) {
     args.allowRoots,
   );
   const configPath = join(targetDir, '.github', 'idd', 'config.json');
+  // #3292: the same ancestor/leaf guard the --write-policy-doc destination
+  // uses below, applied to .github/idd/config.json itself before this
+  // function reads or writes it -- a symlinked ancestor or a symlinked
+  // config.json leaf pointing outside --target must never be silently
+  // followed by either the read further down or the --apply write.
+  assertSafePlainFileDestination(targetDir, '.github/idd/config.json');
   if (!existsSync(configPath)) {
     throw new Error(
       `--record-policy is post-import only; missing ${configPath}`,
@@ -2610,10 +3054,70 @@ export function runRecordPolicyCli(args, readers = {}) {
   });
   // --dry-run always wins over --apply, matching runImportCli's convention.
   const canWrite = args.apply && !args.dryRun;
+  // #3292: resolve and validate the --write-policy-doc destination (and
+  // refuse an unsafe/clobbering one) before either write below, so a
+  // refusal here never leaves config.json written while the doc write is
+  // skipped -- the ordering the issue's own proposed change requires.
+  let policyDocDestination = null;
+  if (canWrite && args.writePolicyDoc) {
+    policyDocDestination = resolvePolicyDocDestination(
+      targetDir,
+      args.writePolicyDoc,
+    );
+    // #3292 review (Copilot): reject a --write-policy-doc destination
+    // that resolves to .github/idd/config.json itself, unconditionally
+    // -- --force must never permit this. Without this check, --force
+    // would pass assertPolicyDocNotClobbered's content guard (it
+    // short-circuits before even reading the file), then the Markdown
+    // document write below would immediately overwrite the config
+    // write that already landed on the very same path, leaving the
+    // required config.json invalid. The literal-string check catches
+    // the common identical-path case cheaply; isSameExistingFile also
+    // catches a case-insensitive-filesystem alias (#3292 review round
+    // 2, Copilot) that differs as a string but denotes the same file.
+    if (
+      policyDocDestination === resolve(configPath) ||
+      isSameExistingFile(policyDocDestination, configPath)
+    ) {
+      throw new Error(
+        `--write-policy-doc must not resolve to .github/idd/config.json itself: ${args.writePolicyDoc}`,
+      );
+    }
+    assertPolicyDocNotClobbered(policyDocDestination, args.force);
+    // Create a missing parent directory before either write below (#3292
+    // review, CodeRabbit): the ancestor check inside
+    // resolvePolicyDocDestination only refuses a non-directory ancestor,
+    // by design leaving a genuinely absent one for this recursive
+    // mkdirSync to create -- matching applyUntrustedLabelerGuardPlan's
+    // own mkdirSync-then-write convention. Doing this before the
+    // config.json write keeps a missing-directory failure from landing
+    // config.json first and then failing the doc write on the very next
+    // line, which is exactly the half-applied --apply the ordering
+    // requirement above exists to prevent.
+    mkdirSync(dirname(policyDocDestination), { recursive: true });
+  }
   if (canWrite) {
+    // #3292 review (Copilot): re-run the ancestor/leaf confinement
+    // check immediately before each write below, narrowing the gap
+    // between it and the earlier check to a single-statement TOCTOU
+    // window -- the same belt-and-suspenders precedent
+    // assertSafeGuardWorkflowDestination's own doc comment already
+    // documents for applyUntrustedLabelerGuardPlan's write. This
+    // narrows, but does not eliminate, a concurrent symlink-swap race;
+    // no no-follow/atomic-write primitive exists anywhere in this
+    // module (a larger hardening effort across every write path here,
+    // out of scope for this issue).
+    assertSafePlainFileDestination(targetDir, '.github/idd/config.json');
     writeFileSync(configPath, `${JSON.stringify(mergedConfig, null, 2)}\n`);
-    if (args.writePolicyDoc) {
-      writeFileSync(resolve(args.writePolicyDoc), `${policyDocument}\n`);
+    if (policyDocDestination) {
+      assertSafePlainFileDestination(
+        targetDir,
+        relative(targetDir, policyDocDestination).split(sep).join('/'),
+      );
+      writeFileSync(
+        policyDocDestination,
+        buildPolicyDocWithSentinel(policyDocument),
+      );
     }
   }
   const verdict = {
@@ -2623,8 +3127,7 @@ export function runRecordPolicyCli(args, readers = {}) {
     transcript: resolve(args.transcript),
     configPatch: renderPatchForVerdict(patch),
     policyDocument,
-    writtenPolicyDocPath:
-      canWrite && args.writePolicyDoc ? resolve(args.writePolicyDoc) : null,
+    writtenPolicyDocPath: policyDocDestination,
     written: canWrite,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
@@ -2917,9 +3420,14 @@ async function runCli() {
   }
   if (args.recordPolicy) {
     // Not hearOnlyFlagsPresent(args): that set includes bare --apply,
-    // which --record-policy shares and must accept.
+    // which --record-policy shares and must accept. Not the full
+    // importOnlyFlagsPresent(args) either (#3292): --force is meaningful
+    // here too -- it lets --write-policy-doc overwrite a destination that
+    // is not this generator's own unedited output -- so it is excluded
+    // from this stage's own foreign-flag list even though --hear and bare
+    // --substitute below still reject it via the unfiltered helper.
     const foreign = [
-      ...importOnlyFlagsPresent(args),
+      ...importOnlyFlagsPresent(args).filter((flag) => flag !== '--force'),
       ...substituteOnlyFlagsPresent(args),
       ...(args.propose ? ['--propose'] : []),
       ...(args.answers !== undefined ? ['--answers'] : []),
@@ -3014,10 +3522,35 @@ async function runCli() {
     ...args.overrides,
   };
   const resolution = resolvePlaceholderValues(targetDir, mergedOverrides);
-  const plan = buildSubstitutionPlan(
+  // #3291: --substitute takes no --source, so its scan scope always comes
+  // from the RUNNING CLI's own idd-skill package root -- never an
+  // adopter-supplied tree. Resolved via the shared, marker-first
+  // `resolveBundleRoot` (#3238) rather than a nearest-`package.json`
+  // walk of its own (2026-09-24 review): a nearest-`package.json` walk
+  // can stop at an outer workspace/package ancestor before reaching the
+  // actual idd-skill (or vendored-node bundle) root, reading the wrong
+  // `audit/sync-manifest.json` or none at all. A tree with neither the
+  // bundle marker nor `package.json` anywhere in the (bounded) walk
+  // fails closed here, naming the tried root, and reaches main()'s
+  // exit-2 usage-error handling rather than ever falling back to
+  // scanning the whole --target tree.
+  let scanSourceRoot;
+  let scanScope;
+  try {
+    scanSourceRoot = resolveBundleRoot(import.meta.dirname);
+    scanScope = resolvePlaceholderScanScope(
+      resolveImportFiles(scanSourceRoot).files,
+    );
+  } catch (error) {
+    throw new Error(
+      `--substitute could not resolve its own core file set: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
     scanPlaceholderTokens(targetDir),
-    resolution,
+    scanScope,
   );
+  const plan = buildSubstitutionPlan(inScope, resolution);
   // #2671: planned before any write below (and before the canWrite check),
   // so a malformed `labels.*` value (e.g. a control character rejected by
   // `buildUntrustedLabelerGuardWorkflowContent`) throws and aborts the
@@ -3043,6 +3576,14 @@ async function runCli() {
     plan: plan.entries,
     residue: plan.residue,
     unknownTokens: plan.unknownTokens,
+    // #3291: every `{{...}}`-shaped token found outside the imported
+    // core file set -- informational only, never written, never
+    // blocking (see resolvePlaceholderScanScope/partitionScansByScope).
+    outOfScopeTokens,
+    scope: {
+      sourceRoot: scanSourceRoot,
+      inScopeFileCount: scanScope.size,
+    },
     skippedPaths: listSkippedPlaceholderPaths(targetDir),
     filesChanged,
     // Folds in untrustedLabelerGuardWritten (#2684 review): a caller
@@ -3149,16 +3690,17 @@ function runVerifyCli(args) {
     profile: args.profile ?? null,
     manifestCompleteness: result.manifestCompleteness,
     placeholderResidue: result.placeholderResidue,
+    helperLoad: result.helperLoad,
     staleImportSignal: result.staleImportSignal,
     packagePinWarning: result.packagePinWarning,
     blocking: result.blocking,
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  // Blocking findings (manifest gap or placeholder residue) signal via exit
-  // 1, matching --substitute / --import's contract; the stale-import signal
-  // and the package-pin advisory are both informational only and never
-  // flip this exit code (see checkStaleImportSignal / checkPackagePinWarning
-  // / runVerify).
+  // Blocking findings (manifest gap, placeholder residue, or a helper-load
+  // failure) signal via exit 1, matching --substitute / --import's
+  // contract; the stale-import signal and the package-pin advisory are
+  // both informational only and never flip this exit code (see
+  // checkStaleImportSignal / checkPackagePinWarning / runVerify).
   process.exit(result.blocking ? 1 : 0);
 }
 function printHelp() {
@@ -3173,7 +3715,7 @@ function printHelp() {
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
-       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>]
+       node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>] [--force]
 
 Onboarding automation.
 
@@ -3260,21 +3802,25 @@ nothing in that case); 2 usage or configuration error.
 
 --verify (wave 3): mechanical pass/fail for a target tree after --import and
 --substitute have run, in place of a manual walkthrough of
-idd-template/ONBOARDING.md Step 6. Reports four check groups:
+idd-template/ONBOARDING.md Step 6. Reports five check groups:
 manifestCompleteness (every file --import would copy for --source /
 --profile exists under --target, reusing that same manifest resolution —
 missing files are blocking), placeholderResidue (leftover {{...}} tokens via
 --substitute's own scanner — a remaining onboarding placeholder is blocking
-residue, any other {{...}}-shaped token stays informational),
-staleImportSignal (idd-doctor's content-based stale-import detector re-run
-against the target's imported files — informational only, never blocking),
-and packagePinWarning (advisory only, never blocking: flags an
-ephemeral-npx/package-manager helperRuntime.profile with no configured
-helperRuntime.packageSpec, so helper commands silently resolve against the
-mutable default archive URL instead of an audited pin).
+residue, any other {{...}}-shaped token stays informational), helperLoad
+(--profile vendored-node only: spawns every cataloged helper under
+--target's own tree with --help and reports any that fail to load — a
+failure is blocking; not applicable, and spawns nothing, for any other
+profile), staleImportSignal (idd-doctor's content-based stale-import
+detector re-run against the target's imported files — informational only,
+never blocking), and packagePinWarning (advisory only, never blocking:
+flags an ephemeral-npx/package-manager helperRuntime.profile with no
+configured helperRuntime.packageSpec, so helper commands silently resolve
+against the mutable default archive URL instead of an audited pin).
 
-Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest gap
-or placeholder residue); 2 usage or configuration error.
+Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest
+gap, placeholder residue, or a helper-load failure); 2 usage or
+configuration error.
 
   --verify                           run the verify stage
   --source <dir>                     local idd-skill source tree the target was imported from
@@ -3333,8 +3879,14 @@ never writes .github/idd/config.json, never requires --source.
 
 --record-policy (#2282): consumes a confirmed --hear transcript's
 policy-kind answers. Post-import only: --target must already contain
-.github/idd/config.json. Never edits ONBOARDING.md, CLAUDE.md,
-AGENTS.md, or GEMINI.md.
+.github/idd/config.json. Refuses (exit 2) to edit ONBOARDING.md,
+CLAUDE.md, AGENTS.md, or GEMINI.md -- or any other --write-policy-doc
+destination -- unless it is absent, is already this generator's own
+unedited prior output, or --force is passed (#3292). The destination
+must also resolve inside --target with no symlinked or otherwise
+non-directory ancestor and no non-plain-file leaf; --force cannot
+override that part of the check, only the content-differs refusal.
+The same ancestor/leaf check applies to .github/idd/config.json itself.
 
   --record-policy --transcript <file> --target <dir>
                                dry-run (default): print the JSON verdict
@@ -3355,7 +3907,16 @@ AGENTS.md, or GEMINI.md.
                                appear in the filled Markdown template only.
   --write-policy-doc <path>    also write the filled Markdown template to
                                <path> (--apply only); without this flag the
-                               template is stdout-only.
+                               template is stdout-only. The written file
+                               carries a trailing generated-document
+                               sentinel (an HTML comment with a content
+                               hash) the anti-clobber check above reads on
+                               a later run; the stdout-only JSON verdict's
+                               policyDocument field never carries it.
+  --force                       allow --write-policy-doc to overwrite an
+                               existing destination that is not this
+                               generator's own unedited output (has no
+                               effect without --write-policy-doc).
   --issue-mediated              record the issue-authoring companion as
                                \`not installed\` in the policy document,
                                regardless of the transcript value.

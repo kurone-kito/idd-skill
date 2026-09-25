@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-09",
+  "category": "synthetic",
+  "note": "#2767 item 9 (comment-looking text inside a Markdown link title masked as a real HTML comment): findHtmlCommentRanges previously treated every unterminated \"<!--\" (no matching \"-->\" anywhere later in the body) the same way regardless of position, masking from that point through end-of-body -- including a \"<!--\" sitting mid-line inside a link title's quoted text, which is ordinary prose there, never a real HTML comment or block opener. That swallowed the genuine, later \"Maintainer decision (...)\" marker entirely, failing both Check 7 verifiability and A4's autonomous_completion for an issue that actually has a valid resolved decision. An intermediate #3282 revision (masking evaluateAutonomousCompletion's own scanned corpus through the same pipeline, per that issue's Proposed Change #1) changed the symptom from a false autonomous_completion FAIL to a false PASS without touching the root cause. FIXED (#3282, Copilot/CodeRabbit review on PR #3413): findHtmlCommentRanges now only lets an unterminated opener extend through end-of-text when it sits at a CommonMark HTML-block type-2 opening position -- after stripping 0+ blockquote container markers and optionally one list-item marker (its own required padding bounded to 1-4 columns, a bare tab counted via the usual tab-stop rule), at most 3 more leading spaces precede the opener -- confirmed against GitHub's own renderer via `gh api markdown`, which renders this exact body's link title verbatim and the \"Maintainer decision\" line as an ordinary, visible paragraph (and separately confirms a genuine line-start, blockquote-nested, or list-item-opening unterminated opener still swallows the rest of the document, unaffected by this fix). A mid-line unterminated opener like this one is no longer masked at all, so both Check 7 and A4's autonomous_completion now correctly see the resolved-decision marker and pass.",
+  "title": "Adopt option A background",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\nSee [draft notes](https://example.com/doc \"<!-- still drafting\") for background.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "2fc2b4ac9c18d013116e5b1c5f1a84fd1a757f53b28397de89ad5931a3feed1a",
+  "fetchedAt": "2026-09-24T07:22:41.390Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

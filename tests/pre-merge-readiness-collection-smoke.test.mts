@@ -45,6 +45,7 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       body: 'looks good',
       createdAt: '2026-07-31T11:00:00Z',
       updatedAt: '2026-07-31T11:00:00Z',
+      lastEditedAt: undefined,
     },
   );
   assert.equal(
@@ -53,6 +54,29 @@ test('normalizeComment maps REST issue-comment fields, falling back to createdAt
       updated_at: '2026-07-31T12:00:00Z',
     }).updatedAt,
     '2026-07-31T12:00:00Z',
+  );
+});
+
+test('normalizeComment carries last_edited_at through to lastEditedAt (#3246)', () => {
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: null,
+    }).lastEditedAt,
+    null,
+  );
+  assert.equal(
+    normalizeComment({
+      id: 123,
+      body: 'looks good',
+      created_at: '2026-07-31T11:00:00Z',
+      user: { login: 'Commenter-User' },
+      last_edited_at: '2026-07-31T11:30:00Z',
+    }).lastEditedAt,
+    '2026-07-31T11:30:00Z',
   );
 });
 
@@ -219,6 +243,11 @@ function buildStubGhScript(
   threadResolved: boolean,
   options: {
     closingIssuesReferences?: unknown[];
+    // #3298: the PR's own `pulls/{pr}/commits` listing -- collectPreMergeReadiness
+    // now always fetches this (previously only under forcedHandoffEnabled),
+    // so every scenario needs a route for it; empty (the default) means "no
+    // stray commit-message closes."
+    commits?: unknown[];
     failOnClaimComments?: boolean;
     configJson?: string;
   } = {},
@@ -254,6 +283,7 @@ function buildStubGhScript(
   const prComments = [
     {
       id: 1,
+      node_id: 'IC_kwDOexample001',
       body: 'looks good',
       created_at: '2026-07-31T11:00:00Z',
       user: { login: 'commenter-user' },
@@ -362,7 +392,21 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 }
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
+// #3246: listWorkItemComments' includeEditState opt-in batch-resolves
+// each PR comment's lastEditedAt via nodes(ids:) -- every fixture
+// comment is unedited by construction.
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) out(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        nodes: prComments.map((comment) => ({
+          id: comment.node_id,
+          lastEditedAt: null,
+        })),
+      },
+    }),
+  )});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
+if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/commits`}') out(${JSON.stringify(ndjson(options.commits ?? []))});
 ${
   options.configJson !== undefined
     ? `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/contents/.github/idd/config.json`}') out(${JSON.stringify(Buffer.from(options.configJson, 'utf8').toString('base64'))});`
@@ -376,7 +420,10 @@ process.exit(1);
 
 function runPreMergeReadinessSmoke(
   threadResolved: boolean,
-  options: { configJson?: string } = {},
+  options: {
+    configJson?: string;
+    closingIssuesReferences?: unknown[];
+  } = {},
 ): Record<string, unknown> {
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
   // #2373: `configJson` is served from the stub's own
@@ -386,7 +433,10 @@ function runPreMergeReadinessSmoke(
   // PR worktree's own copy.
   const restore = stubExecutable(
     'gh',
-    buildStubGhScript(threadResolved, { configJson: options.configJson }),
+    buildStubGhScript(threadResolved, {
+      configJson: options.configJson,
+      closingIssuesReferences: options.closingIssuesReferences,
+    }),
   );
   try {
     const output = execFileSync(
@@ -434,7 +484,14 @@ function runPreMergeReadinessSmoke(
 // normalizeThread changes a concrete assertion below (verified manually
 // against a mutated build; see the PR description).
 test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh payloads end-to-end', () => {
-  const report = runPreMergeReadinessSmoke(true);
+  // #3298: closingIssuesReferences matches the claimed issue so this truly
+  // "clean" scenario does not pick up a spurious closing-set mismatch (the
+  // stub's own default closingIssuesReferences is empty, which would
+  // otherwise read as the claimed issue's closing keyword never having
+  // registered).
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+  });
 
   // normalizeComment: id/author.login/createdAt/body flow into
   // unrepliedComments.
@@ -506,8 +563,13 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
 // `providerHealth` value -- and asserts the parsed reports are byte-
 // identical, since `pre-merge-readiness.mts` never reads this key.
 test('pre-merge-readiness.mjs CLI: a configured providerHealth policy changes no existing output field (#2319 isolation)', () => {
-  const baseline = runPreMergeReadinessSmoke(true);
+  // #3298: same closing-set fix as the clean-scenario test above, applied
+  // identically to both calls so the byte-identical assertion below still
+  // isolates providerHealth alone.
+  const closingIssuesReferences = [{ number: CLAIM_ISSUE }];
+  const baseline = runPreMergeReadinessSmoke(true, { closingIssuesReferences });
   const withProviderHealth = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences,
     configJson: JSON.stringify({
       iddVersion: '1.0.0',
       markerPrefix: 'idd-skill',
@@ -683,7 +745,13 @@ test('pre-merge-readiness.mjs CLI: neither --claim-issue nor --claimless names -
 });
 
 test('pre-merge-readiness.mjs CLI: blocked scenario (one unresolved review thread) surfaces it end-to-end', () => {
-  const report = runPreMergeReadinessSmoke(false);
+  // #3298: same closing-set fix as the clean-scenario test above, so the
+  // only NEW blocker this scenario's flipped field adds is
+  // "unresolved-threads" -- not an incidental closing-set mismatch from the
+  // stub's own default empty closingIssuesReferences.
+  const report = runPreMergeReadinessSmoke(false, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+  });
 
   const threads = report.threads as { unresolvedCount: number };
   assert.equal(threads.unresolvedCount, 1);
@@ -899,6 +967,143 @@ test('collectPreMergeReadiness against a fake provider: a required check reporti
     assert.equal(ciReport.protectionReadsUnreadable, false);
     assert.equal(ciReport.status, 'failed');
     assert.equal(ciReport.requiredChecksPassing, false);
+    const blockers = report.blockers as { gate: string }[];
+    assert.ok(
+      blockers.some((blocker) => blocker.gate === 'ci'),
+      `expected a "ci" blocker, got: ${JSON.stringify(blockers)}`,
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(cwdRoot, { recursive: true, force: true });
+  }
+});
+
+// kurone-kito/idd-skill#3246 (E2 critique, C1 round 2): every `edited`-bucket
+// test elsewhere in this repository (tests/pre-merge-readiness.test.mts)
+// exercises `summarizeExternalCheckWaivers` or `buildPreMergeReadinessSummary`
+// with a hand-built comment list -- none proves `collectPreMergeReadiness`'s
+// own `port.listWorkItemComments(prNumber, { includeEditState: true })` wiring
+// genuinely carries a fixture's `lastEditedAt` through to the report a real
+// GitHub-backed run would produce. The sibling `advisory-convergence.mts`
+// collector already got exactly this negative-control end-to-end test
+// ("C1 round 2" in tests/advisory-convergence-fake-provider.test.mts); this
+// closes the same gap for `pre-merge-readiness.mts`.
+test('collectPreMergeReadiness against a fake provider: a body-edited external-check-waiver comment never covers a failing required check (kurone-kito/idd-skill#3246, C1 round 2)', () => {
+  const cwdRoot = mkdtempSync(
+    join(tmpdir(), 'idd-pre-merge-fake-edited-waiver-'),
+  );
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(cwdRoot);
+
+    const waiverBody = renderExternalCheckWaiverComment({
+      agentId: 'claude-test',
+      claimId: 'none',
+      headSha: 'a'.repeat(40),
+      checkSelector: 'lint',
+      reason: 'lint flaked on an unrelated infra outage',
+      expiresAt: '2099-01-01T00:00:00Z',
+      actor: 'kurone-kito',
+    });
+
+    const port = createFakeProviderAdapter({
+      changeRequestReadinessSnapshots: {
+        42: {
+          headSha: 'a'.repeat(40),
+          baseRefName: 'main',
+          url: 'https://github.com/o/r/pull/42',
+          authorLogin: 'author-user',
+          reviewDecision: null,
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: 'lint',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              completedAt: '2026-08-01T00:00:00Z',
+              workflowName: 'CI',
+            },
+          ],
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          closingIssuesReferences: [],
+        },
+      },
+      branchRules: {
+        'o/r/main': [
+          {
+            type: 'required_status_checks',
+            parameters: { required_status_checks: [{ context: 'lint' }] },
+          },
+        ],
+      },
+      branchProtection: { 'o/r/main': {} },
+      reviewThreadsWithComments: { 42: [] },
+      reviewsWithHeadCommitDate: {
+        42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      },
+      comments: {
+        42: [
+          {
+            id: 1,
+            body: waiverBody,
+            createdAt: '2026-08-01T00:00:00Z',
+            updatedAt: '2026-08-01T00:00:00Z',
+            authorLogin: 'kurone-kito',
+            // GitHub reports this waiver's body was edited after posting --
+            // resolved only because `includeEditState: true` is genuinely
+            // threaded through this collector's own comment read, not
+            // hand-built into the test's input like every other #3246 test
+            // in tests/pre-merge-readiness.test.mts.
+            lastEditedAt: '2026-08-01T00:05:00Z',
+          },
+        ],
+      },
+      changedFiles: { 42: [] },
+    });
+
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '42',
+        '--claimless',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-08-01T00:10:00Z',
+      ],
+      () => port,
+      () =>
+        ({
+          ciGate: {
+            externalCheckWaivers: { mode: 'maintainer-authorized' },
+            externalChecks: {
+              waivable: [{ selector: 'lint', matchMode: 'exact' }],
+            },
+          },
+        }) as never,
+    );
+
+    const waiverEvidence = report.waiverEvidence as {
+      valid: unknown[];
+      edited: { authorLogin: string; editState: string }[];
+    };
+    assert.equal(waiverEvidence.valid.length, 0);
+    assert.equal(waiverEvidence.edited.length, 1);
+    assert.equal(waiverEvidence.edited[0].authorLogin, 'kurone-kito');
+    assert.equal(waiverEvidence.edited[0].editState, 'edited');
+
+    const ciReport = report.ci as {
+      status: string;
+      requiredChecksPassing: boolean;
+      checks: { name: string; coveredByWaiver?: boolean }[];
+    };
+    assert.equal(ciReport.status, 'failed');
+    assert.equal(ciReport.requiredChecksPassing, false);
+    const lintCheck = ciReport.checks.find((c) => c.name === 'lint');
+    assert.equal(lintCheck?.coveredByWaiver, undefined);
     const blockers = report.blockers as { gate: string }[];
     assert.ok(
       blockers.some((blocker) => blocker.gate === 'ci'),
@@ -1221,6 +1426,12 @@ function runSecondaryQuietWindowFixture(
       reviewsWithHeadCommitDate: {
         42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
       },
+      // kurone-kito/idd-skill#3253: the GitHub-observed anchor, mirroring
+      // headCommittedAt above -- absent, this defaults to `''` and the
+      // secondary-bot settlement cutoff has no valid anchor to compare
+      // against, so a genuine review can never settle the quiet window
+      // regardless of its timestamp.
+      headObservedAtByChangeRequest: { 42: '2026-07-31T23:00:00Z' },
       changedFiles: { 42: [] },
       comments: {
         42: comments.map((entry, index) => ({
@@ -1364,6 +1575,9 @@ function selfWaiverMarkerCollectionComment(payload: {
     createdAt: payload.createdAt,
     updatedAt: payload.createdAt,
     authorLogin: 'github-actions[bot]',
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

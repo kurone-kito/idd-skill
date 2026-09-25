@@ -37,6 +37,7 @@
         },
         "state": "APPROVED",
         "commitId": "1111111111111111111111111111111111111111",
+        "body": "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n",
         "submittedAt": "2026-05-11T23:54:00Z",
         "createdAt": "2026-05-11T23:54:00Z",
         "updatedAt": "2026-05-11T23:54:00Z"
@@ -140,7 +141,19 @@
     "viewerLogin": "kurone-kito",
     "configuredTrustedActors": [],
     "collaboratorTrustEnabled": false,
-    "advisoryBotLoginsSource": "config"
+    "advisoryBotLoginsSource": "config",
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
+    }
   },
   "expected": {
     "protocolVersion": "1",
@@ -350,12 +363,14 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": [],
-      "modeDisabled": []
+      "modeDisabled": [],
+      "edited": []
     },
     "advisoryConvergenceWaiverPrecondition": {
       "checkSelector": "idd-advisory-convergence",
       "deadlineMinutes": 1440,
       "headCommittedAt": "none",
+      "headObservedAt": "none",
       "elapsedMinutes": null,
       "deadlinePassed": false,
       "terminalUnavailable": false,
@@ -374,6 +389,18 @@
       "mergeable": "",
       "requiresUpToDateHead": false,
       "requiresUpToDateHeadSource": "none"
+    },
+    "closingSet": {
+      "status": "match",
+      "expected": [
+        309
+      ],
+      "actual": [
+        309
+      ],
+      "extra": [],
+      "missing": [],
+      "strayCommitCloses": []
     },
     "ready": false,
     "blockers": [

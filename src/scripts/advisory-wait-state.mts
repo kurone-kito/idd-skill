@@ -27,6 +27,7 @@ import { loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
+  advisoryWaitFamilyMarkerStart,
   buildAdvisoryWaitSummary,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
@@ -123,8 +124,12 @@ interface ReviewPayload {
   submitted_at?: string | null;
   commit_id?: string | null;
   /** #3015: consumed by `findLastCopilotReviewCommit`
-   * (protocol-helpers.mts) to exclude a Copilot "encountered an error"
-   * review from the latest-review selection. */
+   * (protocol-helpers.mts) to decide whether this review counts as
+   * covering its `commit_id`. For a configured non-Copilot primary bot,
+   * only the exact #3015 "encountered an error" template is excluded;
+   * as of #3265, for the DEFAULT Copilot bot, only a body
+   * `classifyCopilotReviewBody` recognizes as `overview-v2` or
+   * `overview-legacy` counts at all. */
   body?: string | null;
 }
 
@@ -974,14 +979,14 @@ function resolveTrustedCollaboratorMarkerLogins(
   });
 }
 
+// #3338: delegates to the shared, byte-0-anchored family-start predicate
+// (marker-helpers.mts, re-exported via protocol-helpers.mts) instead of
+// four hand-copied `startsWith` literals. Keeps the deliberately narrow
+// four-prefix scope from #1693 unchanged -- only the HTML form's spacing
+// tolerance (`<!--\s*advisory-wait:` instead of the exact single space
+// `<!-- advisory-wait:`) widens.
 export function advisoryMarkerComment(body: string): boolean {
-  const normalized = String(body ?? '');
-  return (
-    normalized.startsWith('advisory-wait:') ||
-    normalized.startsWith('advisory-wait-recovery:') ||
-    normalized.startsWith('advisory-reroll:') ||
-    normalized.startsWith('<!-- advisory-wait:')
-  );
+  return advisoryWaitFamilyMarkerStart(body) !== null;
 }
 
 function isTruthy(value: unknown): boolean {

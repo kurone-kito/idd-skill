@@ -8,6 +8,7 @@ import {
   type ActiveIssueInput,
   analyzeSharedFileOverlap,
   applyOverlapTieBreaker,
+  hasCandidateFilesHeading,
   loadManifest,
   normalizeContentionPath,
   type OverlapCandidateInput,
@@ -823,4 +824,73 @@ test('the suitability kill switch still de-prioritizes overlap before issue numb
     suitabilityEnabled: false,
   });
   assert.deepEqual(result.recommendedOrder, [19, 18]);
+});
+
+// --- #3282: Candidate files section located on a masked copy, replacing
+// the former raw-line-only heading/Setext scan ------------------------------
+
+test('hasCandidateFilesHeading/parseCandidateFiles ignore a template-only body whose "## Candidate files" heading and placeholder bullet sit only inside a fenced example', () => {
+  const body = [
+    '```markdown',
+    '## Candidate files',
+    '',
+    '- `<path>`',
+    '```',
+  ].join('\n');
+  assert.equal(hasCandidateFilesHeading(body), false);
+  assert.deepEqual(parseCandidateFiles(body), []);
+});
+
+test('parseCandidateFiles reads the real section, not a fenced placeholder example that precedes it', () => {
+  const body = [
+    '```markdown',
+    '## Candidate files',
+    '',
+    '- `<path>`',
+    '```',
+    '',
+    '## Candidate files',
+    '',
+    '- `scripts/real.mjs`',
+  ].join('\n');
+  assert.equal(hasCandidateFilesHeading(body), true);
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/real.mjs']);
+});
+
+test('parseCandidateFiles reads the real section, not a fenced example whose bullets are path-like (not obviously placeholder)', () => {
+  // The fenced example's own bullet looks like a real path -- before
+  // #3282, this shape passed actionability with the example path read as
+  // the issue's own candidate file.
+  const body = [
+    '```markdown',
+    '## Candidate files',
+    '',
+    '- `scripts/fake.mjs`',
+    '```',
+    '',
+    '## Candidate files',
+    '',
+    '- `scripts/real.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/real.mjs']);
+});
+
+test('parseCandidateFiles still reads a real section whose first content is a fenced shell snippet starting with a "#" comment line', () => {
+  // Regression for a real bug found while implementing #3282: a naive
+  // backtick-pair regex over the section's raw text let the fence's own
+  // triple-backtick delimiters pair up with each other (and with the
+  // real path's own opening backtick), corrupting the scan and losing
+  // the real path entirely. Extracting section content from the SAME
+  // masked copy used for heading detection (fence content blanked to
+  // spaces, no backticks left to mis-pair) fixes this.
+  const body = [
+    '## Candidate files',
+    '',
+    '```sh',
+    '# run this first',
+    '```',
+    '',
+    '- `scripts/real.mjs`',
+  ].join('\n');
+  assert.deepEqual(parseCandidateFiles(body), ['scripts/real.mjs']);
 });

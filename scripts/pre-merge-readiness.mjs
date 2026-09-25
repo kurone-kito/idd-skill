@@ -34,18 +34,21 @@ import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
-  parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
   resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mjs';
 import {
   buildPreMergeReadinessSummary,
-  DEFAULT_STALE_AGE_MS,
+  classifyPrLoopMembership,
   deriveIddAgentLogins,
+  extractSameRepoClosingIssueNumbers,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parseExternalCheckWaiverComment,
+  readClaimStaleAgeMs,
+  resolveActiveClaim,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolveCodeownersForFiles,
   resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
@@ -70,9 +73,18 @@ import {
 // `listCheckRunWorkflowPaths`'s own doc comment in provider-port.mts).
 import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
+  fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
+// #3298: this file's only consumer of supersession-detection.mts --
+// protocol-helpers.mts must never import from it (supersession-detection.mts
+// already transitively depends on protocol-helpers.mts via
+// discover-shared-file-overlap.mts, so the reverse edge would cycle), so the
+// closing-set evidence computation itself stays here rather than moving into
+// protocol-helpers.mts's computePreMergeReadinessBlockers, which only reads
+// the already-computed record.
+import { computeClosingSetEvidence } from './supersession-detection.mjs';
 
 // GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
 // has not completed yet (and a `StatusContext`, which has no completedAt
@@ -182,6 +194,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 /**
@@ -238,16 +251,29 @@ export function collectPreMergeReadiness(
   const reviewDecision = snapshot.reviewDecision ?? '';
   const mergeable = snapshot.mergeable;
   const mergeStateStatus = snapshot.mergeStateStatus;
-  if (args.claimless) {
-    const closingRefs = Array.isArray(snapshot.closingIssuesReferences)
-      ? snapshot.closingIssuesReferences
-      : [];
-    if (closingRefs.length > 0) {
-      throw new Error(
-        '--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead',
-      );
-    }
-  }
+  // kurone-kito/idd-skill#3328: the immediate "no closingIssuesReferences"
+  // refusal below moved to AFTER `comments`/`trustedMarkerLogins` resolve
+  // (search "Out-of-loop membership" below) -- deciding whether a
+  // non-empty closing-reference set is still eligible now needs
+  // `classifyPrLoopMembership`, which needs the PR's own comments (with
+  // edit state) and the resolved trusted-marker-login set, neither of
+  // which exists yet at this point in collection. `closingRefsAtEntry`
+  // captures the raw, as-fetched value for that later check.
+  //
+  // Copilot review, PR #3421: `closingRefsReadable` is tracked
+  // SEPARATELY from the coerced-to-array `closingRefsAtEntry` -- a
+  // non-array `closingIssuesReferences` (the field itself unreadable or
+  // malformed) must not silently read as "genuinely no closing
+  // references" (the ordinary #2017 claimless case) the way coercing
+  // straight to `[]` and gating on its `.length` would. The out-of-loop
+  // block below gates on `closingRefsReadable` too, so an unreadable
+  // field still reaches `resolveClosingIssueNumbersForClassifier` (which
+  // itself now fails closed to `null` for a non-array input) instead of
+  // skipping classification entirely.
+  const closingRefsReadable = Array.isArray(snapshot.closingIssuesReferences);
+  const closingRefsAtEntry = closingRefsReadable
+    ? snapshot.closingIssuesReferences
+    : [];
   // #2373: EVERY config-driven gate below resolves `.github/idd/config.json`
   // from this ONE trusted-ref read, never a local worktree read -- the F3
   // merge-gate helper normally runs from the claimed PR's own worktree
@@ -590,8 +616,13 @@ export function collectPreMergeReadiness(
     args.prNumber,
   );
   const timelineEvents = port.getWorkItemTimeline(args.prNumber);
+  // #3246: `includeEditState` resolves each comment's GraphQL
+  // `lastEditedAt` -- needed so `waiverEvidence` (fed by these PR
+  // comments) can reject a body-edited external-check-waiver marker.
+  // `claimComments` below deliberately does NOT opt in: the claim-marker
+  // family's own edit-state consumer is a separate, sibling issue.
   const comments = port
-    .listWorkItemComments(args.prNumber)
+    .listWorkItemComments(args.prNumber, { includeEditState: true })
     .map(toIssueCommentPayload);
   const claimComments = args.claimless
     ? []
@@ -600,6 +631,11 @@ export function collectPreMergeReadiness(
         // guard already rejected this branch with a missing claim issue.
         .listWorkItemComments(args.claimIssueNumber)
         .map(toIssueCommentPayload);
+  // kurone-kito/idd-skill#3328: hoisted from further below (it used to sit
+  // just before `normalizedReviews`) -- `classifyPrLoopMembership` below
+  // needs the `CommentLike`-shaped comments too, and this derivation has no
+  // dependency on anything defined between the old and new positions.
+  const normalizedComments = comments.map(normalizeComment);
   const threads = port.listChangeRequestReviewThreadsWithComments(
     args.prNumber,
   );
@@ -646,6 +682,116 @@ export function collectPreMergeReadiness(
         ])
       : []),
   ]);
+  // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
+  // evaluated when claimless AND (the PR actually has closing references
+  // OR the field itself could not be read) -- the common claimless case
+  // (a genuinely empty closing-reference array) keeps the unchanged #2017
+  // fast path below (`out-of-loop-claimless`, deriving
+  // `closingIssueNumbers: []` the same way `classifyPrLoopMembership`
+  // itself does). `closingRefsAtEntry` is the raw, as-fetched
+  // `closingIssuesReferences` this file recorded at collection entry,
+  // before `comments`/`trustedMarkerLogins` existed to classify against;
+  // `closingRefsReadable` is checked here too (Copilot review, PR #3421)
+  // so an unreadable field reaches the classifier (as `null`, fail-closed)
+  // instead of silently skipping classification via the coerced array's
+  // now-vacuous `.length > 0`.
+  let outOfLoopMembership = null;
+  if (
+    args.claimless &&
+    (!closingRefsReadable || closingRefsAtEntry.length > 0)
+  ) {
+    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: a
+    // same-repo-only extraction fed straight to the classifier would
+    // silently read a cross-repo-only, partially-unresolvable, or
+    // unreadable closing reference as "no closing references", accepting
+    // --claimless with NO marker required for a PR the pre-#3328 code
+    // always refused. resolveClosingIssueNumbersForClassifier reports
+    // `null` (unreadable) for exactly those cases instead, which the
+    // classifier fails closed to `in-loop` for -- reproducing the
+    // original refusal. Pass the RAW value (not the coerced
+    // `closingRefsAtEntry`) so the function's own `Array.isArray` check
+    // sees the real shape.
+    const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
+      snapshot.closingIssuesReferences,
+      owner,
+      repo,
+    );
+    // kurone-kito/idd-skill#3328 (C1 critique pass, round 2): the claimed
+    // path's own collaborator-trust auto-discovery scans BOTH the PR's
+    // comments and the claimed issue's comments (`claimComments` above) --
+    // but under --claimless, `claimComments` is always `[]`, so a
+    // collaborator whose only claim comment lives on the CLOSING issue
+    // (never the PR) was invisible to `trustedMarkerLogins`, silently
+    // reading their real active claim as untrusted noise and letting a
+    // marker wrongly override it. Read each closing issue's comments once
+    // here, and when collaborator trust is enabled, fold the same
+    // discovery over them too before resolving claim state -- restoring
+    // the "an active claim always wins over a marker" invariant this file
+    // documents. Any read failure fails the whole check closed to
+    // `'unknown'`, the same way a single-issue read failure already did.
+    const closingIssueCommentsByNumber = new Map();
+    let closingIssueReadFailed = false;
+    for (const issueNumber of closingIssueNumbers ?? []) {
+      try {
+        closingIssueCommentsByNumber.set(
+          issueNumber,
+          port.listWorkItemComments(issueNumber).map(toIssueCommentPayload),
+        );
+      } catch {
+        closingIssueReadFailed = true;
+        break;
+      }
+    }
+    const closingIssueTrustedMarkerLogins =
+      !closingIssueReadFailed && collaboratorTrustEnabled
+        ? normalizeTrustedMarkerLogins([
+            ...trustedMarkerLogins,
+            ...resolveTrustedCollaboratorMarkerLogins(
+              port,
+              [...closingIssueCommentsByNumber.values()].flat(),
+            ),
+          ])
+        : trustedMarkerLogins;
+    const isTrustedIssueAuthor = (login) =>
+      closingIssueTrustedMarkerLogins.includes(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+    let closingIssueClaimState = closingIssueReadFailed ? 'unknown' : 'none';
+    if (!closingIssueReadFailed) {
+      for (const issueComments of closingIssueCommentsByNumber.values()) {
+        if (
+          resolveActiveClaim(
+            issueComments.map(normalizeComment),
+            isTrustedIssueAuthor,
+          )
+        ) {
+          closingIssueClaimState = 'present';
+          break;
+        }
+      }
+    }
+    outOfLoopMembership = classifyPrLoopMembership({
+      prNumber: args.prNumber,
+      closingIssueNumbers,
+      closingIssueClaimState,
+      prComments: normalizedComments,
+      // The extended set (folding in any closing-issue-comment-discovered
+      // collaborator) is a strict superset of `trustedMarkerLogins` -- safe
+      // to reuse here too: it only ever widens who is trusted, never
+      // narrows, and using one consistent trust set for both the claim
+      // check above and this marker check avoids the two sub-decisions
+      // silently disagreeing on who counts as trusted.
+      trustedMarkerLogins: closingIssueTrustedMarkerLogins,
+    });
+    if (outOfLoopMembership.membership === 'in-loop') {
+      throw new Error(
+        `--claimless requires a PR with no closingIssuesReferences, or a ` +
+          `valid out-of-loop marker; pass --claim-issue instead (${outOfLoopMembership.reason})`,
+      );
+    }
+  }
   const iddAgentLogins = deriveIddAgentLogins({
     viewerLogin,
     iddAgentLogins: splitCsv(args.iddAgentLogins),
@@ -657,6 +803,29 @@ export function collectPreMergeReadiness(
   const forcedHandoffPolicy = normalizePolicyConfig(iddConfig).forcedHandoff;
   const forcedHandoffAuthorityPolicy = forcedHandoffPolicy.authorityPolicy;
   const forcedHandoffEnabled = forcedHandoffPolicy.mode === 'human-gated';
+  // #3298: fetched unconditionally now (previously only under
+  // forcedHandoffEnabled below) -- the closing-set gate's stray-commit-close
+  // scan needs this same `pulls/{pr}/commits` listing on every call, not
+  // only when forced handoffs are enabled, so this one read backs both
+  // prFirstCommitAt and closingSet.strayCommitCloses instead of each
+  // resolving its own copy. `null` means the read failed; both downstream
+  // consumers already have their own fail-closed handling for that.
+  let prCommits = null;
+  try {
+    const rawCommits = port.listChangeRequestCommits(args.prNumber);
+    // Copilot review, PR #3353: `listChangeRequestCommits` is declared
+    // `unknown[]` on the provider port, but nothing enforces that at
+    // runtime -- a malformed/non-array successful response would silently
+    // pass the `as PrCommitPayload[]` cast (a compile-time-only promise),
+    // then crash `computeClosingSetEvidence`'s own `.length`/iteration
+    // (uncaught, outside this try/catch) instead of producing the
+    // documented `closingSet.status: "unavailable"`. Validate the shape
+    // here so any non-array response fails closed the same way a thrown
+    // read already does.
+    prCommits = Array.isArray(rawCommits) ? rawCommits : null;
+  } catch {
+    prCommits = null;
+  }
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
   // against a PR-backed claim. This allowance is applied on the merge side
@@ -664,18 +833,71 @@ export function collectPreMergeReadiness(
   // (an issue-only handoff against a PR-backed claim stays rejected there) —
   // the merge-only half of the documented strict-resume vs. lenient-relay-merge
   // split (see docs/idd-design-rationale.md, "Claim resolution"). Resolve it
-  // only when forced handoffs are enabled, and fail closed to `null` (reject)
-  // on any lookup/parse error so a transient commits-API failure never aborts
-  // the readiness gate.
-  let prFirstCommitAt = null;
-  if (forcedHandoffEnabled) {
+  // only when forced handoffs are enabled and the commit list actually read,
+  // and fail closed to `null` (reject) otherwise so a transient commits-API
+  // failure never aborts the readiness gate.
+  const prFirstCommitAt =
+    forcedHandoffEnabled && prCommits
+      ? resolvePrFirstCommitAt(prCommits)
+      : null;
+  // #3298: the *live* repository default branch, matching D3.5's own
+  // non-default-branch exemption -- distinct from developmentBranchTarget's
+  // *configured* development-branch value above (a configured
+  // developmentBranch implies nothing about GitHub's own default branch,
+  // which is what closingIssuesReferences actually keys its population on).
+  // Reuses `liveDefaultBranch` when it already resolved this exact call
+  // (developmentBranchInspection status 'absent'); otherwise a fresh,
+  // fail-closed-to-null read (unlike developmentBranchTarget's own
+  // uncaught-throw contract) since closingSet needs an 'unavailable' status
+  // here instead of crashing the whole collector.
+  let closingSetLiveDefaultBranch = liveDefaultBranch;
+  if (closingSetLiveDefaultBranch === null) {
     try {
-      const prCommits = port.listChangeRequestCommits(args.prNumber);
-      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+      const rawDefaultBranch = port.getRepositoryDefaultBranch(owner, repo);
+      // Copilot review, PR #3353: the port's declared `string | null`
+      // return type is a compile-time promise only -- validate it here too
+      // (same rationale as the commits-array guard above), so a
+      // non-conforming provider implementation fails closed instead of
+      // handing a non-string value to the `baseRefName !==
+      // liveDefaultBranch` comparison below.
+      closingSetLiveDefaultBranch =
+        typeof rawDefaultBranch === 'string' ? rawDefaultBranch : null;
     } catch {
-      prFirstCommitAt = null;
+      closingSetLiveDefaultBranch = null;
     }
   }
+  // #3298: the deliberate closing set -- --closing-issues when given
+  // (parseArgs already validated it includes the claimed issue and does
+  // not combine with --claimless), else the single claimed issue, else
+  // empty under --claimless. kurone-kito/idd-skill#3328: an
+  // `out-of-loop-authorized` PR is the one exception to the plain
+  // --claimless "[]" default -- it carries no claim-derived deliberate
+  // set to diff against, so the valid marker authorizes exactly the PR's
+  // own live `closingIssuesReferences` instead (the same same-repo
+  // extraction the membership check above already ran). A malformed or
+  // cross-repo entry still fails `computeClosingSetEvidence` closed to
+  // `'unavailable'`/`'mismatch'` regardless of this expected set (its own
+  // malformed-entry and cross-repo-`extra` checks run unconditionally), and
+  // `missing` is structurally empty on this path since `expected` is
+  // always a subset of the same-repo `actual` numbers by construction --
+  // there is no separate "should have closed but didn't" question left to
+  // ask once a marker authorizes the PR's own declared closing set.
+  const expectedClosingIssues =
+    args.closingIssueNumbers ??
+    (args.claimless
+      ? outOfLoopMembership?.membership === 'out-of-loop-authorized'
+        ? extractSameRepoClosingIssueNumbers(closingRefsAtEntry, owner, repo)
+        : []
+      : [args.claimIssueNumber]);
+  const closingSetEvidence = computeClosingSetEvidence({
+    expected: expectedClosingIssues,
+    closingIssuesReferences: snapshot.closingIssuesReferences,
+    owner,
+    repo,
+    baseRefName,
+    liveDefaultBranch: closingSetLiveDefaultBranch,
+    commits: prCommits,
+  });
   const forcedHandoffPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors(iddConfig);
   const externalCheckWaiverMaxValidity =
@@ -685,7 +907,6 @@ export function collectPreMergeReadiness(
     readTrustSourcePinnedRequiredChecks(iddConfig);
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
-  const normalizedComments = comments.map(normalizeComment);
   const normalizedReviews = reviews.map(normalizeReview);
   // #2021: fetch the current HEAD commit's own `committedDate`, plus every
   // PR review, via the SAME GraphQL query `advisory-convergence.mts`'s own
@@ -703,6 +924,17 @@ export function collectPreMergeReadiness(
     reviews: advisoryConvergenceReviews,
     headCommittedAt: advisoryConvergenceHeadCommittedAt,
   } = fetchReviewsAndHeadCommit(owner, repo, args.prNumber, port);
+  // kurone-kito/idd-skill#3253: a sibling fetch, not an extension of the one
+  // above -- fail-closed to `''` on any failure, never throws (see
+  // `fetchHeadObservedAt`'s own doc comment), so unlike the sibling fetch
+  // above this one is safe to leave uncaught without masking a fetch
+  // failure as an empty anchor.
+  const advisoryConvergenceHeadObservedAt = fetchHeadObservedAt(
+    owner,
+    repo,
+    args.prNumber,
+    port,
+  );
   const advisoryConvergenceDeadlineMinutes =
     resolveAdvisoryConvergenceDeadlineMinutes(advisoryWaitConfig);
   const secondaryQuietWindowMinutes =
@@ -1065,6 +1297,7 @@ export function collectPreMergeReadiness(
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       developmentBranchTarget,
+      closingSet: closingSetEvidence,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
@@ -1074,6 +1307,7 @@ export function collectPreMergeReadiness(
       advisoryConvergenceOutageRelievedSince:
         advisoryConvergenceOutageRelief.since,
       advisoryConvergenceHeadCommittedAt,
+      advisoryConvergenceHeadObservedAt,
       advisoryConvergenceDeadlineMinutes,
       secondaryQuietWindowMinutes,
       secondaryBotLogins,
@@ -1249,6 +1483,39 @@ export function parseArgs(argv) {
   if (claimless && claimId) {
     throw new Error('--claimless cannot be combined with --claim-id');
   }
+  // #3298: --closing-issues declares the deliberate multi-issue closing set
+  // (idd-pr-submit.instructions.md's "Multiple closing issues" case) for
+  // the closing-set merge gate. A usage error here (not a fail-closed
+  // blocker) since it is a call-time contract violation, matching the
+  // --claimless combination checks immediately above.
+  const closingIssuesToken = values['closing-issues'];
+  let closingIssueNumbers = null;
+  if (closingIssuesToken !== undefined) {
+    if (claimless) {
+      throw new Error('--closing-issues cannot be combined with --claimless');
+    }
+    closingIssueNumbers = closingIssuesToken.split(',').map((token) => {
+      const trimmed = token.trim();
+      if (!/^[1-9]\d*$/.test(trimmed)) {
+        throw new Error(
+          `invalid --closing-issues value: ${closingIssuesToken}`,
+        );
+      }
+      return Number(trimmed);
+    });
+    const claimIssueNumber = requirePositiveInteger(
+      values['claim-issue'],
+      '--claim-issue',
+    );
+    if (
+      claimIssueNumber !== null &&
+      !closingIssueNumbers.includes(claimIssueNumber)
+    ) {
+      throw new Error(
+        `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+      );
+    }
+  }
   return {
     prNumber: requirePositiveInteger(values.pr, '--pr'),
     claimIssueNumber: requirePositiveInteger(
@@ -1266,6 +1533,7 @@ export function parseArgs(argv) {
     now: values.now ?? '',
     help,
     claimless: Boolean(values.claimless),
+    closingIssueNumbers,
   };
 }
 function printHelp() {
@@ -1281,10 +1549,19 @@ function printHelp() {
                     catching a second, independent activation of the same
                     claim-id as a collision. Omit --nonce, or leave it empty,
                     to skip this comparison entirely (backward compatible).
-  --claimless      skip claim fetch/revalidation (#2017). Only for a PR
-                    whose closingIssuesReferences is empty; cannot combine
-                    with --claim-issue or --claim-id. Claim-ownership in
-                    the report is the not-applicable / unclaimed shape.
+  --claimless      skip claim fetch/revalidation (#2017). For a PR whose
+                    closingIssuesReferences is empty, or (#3328) one that
+                    carries a valid, trusted, unedited <!-- idd-out-of-loop:
+                    ... reason:bootstrap ... --> marker naming this PR and
+                    whose closing issue(s) have no active claim; cannot
+                    combine with --claim-issue or --claim-id.
+                    Claim-ownership in the report is the not-applicable /
+                    unclaimed shape.
+  --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing
+                    set for the closing-set merge gate; must include
+                    --claim-issue's own number. Cannot combine with
+                    --claimless. Omit to use the single claimed issue (or
+                    the empty set under --claimless) as the deliberate set.
 `);
 }
 /**
@@ -1312,6 +1589,10 @@ function toIssueCommentPayload(comment) {
     created_at: comment.createdAt,
     updated_at: comment.updatedAt,
     user: { login: comment.authorLogin },
+    // #3246: passthrough only -- `undefined` for every caller that did not
+    // request `includeEditState` from the port, unchanged from before this
+    // field existed.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 export function normalizeComment(comment) {
@@ -1321,6 +1602,10 @@ export function normalizeComment(comment) {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     updatedAt: comment.updated_at ?? comment.created_at ?? '',
+    // #3246: carried through to the `CommentLike` shape
+    // `summarizeExternalCheckWaivers` reads (protocol-helpers.mts) --
+    // never derived from `updatedAt`/`updated_at`.
+    lastEditedAt: comment.last_edited_at,
   };
 }
 /**
@@ -1853,19 +2138,6 @@ function resolveAdvisoryConvergenceOutageRelief({
   } catch {
     return notRelieved;
   }
-}
-// Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed
-// to milliseconds so the write-gate claim resolver honors it instead of the
-// hardcoded 24h `isStaleAt` default. Takes the caller's already-resolved
-// trusted-ref config (#2373) instead of its own `.github/idd/config.json`
-// read; `normalizePolicyConfig(null)` already defaults to `PT24H`, so no
-// try/catch is needed here. An absent or unparseable value falls back to
-// the shared `DEFAULT_STALE_AGE_MS` (protocol-helpers.mts) rather than a
-// second local 24h literal, so behavior is unchanged for repos on the
-// default and there is exactly one hardcoded-24h source of truth.
-function readClaimStaleAgeMs(iddConfig) {
-  const staleAge = normalizePolicyConfig(iddConfig).claimTiming.staleAge;
-  return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
 }
 // Configured governance-read trust opt-in (`ciGate.trustEmptyProtectionReads`,
 // #1377). Takes the caller's already-resolved trusted-ref config (#2373);

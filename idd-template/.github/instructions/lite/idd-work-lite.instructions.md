@@ -16,6 +16,10 @@ repository is `instructions-only`, use the standard work instructions instead.
 
 ## Stop-and-ask conditions
 
+B1's setup steps run on the primary worktree by design; the
+sibling-worktree and current-branch bullets below apply from B2
+onward, once B1 step 30's cwd check passes.
+
 - The active claim is ambiguous, disputed, or lost.
 - The current directory is not the sibling worktree for the claimed branch.
   For a harness whose file-read/edit tools stay bound to the launch
@@ -32,7 +36,17 @@ repository is `instructions-only`, use the standard work instructions instead.
 ## Pre-mutation guard
 
 Before any commit, push, rebase, claim heartbeat, reply, resolve, reviewer
-request, or other GitHub side effect, confirm all of the following:
+request, or other GitHub side effect, confirm all of the following.
+
+Every B1 step — including the step 10 and step 31 hold-comment posts —
+runs with checks 1-2 only. Checks 3-5 apply from B2 onward, once B1 step
+30's cwd check passes; steps 28-31 are the hand-off mechanism, so a
+step 28 or 29 failure that routes to step 31's hold still runs under
+checks 1-2 only. Never relax checks 1-2 anywhere. This defers only this
+guard's own check 3-5 gate, never B1's own explicit lock-acquisition
+steps: step 7's takeover lock/collision check, and steps 19 and 26's
+lock acquisition and immediate token-recording after creation, all stay
+mandatory regardless of this deferral.
 
 1. The active claim still uses this session's claim id.
 2. If this session posted an activation nonce for the current claim,
@@ -74,8 +88,12 @@ worktree removal) behind the
    primary worktree — each of these violates this rule.
 6. Reuse the existing branch name verbatim for takeover.
 7. Run `git worktree list` (and `git worktree list --porcelain` when checking
-   prunable entries). If a sibling worktree already exists, inspect that exact
-   path with the profile-selected `claim-lock` helper before reuse or removal.
+   prunable entries). If a sibling worktree already exists, inspect and
+   acquire its worktree-local claim lock with the profile-selected
+   `claim-lock` helper before reuse or removal. A `collision` result is
+   fail-closed: do not reuse or remove the path — resolve it via the
+   Claim-state rule in `idd-claim.instructions.md`, and only remove the
+   path once the current claim is authorized to take it over.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
@@ -201,7 +219,9 @@ the citation if it does not exist; stop and hold if unclear (`#2806`).
 4. Post the plan retroactively.
 5. Implement the plan.
 6. Critique the completed diff.
-7. Run `fix-validate` before each commit.
+7. Run `fix-validate` before each commit, judged by its own exit
+   status (in Bash, check `${PIPESTATUS[0]}` or use `set -o pipefail`)
+   — a `tail`/`head` filter cannot prove success (#3139).
 8. Keep commits atomic.
 9. If `fix-validate` changes files, stage and commit them before continuing.
 10. Verify a commit actually landed before trusting a subsequent push: a
@@ -364,11 +384,13 @@ telemetry record.
 
 ### C5 — Fix accepted issues
 
-1. Run `fix-validate`.
+1. Run `fix-validate`, judged by its own exit status (in Bash, check
+   `${PIPESTATUS[0]}` or use `set -o pipefail`) — a `tail`/`head`
+   filter cannot prove success (#3139).
 2. If the floor still has not passed and there are no accepted issues, stop
    and ask.
 3. Fix the accepted issues.
-4. Rerun `fix-validate`.
+4. Rerun `fix-validate`, judged the same way.
 5. If anything changed, commit atomically.
 
 ### C6 — Return to C1

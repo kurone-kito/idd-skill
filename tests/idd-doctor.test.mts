@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   mkdirSync,
@@ -10,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   backLinkPatternFor,
@@ -20,6 +22,7 @@ import {
   checkPlaceholders,
   checkPolicySignals,
   checkProjectCommands,
+  checkThreadResolutionPolicy,
   classifyBacklog,
   classifyBootstrapEraPrNumbers,
   classifyBranchProtectionUnreadableCatchCause,
@@ -28,6 +31,7 @@ import {
   classifyMergePolicyAcknowledgement,
   classifyPrimaryHead,
   classifyReleaseTagDrift,
+  classifyThreadResolutionPolicy,
   classifyWorktreeGuardActivation,
   classifyWorktreeHeadFinding,
   computeWindowStartIso,
@@ -41,6 +45,7 @@ import {
   evaluateBranchProtectionFindings,
   evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
+  evaluateRoadmapIdentityConsistency,
   extractMarkerPrefixes,
   fetchGhApiJsonAt,
   filterIddBranchMergedPrs,
@@ -77,11 +82,15 @@ import {
   scanFileForPlaceholders,
   selectBacklogExamples,
   stripMarkdownNonText,
+  THREAD_RESOLUTION_POLICY_PHASE_FILES,
   worktreeGuardWiredAt,
 } from '../src/scripts/idd-doctor.mts';
 import { fetchGovernanceJson } from '../src/scripts/pre-merge-readiness.mts';
 import { loadJson } from '../src/scripts/validate-schemas.mts';
 import { readText, stubExecutable } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const IDD_DOCTOR_SCRIPT = join(REPO_ROOT, 'scripts/idd-doctor.mjs');
 
 const ap = (n: number | string) =>
   `<!-- idd-skill-autopilot-suitability: ${n} -->`;
@@ -266,6 +275,99 @@ test('autopilot-suitability consistency: floor 1 treats score-1 + blocked-by-hum
   assert.match(
     warnings.find((w) => /issue #23/.test(w)) ?? '',
     /issue #23 is scored 2 \(>= floor 1\) but carries status:blocked-by-human/,
+  );
+});
+
+test('roadmap-identity consistency: label without a marker warns (#3286)', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    { number: 30, body: 'no marker here', labels: [{ name: 'roadmap' }] },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /roadmap-identity: issue #30 carries the roadmap label but no idd-skill-roadmap-id marker; Discover treats it as an ordinary issue/,
+  );
+});
+
+test('roadmap-identity consistency: a marker quoted only in inline code still counts as absent (#3286)', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    {
+      number: 31,
+      body: 'see `<!-- idd-skill-roadmap-id: example -->` for the format',
+      labels: [{ name: 'roadmap' }],
+    },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /issue #31 carries the roadmap label/);
+});
+
+test('roadmap-identity consistency: a real marker stays silent regardless of the label', () => {
+  const withLabel = evaluateRoadmapIdentityConsistency([
+    {
+      number: 32,
+      body: '<!-- idd-skill-roadmap-id: root -->',
+      labels: [{ name: 'roadmap' }],
+    },
+  ]);
+  assert.deepEqual(withLabel.warnings, []);
+
+  const withoutLabel = evaluateRoadmapIdentityConsistency([
+    { number: 33, body: '<!-- idd-skill-roadmap-id: root -->', labels: [] },
+  ]);
+  assert.deepEqual(withoutLabel.warnings, []);
+});
+
+test('roadmap-identity consistency: no roadmap label stays silent regardless of the marker', () => {
+  const { warnings } = evaluateRoadmapIdentityConsistency([
+    { number: 34, body: 'ordinary issue, no marker', labels: [] },
+    {
+      number: 35,
+      body: 'ordinary issue, no marker',
+      labels: [{ name: 'enhancement' }],
+    },
+  ]);
+  assert.deepEqual(warnings, []);
+});
+
+test('roadmap-identity consistency: honors a non-default roadmapLabelName', () => {
+  // A custom label ('epic') without a marker warns...
+  const custom = evaluateRoadmapIdentityConsistency(
+    [{ number: 36, body: 'no marker', labels: [{ name: 'epic' }] }],
+    { roadmapLabelName: 'epic' },
+  );
+  assert.equal(custom.warnings.length, 1);
+  assert.match(custom.warnings[0], /issue #36 carries the epic label/);
+
+  // ...and the stock 'roadmap' label no longer matches once overridden.
+  const stockNoLongerMatches = evaluateRoadmapIdentityConsistency(
+    [{ number: 37, body: 'no marker', labels: [{ name: 'roadmap' }] }],
+    { roadmapLabelName: 'epic' },
+  );
+  assert.deepEqual(stockNoLongerMatches.warnings, []);
+});
+
+test('roadmap-identity consistency: matches the configured label name case-insensitively (Copilot review, PR #3362)', () => {
+  // GitHub label names are case-insensitive; a differently-cased label on
+  // the issue still counts as the configured roadmap label.
+  const differentIssueCase = evaluateRoadmapIdentityConsistency([
+    { number: 38, body: 'no marker', labels: [{ name: 'Roadmap' }] },
+  ]);
+  assert.equal(differentIssueCase.warnings.length, 1);
+  assert.match(
+    differentIssueCase.warnings[0],
+    /issue #38 carries the roadmap label/,
+  );
+
+  // A differently-cased configured roadmapLabelName also still matches.
+  const differentConfigCase = evaluateRoadmapIdentityConsistency(
+    [{ number: 39, body: 'no marker', labels: [{ name: 'epic' }] }],
+    { roadmapLabelName: 'Epic' },
+  );
+  assert.equal(differentConfigCase.warnings.length, 1);
+  // The warning text echoes the configured (un-normalized) spelling.
+  assert.match(
+    differentConfigCase.warnings[0],
+    /issue #39 carries the Epic label/,
   );
 });
 
@@ -3580,6 +3682,239 @@ test('checkMergePolicyAcknowledgement names idd-policy.json when only the legacy
     assert.doesNotMatch(report.warnings[0], /\.github\/idd\/config\.json/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// idd-skill#3295: threadResolutionPolicy is a required schema key that
+// no enforcement helper or gate reads (checkThreadResolutionPolicy
+// itself reads it, but only to emit the warning below). These tests
+// pin the exported five-basename list to literal strings pulled directly
+// from the issue/docs/idd-review-policy-profiles.md -- not derived from
+// THREAD_RESOLUTION_POLICY_PHASE_FILES itself, so a wrong or missing
+// basename in that array would still fail these assertions instead of
+// passing silently.
+const THREAD_RESOLUTION_POLICY_EXPECTED_PHASE_FILES = [
+  'idd-review-snapshot.instructions.md',
+  'idd-review-triage.instructions.md',
+  'idd-review-fix.instructions.md',
+  'idd-pre-merge.instructions.md',
+  'idd-merge.instructions.md',
+];
+
+test('THREAD_RESOLUTION_POLICY_PHASE_FILES matches the five phase files docs/idd-review-policy-profiles.md lists', () => {
+  assert.deepEqual(
+    [...THREAD_RESOLUTION_POLICY_PHASE_FILES],
+    THREAD_RESOLUTION_POLICY_EXPECTED_PHASE_FILES,
+  );
+});
+
+test('classifyThreadResolutionPolicy warns exactly once for hybrid-reviewer-ack, naming the value, all five phase files, and the profiles doc', () => {
+  const finding = classifyThreadResolutionPolicy({
+    threadResolutionPolicy: 'hybrid-reviewer-ack',
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /hybrid-reviewer-ack/);
+  for (const phaseFile of THREAD_RESOLUTION_POLICY_EXPECTED_PHASE_FILES) {
+    assert.ok(
+      finding?.message.includes(phaseFile),
+      `expected message to include ${phaseFile}, got: ${finding?.message}`,
+    );
+  }
+  assert.match(finding?.message ?? '', /docs\/idd-review-policy-profiles\.md/);
+});
+
+test('classifyThreadResolutionPolicy warns exactly once for strict-reviewer-resolve, naming the value, all five phase files, and the profiles doc', () => {
+  const finding = classifyThreadResolutionPolicy({
+    threadResolutionPolicy: 'strict-reviewer-resolve',
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /strict-reviewer-resolve/);
+  for (const phaseFile of THREAD_RESOLUTION_POLICY_EXPECTED_PHASE_FILES) {
+    assert.ok(
+      finding?.message.includes(phaseFile),
+      `expected message to include ${phaseFile}, got: ${finding?.message}`,
+    );
+  }
+  assert.match(finding?.message ?? '', /docs\/idd-review-policy-profiles\.md/);
+});
+
+// PR #3349 review (idd-skill#3295): the message must qualify "no ...
+// helper or gate reads this key" as *enforcement* helper/gate -- an
+// unqualified claim is self-contradictory, since this very diagnostic
+// is itself a helper that reads the key to print the message.
+test('classifyThreadResolutionPolicy message never claims plainly that no helper reads the key -- it must qualify "enforcement"', () => {
+  const finding = classifyThreadResolutionPolicy({
+    threadResolutionPolicy: 'strict-reviewer-resolve',
+  });
+  assert.match(finding?.message ?? '', /no enforcement helper or gate reads/);
+  assert.doesNotMatch(finding?.message ?? '', /\bno helper or gate reads\b/);
+});
+
+test('classifyThreadResolutionPolicy stays silent for fast-agent-resolve, an absent key, and a non-enum string', () => {
+  assert.equal(
+    classifyThreadResolutionPolicy({
+      threadResolutionPolicy: 'fast-agent-resolve',
+    }),
+    null,
+  );
+  assert.equal(classifyThreadResolutionPolicy({}), null);
+  assert.equal(classifyThreadResolutionPolicy(undefined), null);
+  assert.equal(classifyThreadResolutionPolicy(null), null);
+  assert.equal(
+    classifyThreadResolutionPolicy({
+      threadResolutionPolicy: 'not-a-real-value',
+    }),
+    null,
+  );
+});
+
+test('checkThreadResolutionPolicy pushes a warning for a non-default profile, none for the default or a missing config', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-thread-resolution-policy-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ threadResolutionPolicy: 'strict-reviewer-resolve' }),
+    );
+
+    const nonDefaultReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, nonDefaultReport);
+    assert.equal(nonDefaultReport.errors.length, 0);
+    assert.equal(nonDefaultReport.warnings.length, 1);
+    assert.match(nonDefaultReport.warnings[0], /strict-reviewer-resolve/);
+
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ threadResolutionPolicy: 'fast-agent-resolve' }),
+    );
+    const defaultReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, defaultReport);
+    assert.equal(defaultReport.warnings.length, 0);
+    assert.equal(defaultReport.errors.length, 0);
+
+    // No config.json at all: this check is not the file-presence gate --
+    // it skips rather than erroring, matching checkMergePolicyAcknowledgement.
+    rmSync(join(dir, '.github/idd/config.json'));
+    const missingConfigReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, missingConfigReport);
+    assert.equal(missingConfigReport.warnings.length, 0);
+    assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// PR #3349 review: checkThreadResolutionPolicy uses
+// resolveLiveConfigDocument's canonical-then-legacy walk (the same
+// reader checkMergePolicyAcknowledgement uses), but the fixture test
+// above only ever exercised the canonical .github/idd/config.json
+// path -- a regression to a canonical-only read would still pass it.
+// Mirrors "checkMergePolicyAcknowledgement names idd-policy.json when
+// only the legacy candidate is present (#2301 review)" above.
+test('checkThreadResolutionPolicy also reads the legacy idd-policy.json path when the canonical file is absent, and prefers canonical when both exist', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-thread-resolution-policy-legacy-'),
+  );
+  try {
+    // Legacy-only: the warning still fires.
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ threadResolutionPolicy: 'strict-reviewer-resolve' }),
+    );
+    const legacyOnlyReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, legacyOnlyReport);
+    assert.equal(legacyOnlyReport.errors.length, 0);
+    assert.equal(legacyOnlyReport.warnings.length, 1);
+    assert.match(legacyOnlyReport.warnings[0], /strict-reviewer-resolve/);
+
+    // Canonical-first precedence: when both files exist, the canonical
+    // file's own (also non-default) value wins -- positively proven by
+    // asserting the warning names canonical's value, not a bare
+    // zero-warnings check that a bailed-to-null regression would also
+    // satisfy vacuously.
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ threadResolutionPolicy: 'hybrid-reviewer-ack' }),
+    );
+    const bothPresentReport = emptyReport(dir);
+    checkThreadResolutionPolicy(dir, bothPresentReport);
+    assert.equal(bothPresentReport.errors.length, 0);
+    assert.equal(bothPresentReport.warnings.length, 1);
+    assert.match(bothPresentReport.warnings[0], /hybrid-reviewer-ack/);
+    assert.doesNotMatch(
+      bothPresentReport.warnings[0],
+      /strict-reviewer-resolve/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// CLI-level coverage that `runDoctor` actually calls
+// checkThreadResolutionPolicy, spawning the real compiled
+// scripts/idd-doctor.mjs the same way
+// tests/idd-doctor-cleanup-backlog-cli-smoke.test.mts's
+// runIddDoctorReport does. checkThreadResolutionPolicy itself makes no
+// `gh` calls; `gh` is stubbed here only to keep the run hermetic against
+// idd-doctor's *other* checks (e.g. checkPostMergeCleanupBacklog), which
+// do shell out to `gh` and would otherwise hit the real network from a
+// near-empty --repo-root fixture.
+function stubGhAlwaysFails(): string {
+  return `process.stderr.write('stubbed gh: not implemented for this test\\n');
+process.exit(1);
+`;
+}
+
+test('checkThreadResolutionPolicy CLI: idd-doctor.mjs reports the warning for a non-default profile and never mentions threadResolutionPolicy in errors', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'idd-doctor-thread-resolution-cli-'));
+  const restore = stubExecutable('gh', stubGhAlwaysFails());
+  try {
+    const fixtureConfig = JSON.parse(
+      readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
+    );
+    fixtureConfig.threadResolutionPolicy = 'strict-reviewer-resolve';
+    mkdirSync(join(cwd, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.github/idd/config.json'),
+      JSON.stringify(fixtureConfig),
+    );
+
+    const argv = [IDD_DOCTOR_SCRIPT, '--json', '--repo-root', cwd];
+    const options = {
+      encoding: 'utf8' as const,
+      env: { ...process.env },
+      timeout: 60_000,
+    };
+    let report: { errors: string[]; warnings: string[] };
+    try {
+      report = JSON.parse(execFileSync(process.execPath, argv, options));
+    } catch (error) {
+      // A near-empty --repo-root trips other unrelated required-file /
+      // project-commands checks, making idd-doctor.mjs exit non-zero --
+      // expected and irrelevant to this test's target. execFileSync still
+      // captures full stdout on the thrown error, same pattern as
+      // tests/idd-doctor-cleanup-backlog-cli-smoke.test.mts.
+      const stdout = (error as { stdout?: string } | null)?.stdout;
+      if (typeof stdout !== 'string' || stdout.length === 0) {
+        throw error;
+      }
+      report = JSON.parse(stdout);
+    }
+
+    assert.ok(
+      report.warnings.some((w) =>
+        w.includes('threadResolutionPolicy is "strict-reviewer-resolve"'),
+      ),
+      `expected a threadResolutionPolicy warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+    assert.ok(
+      !report.errors.some((e) => e.includes('threadResolutionPolicy')),
+      `expected no threadResolutionPolicy error, got: ${JSON.stringify(report.errors)}`,
+    );
+  } finally {
+    restore();
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 

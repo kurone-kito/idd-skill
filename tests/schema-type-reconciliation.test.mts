@@ -614,6 +614,7 @@ export const preMergeReadinessKeys = [
   'trustedMarkerActorsSource',
   'localValidationEvidence',
   'developmentBranchTarget',
+  'closingSet',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
@@ -762,6 +763,7 @@ const advisoryConvergenceFixture = {
     itemCount: 0,
     submittedAt: '2026-07-11T10:00:00Z',
     suppressedCount: 0,
+    bodyShape: 'overview-v2',
     satisfied: true,
   },
   threads: {
@@ -774,6 +776,7 @@ const advisoryConvergenceFixture = {
   deadline: {
     minutes: 1440,
     headCommittedAt: '2026-07-11T09:00:00Z',
+    headObservedAt: '2026-07-11T09:00:00Z',
     elapsedMinutes: 180,
     passed: false,
   },
@@ -1441,11 +1444,13 @@ const preMergeReadinessFixture = {
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
+    edited: [],
   },
   advisoryConvergenceWaiverPrecondition: {
     checkSelector: 'idd-advisory-convergence',
     deadlineMinutes: 1440,
     headCommittedAt: 'none',
+    headObservedAt: 'none',
     elapsedMinutes: null,
     deadlinePassed: false,
     terminalUnavailable: false,
@@ -1464,6 +1469,14 @@ const preMergeReadinessFixture = {
     mergeable: 'MERGEABLE',
     requiresUpToDateHead: false,
     requiresUpToDateHeadSource: 'none',
+  },
+  closingSet: {
+    status: 'match',
+    expected: [309],
+    actual: [309],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
   },
   trustedMarkerActors: ['copilot-cli'],
   trustedMarkerActorsSource: 'config',

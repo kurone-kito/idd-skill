@@ -31,6 +31,7 @@ import {
   parseAdvisoryRecoveryComment,
   parseClaimComment,
   parseCopilotUnavailableComment,
+  parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewAckComment,
   parseReviewWatermarkComment,
@@ -439,6 +440,121 @@ test('the copilot-unavailable body round-trips through parseCopilotUnavailableCo
   assert.equal(operationalMarkerPrefix(body), 'copilot-unavailable:');
 });
 
+// --- #3328: out-of-loop -----------------------------------------------
+
+test('buildMarkerBody renders the out-of-loop body (reason is always bootstrap)', () => {
+  const body = buildMarkerBody('out-of-loop', {
+    'agent-id': 'claude-ad242b1f',
+    pr: '3229',
+    timestamp: TS,
+  });
+  assert.equal(
+    body,
+    `<!-- idd-out-of-loop: claude-ad242b1f pr:3229 reason:bootstrap at:${TS} -->\n\n` +
+      '_claude-ad242b1f: this PR runs outside the IDD claim loop -- IDD automation marker. Do not edit._',
+  );
+});
+
+test('buildMarkerBody throws on out-of-loop with agent-id, pr, or timestamp missing', () => {
+  const fullFields = {
+    'agent-id': 'claude-ad242b1f',
+    pr: '3229',
+    timestamp: TS,
+  };
+  for (const omit of Object.keys(fullFields)) {
+    const fields = { ...fullFields };
+    delete (fields as Record<string, string>)[omit];
+    assert.throws(
+      () => buildMarkerBody('out-of-loop', fields),
+      /invalid out-of-loop marker payload/,
+      `omitting ${omit} should throw`,
+    );
+  }
+});
+
+test('the out-of-loop body round-trips through parseOutOfLoopMarker', () => {
+  const body = buildMarkerBody('out-of-loop', {
+    'agent-id': 'claude-ad242b1f',
+    pr: '3229',
+    timestamp: TS,
+  });
+  assert.deepEqual(parseOutOfLoopMarker(body, CREATED_AT), {
+    agentId: 'claude-ad242b1f',
+    prNumber: 3229,
+    reason: 'bootstrap',
+    at: TS,
+    createdAt: CREATED_AT,
+  });
+  assert.equal(operationalMarkerPrefix(body), '<!-- idd-out-of-loop:');
+});
+
+test('parseOutOfLoopMarker returns null for a non-out-of-loop / malformed body', () => {
+  assert.equal(parseOutOfLoopMarker('not a marker', TS), null);
+  assert.equal(
+    parseOutOfLoopMarker(
+      `copilot-unavailable: a ${SHA} ${TS} claim:c attempt:1`,
+      TS,
+    ),
+    null,
+  );
+  // A `reason:` token other than `bootstrap` is not a valid out-of-loop
+  // marker: the grammar accepts exactly `reason:bootstrap` (#3328).
+  assert.equal(
+    parseOutOfLoopMarker(
+      '<!-- idd-out-of-loop: claude-ad242b1f pr:3229 reason:other at:2026-09-24T00:00:00Z -->',
+      TS,
+    ),
+    null,
+  );
+});
+
+test('CLI: --type out-of-loop derives pr: from --target pr <n>, never a separate flag', () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'out-of-loop',
+      '--target',
+      'pr',
+      '3229',
+      '--agent-id',
+      'claude-ad242b1f',
+      '--timestamp',
+      TS,
+    ],
+    { encoding: 'utf8' },
+  );
+  const report = JSON.parse(output) as { body: string };
+  assert.match(report.body, /pr:3229/);
+  assert.match(report.body, /reason:bootstrap/);
+});
+
+test('CLI: --type out-of-loop with --target issue is rejected', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'out-of-loop',
+    '--target',
+    'issue',
+    '3229',
+    '--agent-id',
+    'claude-ad242b1f',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(stderr, /--type out-of-loop requires --target pr/);
+});
+
+test('--help lists out-of-loop among the supported --type values', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  assert.match(output, /--type <type>\s+one of:.*\bout-of-loop\b/);
+});
+
 test('a fractional-second embedded timestamp is recognized identically by operationalMarkerPrefix and the parse helpers', () => {
   // OPERATIONAL_MARKERS (regex-based recognition) and
   // parseBoundAdvisoryEvidenceMarker (structured field extraction) must
@@ -603,7 +719,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the twelve supported types', () => {
+test('MARKER_TYPES lists exactly the thirteen supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -617,6 +733,7 @@ test('MARKER_TYPES lists exactly the twelve supported types', () => {
       'advisory-reroll',
       'review-ack',
       'copilot-unavailable',
+      'out-of-loop',
       'authoring-owner',
       'authoring-publication-intent',
     ],
@@ -818,6 +935,10 @@ process.exit(1);
     });
 
     // (1) the exact gh api arguments (JSON `--input -` path, not `-f body=`).
+    // `--include` (#3275) keeps the response's HTTP headers available for a
+    // failed attempt's `Retry-After` derivation; a plain JSON body (as this
+    // stub still returns) is parsed unchanged via the tolerant fallback in
+    // `extractIncludedResponseBody`.
     assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
       'api',
       '--method',
@@ -825,6 +946,7 @@ process.exit(1);
       'repos/o/r/issues/1047/comments',
       '--input',
       '-',
+      '--include',
     ]);
 
     // (2) the JSON request body piped to stdin carries the exact marker body.

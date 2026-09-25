@@ -62,9 +62,10 @@ This check is read-only — F1 does not rebase, merge, or push.
   attempts, a few seconds apart), then route by the first settled
   result. Only if still `computing`/`unknown` after the budget, fall
   through to the terminal hold below.
-- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold;
-  post a PR comment documenting the branch state and stop. A
-  maintainer must clear the hold.
+- **`dirty`** (`mergeStateStatus` is `DIRTY`), **`unknown`**, or any
+  other state the bullets above do not name (for example
+  `force-push-exception`): hold; post a PR comment documenting the
+  branch state and stop. A maintainer must clear the hold.
 
 ## F2 — Pre-merge condition check
 
@@ -89,7 +90,7 @@ non-Copilot finding still returns to E1.
 (directly, or via the documented merge-gate helper reference), pass
 `--nonce {nonce}` — this session's own locally-recorded activation-nonce
 from claim time (`idd-claim.instructions.md`'s activation-nonce format) —
-alongside `--claim-id`, extending Claim-verification-step-5's nonce
+alongside `--claim-id`, extending Claim-verification-step-4's nonce
 collision check to this merge-time write-gate (Resume-phase cold
 recovery stays a distinct, not-yet-wired case — see
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred),
@@ -97,28 +98,25 @@ kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
 merge-time comparison rather than failing closed, so pass it whenever a
 nonce was recorded for the active claim.
 
-**No claimed issue**: the readiness collector requires either
+**No claimed issue**: the readiness collector requires
 `--claim-issue <issue-number>` (with `--claim-id`) or `--claimless`
-(#2017) — pass `--claimless` instead when this PR has no linked issue to
-claim (`closingIssuesReferences` empty); it cannot combine with
-`--claim-issue`/`--claim-id` and fails closed if `closingIssuesReferences`
-is non-empty. See
-[docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md)
-for the full flag reference.
+(#2017) — pass `--claimless` for a PR with no linked issue
+(`closingIssuesReferences` empty) or a valid `reason:bootstrap`
+out-of-loop marker; it cannot combine with `--claim-issue`/`--claim-id`,
+and otherwise fails closed on a non-empty `closingIssuesReferences`. See
+[docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md).
 
-**Polling loop failure mode**: a caller that repeats this invocation
-(directly, or via a delegated worker) until F2 is ready must branch on
-two distinct outcomes: a zero exit with the full readiness report JSON
-(`ready: false` with `blockers`) is an ordinary **not-ready-yet** result
-to keep polling on; a non-zero exit with a JSON `{ "error": ... }` object
-on stdout instead is a **call failure** — this covers both a call-time
-argument/usage error (e.g. the missing `--claim-issue`/`--claimless`
-case above, which also carries a `hint`) and a live `gh`-backed lookup
-failing (no `hint`); fix the invocation before retrying an argument
-error, and use judgment before abandoning the poll on a `hint`-less one
-(a live call can fail transiently). Conflating either kind of `{error}`
-response with an ordinary not-ready-yet result (kurone-kito/idd-skill#2707)
-turns an operator-visible failure into a silent stall.
+**Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
+full set (else a `closing-set` mismatch).
+
+**Polling loop failure mode**: a zero exit with the full readiness
+JSON (`ready: false` + `blockers`) is not-ready-yet — keep polling. A
+non-zero exit with `{ "error": ... }` is a **call failure**: a usage
+error (e.g. missing `--claim-issue`/`--claimless`) carries a `hint` —
+fix before retrying; a live `gh` lookup failure lacks one — use
+judgment (calls can fail transiently). Conflating either `{error}`
+shape with not-ready-yet (kurone-kito/idd-skill#2707) turns a real
+failure into a silent stall.
 
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
@@ -290,7 +288,8 @@ turns an operator-visible failure into a silent stall.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
-  `ciWait.rerunPolicy` values; on-success → re-evaluate F2).
+  `ciWait.rerunPolicy` values; on-success → re-evaluate F2; code-caused
+  → `Phase: F2 ci-failure`, E15's code-caused route).
 
   `pre-merge-readiness` reads `.github/idd/config.json` from the PR's
   trusted **base** ref, not the PR head. When this PR introduces a
@@ -431,7 +430,9 @@ turns an operator-visible failure into a silent stall.
   cause makes it `false`, and the gate still routes to E1/E4. Fails
   closed: an unusable check makes this condition unmet.
 - **Closing-set and impact-checklist re-verification**:
-  after fetch, the claim gate must confirm
+  `closingSet`/`closing-set` evidences this section's re-run of
+  D3.5 steps 6-7 only; re-derive D3.7 below locally.
+  After fetch, the claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain` and
   `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. For

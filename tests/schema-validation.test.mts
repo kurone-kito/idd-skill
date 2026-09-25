@@ -489,6 +489,33 @@ test('policy schema rejects a critiqueLoop.delegate mode outside the enum (#2324
   );
 });
 
+test('policy schema accepts every critiqueLoop.deferByUrgency value (#3311)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferByUrgency of ['off', 'low', 'low-and-medium']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferByUrgency };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferByUrgency ${deferByUrgency} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a critiqueLoop.deferByUrgency value outside the enum (#3311)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { ...instance.critiqueLoop, deferByUrgency: 'high' };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unlisted deferByUrgency value to be rejected',
+  );
+});
+
 test('policy schema accepts the worktreeGuard opt-in object', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

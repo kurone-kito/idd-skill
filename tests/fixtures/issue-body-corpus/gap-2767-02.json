@@ -1,0 +1,25 @@
+{
+  "id": "gap-2767-02",
+  "category": "synthetic",
+  "note": "#2767 item 2 (plural possessive apostrophe indistinguishable from a closing quote): the possessive apostrophe in \"modules' configs\" is immediately followed by whitespace, exactly like a genuine closing quote, so `isFollowedByFramingVerb`'s bare indexOf(\"'\") scan treats it as the closer and never reaches the real one before \"Alice reports\"; the genuine attribution is missed and the decision is wrongly counted as live. Same underlying mechanism as item 1's finding; the gap is present today (MATCH).",
+  "title": "Update module configs",
+  "labels": [],
+  "body": "Whether this design reads well is ultimately a matter of maintainer preference.\n\n'Maintainer decision (#100, 2026-09-01): update the modules' configs. Keep them synced,' Alice reports.\n\n## Acceptance Criteria\n- [ ] `src/foo.mts` implements the change described above.\n",
+  "bodySha256": "68b22d5ccf35a6324918099042a3536c2ce5097176b24d5b2be02f10a07d2038",
+  "fetchedAt": "2026-09-24T07:22:41.380Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

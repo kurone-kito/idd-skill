@@ -14,6 +14,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
@@ -25,8 +26,9 @@ import {
   isKnownReviewBot,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
   unsafeTextReason,
 } from './protocol-helpers.mjs';
@@ -1177,7 +1179,7 @@ function assertActiveClaim(
     );
   }
 }
-function readActiveClaim(owner, repo, issueNumber, options = {}) {
+export function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const result = JSON.parse(
     ghText([
       'issue',
@@ -1197,13 +1199,16 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call
-  // would be a needless I/O hot path.
+  // would be a needless I/O hot path. staleAgeMs (#3270) reuses the same
+  // read.
   const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
-  const summary = summarizeClaimValidation(comments, {
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
+  const summary = summarizeClaimValidationForWriteGate(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
     prFirstCommitAt: options.prFirstCommitAt ?? null,
+    staleAgeMs,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,

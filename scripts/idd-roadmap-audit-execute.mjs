@@ -24,15 +24,16 @@ import {
   buildSubIssueLoader,
   enumerateRoadmapGraph,
   isClaimStaleByAge,
-  parseClaimStaleAgeMs,
 } from './discover-roadmap-graph.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
+  DEFAULT_STALE_AGE_MS,
   normalizeApplyNow,
+  readClaimStaleAgeMs,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
-  summarizeClaimValidation,
+  summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
@@ -40,10 +41,6 @@ import {
 } from './provider-adapter-github.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-// Distributed `claim-stale-age` default (docs/policy-constants.md: 24 h). Used
-// only as the fallback when the policy declares no (or an invalid)
-// `claimTiming.staleAge`; mirrors discover-roadmap-graph's own default.
-const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 // The canonical evidence comment's literal leading heading. Shared by the
 // body composer (`buildRoadmapCompletionAuditBody`) and the evidence
 // detector (`hasTrustedCompletionEvidenceComment`, #1299) so the two never
@@ -353,7 +350,8 @@ function buildReachableLeafCounter(report) {
  * edge / depth counts, closed descendants split by classification, and the
  * traversal diagnostics) and asserts no open / unresolved / inaccessible /
  * nested-roadmap descendant remains. Only called when the roadmap is ready,
- * so every descendant is closed or otherwise complete.
+ * so every descendant is closed -- some possibly as completed, others (if
+ * any, listed separately) as not planned or duplicate (#3326).
  */
 export function buildRoadmapCompletionAuditBody(report) {
   const rootNumber = report.root.number;
@@ -372,16 +370,26 @@ export function buildRoadmapCompletionAuditBody(report) {
     .filter((node) => node.classification === 'roadmap')
     .map((node) => `#${node.number}`)
     .join(', ');
+  // Children closed without completion (not planned, duplicate, or any other
+  // non-null reason other than `completed`) are still closed work, but the
+  // headline below no longer calls them complete -- list which ones, and
+  // why, instead of silently folding them into "closed or otherwise
+  // complete" (#3326).
+  const closedWithoutCompletion = descendants
+    .filter((node) => typeof node.stateReason === 'string')
+    .map((node) => `#${node.number} (${node.stateReason})`)
+    .join(', ');
   return [
     COMPLETION_AUDIT_HEADING,
     '',
-    `Roadmap #${rootNumber} "${report.root.title}" audited as complete: every referenced child and descendant issue is closed or otherwise complete.`,
+    `Roadmap #${rootNumber} "${report.root.title}" audited as complete: every referenced child and descendant issue is closed; any child closed without completion is listed in the evidence below.`,
     '',
     'Evidence:',
     `- Graph: ${report.summary.nodeCount} nodes, ${report.summary.edgeCount} edges, max depth ${report.summary.maxDepth}.`,
     `- Closed descendants: ${descendants.length} (${executionCount} execution leaves, ${nestedRoadmapCount} nested roadmaps).`,
     `- Closed execution leaves: ${closedExecution || 'none'}.`,
     `- Closed nested roadmaps: ${closedNested || 'none'}.`,
+    `- Closed without completion (not planned / duplicate / other): ${closedWithoutCompletion || 'none'}.`,
     '- Open / unresolved / inaccessible / nested-roadmap / open-linked-PR descendants: none.',
     `- Diagnostics: ${report.summary.cycleCount} cycles, ${report.summary.unresolvedReferenceCount} unresolved references, ${report.summary.inaccessibleReferenceCount} inaccessible references, ${report.summary.duplicateReferenceCount} duplicate references.`,
     '',
@@ -440,10 +448,18 @@ export function reconcileConnectedOpenPrs(events) {
  * stale age are injected so every fail-closed path is unit-testable.
  */
 export function evaluateRoadmapClaim(comments, options) {
-  const summary = summarizeClaimValidation(comments, {
+  // #3270: the same configured `staleAgeMs` (default 24h, resolved once
+  // below) now backs BOTH the claim-identity match below (via the
+  // write-gate wrapper) and the roadmap-audit-branch staleness check
+  // further down -- previously only the latter honored it, so a takeover
+  // inside a configured (non-24h) window could fail to match here even
+  // though the branch/staleness checks below would have accepted it.
+  const effectiveStaleAgeMs = options.staleAgeMs ?? DEFAULT_STALE_AGE_MS;
+  const summary = summarizeClaimValidationForWriteGate(comments, {
     isTrustedAuthor: options.isTrustedAuthor,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    staleAgeMs: effectiveStaleAgeMs,
   });
   if (!summary.matchesExpectedClaim) {
     return {
@@ -468,12 +484,13 @@ export function evaluateRoadmapClaim(comments, options) {
       activeClaim: summary.activeClaim,
     };
   }
-  // Staleness uses the configured stale age (default 24 h); the math is reused
-  // verbatim from the shared `isClaimStaleByAge` rather than re-derived here.
+  // Staleness uses the same configured stale age (default 24 h) the match
+  // check above just used; the math is reused verbatim from the shared
+  // `isClaimStaleByAge` rather than re-derived here.
   const stale = isClaimStaleByAge(
     summary.activeClaim.createdAt,
     options.nowIso,
-    options.staleAgeMs ?? DEFAULT_CLAIM_STALE_AGE_MS,
+    effectiveStaleAgeMs,
   );
   if (stale) {
     return {
@@ -1256,12 +1273,15 @@ function createProductionDeps(args) {
     viewerLogin,
     rawConfig: rawConfig,
   });
-  // Honor the configured `claimTiming.staleAge` (docs/policy-constants.md);
-  // reuse discover-roadmap-graph's ISO-duration parser, falling back to the
-  // distributed 24 h default on an absent/invalid value.
-  const staleAgeMs =
-    parseClaimStaleAgeMs(rawConfig?.claimTiming?.staleAge) ??
-    DEFAULT_CLAIM_STALE_AGE_MS;
+  // Honor the configured `claimTiming.staleAge` (docs/policy-constants.md).
+  // Copilot review, PR #3370: this previously used
+  // discover-roadmap-graph's parseClaimStaleAgeMs on the RAW value, which
+  // trims whitespace before parsing -- unlike normalizePolicyConfig's own
+  // schema check (no trim), so a value like " PT18H " was accepted here
+  // but fell back to the 24h default in every other write gate.
+  // readClaimStaleAgeMs applies the same normalized-then-parsed path as
+  // those other gates, so this can no longer disagree with them.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
   const loadIssue = buildIssueLoader(port);
   const loadSubIssues = buildSubIssueLoader(port);
@@ -1269,7 +1289,6 @@ function createProductionDeps(args) {
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {
         markerPrefix,
-        roadmapLabelName: labelsPolicy.roadmapLabelName,
         owner,
         repo,
         loadIssue,

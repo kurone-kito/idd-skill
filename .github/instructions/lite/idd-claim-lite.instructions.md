@@ -141,7 +141,7 @@ the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
 Heartbeat). If it was omitted (first-time forced-handoff entry, not
 yet activated by you), go to Claim execution step 5 (post your own
 activation-nonce for `newClaimId`) first, then Claim verification's
-**Forced-handoff adopt-verbatim** case (step 5's settle-delay + nonce
+**Forced-handoff adopt-verbatim** case (step 4's settle-delay + nonce
 recompute only).
 
 **Otherwise** (no recorded `{claim-id}`, no forced-handoff evidence, or
@@ -359,43 +359,39 @@ the stale clock. Skip step 5 (activation-nonce).
 ## Claim verification
 
 **Already-owned continuation (no new post)**: pre-check (c)'s
-top-branch `already_owned` result verifies ownership. Skip checks 1–5, but run
-step 6's authoring guard; post no new `claimed-by` or nonce. Checks 1–5
+top-branch `already_owned` result verifies ownership. Skip checks 1–4, but run
+step 5's authoring guard; post no new `claimed-by` or nonce. Checks 1–4
 require a fresh `claimed-by` and apply only to fresh claims, takeovers, and
 legacy migrations.
 
 For fresh activation, after posting `claimed-by`, wait the settle delay
 (`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then
-check steps 1–5. Step 6 applies to both paths:
+check steps 1–4. Step 5 applies to both paths:
 
 1. Build the same-second contender set: every trusted `claimed-by`
    (including yours) sharing your event's `created_at` second.
 2. 2+ contenders → the lexicographically earliest `{claim-id}` wins
    (case-sensitive ASCII compare).
 3. The active claim now uses **your** `{claim-id}` after that
-   tie-break.
-4. No trusted competing `claimed-by` with a different `{claim-id}`
-   appears in a strictly later second than yours.
-5. If you posted an activation-nonce for this `{claim-id}`, recompute
+   tie-break. A later trusted `claimed-by` with a different `{claim-id}`
+   never disputes this (#3268): Claim-state parsing rules 4/6 could never
+   have activated it, so it stays diagnostic only.
+4. If you posted an activation-nonce for this `{claim-id}`, recompute
    its winner and confirm it is yours (no marker posted → treat as
    passed).
-6. Re-fetch the authoring label and paginated owner log. A
+5. Re-fetch the authoring label and paginated owner log. A
    current/incomplete hold contests this claim; only exact
    anchor/set/session `release-complete` with verified snapshots
    passes. If it
-   contests the claim but steps 1–5 passed and the pair is still active, post
+   contests the claim but steps 1–4 passed and the pair is still active, post
    and verify `unclaimed-by` before stopping. If ownership/nonce is ambiguous,
    retain the claim and stop; never release on failed evidence.
 
-Any failure → claim contested → **STOP**, do not proceed. **Exception:
-only step 4 fails** (1-3 passed — the claim is genuinely yours) → post
-`unclaimed-by` for your own `{agent-id}`/`{claim-id}` first (safe: you
-provably hold it), **then STOP**. Step 5 also failing (alone or with
-step 4) → never release (shares that exact pair) — STOP as usual.
+Any failure → claim contested → **STOP**, do not proceed.
 
-**Forced-handoff adopt-verbatim** only: skip steps 1-4 (no
+**Forced-handoff adopt-verbatim** only: skip steps 1-3 (no
 `claimed-by` was posted for this path). Repeat the authoring guard above
-before posting the activation nonce; only step 5 applies — wait the settle
+before posting the activation nonce; only step 4 applies — wait the settle
 delay (`claim.verifySettleDelay`, default `PT5S`), then recompute the nonce
 winner for the adopted `newClaimId` and confirm it is yours. Repeat the
 authoring guard after nonce verification; on a mismatch or hold, re-resolve
@@ -437,19 +433,17 @@ require `present: true` with no `malformed`; otherwise recover per
 `reacquired: true` both ends), else stop.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — re-run pre-check (c) (`--claim-id`
-first, then `--fresh-claim-gate` if not `already_owned`):
+`{claim-id}` is always a collision — run `--fresh-claim-gate` directly
+(not pre-check (c)):
 
-- `already_owned` naming **your own** id: only the local lock drifted
-  (crash / worktree recreation) — you still own the GitHub claim.
-  Retry the lock with `--takeover` directly.
-- `claimable` / `stale-reclaimable`, or `already_owned` naming a
-  **different** id: the claim itself was lost. Post and verify a
-  fresh/takeover claim (pre-check (c) → Claim execution → Claim
-  verification), then retry the lock with `--takeover` — the local
-  lock's recorded id is now stale relative to the newly verified one.
-- `already-claimed` naming a **different** id: a live competitor holds
-  it — stop, the claim was lost.
+- `already-claimed` naming **your own** verified `{claim-id}`, with a
+  top-level `reason` that is not `released-claim-*`: only the local lock
+  drifted (crash / worktree recreation) — you still own the GitHub
+  claim. Retry the lock with `--takeover` directly.
+- Every other result — a `released-claim-*` reason, `already-claimed`
+  naming a different id, or `claimable`/`stale-reclaimable`: the claim
+  itself was lost. **STOP** and report; post no new claim from this
+  check. Re-entry is only through a fresh Resume or Discover pass.
 
 No release step (F4 `git worktree remove` deletes it).
 

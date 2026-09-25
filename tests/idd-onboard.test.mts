@@ -4,6 +4,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -19,6 +20,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  buildCommandCatalog,
   collectVendoredFiles,
   PROFILE_NAMES,
 } from '../src/scripts/helper-runtime-manifest.mts';
@@ -34,6 +36,7 @@ import {
   buildSubstitutionPlan,
   buildUntrustedLabelerGuardWorkflowContent,
   checkGitRemoteBranchExists,
+  checkHelperLoad,
   checkManifestCompleteness,
   checkPackagePinWarning,
   checkPlaceholderResidue,
@@ -48,11 +51,13 @@ import {
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
+  partitionScansByScope,
   planUntrustedLabelerGuardWorkflow,
   readExistingCommandsTable,
   resolveConfinedDirectory,
   resolveCoreTemplateFiles,
   resolveImportFiles,
+  resolvePlaceholderScanScope,
   resolvePlaceholderValues,
   restoreExistingCommandsTable,
   runHearWizard,
@@ -75,6 +80,19 @@ const PLACEHOLDERS_DOC = join(
   'placeholders.md',
 );
 const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
+
+/**
+ * The real repo's own core (default-profile) placeholder-scan scope
+ * (#3291) — the same set `--substitute`'s own `resolveBundleRoot(
+ * import.meta.dirname)` resolution lands on when run from this checkout,
+ * and what `importAndSubstitute`'s default-profile import below produces.
+ * Computed once (real filesystem read, not a fixture) and reused by every
+ * `checkPlaceholderResidue` call below built on a `REPO_ROOT`-sourced
+ * import.
+ */
+const CORE_SCAN_SCOPE = resolvePlaceholderScanScope(
+  resolveImportFiles(REPO_ROOT).files,
+);
 
 const createdFixtureDirs: string[] = [];
 
@@ -149,8 +167,15 @@ function writeTemplateFixture(root: string): void {
       '',
     ].join('\n'),
   );
+  // #3291: the real idd-skill repo's own manifest does NOT include a
+  // top-level README.md (only `profiles/*/README.md` -- an adopter's own
+  // pre-existing README is never onboarding-managed), so a fixture file
+  // meant to exercise `--substitute`'s CLI path (which now scopes to the
+  // running CLI's own manifest target-path set) must sit at a REAL
+  // manifest path. `docs/index.md` is one, and reads naturally as prose.
+  mkdirSync(join(root, 'docs'), { recursive: true });
   writeFileSync(
-    join(root, 'README.md'),
+    join(root, 'docs', 'index.md'),
     '# {{REPO_NAME}}\n\nWorktree example: ../{{REPO_NAME}}.issue-1-fix\n',
   );
 }
@@ -1209,10 +1234,12 @@ test('substitution applies exactly the planned edits and keeps config.json valid
   );
   const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
   assert.deepEqual(plan.residue, []);
-  const readme = plan.entries.filter((entry) => entry.file === 'README.md');
-  assert.deepEqual(readme, [
+  const docsIndex = plan.entries.filter(
+    (entry) => entry.file === 'docs/index.md',
+  );
+  assert.deepEqual(docsIndex, [
     {
-      file: 'README.md',
+      file: 'docs/index.md',
       placeholder: 'REPO_NAME',
       occurrences: 2,
       from: '{{REPO_NAME}}',
@@ -1223,7 +1250,7 @@ test('substitution applies exactly the planned edits and keeps config.json valid
   const filesChanged = applySubstitutionPlan(root, plan);
   assert.equal(filesChanged, 2);
   assert.equal(
-    readFileSync(join(root, 'README.md'), 'utf8'),
+    readFileSync(join(root, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
   const config = JSON.parse(
@@ -1251,7 +1278,7 @@ test('unresolved placeholders block as residue; unknown tokens stay informationa
   const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
   assert.deepEqual(
     plan.residue.map((entry) => [entry.file, entry.token]),
-    [['README.md', '{{REPO_NAME}}']],
+    [['docs/index.md', '{{REPO_NAME}}']],
   );
   // An adopter's own {{UPPER_SNAKE}} template token must not make the
   // run permanently non-convergent — wave 1 cannot know the copied set.
@@ -1349,7 +1376,7 @@ test('--substitute leaves the meta-docs byte-identical, including on a second re
   }
   // Every non-excluded site still converges normally in the same run.
   assert.equal(
-    readFileSync(join(root, 'README.md'), 'utf8'),
+    readFileSync(join(root, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
 });
@@ -1381,9 +1408,10 @@ test('applySubstitutionPlan refuses to rewrite a SCAN_EXCLUDED_PATHS entry even 
 test('checkPlaceholderResidue does not report the meta-docs as unresolved residue', () => {
   const root = makeFixtureDir();
   writeExcludedMetaDocs(root);
-  const result = checkPlaceholderResidue(root);
+  const result = checkPlaceholderResidue(root, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
   assert.deepEqual(result.unknownTokens, []);
+  assert.deepEqual(result.outOfScopeTokens, []);
 });
 
 test('listSkippedPlaceholderPaths reports only the meta-docs present in the target, sorted', () => {
@@ -1394,6 +1422,80 @@ test('listSkippedPlaceholderPaths reports only the meta-docs present in the targ
   });
   writeFileSync(join(root, ...firstPath.split('/')), '# ref\n');
   assert.deepEqual(listSkippedPlaceholderPaths(root), [firstPath]);
+});
+
+// ---------------------------------------------------------------------------
+// resolvePlaceholderScanScope / partitionScansByScope (#3291)
+// ---------------------------------------------------------------------------
+
+test('resolvePlaceholderScanScope includes every manifest target path not in SCAN_EXCLUDED_PATHS', () => {
+  const [excludedPath] = SCAN_EXCLUDED_PATHS;
+  const scope = resolvePlaceholderScanScope([
+    { sourcePath: `idd-template/${excludedPath}`, targetPath: excludedPath },
+    { sourcePath: 'idd-template/README.md', targetPath: 'README.md' },
+  ]);
+  assert.equal(scope.has(excludedPath), false);
+  assert.equal(scope.has('README.md'), true);
+  assert.equal(scope.size, 1);
+});
+
+test('resolvePlaceholderScanScope returns an empty scope for an empty file list', () => {
+  assert.equal(resolvePlaceholderScanScope([]).size, 0);
+});
+
+test('partitionScansByScope keeps an in-scope scan unchanged and reports nothing out of scope', () => {
+  const scans = [
+    { file: 'README.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(inScope, scans);
+  assert.deepEqual(outOfScopeTokens, []);
+});
+
+test('partitionScansByScope flattens an out-of-scope scan into outOfScopeTokens, known or unknown token alike', () => {
+  const scans = [
+    {
+      file: 'LEFTOVER.md',
+      tokens: new Map([
+        ['{{REPO_NAME}}', 1],
+        ['{{SOME_ADOPTER_TOKEN}}', 2],
+      ]),
+    },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(inScope, []);
+  assert.deepEqual(
+    outOfScopeTokens.sort((a, b) => a.token.localeCompare(b.token)),
+    [
+      { file: 'LEFTOVER.md', token: '{{REPO_NAME}}', occurrences: 1 },
+      { file: 'LEFTOVER.md', token: '{{SOME_ADOPTER_TOKEN}}', occurrences: 2 },
+    ],
+  );
+});
+
+test('partitionScansByScope handles a mix of in-scope and out-of-scope scans in one call', () => {
+  const scans = [
+    { file: 'README.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+    { file: 'LEFTOVER.md', tokens: new Map([['{{REPO_NAME}}', 1]]) },
+  ];
+  const { inScope, outOfScopeTokens } = partitionScansByScope(
+    scans,
+    new Set(['README.md']),
+  );
+  assert.deepEqual(
+    inScope.map((scan) => scan.file),
+    ['README.md'],
+  );
+  assert.deepEqual(
+    outOfScopeTokens.map((entry) => entry.file),
+    ['LEFTOVER.md'],
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -2285,7 +2387,7 @@ test('bin/idd-onboard.mjs without --dry-run applies exactly the planned edits', 
   assert.equal(verdict.written, true);
   assert.deepEqual(verdict.plan, planned);
   assert.equal(
-    readFileSync(join(applyRoot, 'README.md'), 'utf8'),
+    readFileSync(join(applyRoot, 'docs', 'index.md'), 'utf8'),
     '# my-app\n\nWorktree example: ../my-app.issue-1-fix\n',
   );
 });
@@ -2320,6 +2422,80 @@ test('bin/idd-onboard.mjs exits 2 on usage errors, distinct from residue', () =>
     assert.equal(failed.status, 2);
     assert.match(String(failed.stderr), /unknown argument/);
   }
+});
+
+// #3291 review: an isolated copy of the compiled bundle (bin/idd-onboard.mjs
+// + its full scripts/*.mjs dependency closure + schemas/, mirroring
+// tests/sync-docs.test.mts's own isolated-bundle pattern) with a
+// package.json/schemas/ pair present -- so resolveBundleRoot resolves a
+// root via its schemas/policy.schema.json marker -- but no
+// audit/sync-manifest.json in that same root. Reproduces the "running
+// bundle lacks a readable manifest" case `--substitute`'s own doc comment
+// describes as effectively unreachable for a full idd-skill clone, but
+// real for a vendored-node bundle whose deployment omitted the manifest.
+function makeIsolatedOnboardBundle(): string {
+  const bundleDir = mkdtempSync(join(tmpdir(), 'idd-onboard-isolated-'));
+  mkdirSync(join(bundleDir, 'bin'), { recursive: true });
+  mkdirSync(join(bundleDir, 'scripts'), { recursive: true });
+  cpSync(BIN_PATH, join(bundleDir, 'bin', 'idd-onboard.mjs'));
+  // bin/idd-onboard.mjs spawns scripts/idd-onboard.mjs as a child process
+  // via its sibling run-helper.mjs (see src/bin/run-helper.mts) -- without
+  // this copy, the outer process itself fails to resolve that import
+  // (ERR_MODULE_NOT_FOUND, exit 1) before ever reaching --substitute's
+  // own fail-closed logic in the inner process this test targets.
+  cpSync(
+    join(REPO_ROOT, 'bin', 'run-helper.mjs'),
+    join(bundleDir, 'bin', 'run-helper.mjs'),
+  );
+  const scriptsDir = join(REPO_ROOT, 'scripts');
+  for (const entry of readdirSync(scriptsDir)) {
+    if (entry.endsWith('.mjs')) {
+      cpSync(join(scriptsDir, entry), join(bundleDir, 'scripts', entry));
+    }
+  }
+  // The bundle marker resolveBundleRoot looks for (#3238) -- present, so
+  // resolution lands on this isolated root rather than throwing outright.
+  cpSync(join(REPO_ROOT, 'schemas'), join(bundleDir, 'schemas'), {
+    recursive: true,
+  });
+  writeFileSync(join(bundleDir, 'package.json'), '{}\n');
+  // Deliberately absent: audit/sync-manifest.json.
+  return bundleDir;
+}
+
+test('bin/idd-onboard.mjs --substitute exits 2 and writes nothing when the running bundle has no readable manifest (#3291 review)', () => {
+  const bundleDir = makeIsolatedOnboardBundle();
+  const targetRoot = makeFixtureDir();
+  writeTemplateFixture(targetRoot);
+  const before = snapshotTree(targetRoot);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(bundleDir, 'bin', 'idd-onboard.mjs'),
+        '--substitute',
+        '--target',
+        targetRoot,
+        ...CLI_OVERRIDE_FLAGS,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(
+      String(failed.stderr),
+      /--substitute could not resolve its own core file set/,
+    );
+    assert.match(String(failed.stderr), /audit[\\/]sync-manifest\.json/);
+  }
+  // Fails closed before any write, exactly like the usage-error case above
+  // -- never a silent fallback to scanning the whole --target tree.
+  assertTreeUnchanged(targetRoot, before);
+  rmSync(bundleDir, { recursive: true, force: true });
 });
 
 test('bin/idd-onboard.mjs --import --dry-run prints the plan and writes nothing', () => {
@@ -3022,22 +3198,35 @@ test('checkManifestCompleteness forwards --profile to resolveImportFiles, coveri
   assert.deepEqual(result.missingTarget, []);
 });
 
-test('checkPlaceholderResidue classifies a leftover onboarding placeholder as blocking residue', () => {
+// #3291: a file the manifest never imported -- LEFTOVER.md at the
+// target root -- is exactly the pre-fix bug shape (issue reproduction:
+// an adopter-owned src/greeting.mustache). Its tokens must land in
+// outOfScopeTokens, never residue/unknownTokens, and --substitute must
+// never plan a rewrite for it.
+test('checkPlaceholderResidue reports an out-of-manifest file under outOfScopeTokens, never residue/unknownTokens', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
   writeFileSync(
     join(targetRoot, 'LEFTOVER.md'),
     '{{REPO_NAME}} and {{SOME_ADOPTER_TOKEN}} remain\n',
   );
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
+  assert.deepEqual(
+    result.residue.filter((entry) => entry.file === 'LEFTOVER.md'),
+    [],
+  );
+  assert.deepEqual(
+    result.unknownTokens.filter((entry) => entry.file === 'LEFTOVER.md'),
+    [],
+  );
   assert.ok(
-    result.residue.some(
+    result.outOfScopeTokens.some(
       (entry) =>
         entry.file === 'LEFTOVER.md' && entry.token === '{{REPO_NAME}}',
     ),
   );
   assert.ok(
-    result.unknownTokens.some(
+    result.outOfScopeTokens.some(
       (entry) =>
         entry.file === 'LEFTOVER.md' &&
         entry.token === '{{SOME_ADOPTER_TOKEN}}',
@@ -3045,11 +3234,37 @@ test('checkPlaceholderResidue classifies a leftover onboarding placeholder as bl
   );
 });
 
+// #3291 regression (issue AC): an unresolved known token left in an
+// IN-SCOPE manifest file (never an adopter-owned one) must still block.
+test('checkPlaceholderResidue still classifies an unresolved token in an in-scope manifest file as blocking residue', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const inScopePath = join(targetRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
+  assert.ok(
+    result.residue.some(
+      (entry) =>
+        entry.file === '.markdownlint.yml' && entry.token === '{{REPO_NAME}}',
+    ),
+  );
+  assert.deepEqual(
+    result.outOfScopeTokens.filter(
+      (entry) => entry.file === '.markdownlint.yml',
+    ),
+    [],
+  );
+});
+
 test('checkPlaceholderResidue reports nothing for a fully substituted target', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
+  assert.deepEqual(result.outOfScopeTokens, []);
 });
 
 test('#1924 regression: importing the real template keeps the meta-docs literal', () => {
@@ -3073,7 +3288,7 @@ test('#1924 regression: importing the real template keeps the meta-docs literal'
   }
   // --verify's residue check must not read their surviving tokens as
   // unresolved placeholders.
-  const result = checkPlaceholderResidue(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot, CORE_SCAN_SCOPE);
   assert.deepEqual(result.residue, []);
 });
 
@@ -3128,11 +3343,35 @@ test('runVerify blocks when manifest completeness or placeholder residue fails',
   const missingManifestFile = runVerify(REPO_ROOT, targetRoot);
   assert.equal(missingManifestFile.blocking, true);
 
+  // #3291 regression: an unresolved token in an IN-SCOPE manifest file
+  // (never an adopter-owned one outside it) still blocks via runVerify.
   const residueRoot = makeFixtureDir();
   importAndSubstitute(residueRoot);
-  writeFileSync(join(residueRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const inScopePath = join(residueRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
   const residueResult = runVerify(REPO_ROOT, residueRoot);
   assert.equal(residueResult.blocking, true);
+  assert.ok(
+    residueResult.placeholderResidue.residue.some(
+      (entry) => entry.file === '.markdownlint.yml',
+    ),
+  );
+
+  // #3291: a token OUTSIDE the manifest never blocks -- it is reported
+  // under outOfScopeTokens instead.
+  const outOfScopeRoot = makeFixtureDir();
+  importAndSubstitute(outOfScopeRoot);
+  writeFileSync(join(outOfScopeRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const outOfScopeResult = runVerify(REPO_ROOT, outOfScopeRoot);
+  assert.equal(outOfScopeResult.blocking, false);
+  assert.ok(
+    outOfScopeResult.placeholderResidue.outOfScopeTokens.some(
+      (entry) => entry.file === 'LEFTOVER.md',
+    ),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -3293,10 +3532,14 @@ test('bin/idd-onboard.mjs --verify exits 1 and names the missing file when the m
   );
 });
 
-test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding placeholder is unresolved', () => {
+test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding placeholder is unresolved in an in-scope manifest file', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
-  writeFileSync(join(targetRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const inScopePath = join(targetRoot, '.markdownlint.yml');
+  writeFileSync(
+    inScopePath,
+    `${readFileSync(inScopePath, 'utf8')}\n# {{REPO_NAME}}\n`,
+  );
   const { status, verdict } = runCliBin([
     '--verify',
     '--source',
@@ -3309,7 +3552,28 @@ test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding
   const residue = (
     verdict.placeholderResidue as { residue: { file: string }[] }
   ).residue;
-  assert.ok(residue.some((entry) => entry.file === 'LEFTOVER.md'));
+  assert.ok(residue.some((entry) => entry.file === '.markdownlint.yml'));
+});
+
+// #3291: the pre-fix bug shape (issue reproduction) -- a known onboarding
+// token in a file OUTSIDE the imported manifest must never block --verify.
+test('bin/idd-onboard.mjs --verify exits 0 for a known token found outside the imported manifest', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  writeFileSync(join(targetRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  const outOfScopeTokens = (
+    verdict.placeholderResidue as { outOfScopeTokens: { file: string }[] }
+  ).outOfScopeTokens;
+  assert.ok(outOfScopeTokens.some((entry) => entry.file === 'LEFTOVER.md'));
 });
 
 test('bin/idd-onboard.mjs --verify exits 0 even when the stale-import signal fires (informational only)', () => {
@@ -3426,6 +3690,182 @@ test('bin/idd-onboard.mjs --verify --profile vendored-node passes for a target i
   ]);
   assert.equal(status, 0);
   assert.equal(verdict.blocking, false);
+  // #3238 regression: this fixture has no package.json (makeFixtureDir is a
+  // bare mkdtemp), matching the reported bug's precondition exactly -- every
+  // cataloged helper must still load and print --help via the shared
+  // resolveBundleRoot marker-first fix.
+  const helperLoad = verdict.helperLoad as {
+    applicable: boolean;
+    probed: string[];
+    failed: unknown[];
+  };
+  assert.equal(helperLoad.applicable, true);
+  assert.deepEqual(helperLoad.failed, []);
+  assert.ok(helperLoad.probed.length > 0);
+});
+
+test('checkHelperLoad reports not applicable and spawns nothing for a non-vendored-node profile', () => {
+  // Import the vendored-node bundle itself, so every cataloged helper file
+  // genuinely exists under targetRoot -- proving the assertions below hold
+  // because of the profile check, not merely because there is nothing to
+  // probe.
+  const targetRoot = makeFixtureDir();
+  const importPlan = buildImportPlan(REPO_ROOT, targetRoot, {
+    profile: 'vendored-node',
+  });
+  applyImportPlan(REPO_ROOT, targetRoot, importPlan);
+
+  for (const profile of [
+    undefined,
+    'package-manager',
+    'ephemeral-npx',
+    'instructions-only',
+  ]) {
+    const result = checkHelperLoad(targetRoot, profile);
+    assert.equal(result.applicable, false);
+    assert.deepEqual(result.probed, []);
+    assert.deepEqual(result.failed, []);
+  }
+});
+
+test('checkHelperLoad refuses to spawn an entryPath reached only through a symlinked ancestor directory (PR #3303 Copilot review)', () => {
+  // fileExists()'s lstatSync only protects the leaf path component -- a
+  // symlinked ancestor directory (here, targetRoot/scripts itself) is
+  // still followed during ordinary path resolution, so a real file
+  // reached only through it must never be spawned as though it were a
+  // normal file under --target.
+  const targetRoot = makeFixtureDir();
+  const outsideDir = makeFixtureDir();
+  const catalog = buildCommandCatalog();
+  const command = catalog.find((c) => c.id === 'select-desynced-index');
+  assert.ok(command, 'expected select-desynced-index in the catalog');
+  const leafName = command.entryPath.split('/').pop();
+  assert.ok(leafName, 'expected a non-empty leaf filename');
+  writeFileSync(
+    join(outsideDir, leafName),
+    "console.log('should never run');\n",
+  );
+  symlinkSync(outsideDir, join(targetRoot, 'scripts'));
+
+  const result = checkHelperLoad(targetRoot, 'vendored-node');
+  assert.equal(result.applicable, true);
+  assert.deepEqual(result.probed, []);
+  const failure = result.failed.find(
+    (entry) => entry.entryPath === command.entryPath,
+  );
+  assert.ok(
+    failure,
+    `expected ${command.entryPath} in helperLoad.failed (symlinked ancestor)`,
+  );
+  assert.match(failure.reason, /symlinked ancestor/);
+});
+
+test('bin/idd-onboard.mjs --verify reports a broken vendored helper in helperLoad without flagging manifestCompleteness (#3238)', () => {
+  const targetRoot = makeFixtureDir();
+  const { status: importStatus } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(importStatus, 0);
+  runCliBin(['--substitute', '--target', targetRoot, ...CLI_OVERRIDE_FLAGS]);
+
+  // select-desynced-index is a standalone cataloged helper: no other
+  // cataloged entryPath imports it (verified by grep before picking it), so
+  // corrupting it in isolation produces exactly one helperLoad failure
+  // rather than a cascade through a shared dependency.
+  const catalog = buildCommandCatalog();
+  const brokenCommand = catalog.find(
+    (command) => command.id === 'select-desynced-index',
+  );
+  assert.ok(brokenCommand, 'expected select-desynced-index in the catalog');
+  const brokenPath = join(targetRoot, brokenCommand.entryPath);
+  assert.ok(
+    existsSync(brokenPath),
+    `${brokenCommand.entryPath} must exist in the imported target`,
+  );
+  writeFileSync(
+    brokenPath,
+    "throw new Error('#3238 test fixture: load-time failure');\n",
+  );
+
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.blocking, true);
+  const helperLoad = verdict.helperLoad as {
+    failed: { id: string; entryPath: string; reason: string }[];
+  };
+  // select-desynced-index has no other cataloged importer (verified above),
+  // so corrupting it in isolation must produce exactly one failure, not a
+  // cascade through a shared dependency.
+  assert.equal(helperLoad.failed.length, 1);
+  assert.equal(helperLoad.failed[0]?.entryPath, brokenCommand.entryPath);
+  const manifestCompleteness = verdict.manifestCompleteness as {
+    missingTarget: string[];
+  };
+  assert.deepEqual(manifestCompleteness.missingTarget, []);
+});
+
+test('a --profile vendored-node import can run its own vendored helpers with --help in a repo with no package.json (#3238 reproduction)', (t) => {
+  const targetRoot = makeFixtureDir();
+  // The reported bug's precondition: no ancestor of targetRoot (up to the
+  // filesystem root) already carries a package.json that would mask the
+  // fa49fb6c-era failure this test guards against.
+  let ancestor = targetRoot;
+  for (;;) {
+    if (existsSync(join(ancestor, 'package.json'))) {
+      t.skip(
+        `an ancestor of the fixture tree (${ancestor}) already has a package.json`,
+      );
+      return;
+    }
+    const parent = dirname(ancestor);
+    if (parent === ancestor) {
+      break;
+    }
+    ancestor = parent;
+  }
+
+  const { status: importStatus } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(importStatus, 0);
+  runCliBin(['--substitute', '--target', targetRoot, ...CLI_OVERRIDE_FLAGS]);
+  assert.equal(existsSync(join(targetRoot, 'package.json')), false);
+
+  for (const args of [
+    ['scripts/advisory-wait-state.mjs', '--help'],
+    ['scripts/pre-merge-readiness.mjs', '--help'],
+    ['scripts/helper-runtime-manifest.mjs', '--profile', 'vendored-node'],
+  ]) {
+    const [entryPath, ...rest] = args;
+    const result = execFileSync(process.execPath, [entryPath, ...rest], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+    });
+    assert.ok(
+      result.trim() !== '',
+      `expected non-empty stdout from ${entryPath}`,
+    );
+  }
 });
 
 test('bin/idd-onboard.mjs --verify exits 2 on an unknown --profile value', () => {
@@ -4498,6 +4938,77 @@ test('a real import + substitute produces a doc tree that passes the documented 
   );
 });
 
+// #3291 acceptance criteria: a real --import followed by a real
+// --substitute/--verify CLI run, with an adopter-owned file outside the
+// imported manifest carrying a known onboarding token -- the issue's own
+// reproduction shape (`src/greeting.mustache`).
+test('bin/idd-onboard.mjs --substitute never rewrites an adopter file outside the imported manifest; --verify treats it as informational only (#3291)', () => {
+  const targetRoot = makeFixtureDir();
+  const imported = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(imported.status, 0, JSON.stringify(imported.verdict));
+  assert.equal(imported.verdict.written, true);
+
+  mkdirSync(join(targetRoot, 'src'), { recursive: true });
+  const mustachePath = join(targetRoot, 'src', 'greeting.mustache');
+  const mustacheContent = 'Hello from {{REPO_NAME}}!\n';
+  writeFileSync(mustachePath, mustacheContent);
+
+  const dryRun = runCliBin([
+    '--substitute',
+    '--dry-run',
+    '--target',
+    targetRoot,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(dryRun.status, 0, JSON.stringify(dryRun.verdict));
+  const dryRunPlan = dryRun.verdict.plan as { file: string }[];
+  assert.ok(
+    dryRunPlan.every((entry) => entry.file !== 'src/greeting.mustache'),
+    `expected no plan entry for src/greeting.mustache, got: ${JSON.stringify(dryRunPlan)}`,
+  );
+  const dryRunOutOfScope = dryRun.verdict.outOfScopeTokens as {
+    file: string;
+  }[];
+  assert.ok(
+    dryRunOutOfScope.some((entry) => entry.file === 'src/greeting.mustache'),
+  );
+
+  const applied = runCliBin([
+    '--substitute',
+    '--target',
+    targetRoot,
+    ...CLI_OVERRIDE_FLAGS,
+  ]);
+  assert.equal(applied.status, 0, JSON.stringify(applied.verdict));
+  assert.equal(applied.verdict.written, true);
+  // Never rewritten -- byte-identical to what this test wrote above.
+  assert.equal(readFileSync(mustachePath, 'utf8'), mustacheContent);
+
+  const verified = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(verified.status, 0, JSON.stringify(verified.verdict));
+  assert.equal(verified.verdict.blocking, false);
+  const verifyOutOfScope = (
+    verified.verdict.placeholderResidue as {
+      outOfScopeTokens: { file: string }[];
+    }
+  ).outOfScopeTokens;
+  assert.ok(
+    verifyOutOfScope.some((entry) => entry.file === 'src/greeting.mustache'),
+  );
+});
+
 // ---------------------------------------------------------------------------
 // --substitute --from-transcript / --record-policy (#2282)
 // ---------------------------------------------------------------------------
@@ -5389,6 +5900,617 @@ test("bin/idd-onboard.mjs --record-policy --write-policy-doc output passes the t
     0,
     `markdownlint-cli2 findings against the written policy doc:\n${markdownlintResult.stdout}${markdownlintResult.stderr}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// --record-policy --write-policy-doc confinement, anti-clobber, and
+// config.json write guard (#3292)
+// ---------------------------------------------------------------------------
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses to overwrite an existing plain file that is not its own generated output, and --force overrides it (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  // AGENTS.md mirrors the issue's own reproduction: an adopter-authored
+  // file a reader could reasonably point --write-policy-doc at.
+  const docPath = join(root, 'AGENTS.md');
+  const handWritten = '# Adopter-authored AGENTS.md\n\nHand-written content.\n';
+  writeFileSync(docPath, handWritten);
+  const before = snapshotTree(root);
+
+  const refused = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(refused.status, 2);
+  assert.match(String(refused.stderr), /refusing to overwrite/);
+  // Neither AGENTS.md nor .github/idd/config.json changed.
+  assertTreeUnchanged(root, before);
+
+  const forced = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+    '--force',
+  ]);
+  assert.equal(forced.status, 0);
+  assert.equal(forced.verdict.writtenPolicyDocPath, resolve(docPath));
+  assert.match(
+    readFileSync(docPath, 'utf8'),
+    /# IDD Policy Configuration Record/,
+  );
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination outside --target, writing nothing (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const before = snapshotTree(root);
+  // A dedicated tracked tmp dir (not a fixed filename directly under the
+  // shared tmpdir() -- this repository's heavy concurrent-session load
+  // could otherwise collide two parallel test runs on the same path,
+  // #3292 review): inside the --allow-root-widened confined root, but
+  // still outside --target itself, which is what this guard checks.
+  const outsideDocPath = join(
+    trackedMkdtemp('idd-onboard-outside-'),
+    'outside-policy-doc.md',
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      outsideDocPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /must resolve inside --target/);
+  assert.equal(existsSync(outsideDocPath), false);
+  assertTreeUnchanged(root, before);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination that is itself a symlink, leaving the link target unchanged (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const outsideFile = join(trackedMkdtemp('idd-onboard-outside-'), 'evil.md');
+  writeFileSync(outsideFile, '# pre-existing\n');
+  const docPath = join(root, 'policy-doc.md');
+  symlinkSync(outsideFile, docPath);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      // #3292 review (CodeRabbit): without --allow-root, root's own
+      // location outside this test process's cwd trips
+      // resolveConfinedDirectory's unrelated --target confinement check
+      // first, so this never actually reached the destination-safety
+      // guard under test. --allow-root tmpdir() clears that unrelated
+      // check, and the stderr match below pins down which guard fired.
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /non-plain-file entry/);
+  assert.equal(readFileSync(outsideFile, 'utf8'), '# pre-existing\n');
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc refuses a destination that sits under a symlinked ancestor directory (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const outsideDir = trackedMkdtemp('idd-onboard-outside-');
+  symlinkSync(outsideDir, join(root, 'docs-link'));
+  const docPath = join(root, 'docs-link', 'policy-doc.md');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--write-policy-doc',
+      docPath,
+      // See the sibling leaf-symlink test above for why --allow-root is
+      // required here to actually reach the guard under test.
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(String(result.stderr), /non-directory .* sits on its path/);
+  assert.equal(existsSync(join(outsideDir, 'policy-doc.md')), false);
+});
+
+test('bin/idd-onboard.mjs --record-policy refuses when .github/idd/config.json is a symlink to a file outside --target, with or without --write-policy-doc (#3292)', () => {
+  const outsideConfigPath = join(
+    trackedMkdtemp('idd-onboard-outside-'),
+    'config.json',
+  );
+  const outsideConfigContent = JSON.stringify({
+    markerPrefix: 'x',
+    trustedMarkerActors: ['x'],
+    commands: {
+      'install-deps': 'x',
+      'fix-validate': 'x',
+      'pre-push-validate': 'x',
+      'post-fix-validate': 'x',
+    },
+  });
+  writeFileSync(outsideConfigPath, outsideConfigContent);
+
+  for (const withDocFlag of [false, true]) {
+    const root = makeFixtureDir();
+    mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+    symlinkSync(outsideConfigPath, join(root, '.github', 'idd', 'config.json'));
+    const transcriptPath = join(root, 'transcript.json');
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ version: '1.0.0', answers: [] }),
+    );
+    const extraArgs = withDocFlag
+      ? ['--write-policy-doc', join(root, 'policy-doc.md')]
+      : [];
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        ...extraArgs,
+        // See the write-policy-doc symlink tests above for why
+        // --allow-root is required here to actually reach the guard
+        // under test rather than an unrelated --target confinement error.
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2, `withDocFlag=${withDocFlag}`);
+    assert.match(
+      String(result.stderr),
+      /refusing to write \.github\/idd\/config\.json:.*non-plain-file entry/,
+      `withDocFlag=${withDocFlag}`,
+    );
+  }
+  assert.equal(readFileSync(outsideConfigPath, 'utf8'), outsideConfigContent);
+});
+
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/config.json refuses the internal-file collision instead of clobbering config.json (#3292 review, Copilot)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      configPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+});
+
+// NTFS (Windows' default filesystem) is case-insensitive but
+// case-preserving, so this collision is only genuinely reproducible on
+// the "Windows platform tests" CI lane -- ext4 (this repo's other
+// lanes) is case-sensitive and would not exercise
+// isSameExistingFile's dev/ino-identity comparison at all.
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc .github/idd/CONFIG.JSON refuses the case-insensitive-filesystem alias to config.json (#3292 review round 2, Copilot)', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+  const upperCaseAlias = join(root, '.github', 'idd', 'CONFIG.JSON');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      upperCaseAlias,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+});
+
+test('bin/idd-onboard.mjs --record-policy --force --write-policy-doc <a hard link to config.json> refuses the alias, since realpathSync alone cannot see it (#3292 review round 3, Copilot)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const configPath = join(root, '.github', 'idd', 'config.json');
+  const originalConfig = readFileSync(configPath, 'utf8');
+  // A hard link is a second directory entry for the same inode -- unlike
+  // a symlink, it has its own fully-canonical path with nothing for
+  // realpathSync to resolve through, so only a dev/ino identity
+  // comparison (not realpathSync) can recognize it as the same file.
+  const hardLinkPath = join(root, '.github', 'idd', 'config-hardlink.json');
+  linkSync(configPath, hardLinkPath);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--record-policy',
+      '--transcript',
+      transcriptPath,
+      '--target',
+      root,
+      '--apply',
+      '--force',
+      '--write-policy-doc',
+      hardLinkPath,
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 2);
+  assert.match(
+    String(result.stderr),
+    /must not resolve to \.github\/idd\/config\.json itself/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), originalConfig);
+  assert.equal(readFileSync(hardLinkPath, 'utf8'), originalConfig);
+});
+
+// Permission-denied is a distinct failure from ENOENT and must fail closed
+// (never silently treated as "absent"). Skipped when running as root or on
+// a platform where chmod does not restrict the owning user's own access
+// (root ignores POSIX permission bits; Windows chmod semantics differ) --
+// mirrors tests/idd-config.test.mts's own `canTestPermissionDenied` guard.
+const canTestPermissionDenied =
+  process.platform !== 'win32' &&
+  typeof process.getuid === 'function' &&
+  process.getuid() !== 0;
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc fails closed (never silently overwrites) on a permission-denied existing destination (#3292 review, Copilot)', {
+  skip: !canTestPermissionDenied,
+}, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+  const originalContent = '# pre-existing, unreadable\n';
+  writeFileSync(docPath, originalContent);
+  chmodSync(docPath, 0o000);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        '--write-policy-doc',
+        docPath,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2);
+    assert.match(
+      String(result.stderr),
+      /could not read the existing destination/,
+    );
+  } finally {
+    chmodSync(docPath, 0o644);
+  }
+  assert.equal(readFileSync(docPath, 'utf8'), originalContent);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc fails closed on a permission-denied ancestor directory, not treating it as absent (#3292 review, Copilot)', {
+  skip: !canTestPermissionDenied,
+}, () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const blockedDir = join(root, 'blocked');
+  mkdirSync(blockedDir);
+  const docPath = join(blockedDir, 'policy-doc.md');
+  chmodSync(blockedDir, 0o000);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--record-policy',
+        '--transcript',
+        transcriptPath,
+        '--target',
+        root,
+        '--apply',
+        '--write-policy-doc',
+        docPath,
+        '--allow-root',
+        tmpdir(),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 2);
+    assert.match(String(result.stderr), /could not stat the destination/);
+  } finally {
+    chmodSync(blockedDir, 0o755);
+  }
+  assert.equal(existsSync(docPath), false);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc creates a missing parent directory under --target instead of failing after config.json is already written (#3292 review, CodeRabbit)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  // docs/onboarding/ does not exist yet under root -- the destination
+  // guard only refuses a *non-directory* ancestor, by design leaving a
+  // genuinely absent one for the write path to create.
+  const docPath = join(root, 'docs', 'onboarding', 'policy-doc.md');
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.writtenPolicyDocPath, resolve(docPath));
+  assert.match(
+    readFileSync(docPath, 'utf8'),
+    /# IDD Policy Configuration Record/,
+  );
+  // config.json was genuinely merged and written too, not left stale by
+  // an earlier partial failure on the doc write.
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  assert.equal(config.mergePolicy, answers['merge-policy']);
+});
+
+test('bin/idd-onboard.mjs --record-policy --write-policy-doc allows re-running over its own unedited output, but refuses after a manual edit (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+  const docPath = join(root, 'policy-doc.md');
+  const cliArgs = [
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--apply',
+    '--write-policy-doc',
+    docPath,
+  ];
+
+  const first = runCliBin(cliArgs);
+  assert.equal(first.status, 0);
+  const firstContent = readFileSync(docPath, 'utf8');
+  assert.match(firstContent, /<!-- idd-onboard-generated-policy-document/);
+  // The written file carries the sentinel, but the JSON verdict's
+  // policyDocument field (also used for the stdout-only dry-run preview)
+  // never does -- it stays exactly buildFilledPolicyDocument's own output
+  // (#3292 review).
+  assert.doesNotMatch(
+    first.verdict.policyDocument as string,
+    /idd-onboard-generated-policy-document/,
+  );
+
+  // Re-running over its own unedited output succeeds without --force.
+  const second = runCliBin(cliArgs);
+  assert.equal(second.status, 0);
+  assert.equal(readFileSync(docPath, 'utf8'), firstContent);
+
+  // Appending a line breaks the sentinel's self-consistency; re-running
+  // without --force is now refused, and the edited content survives.
+  const edited = `${firstContent}extra line\n`;
+  writeFileSync(docPath, edited);
+  const third = spawnSync(
+    process.execPath,
+    [BIN_PATH, ...cliArgs, '--allow-root', tmpdir()],
+    { encoding: 'utf8' },
+  );
+  assert.equal(third.status, 2);
+  assert.equal(readFileSync(docPath, 'utf8'), edited);
+});
+
+test('bin/idd-onboard.mjs --record-policy renders a not-installed companion answer as `not installed`, matching the --issue-mediated override text (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  // buildValidHearAnswers() answers issue-authoring-companion with its
+  // documented default: the catalog's own hyphenated enum value
+  // (hearing-catalog.json's "not-installed"), not the documented display
+  // form ("not installed", used in policy-decisions.md and
+  // issue-mediated-bootstrap.md).
+  assert.equal(answers['issue-authoring-companion'], 'not-installed');
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status, verdict } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+  ]);
+  assert.equal(status, 0);
+  assert.match(
+    verdict.policyDocument as string,
+    /### Issue-Authoring Companion\n\n\*\*Status\*\*: `not installed`/,
+  );
+  assert.doesNotMatch(verdict.policyDocument as string, /`not-installed`/);
+});
+
+test('bin/idd-onboard.mjs --record-policy --force is accepted alone, and --help documents it under --record-policy (#3292)', () => {
+  const root = makeFixtureDir();
+  writeRecordPolicyFixture(root);
+  const answers = buildValidHearAnswers();
+  const transcript = confirmTranscript(root, answers);
+  const transcriptPath = join(root, 'transcript.json');
+  writeFileSync(transcriptPath, JSON.stringify(transcript));
+
+  const { status } = runCliBin([
+    '--record-policy',
+    '--transcript',
+    transcriptPath,
+    '--target',
+    root,
+    '--force',
+  ]);
+  assert.equal(status, 0);
+
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--force\s+allow --write-policy-doc to overwrite an/);
+});
+
+test("idd-template/ONBOARDING.md's Step 5 no longer describes --write-policy-doc as silently writing into the clone, and its CLI-assisted --record-policy bullet names the same --force exception as --help (#3292)", () => {
+  const doc = readFileSync(ONBOARDING_DOC, 'utf8');
+  assert.doesNotMatch(doc, /writes into the clone/);
+  assert.match(doc, /refuses \(exit `2`\) a path resolving outside/);
+  assert.match(doc, /`GEMINI\.md` unless\n {2}`--force`d\./);
+
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  // The whole --record-policy intro paragraph (up to its first blank
+  // line) must name the same --force exception ONBOARDING.md's bullet
+  // does, alongside the same four agent-entry filenames.
+  const helpIntro = /--record-policy \(#2282\):[\s\S]*?\n\n/.exec(help)?.[0];
+  assert.ok(
+    helpIntro,
+    'expected --help to include a --record-policy intro paragraph',
+  );
+  assert.match(helpIntro as string, /GEMINI\.md/);
+  assert.match(helpIntro as string, /--force/);
 });
 
 test('bin/idd-onboard.mjs --record-policy exits 2 when config.json does not already exist (post-import only)', () => {

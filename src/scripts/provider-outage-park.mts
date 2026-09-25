@@ -19,6 +19,7 @@
 import { parseCliArgs } from './cli-args.mts';
 import { ghApiJson, ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
+import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   compareIsoTimestamps,
@@ -31,6 +32,7 @@ import {
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
+  type ProviderHealthReport,
   type ProviderHealthService,
   type ProviderHealthVerdict,
 } from './provider-health.mts';
@@ -212,10 +214,163 @@ function latestTrustedParkMarker(
   return latest;
 }
 
+/**
+ * The latest GitHub `created_at` of a trusted `claimed-by` comment on the
+ * originating issue (#3277), or `null` when none exists. A fresh claim and
+ * a heartbeat share the identical `claimed-by:` wire format
+ * (`parseClaimComment`, marker-helpers.mts), so either one means "a
+ * session has touched this issue since it was parked" -- exactly the
+ * signal {@link classifyParkMarker}'s liveness check needs, no supersede-
+ * chain or active-claim resolution required. Explicitly validates each
+ * comment's own `created_at` via `isValidIsoTimestamp` before comparing,
+ * rather than relying on `compareIsoTimestamps`'s fallback ordering for a
+ * malformed timestamp to happen to produce the right answer.
+ */
+function latestTrustedClaimCreatedAt(
+  comments: readonly CommentLike[],
+  trustedMarkerLogins: ReadonlySet<string>,
+): string | null {
+  let latest: string | null = null;
+  for (const comment of comments) {
+    const authorLogin = String(comment?.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trustedMarkerLogins.has(authorLogin)) continue;
+    const createdAt = String(comment?.created_at ?? '');
+    if (!isValidIsoTimestamp(createdAt)) continue;
+    const parsed = parseClaimComment(String(comment?.body ?? ''), createdAt);
+    if (parsed === null) continue;
+    if (latest === null || compareIsoTimestamps(parsed.createdAt, latest) > 0) {
+      latest = parsed.createdAt;
+    }
+  }
+  return latest;
+}
+
+/** One raw park marker's liveness classification (#3277). */
+export type ParkMarkerClassification =
+  | 'live'
+  | 'retired:head-moved'
+  | 'retired:later-claim'
+  | 'retired:unsupported-service';
+
+/**
+ * Pure liveness decision (#3277): a park marker counts as LIVE only when
+ * all of these hold:
+ *
+ * - `marker.service` is one of {@link PROVIDER_HEALTH_SERVICES} -- `--park`
+ *   already rejects any other value, so a marker outside this set is
+ *   stale/malformed evidence, not a service this report can even classify;
+ * - the marker's `headSha` still equals the pull request's current head
+ *   SHA (the pull request has not moved since it was parked). An empty
+ *   `prHeadSha` (the open-pull-request list payload's own `head.sha` was
+ *   missing or unreadable) fails CLOSED to `retired:head-moved` --
+ *   `marker.headSha` is always a validated 40-hex value
+ *   (`renderProviderOutageParkComment` rejects anything else), so it can
+ *   never equal an empty string; the required current-head comparison
+ *   was never actually established, so this must never be silently
+ *   treated as proven-live (#3379 review, Copilot);
+ * - no trusted `claimed-by` on the originating issue has a GitHub
+ *   `created_at` STRICTLY LATER than the park marker's own COMMENT
+ *   `created_at` (never the embedded `parked:` field, which is the
+ *   parking agent's local clock -- the Groom-hearing decision this issue
+ *   records).
+ *
+ * `resolveIssueLatestClaimCreatedAt` is a LAZY callback, not a plain
+ * value: it is invoked only once the cheaper service/head checks above
+ * already pass and `marker.createdAt` is readable, so a marker already
+ * retired by service or head never pays for the originating-issue
+ * comment read at all (#3379 review, Copilot) -- the caller
+ * ({@link collectRawParkMarkers}) also caches its result per issue
+ * number, since several markers can share one originating issue.
+ *
+ * The `marker.createdAt === 'none'` short-circuit below is LOAD-BEARING,
+ * not defensive: `compareIsoTimestamps` sorts a non-ISO string (including
+ * the literal `'none'` `parseProviderOutageParkComment` degrades an
+ * unreadable comment `created_at` to) as AFTER any valid ISO timestamp
+ * via its numeric/string fallback, so removing this guard would silently
+ * flip the fail-open contract -- an unreadable park comment would retire
+ * the marker instead of keeping it live. A resolved
+ * `issueLatestClaimCreatedAt === null` (no trusted claimed-by found at
+ * all, or the issue's own comment read failed) fails open the same way.
+ */
+export function classifyParkMarker(
+  marker: ParsedProviderOutagePark,
+  prHeadSha: string,
+  resolveIssueLatestClaimCreatedAt: () => string | null,
+): ParkMarkerClassification {
+  if (
+    !PROVIDER_HEALTH_SERVICES.includes(marker.service as ProviderHealthService)
+  ) {
+    return 'retired:unsupported-service';
+  }
+  if (marker.headSha.toLowerCase() !== prHeadSha.toLowerCase()) {
+    return 'retired:head-moved';
+  }
+  if (marker.createdAt === 'none') {
+    return 'live';
+  }
+  const issueLatestClaimCreatedAt = resolveIssueLatestClaimCreatedAt();
+  if (
+    issueLatestClaimCreatedAt !== null &&
+    compareIsoTimestamps(issueLatestClaimCreatedAt, marker.createdAt) > 0
+  ) {
+    return 'retired:later-claim';
+  }
+  return 'live';
+}
+
 interface GhOpenPullRequest {
   number?: number;
   head?: { sha?: string };
 }
+
+/** Injectable open-pull-request-list fetcher; see {@link collectRawParkMarkers}. */
+type FetchOpenPullRequests = (
+  owner: string,
+  repo: string,
+  sampleSize: number,
+) => GhOpenPullRequest[];
+
+/**
+ * Injectable comments fetcher -- PRs and issues share the identical GitHub
+ * REST shape (`issues/{number}/comments`), so one function serves both the
+ * per-pull-request park-marker read and the new per-issue claim read
+ * (#3277). Throws on failure; the caller decides what a failure means at
+ * each call site.
+ */
+type FetchComments = (
+  owner: string,
+  repo: string,
+  number: number,
+) => CommentLike[];
+
+const defaultFetchOpenPullRequests: FetchOpenPullRequests = (
+  owner,
+  repo,
+  sampleSize,
+) => {
+  const payload = ghApiJson(
+    `repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${sampleSize}`,
+  );
+  if (!Array.isArray(payload)) {
+    throw new Error('malformed open pull request list response');
+  }
+  return payload as GhOpenPullRequest[];
+};
+
+const defaultFetchComments: FetchComments = (owner, repo, number) => {
+  const payload = ghApiJson(
+    `repos/${owner}/${repo}/issues/${number}/comments`,
+    {
+      paginate: true,
+    },
+  );
+  if (!Array.isArray(payload)) {
+    throw new Error('malformed comments response');
+  }
+  return payload as CommentLike[];
+};
 
 /**
  * Collect every open pull request's latest trusted park marker, bounded to
@@ -227,6 +382,22 @@ interface GhOpenPullRequest {
  * pull request outside this sample would otherwise silently understate
  * `count`/`boundReached` (Codex/CodeRabbit review, PR #2421); the caller
  * must treat that case as bound-reached rather than trust an undercount.
+ *
+ * #3277: a found marker is additionally classified via
+ * {@link classifyParkMarker} against the pull request's own live `head.sha`
+ * (already present on the open-PR list payload -- no extra fetch) and the
+ * originating issue's latest trusted `claimed-by` `created_at`
+ * ({@link latestTrustedClaimCreatedAt}, read via the SAME injectable
+ * `fetchComments`, lazily and cached per issue number -- see
+ * `resolveIssueLatestClaimCreatedAt` below; #3379 review, Copilot). Only a
+ * `'live'` classification is kept in `rawMarkers`; anything else
+ * increments `retiredCount`. A failed ORIGINATING-ISSUE comment read is
+ * caught locally and treated as `null` (fails open toward live, per
+ * {@link classifyParkMarker}) -- it does not drop a marker from the list,
+ * so it is never counted toward `prCommentReadFailureCount`, which tracks
+ * only a failed PULL-REQUEST comment read (the read that finds the marker
+ * itself, whose failure DOES silently drop a genuinely parked pull
+ * request).
  */
 function collectRawParkMarkers(
   owner: string,
@@ -234,18 +405,22 @@ function collectRawParkMarkers(
   options: {
     sampleSize?: number;
     trustedMarkerLogins: ReadonlySet<string>;
+    fetchOpenPullRequests?: FetchOpenPullRequests;
+    fetchComments?: FetchComments;
   },
-): { rawMarkers: RawParkMarker[]; sampleTruncated: boolean } {
+): {
+  rawMarkers: RawParkMarker[];
+  sampleTruncated: boolean;
+  retiredCount: number;
+  prCommentReadFailureCount: number;
+} {
   const sampleSize = options.sampleSize ?? 50;
+  const fetchOpenPullRequests =
+    options.fetchOpenPullRequests ?? defaultFetchOpenPullRequests;
+  const fetchComments = options.fetchComments ?? defaultFetchComments;
   let openPrs: GhOpenPullRequest[];
   try {
-    const payload = ghApiJson(
-      `repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${sampleSize}`,
-    );
-    if (!Array.isArray(payload)) {
-      throw new Error('malformed open pull request list response');
-    }
-    openPrs = payload as GhOpenPullRequest[];
+    openPrs = fetchOpenPullRequests(owner, repo, sampleSize);
   } catch (error) {
     throw new Error(
       `could not read open pull requests to list parked changes: ${
@@ -254,52 +429,134 @@ function collectRawParkMarkers(
     );
   }
 
+  // #3379 review (Copilot): several markers can share one originating
+  // issue (`deriveParkedIssues` explicitly supports this), so cache the
+  // per-issue claim-lookup result -- including a failed read, which
+  // still fails open to `null` -- for the lifetime of this collection
+  // pass, keyed by issue number. Combined with `classifyParkMarker`'s
+  // lazy resolver callback, a marker already retired by the cheaper
+  // service/head checks never triggers this read at all.
+  const issueLatestClaimCreatedAtCache = new Map<number, string | null>();
+  const resolveIssueLatestClaimCreatedAt = (
+    issueNumber: number,
+  ): string | null => {
+    const cached = issueLatestClaimCreatedAtCache.get(issueNumber);
+    if (cached !== undefined) return cached;
+    let result: string | null;
+    try {
+      const issueComments = fetchComments(owner, repo, issueNumber);
+      result = latestTrustedClaimCreatedAt(
+        issueComments,
+        options.trustedMarkerLogins,
+      );
+    } catch {
+      // Fails open toward live (#3277 AC) -- never counted toward
+      // `prCommentReadFailureCount`; see the docstring above.
+      result = null;
+    }
+    issueLatestClaimCreatedAtCache.set(issueNumber, result);
+    return result;
+  };
+
   const rawMarkers: RawParkMarker[] = [];
+  let retiredCount = 0;
+  let prCommentReadFailureCount = 0;
   for (const pr of openPrs) {
     if (typeof pr.number !== 'number') continue;
     let comments: CommentLike[];
     try {
-      const payload = ghApiJson(
-        `repos/${owner}/${repo}/issues/${pr.number}/comments`,
-        {
-          paginate: true,
-        },
-      );
-      if (!Array.isArray(payload)) continue;
-      comments = payload as CommentLike[];
+      comments = fetchComments(owner, repo, pr.number);
     } catch {
       // A per-pull-request comment read failure skips that pull request
       // only -- the fetchable pull requests still yield a real (if
       // incomplete) list, matching provider-health.mts's own per-item
-      // read-failure posture.
+      // read-failure posture. Counted toward `prCommentReadFailureCount`
+      // (#3277): this IS a completeness risk, unlike a failed
+      // originating-issue read below.
+      prCommentReadFailureCount += 1;
       continue;
     }
     const marker = latestTrustedParkMarker(
       comments,
       options.trustedMarkerLogins,
     );
-    if (marker !== null) {
-      rawMarkers.push({ prNumber: pr.number, marker });
+    if (marker === null) continue;
+
+    const classification = classifyParkMarker(
+      marker,
+      String(pr.head?.sha ?? ''),
+      () => resolveIssueLatestClaimCreatedAt(marker.issueNumber),
+    );
+    if (classification !== 'live') {
+      retiredCount += 1;
+      continue;
     }
+    rawMarkers.push({ prNumber: pr.number, marker });
   }
-  return { rawMarkers, sampleTruncated: openPrs.length >= sampleSize };
+  return {
+    rawMarkers,
+    sampleTruncated: openPrs.length >= sampleSize,
+    retiredCount,
+    prCommentReadFailureCount,
+  };
 }
 
 /**
- * Read-only list mode (#2321): every open pull request carrying a trusted
- * park marker, each annotated with its parked service's CURRENT live
- * `provider-health` verdict. `count`/`boundReached` against the configured
+ * The sorted, de-duplicated issue numbers of every LIVE entry whose
+ * `resumable` is `false` (#3277) -- the set the Discover sibling issue
+ * consumes to skip still-parked issues. Pure and exported so it is
+ * directly testable against a synthetic `entries` list, independent of
+ * {@link buildParkedChangeReport}'s own network reads.
+ */
+export function deriveParkedIssues(
+  entries: readonly ParkedPullRequestEntry[],
+): number[] {
+  return [
+    ...new Set(
+      entries.filter((entry) => !entry.resumable).map((e) => e.issueNumber),
+    ),
+  ].sort((a, b) => a - b);
+}
+
+/**
+ * Read-only list mode (#2321): every open pull request carrying a LIVE
+ * trusted park marker (#3277: {@link classifyParkMarker} retires a marker
+ * whose head has moved, whose issue was re-claimed since, or whose
+ * service is no longer recognized -- see `retiredCount`), each annotated
+ * with its parked service's CURRENT live `provider-health` verdict.
+ * `count`/`boundReached` against the configured
  * `providerOutage.maxParkedChanges` are information only -- this function
  * enforces nothing; the bound stops new issue CLAIMS (an instruction-level
  * rule), never the parking of an already-stuck pull request. When the open
  * pull request read is truncated (more may exist beyond `sampleSize`),
  * `boundReached` fails closed to `true` regardless of the sampled `count` --
  * an undercounted bound must never read as "still under the limit".
+ *
+ * `parkedIssues`/`parkedIssuesComplete` (#3277) are the cheap-mode
+ * contract: `parkedIssuesComplete` is `false` when `sampleTruncated` is
+ * `true` or any per-PULL-REQUEST comment read failed (either can silently
+ * drop a parked issue from `parkedIssues`) -- a failed per-ISSUE comment
+ * read does NOT affect completeness, since it fails open toward keeping
+ * the marker live instead of dropping it.
+ *
+ * `options.healthReport` lets a caller (e.g. {@link buildParkedIssuesSummary})
+ * that already computed the live provider-health report pass it through
+ * instead of paying for a second one; `options.buildHealthReport`
+ * overrides which function computes a fresh one when `healthReport` is
+ * not supplied (defaults to the real {@link buildProviderHealthReport}).
  */
 export function buildParkedChangeReport(
   owner: string,
   repo: string,
-  options: { config?: unknown; now?: string; sampleSize?: number } = {},
+  options: {
+    config?: unknown;
+    now?: string;
+    sampleSize?: number;
+    fetchOpenPullRequests?: FetchOpenPullRequests;
+    fetchComments?: FetchComments;
+    healthReport?: ProviderHealthReport;
+    buildHealthReport?: typeof buildProviderHealthReport;
+  } = {},
 ): {
   protocolVersion: '1';
   now: string;
@@ -308,6 +565,9 @@ export function buildParkedChangeReport(
   maxParkedChanges: number;
   boundReached: boolean;
   sampleTruncated: boolean;
+  retiredCount: number;
+  parkedIssues: number[];
+  parkedIssuesComplete: boolean;
 } {
   const config = options.config ?? loadIddConfig();
   const now = options.now ?? toSecondPrecisionIso(new Date());
@@ -321,9 +581,16 @@ export function buildParkedChangeReport(
   const maxParkedChanges =
     normalizePolicyConfig(config).providerOutage.maxParkedChanges;
 
-  const { rawMarkers, sampleTruncated } = collectRawParkMarkers(owner, repo, {
+  const {
+    rawMarkers,
+    sampleTruncated,
+    retiredCount,
+    prCommentReadFailureCount,
+  } = collectRawParkMarkers(owner, repo, {
     sampleSize: options.sampleSize,
     trustedMarkerLogins,
+    fetchOpenPullRequests: options.fetchOpenPullRequests,
+    fetchComments: options.fetchComments,
   });
 
   const distinctServices = [
@@ -331,7 +598,10 @@ export function buildParkedChangeReport(
   ];
   const verdictsByService = new Map<string, ProviderHealthVerdict>();
   if (distinctServices.length > 0) {
-    const report = buildProviderHealthReport(owner, repo, { config, now });
+    const buildHealthReport =
+      options.buildHealthReport ?? buildProviderHealthReport;
+    const report =
+      options.healthReport ?? buildHealthReport(owner, repo, { config, now });
     for (const service of distinctServices) {
       const verdict = (
         report.services as Record<string, { verdict: ProviderHealthVerdict }>
@@ -352,6 +622,59 @@ export function buildParkedChangeReport(
     maxParkedChanges,
     boundReached: computeBoundReached(count, maxParkedChanges, sampleTruncated),
     sampleTruncated,
+    retiredCount,
+    parkedIssues: deriveParkedIssues(entries),
+    parkedIssuesComplete: !sampleTruncated && prCommentReadFailureCount === 0,
+  };
+}
+
+/**
+ * Cheap `--parked-issues` mode (#3277): the Discover sibling issue runs
+ * this on EVERY pass, so it must not always pay for the full per-pull-
+ * request comment fan-out {@link buildParkedChangeReport} performs.
+ * Reads the live provider-health report FIRST, unconditionally. When
+ * every {@link PROVIDER_HEALTH_SERVICES} entry's verdict is `'healthy'`,
+ * `parkedIssues` is empty BY CONSTRUCTION (a live marker's `resumable` is
+ * `true` only once its own service is healthy, and every service is
+ * healthy) and complete, so this returns immediately -- no open-pull-
+ * request read, no per-pull-request comment read. Otherwise falls
+ * through to the full {@link buildParkedChangeReport}, reusing the
+ * already-computed health report (never a second live-evidence read).
+ */
+export function buildParkedIssuesSummary(
+  owner: string,
+  repo: string,
+  options: {
+    config?: unknown;
+    now?: string;
+    sampleSize?: number;
+    buildHealthReport?: typeof buildProviderHealthReport;
+    fetchOpenPullRequests?: FetchOpenPullRequests;
+    fetchComments?: FetchComments;
+  } = {},
+): { parkedIssues: number[]; parkedIssuesComplete: boolean } {
+  const config = options.config ?? loadIddConfig();
+  const now = options.now ?? toSecondPrecisionIso(new Date());
+  const buildHealthReport =
+    options.buildHealthReport ?? buildProviderHealthReport;
+  const healthReport = buildHealthReport(owner, repo, { config, now });
+  const allHealthy = PROVIDER_HEALTH_SERVICES.every(
+    (service) => healthReport.services[service]?.verdict === 'healthy',
+  );
+  if (allHealthy) {
+    return { parkedIssues: [], parkedIssuesComplete: true };
+  }
+  const report = buildParkedChangeReport(owner, repo, {
+    config,
+    now,
+    sampleSize: options.sampleSize,
+    fetchOpenPullRequests: options.fetchOpenPullRequests,
+    fetchComments: options.fetchComments,
+    healthReport,
+  });
+  return {
+    parkedIssues: report.parkedIssues,
+    parkedIssuesComplete: report.parkedIssuesComplete,
   };
 }
 
@@ -477,6 +800,7 @@ export function runParkPullRequest(options: {
 // below. See cli-args.mts's module header for the full invariant.
 const PROVIDER_OUTAGE_PARK_FLAG_SPEC = {
   '--park': { type: 'boolean', default: false },
+  '--parked-issues': { type: 'boolean', default: false },
   '--pr': { type: 'string', default: '' },
   '--issue': { type: 'string', default: '' },
   '--service': { type: 'string', default: '' },
@@ -511,12 +835,26 @@ function main(): void {
     process.exit(0);
   }
 
+  // #3277: --park and --parked-issues are two independent single-purpose
+  // modes -- both true is never a coherent request, so fail closed before
+  // either mode's own flag validation runs, the same fail-closed posture
+  // pre-merge-readiness.mts applies to its own mutually-exclusive flags.
+  if ((values.park as boolean) && (values['parked-issues'] as boolean)) {
+    throw new Error('--park and --parked-issues are mutually exclusive');
+  }
+
   const owner =
     (values.owner as string) ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     (values.repo as string) ||
     ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+
+  if (values['parked-issues'] as boolean) {
+    const summary = buildParkedIssuesSummary(owner, repo);
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return;
+  }
 
   if (values.park as boolean) {
     const prNumber = parsePositiveIntegerFlag(values.pr, '--pr');
@@ -555,16 +893,42 @@ function main(): void {
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/provider-outage-park.mjs [--owner <owner>] [--repo <repo>]
+  node scripts/provider-outage-park.mjs --parked-issues [--owner <owner>] [--repo <repo>]
   node scripts/provider-outage-park.mjs --park --pr <n> --issue <n> \\
     --service <advisory-review|ci-actions> --blockers <gate1,gate2> \\
     --agent-id <id> --claim-id <id> [--apply]
 
-Default (no --park): read-only list mode. Reports every open pull request
-carrying a trusted idd-provider-outage-park marker, each with its parked
-service's current provider-health verdict and resumable (true only once
-that verdict is healthy). Sorted by parkedAt then pull request number.
-Also reports count and boundReached against providerOutage.maxParkedChanges
-(default 10) as information only -- this mode enforces nothing.
+Default (no --park/--parked-issues): read-only list mode. Reports every
+open pull request carrying a LIVE trusted idd-provider-outage-park marker,
+each with its parked service's current provider-health verdict and
+resumable (true only once that verdict is healthy). Sorted by parkedAt
+then pull request number. Also reports count and boundReached against
+providerOutage.maxParkedChanges (default 10) as information only -- this
+mode enforces nothing.
+
+#3277 marker liveness: a park marker counts only when its head: still
+equals the pull request's current head SHA, AND no trusted claimed-by on
+the originating issue has a GitHub created_at later than the park
+COMMENT's own created_at (never the embedded parked: field). A marker
+that fails either check, or whose service: is not one of
+advisory-review/ci-actions, is excluded from entries/count/boundReached
+and counted in retiredCount instead. A failed read of the originating
+issue's own comments keeps a marker live (fail-open); a failed read of
+the pull request's own comments (the read that finds the marker) instead
+marks the report parkedIssuesComplete: false, alongside a truncated
+open-pull-request sample.
+
+parkedIssues/parkedIssuesComplete: the sorted, de-duplicated issue
+numbers of every live, non-resumable entry, for a Discover consumer to
+skip. parkedIssuesComplete is false exactly when the report may have
+silently dropped a parked issue (sampleTruncated, or any per-pull-request
+comment read failed).
+
+--parked-issues: cheap mode -- prints ONLY { parkedIssues,
+parkedIssuesComplete }. Reads the live provider-health report first; when
+EVERY service is healthy, parkedIssues is empty and complete by
+construction, so this returns without any open-pull-request or
+per-pull-request comment read. Mutually exclusive with --park.
 
 --park: re-checks the named --service's LIVE provider-health verdict is
 unavailable, and requires every --blockers entry (the caller's own fresh

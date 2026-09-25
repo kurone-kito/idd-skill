@@ -21,9 +21,17 @@
  * gate that runs before Check 7 ever sees it.
  */
 import {
+  findHtmlCommentRanges,
   findMarkdownCodeRanges,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
+
+// Moved to `markdown-code.mts` (#3281): `maskMarkdownForScan` there needs
+// to call it directly, and this file already imports FROM markdown-code.mts
+// (above), so the reverse direction would be circular. Re-exported here so
+// this file's own existing importers (`suitability-triage.mts`,
+// `triage-structural-evidence.mts`) compile unchanged.
+export { findHtmlCommentRanges } from './markdown-code.mjs';
 // #2661 PR #2662 review: the reporting-verb vocabulary a quoting/citing
 // sentence uses to introduce someone else's decision as an example, rather
 // than asserting it as this issue's own. Exported: also used by
@@ -45,70 +53,6 @@ export function getParagraphSpans(body) {
   }
   spans.push({ start: cursor, end: body.length });
   return spans;
-}
-// #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
-// leaves hidden instructional scaffolding as an HTML comment -- e.g.
-// `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
-// -->` -- invisible in the rendered issue but still present in a
-// code-masked body (Markdown code masking does not touch HTML comments).
-// Masked the same way as inline/fenced code, before the inline-decision
-// pattern scan. An unterminated `<!--` (no matching `-->`) extends to
-// end-of-body: CommonMark renders such an HTML block through EOF, so the
-// entire remaining body -- a genuine marker and Acceptance Criteria
-// included -- can be invisible in the rendered issue while still matching
-// this scan if left unmasked (round 7, PR #2662).
-//
-// #2711: an issue that documents this convention's own syntax inside a
-// fenced code example -- e.g. a fence containing a literal, deliberately
-// unterminated `<!--` to illustrate the shape -- must not have that
-// example's opener treated as a REAL unterminated comment: doing so masks
-// through EOF and swallows a genuine later "Maintainer decision (...)"
-// that follows the fence. The same applies to an INLINE code span
-// demonstrating the same syntax (PR #2735 Codex review round 2) -- e.g.
-// `` `<!--` `` followed by a later bullet naming the real artifact.
-// `ignoredOpenerRanges` (optional, defaults to none so existing callers
-// with no code content to worry about are unaffected) lets a caller
-// exclude any `<!--` whose own opening `<` falls inside one of these
-// ranges from consideration entirely; pass fenced + indented + inline
-// ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
-// shape, not just fenced blocks.
-//
-// #2711 PR #2735 review round 5 (Codex): a backslash-escaped opener
-// (`\<!--`) renders as a literal string in CommonMark, not a real HTML
-// comment start -- an issue documenting the literal marker syntax (e.g.
-// `Document the literal \<!-- marker`) must not have everything after it
-// masked through EOF. A single preceding backslash is enough to treat it
-// as escaped (soft heuristic, matching this file's existing style; does
-// not attempt full backslash-run parity for a doubly-escaped `\\<!--`).
-//
-// Exported: also used by suitability-triage.mts's Check 6 (Autonomy) and
-// Check 7 (Verifiability, Acceptance Criteria masking) for the same
-// generic "mask an HTML comment" need, unrelated to resolved-decision
-// detection specifically.
-export function findHtmlCommentRanges(text, ignoredOpenerRanges = []) {
-  const ranges = [];
-  const openPattern = /<!--/g;
-  let openMatch = openPattern.exec(text);
-  while (openMatch) {
-    const openIndex = openMatch.index;
-    const isEscaped = text[openIndex - 1] === '\\';
-    const isIgnored =
-      isEscaped ||
-      ignoredOpenerRanges.some(
-        (range) => openIndex >= range.start && openIndex < range.end,
-      );
-    if (isIgnored) {
-      openPattern.lastIndex = openIndex + 4;
-      openMatch = openPattern.exec(text);
-      continue;
-    }
-    const closeIndex = text.indexOf('-->', openIndex + 4);
-    const end = closeIndex === -1 ? text.length : closeIndex + 3;
-    ranges.push({ start: openIndex, end });
-    openPattern.lastIndex = end;
-    openMatch = openPattern.exec(text);
-  }
-  return ranges;
 }
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
@@ -483,8 +427,11 @@ function findInlineResolvedDecisionSpansFromMasked(
  * offsets into `body` AFTER `\r\n` normalization (`\r\n` -> `\n`); a caller
  * comparing indices from a separately-scanned corpus must normalize that
  * corpus the same way first, or the two coordinate spaces can drift by one
- * byte per CRLF line -- an edge case with no realistic GitHub-fetched issue
- * body, whose API responses are already `\n`-only.
+ * byte per CRLF line -- a real, observed case (#3282), not merely
+ * theoretical: the REST issues endpoint returns `\r\n` verbatim when the
+ * author's client sent it (confirmed against pull requests #475 and #2974
+ * via `gh api repos/kurone-kito/idd-skill/issues/<n>` + `od -c`), so a
+ * GitHub-fetched issue body is NOT reliably `\n`-only.
  */
 export function findInlineResolvedDecisionSpans(body) {
   const { normalizedBody, paragraphSpans, codeMaskedBody } =

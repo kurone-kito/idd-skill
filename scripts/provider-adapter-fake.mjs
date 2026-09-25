@@ -134,6 +134,10 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.connectedPrEventsSingle?.[number] ?? [];
     },
     getConnectedPullRequestEventsPage(number) {
+      const errorMessage = fixture.connectedPrEventPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.connectedPrEventPages?.[number] ?? [];
       const index = connectedPageCallIndex[number] ?? 0;
       connectedPageCallIndex[number] = index + 1;
@@ -147,8 +151,15 @@ export function createFakeProviderAdapter(fixture) {
     listIssueBranchRefs() {
       return fixture.issueBranchRefs ?? [];
     },
-    listWorkItemComments(number) {
-      return fixture.comments?.[number] ?? [];
+    listWorkItemComments(number, options) {
+      const rows = fixture.comments?.[number] ?? [];
+      // #3246: parity with the real adapter's opt-in contract -- a caller
+      // that does not request edit state must see `lastEditedAt` as
+      // `undefined`, even when the fixture happens to carry a value.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map(({ lastEditedAt: _lastEditedAt, ...rest }) => rest);
     },
     postWorkItemComment(number, body) {
       fixture.postedComments?.push({ number, body });
@@ -213,8 +224,21 @@ export function createFakeProviderAdapter(fixture) {
     async listWorkItemSubIssueNodesAsync(number) {
       return fixture.subIssueNodes?.[number] ?? [];
     },
-    async listWorkItemCommentsWithRetryAsync(number) {
-      return fixture.traversalComments?.[number] ?? [];
+    async listWorkItemCommentsWithRetryAsync(number, options) {
+      const rows = fixture.traversalComments?.[number] ?? [];
+      // #3246: same opt-in parity as `listWorkItemComments`, but the
+      // snake_case `last_edited_at` key -- this method's fixture rows are
+      // a raw passthrough, not `ProviderComment`.
+      if (options?.includeEditState) {
+        return rows;
+      }
+      return rows.map((row) => {
+        if (row != null && typeof row === 'object' && 'last_edited_at' in row) {
+          const { last_edited_at: _lastEditedAt, ...rest } = row;
+          return rest;
+        }
+        return row;
+      });
     },
     searchOpenWorkItems() {
       return fixture.searchResults ?? [];
@@ -549,6 +573,9 @@ export function createFakeProviderAdapter(fixture) {
         );
       }
       return value;
+    },
+    getChangeRequestHeadObservedAt(number) {
+      return fixture.headObservedAtByChangeRequest?.[number] ?? '';
     },
     resolveChangeRequestReviewThread(threadId) {
       if (fixture.unresolvableReviewThreadIds?.has(threadId)) {

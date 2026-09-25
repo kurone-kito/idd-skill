@@ -220,6 +220,19 @@ fields (`agent-id`, `claim-id`, `head-sha`, check selector, reason
 token, and expiry); copied or retyped marker text without matching
 GitHub actor and timestamp evidence is not authority.
 
+An edited waiver comment is not waiver evidence either
+(kurone-kito/idd-skill#3246). GitHub lets any Write-role collaborator or
+App rewrite an existing comment's body in place while keeping its `id`,
+author, and `created_at`, so those alone do not prove the body is still
+the one that was posted. The authoritative signal is the comment's
+GraphQL `lastEditedAt`: an explicit `null` means the comment was never
+body-edited; a timestamp, or an edit state the runtime could not
+resolve, excludes the marker from valid waiver evidence even when its
+author, HEAD, claim, and expiry all otherwise check out.
+`updated_at`/`updatedAt` is never a substitute -- GitHub's
+`minimizeComment` mutation (IDD's own hide-on-supersede sweeps call it)
+advances `updatedAt` while leaving `lastEditedAt` `null`.
+
 Normal PR approvals, CODEOWNER approvals, or casual comments such as
 "continue" are not waiver evidence. A valid external-check waiver also
 never bypasses stale review currency, unresolved threads, missing
@@ -405,8 +418,11 @@ Keep approval labels and operational marker trust as separate controls:
 
 - The configured ready label from `approvalSignals.readyLabelName`
   (default: `idd:ready`) is the distributed issue-selection approval
-  signal for orphan-first policy and should be restricted to maintainer
-  approval actors.
+  signal for orphan-first policy. GitHub has no per-label permission, so
+  the `claim-approval-gate` helper verifies the actor of the label's
+  latest `labeled` timeline event against `maintainerApprovalActorPolicy`
+  and fails closed when that actor's permission cannot be read, instead
+  of trusting label presence alone.
 - Trusted marker actors govern operational marker authority
   (`claimed-by`, `unclaimed-by`, `review-watermark`,
   `review-baseline`, `advisory-wait`) and may include different actors.

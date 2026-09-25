@@ -5,15 +5,25 @@
 // See docs/typescript-sources.md.
 
 /**
- * Strip Markdown code regions (fenced blocks and inline code spans) from a body
- * before scanning it for machine-readable markers or dependency references. A
- * genuine marker is raw text GitHub renders as intended (an HTML comment it
- * hides, or a `Blocked by #N` line it links), never inside a code span or
- * fence, so an example an issue merely *quotes* in code (e.g. an issue about
- * the marker or dependency syntax) must not be read as real. HTML comments are
- * deliberately NOT stripped here — only code regions are, since some markers
- * are themselves HTML comments. Masked regions keep their line count and
- * surrounding text so a real marker elsewhere in the body still matches.
+ * Strip Markdown code regions (fenced blocks and inline code spans) from a
+ * body before scanning it for machine-readable markers or dependency
+ * references. A genuine marker is raw text GitHub renders as intended (an
+ * HTML comment it hides, or a `Blocked by #N` line it links), never inside a
+ * code span or fence, so an example an issue merely *quotes* in code (e.g.
+ * an issue about the marker or dependency syntax) must not be read as real.
+ * HTML comments are deliberately NOT stripped here — only code regions are,
+ * since some markers are themselves HTML comments. Masked regions keep
+ * their line count and surrounding text so a real marker elsewhere in the
+ * body still matches.
+ *
+ * **Issue-body scanners: use {@link maskMarkdownForScan} instead (#3281).**
+ * This module's original scan (fenced blocks + inline spans only) misses a
+ * top-level indented (4-space) code block entirely, which a naive caller
+ * can misread as real content. `stripMarkdownCodeRegions` remains the
+ * primitive for PR-review and comment-body scanning
+ * (`review-clause.mts`, `supersession-detection.mts`, and
+ * `audit-authored-issue.mts`'s own comment-body checks), where that
+ * narrower scope is still correct today.
  */
 /**
  * Blank fenced code block lines (``` or ~~~), tracking the fence char +
@@ -1316,6 +1326,315 @@ function isHtmlBlockContainerEnded(
   return false;
 }
 
+// #2661 PR #2662 review round 6 (Codex): an issue-template author commonly
+// leaves hidden instructional scaffolding as an HTML comment -- e.g.
+// `<!-- Maintainer decision (Groom hearing, YYYY-MM-DD): <resolution text>
+// -->` -- invisible in the rendered issue but still present in a
+// code-masked body (Markdown code masking does not touch HTML comments).
+// Masked the same way as inline/fenced code, before the inline-decision
+// pattern scan. An unterminated `<!--` (no matching `-->`) extends to
+// end-of-body: CommonMark renders such an HTML block through EOF, so the
+// entire remaining body -- a genuine marker and Acceptance Criteria
+// included -- can be invisible in the rendered issue while still matching
+// this scan if left unmasked (round 7, PR #2662).
+//
+// #2711: an issue that documents this convention's own syntax inside a
+// fenced code example -- e.g. a fence containing a literal, deliberately
+// unterminated `<!--` to illustrate the shape -- must not have that
+// example's opener treated as a REAL unterminated comment: doing so masks
+// through EOF and swallows a genuine later "Maintainer decision (...)"
+// that follows the fence. The same applies to an INLINE code span
+// demonstrating the same syntax (PR #2735 Codex review round 2) -- e.g.
+// `` `<!--` `` followed by a later bullet naming the real artifact.
+// `ignoredOpenerRanges` (optional, defaults to none so existing callers
+// with no code content to worry about are unaffected) lets a caller
+// exclude any `<!--` whose own opening `<` falls inside one of these
+// ranges from consideration entirely; pass fenced + indented + inline
+// ranges (e.g. `findMarkdownCodeRanges`'s result) to cover every code
+// shape, not just fenced blocks.
+//
+// #2711 PR #2735 review round 5 (Codex): a backslash-escaped opener
+// (`\<!--`) renders as a literal string in CommonMark, not a real HTML
+// comment start -- an issue documenting the literal marker syntax (e.g.
+// `Document the literal \<!-- marker`) must not have everything after it
+// masked through EOF. A single preceding backslash is enough to treat it
+// as escaped (soft heuristic, matching this file's existing style; does
+// not attempt full backslash-run parity for a doubly-escaped `\\<!--`).
+//
+// Moved here from `resolved-decision.mts` (#3281): `maskMarkdownForScan`
+// below needs to call this directly, and `resolved-decision.mts` already
+// imports FROM this file, so the reverse direction would be circular.
+// `resolved-decision.mts` re-exports this name so its own callers
+// (`suitability-triage.mts`, `triage-structural-evidence.mts`) compile
+// unchanged.
+// #3282 Copilot review (PR #3413): an unterminated opener (no matching
+// "-->" anywhere later in the text) only extends through end-of-text
+// when it sits at a CommonMark HTML-block type-2 opening position --
+// after stripping 0+ blockquote container markers (each an optional
+// leading `>` with up to 3 spaces before it, mirroring
+// parseContainerLine's own recognition rule) and, on the same line,
+// optionally ONE list-item marker with its required spacing, nothing
+// else precedes the "<!--" but at most 3 more leading spaces. This
+// covers a bare line-start opener, one nested inside a blockquote
+// (`> <!--`, `>> <!--`), a list item's own opening line (`- <!--`,
+// `1) <!--`), and a combination (`> - <!--`) -- round 1 of this fix
+// (Copilot review, same PR) only checked the raw physical line's own
+// leading spaces, missing every container-nested case; `gh api
+// markdown` confirms each of the shapes above still swallows the rest
+// of the document exactly like a bare line-start opener. A "<!--"
+// appearing anywhere else mid-line -- e.g. inside a Markdown link
+// title's quoted text, `[x](url "<!-- still drafting")` -- is ordinary
+// prose there: CommonMark's inline raw-HTML grammar for a comment
+// requires BOTH delimiters, and this position never qualifies as an
+// HTML block opener either, so GitHub renders it as literal text with
+// no masking effect (reproduces tests/fixtures/issue-body-corpus/
+// gap-2767-09.json's own body). Before the first #3282 fix, every
+// mid-line unterminated opener -- container-nested or not -- was
+// treated the same as a genuine line-start one, masking real content
+// after it.
+//
+// CodeRabbit review, same PR, same round: a list marker's own required
+// padding is bounded to 1-4 columns of indentation (CommonMark's list
+// item rule 1; a bare tab counts as up to 4 columns via the usual
+// tab-stop rule) -- five or more columns of padding is NOT "immediately
+// after the marker" for block-opener purposes, it starts an indented
+// code block nested inside the list item instead (confirmed via `gh
+// api markdown`: "-     <!-- x" renders as a `<pre><code>` block
+// _inside_ the `<li>`, with later content rendering as its own
+// paragraph OUTSIDE the list, i.e. NOT swallowed). Reuses
+// parseListItemContainer's own markerEndColumns/spacingColumns
+// derivation so both call sites agree on the same boundary.
+//
+// Copilot review round 3, same PR: a list-item CONTINUATION line that
+// carries no marker of its own and relies on an earlier line's
+// inherited list-content indentation (e.g. `-    item` followed by a
+// line indented to column 5 with no marker) is also a valid opener
+// position -- `gh api markdown` confirms it still swallows the rest of
+// the document. `lineListContentIndents`, precomputed once per
+// {@link findHtmlCommentRanges} call via the same forward,
+// per-line-only tracker helpers {@link findHtmlBlockRanges} uses
+// ({@link createListContentIndentTrackerState},
+// {@link resetListContentIndentTrackerForLine},
+// {@link adoptListContentIndentForLine} -- see
+// {@link computeLineListContentIndents}'s own doc comment for how it
+// stays synchronized with that function's fence/HTML-block state
+// too), supplies the inherited content indent applicable to the
+// physical line containing `openIndex`, reset exactly as
+// {@link findHtmlBlockRanges} resets it (container-depth mismatch, an
+// indentation drop, or two consecutive blank lines). A continuation
+// line qualifies when its own
+// (blockquote-stripped) leading whitespace reaches that indent, plus
+// at most 3 more columns -- the same "at most 3 leading spaces" rule a
+// bare or list-opening line already applies past its own required
+// prefix.
+function isAtHtmlBlockOpenerPosition(
+  text: string,
+  openIndex: number,
+  lineListContentIndents: Map<number, number | null>,
+): boolean {
+  const lineStart = text.lastIndexOf('\n', openIndex - 1) + 1;
+  const { content } = parseContainerLine(text.slice(lineStart, openIndex));
+  if (/^ {0,3}$/.test(content)) {
+    return true;
+  }
+  const listItem = parseListItemMatch(content);
+  if (listItem !== null && listItem.content === '') {
+    const markerEndColumns =
+      indentationColumns(listItem.markerIndent) + listItem.marker.length;
+    const spacingColumns =
+      indentationColumns(listItem.spacing, markerEndColumns) - markerEndColumns;
+    return spacingColumns <= 4;
+  }
+  const inheritedContentIndent = lineListContentIndents.get(lineStart);
+  if (
+    inheritedContentIndent === undefined ||
+    inheritedContentIndent === null ||
+    // Copilot review round 5, same PR: a continuation line's own
+    // indentation is tab-aware (matching indentationColumns below, and
+    // the tracker's own tab-stop-aware contentIndent derivation) -- a
+    // whitespace-only check that rejected any tab, not just any
+    // non-whitespace character, wrongly left "- item\n\t<!-- x"
+    // unmasked even when the tab reaches the inherited content indent.
+    /[^ \t]/.test(content)
+  ) {
+    return false;
+  }
+  const columns = indentationColumns(content) - inheritedContentIndent;
+  return columns >= 0 && columns <= 3;
+}
+/**
+ * Precomputes, for every physical line's start offset in `text`, the
+ * list-content indent a continuation line at that offset would inherit
+ * (or `null` when no list item's content zone is active there) --
+ * {@link isAtHtmlBlockOpenerPosition}'s own per-call input, built once
+ * up front rather than per `<!--` occurrence. A standalone forward pass
+ * using only the list-content-indent tracker half of
+ * {@link findHtmlBlockRanges}'s loop, with a lighter-weight opaque-range
+ * freeze in place of that function's own fence/HTML-block/paragraph
+ * bookkeeping (see the round 4 and round 6 notes below for exactly what
+ * that freeze needs to cover, and why) -- this scan only ever reads
+ * `lineTracker.contentIndent`, never any of the other state that
+ * bookkeeping drives.
+ *
+ * Copilot review round 4, same PR: a fenced example's own content is
+ * opaque to this tracker too, the same "frozen while inside a fence"
+ * choice {@link findHtmlBlockRanges} and {@link blankFencedCodeBlocks}
+ * both already make -- without it, a line inside a fence that merely
+ * *looks* like a list marker (e.g. a fenced shell example's own
+ * "- item" demonstration) could spuriously adopt a `contentIndent`,
+ * and if the closing fence delimiter happens to be indented to that
+ * same column, {@link resetListContentIndentTrackerForLine}'s own
+ * indentation-drop check never fires to clear it (its guard is a
+ * strict `<`, not `<=`) -- leaking that spurious indent past the fence
+ * to a later, genuinely top-level line. `gh api markdown` confirms a
+ * real case of this shape ("```\n- x\n  ```\n     <!-- trigger") does
+ * NOT swallow the rest of the document (the "<!--" line renders as its
+ * own indented code block, unrelated to any list), which the
+ * unfrozen tracker wrongly masked. `fencedRanges` reuses
+ * {@link findFencedCodeRanges}'s own opaque-content boundaries
+ * ({@link findHtmlBlockRanges}'s identical `lineStart > start &&
+ * lineStart < end` condition -- the fence's own opening line is real,
+ * unfrozen content, but every line after it through the closing
+ * delimiter, inclusive, is frozen).
+ *
+ * `fencedRanges` (Copilot review round 5, same PR): optional, so a
+ * caller that already computed {@link findFencedCodeRanges} for its own
+ * purposes -- {@link maskMarkdownForScan}, on the hot path of several
+ * Discover/audit issue-body scanners, is the motivating case -- can pass
+ * it straight through instead of this function silently repeating that
+ * scan. Omitted (the default), it is computed here exactly as before.
+ *
+ * Copilot review round 6, same PR: a raw/generic HTML block's own
+ * content (e.g. `<div>...`, ending at the next blank line) is opaque to
+ * this tracker for the same reason a fence's content is -- it is never
+ * parsed as Markdown, so a line inside it that merely *looks* like a
+ * list marker must not update list-content-indent state either.
+ * `opaqueRanges` merges `fencedRanges` with `htmlBlockRanges` (the
+ * caller's own {@link findHtmlBlockRanges} result when it already has
+ * one, or computed here otherwise) into one combined freeze set,
+ * reusing the identical opaque-content condition above for both.
+ */
+function computeLineListContentIndents(
+  text: string,
+  fencedRanges: MarkdownCodeRange[] = findFencedCodeRanges(text),
+  htmlBlockRanges: MarkdownCodeRange[] = findHtmlBlockRanges(
+    text,
+    fencedRanges,
+  ),
+): Map<number, number | null> {
+  const indents = new Map<number, number | null>();
+  const opaqueRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...htmlBlockRanges,
+  ]);
+  let opaqueRangeIndex = 0;
+  const listTracker = createListContentIndentTrackerState();
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newlineIndex = text.indexOf('\n', lineStart);
+    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
+    const line = text.slice(lineStart, lineEnd);
+    while (
+      opaqueRangeIndex < opaqueRanges.length &&
+      lineStart >= (opaqueRanges[opaqueRangeIndex]?.end ?? text.length)
+    ) {
+      opaqueRangeIndex += 1;
+    }
+    const opaqueRange = opaqueRanges[opaqueRangeIndex];
+    const isOpaqueContent =
+      opaqueRange !== undefined &&
+      lineStart > opaqueRange.start &&
+      lineStart < opaqueRange.end;
+    if (isOpaqueContent) {
+      indents.set(lineStart, listTracker.contentIndent);
+      if (newlineIndex === -1) {
+        break;
+      }
+      lineStart = newlineIndex + 1;
+      continue;
+    }
+    const containerLine = parseContainerLine(line);
+    const isBlank = containerLine.content.trim() === '';
+    resetListContentIndentTrackerForLine(listTracker, containerLine, isBlank);
+    indents.set(lineStart, listTracker.contentIndent);
+    adoptListContentIndentForLine(listTracker, containerLine);
+    if (newlineIndex === -1) {
+      break;
+    }
+    lineStart = newlineIndex + 1;
+  }
+  return indents;
+}
+export function findHtmlCommentRanges(
+  text: string,
+  ignoredOpenerRanges: MarkdownCodeRange[] = [],
+  // Copilot review round 5, same PR: optional, so a caller that already
+  // has fenced ranges (see computeLineListContentIndents's own doc
+  // comment) can pass them through rather than triggering a second
+  // findFencedCodeRanges scan here.
+  fencedRanges: MarkdownCodeRange[] = findFencedCodeRanges(text),
+  // Copilot review round 6, same PR: same reasoning, for a caller that
+  // already has {@link findHtmlBlockRanges}'s own result (e.g.
+  // {@link maskMarkdownForScan} when `htmlBlocks: 'mask'` is also
+  // requested). Copilot review round 7, same PR: also read directly
+  // below (not only threaded into computeLineListContentIndents) -- an
+  // unterminated opener sitting anywhere inside an ALREADY-open
+  // raw/generic HTML block (e.g. "<div><!-- trigger", the "<!--" not
+  // itself at a fresh block-start position, but already inside the
+  // "<div>" block's own extent) is real, opaque content per CommonMark
+  // regardless of its own position, since that block's content is never
+  // reparsed once open. `gh api markdown` confirms this exact shape
+  // ("<div><!-- trigger\nAfter") swallows the rest of the document (an
+  // empty "<div></div>" is all that renders); the position-only check
+  // alone can never recognize this, since "<!--" here is not opening
+  // anything of its own -- it is unrelated, already-covered content.
+  htmlBlockRanges: MarkdownCodeRange[] = findHtmlBlockRanges(
+    text,
+    fencedRanges,
+  ),
+): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  const lineListContentIndents = computeLineListContentIndents(
+    text,
+    fencedRanges,
+    htmlBlockRanges,
+  );
+  const openPattern = /<!--/g;
+  let openMatch = openPattern.exec(text);
+  while (openMatch) {
+    const openIndex = openMatch.index;
+    const isEscaped = text[openIndex - 1] === '\\';
+    const isIgnored =
+      isEscaped ||
+      ignoredOpenerRanges.some(
+        (range) => openIndex >= range.start && openIndex < range.end,
+      );
+    if (isIgnored) {
+      openPattern.lastIndex = openIndex + 4;
+      openMatch = openPattern.exec(text);
+      continue;
+    }
+    const closeIndex = text.indexOf('-->', openIndex + 4);
+    const isInsideExistingHtmlBlock = htmlBlockRanges.some(
+      (range) => range.start <= openIndex && openIndex < range.end,
+    );
+    if (
+      closeIndex === -1 &&
+      !isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents) &&
+      !isInsideExistingHtmlBlock
+    ) {
+      openPattern.lastIndex = openIndex + 4;
+      openMatch = openPattern.exec(text);
+      continue;
+    }
+    const end = closeIndex === -1 ? text.length : closeIndex + 3;
+    ranges.push({ start: openIndex, end });
+    openPattern.lastIndex = end;
+    openMatch = openPattern.exec(text);
+  }
+  return ranges;
+}
+
 export function findHtmlBlockRanges(
   text: string,
   fencedRanges: MarkdownCodeRange[] = [],
@@ -1891,7 +2210,15 @@ export function findIndentedCodeRanges(
   return ranges;
 }
 
-function mergeMarkdownCodeRanges(
+/**
+ * Sort `ranges` by `start` and coalesce any that overlap or touch into
+ * one, so a downstream consumer never has to reason about two adjacent
+ * or overlapping ranges separately. Exported (#3281) so
+ * {@link maskMarkdownForScan} can compose ranges from more than one
+ * finder (fenced, indented, inline, HTML block, HTML comment) without
+ * duplicating this merge logic.
+ */
+export function mergeMarkdownCodeRanges(
   ranges: MarkdownCodeRange[],
 ): MarkdownCodeRange[] {
   const merged: MarkdownCodeRange[] = [];
@@ -2192,7 +2519,17 @@ function matchInlineLinkDestTitleEnd(
   return hasBlankLine(text, start, matchEnd) ? null : matchEnd;
 }
 
-function findInlineCodeRanges(
+/**
+ * Inline code span ranges (`` `...` ``, CommonMark-aware: raw-HTML tags,
+ * link destination/title spans, and escaped backticks are excluded from
+ * consideration) within `[start, end)`. Exported (#3281) so
+ * {@link maskMarkdownForScan} can scan the gaps between its own
+ * already-computed fenced/indented ranges directly, the same way
+ * {@link findMarkdownCodeRanges} does internally, instead of calling
+ * {@link findMarkdownCodeRanges} (which would recompute
+ * {@link findFencedCodeRanges} a second time).
+ */
+export function findInlineCodeRanges(
   text: string,
   start: number,
   end: number,
@@ -2329,4 +2666,142 @@ export function maskMarkdownCodeRegionsPreservingPositions(
     }
   }
   return masked.join('');
+}
+
+/** Options for {@link maskMarkdownForScan}. */
+export interface MaskMarkdownForScanOptions {
+  /**
+   * CommonMark inline code spans (`` `...` ``). Default `'mask'`: an
+   * issue-body scanner reading raw text must not read a quoted example
+   * as the real thing.
+   */
+  inlineCode?: 'mask' | 'keep';
+  /**
+   * HTML comments (`<!-- ... -->`). Default `'keep'`, because the
+   * machine markers this scan exists to find are themselves HTML
+   * comments -- masking them by default would defeat the caller's own
+   * purpose.
+   */
+  htmlComments?: 'mask' | 'keep';
+  /**
+   * Raw/special/generic HTML blocks (`<pre>`, `<!-- ... -->` as its own
+   * block, `<div>`, a lone custom tag; see {@link findHtmlBlockRanges}).
+   * Default `'keep'`, matching every current issue-body scanner's
+   * behavior -- none of them mask HTML block content today.
+   */
+  htmlBlocks?: 'mask' | 'keep';
+}
+
+/**
+ * One documented entry point (#3281) for masking a Markdown issue/PR body
+ * before scanning it for machine-readable markers or dependency
+ * references, replacing the ad hoc mix of {@link stripMarkdownCodeRegions}
+ * (fenced + inline only -- misses indented code) and no masking at all
+ * that the Discover helpers previously used inconsistently. Always:
+ *
+ * - normalizes `\r\n` to `\n` first, so the result never contains a bare
+ *   `\r` regardless of the input's line endings;
+ * - masks fenced ({@link findFencedCodeRanges}) and indented
+ *   ({@link findIndentedCodeRanges}) code blocks;
+ * - replaces every masked character with a space and keeps every `\n`,
+ *   so the result has the same length and line structure as the
+ *   normalized input (line-number math on the returned text stays
+ *   valid, matching {@link stripMarkdownCodeRegions}'s existing
+ *   contract).
+ *
+ * `options.inlineCode`/`options.htmlComments`/`options.htmlBlocks`
+ * control the three optional mask categories; see
+ * {@link MaskMarkdownForScanOptions} for their defaults and rationale.
+ *
+ * Computes {@link findFencedCodeRanges} exactly once (Copilot review, PR
+ * #3399) and reuses it for every downstream range finder that needs it
+ * ({@link findIndentedCodeRanges}, the inline scan, {@link
+ * findHtmlBlockRanges}, and -- via its own optional `fencedRanges`
+ * parameter, Copilot review round 5, PR #3413 -- {@link
+ * findHtmlCommentRanges}'s own list-content-indent tracking) -- calling
+ * {@link findMarkdownCodeRanges} here instead would silently recompute
+ * the fence scan a second time on every call, and this function is now
+ * on the hot path of several Discover/audit issue-body scanners.
+ */
+export function maskMarkdownForScan(
+  text: string,
+  options: MaskMarkdownForScanOptions = {},
+): string {
+  const normalized = text.replace(/\r\n/g, '\n');
+  const inlineCode = options.inlineCode ?? 'mask';
+  const htmlComments = options.htmlComments ?? 'keep';
+  const htmlBlocks = options.htmlBlocks ?? 'keep';
+
+  const fencedRanges = findFencedCodeRanges(normalized);
+  const structuralRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...findIndentedCodeRanges(normalized, fencedRanges),
+  ]);
+
+  // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the structural
+  // ranges already computed above instead of recomputing them via a
+  // second findFencedCodeRanges call. Computed unconditionally (#3282
+  // review): a `<!--` sitting inside an inline code span must be
+  // excluded from findHtmlCommentRanges's own opener detection below
+  // regardless of whether inline code itself ends up masked in the final
+  // output -- otherwise a quoted `` `<!--` `` example (#2711/PR #2735's
+  // own round-2 case) is wrongly read as a real, unterminated HTML
+  // comment opener whenever `inlineCode: 'keep'` is combined with
+  // `htmlComments: 'mask'`.
+  const inlineRanges: MarkdownCodeRange[] = [];
+  let cursor = 0;
+  for (const structuralRange of structuralRanges) {
+    inlineRanges.push(
+      ...findInlineCodeRanges(normalized, cursor, structuralRange.start),
+    );
+    cursor = structuralRange.end;
+  }
+  inlineRanges.push(
+    ...findInlineCodeRanges(normalized, cursor, normalized.length),
+  );
+
+  let ranges: MarkdownCodeRange[] =
+    inlineCode === 'mask'
+      ? mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges])
+      : structuralRanges;
+
+  // Computed at most once, exactly when either mask category below
+  // needs it (Copilot review round 6, PR #3413): findHtmlCommentRanges's
+  // own list-content-indent tracker must freeze across a raw/generic
+  // HTML block's content too (see computeLineListContentIndents's own
+  // doc comment), the same reason it already freezes across fenced
+  // ranges -- computing it here and threading it through avoids a
+  // second findHtmlBlockRanges scan whenever both `htmlBlocks: 'mask'`
+  // and `htmlComments: 'mask'` are requested together (the
+  // maskOpaqueMarkdown composition several scanners already use).
+  const htmlBlockRanges =
+    htmlBlocks === 'mask' || htmlComments === 'mask'
+      ? findHtmlBlockRanges(normalized, fencedRanges)
+      : undefined;
+
+  if (htmlBlocks === 'mask') {
+    ranges = mergeMarkdownCodeRanges([...ranges, ...(htmlBlockRanges ?? [])]);
+  }
+
+  if (htmlComments === 'mask') {
+    // ignoredOpenerRanges always includes the inline ranges (see the
+    // comment above), even when inlineCode: 'keep' left them out of
+    // `ranges` itself -- merging them in here again when inlineCode:
+    // 'mask' already included them is a harmless no-op.
+    const ignoredOpenerRanges = mergeMarkdownCodeRanges([
+      ...ranges,
+      ...inlineRanges,
+    ]);
+    ranges = mergeMarkdownCodeRanges([
+      ...ranges,
+      ...findHtmlCommentRanges(
+        normalized,
+        ignoredOpenerRanges,
+        fencedRanges,
+        htmlBlockRanges,
+      ),
+    ]);
+  }
+
+  return maskMarkdownCodeRegionsPreservingPositions(normalized, ranges);
 }

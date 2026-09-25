@@ -20,6 +20,7 @@ import {
   parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
+import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
@@ -152,6 +153,7 @@ export function runDoctor({
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
+  checkThreadResolutionPolicy(root, report);
   checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
@@ -178,9 +180,15 @@ export function runDoctor({
   );
   checkWorkshopExampleRepoBackLink(root, { requireGithub }, report);
   checkGithubReadiness(root, requireGithub, strict, report);
-  checkAutopilotSuitabilityConsistency(
+  const openIssuesForConsistencyChecks = checkAutopilotSuitabilityConsistency(
     root,
     { requireGithub, markerPrefix },
+    report,
+  );
+  checkRoadmapIdentityConsistency(
+    root,
+    openIssuesForConsistencyChecks,
+    { markerPrefix },
     report,
   );
 
@@ -252,15 +260,24 @@ export function evaluateAutopilotSuitabilityConsistency(
   return { warnings };
 }
 
-function checkAutopilotSuitabilityConsistency(
+/**
+ * Fetch every open issue's `number,labels,body` once via `gh issue list`,
+ * shared by the autopilot-suitability and roadmap-identity consistency
+ * checks below (#3286) so a single `gh` call feeds both instead of each
+ * issuing its own. Returns `null` on any `gh`/parse failure or an empty
+ * result; a `checkName`-prefixed error is recorded on `report` only when
+ * `requireGithub` is set, matching each check's prior standalone
+ * behavior.
+ */
+function fetchOpenIssuesForConsistencyChecks(
   root: string,
-  options: { requireGithub?: boolean; markerPrefix: string | null },
+  options: { requireGithub?: boolean; checkName: string },
   report: DoctorReport,
-) {
+): unknown[] | null {
   const requireGithub = options.requireGithub === true;
   const recordGhFailure = (message: string) => {
     if (requireGithub) {
-      report.errors.push(`autopilot-suitability consistency check: ${message}`);
+      report.errors.push(`${options.checkName}: ${message}`);
     }
   };
 
@@ -280,17 +297,33 @@ function checkAutopilotSuitabilityConsistency(
   );
   if (!list.ok) {
     recordGhFailure('gh issue list unavailable');
-    return;
+    return null;
   }
   let issues: unknown;
   try {
     issues = JSON.parse(list.stdout);
   } catch {
     recordGhFailure('gh issue list returned invalid JSON');
-    return;
+    return null;
   }
-  if (!Array.isArray(issues) || issues.length === 0) {
-    return;
+  return Array.isArray(issues) && issues.length > 0 ? issues : null;
+}
+
+function checkAutopilotSuitabilityConsistency(
+  root: string,
+  options: { requireGithub?: boolean; markerPrefix: string | null },
+  report: DoctorReport,
+): unknown[] | null {
+  const issues = fetchOpenIssuesForConsistencyChecks(
+    root,
+    {
+      requireGithub: options.requireGithub,
+      checkName: 'autopilot-suitability consistency check',
+    },
+    report,
+  );
+  if (!issues) {
+    return null;
   }
 
   const { floor, blockedByHumanLabelName } =
@@ -300,6 +333,110 @@ function checkAutopilotSuitabilityConsistency(
     floor,
     markerPrefix: options.markerPrefix,
     blockedByHumanLabelName,
+  });
+  for (const warning of warnings) {
+    report.warnings.push(warning);
+  }
+  return issues;
+}
+
+/**
+ * Warn about an open issue that carries the configured roadmap label but
+ * no `roadmap-id` marker in its body -- Discover's `classifyIssue`
+ * (`discover-roadmap-graph.mts`, #3286) treats such an issue as an
+ * ordinary execution leaf, never as a roadmap, so a stray label (commonly
+ * applied by a semantic auto-labeler after publication) silently has no
+ * discovery effect. Pure (no I/O) so it can be unit-tested directly;
+ * issues are `{ number, body, labels }` where labels are strings or
+ * `{ name }` objects, matching `evaluateAutopilotSuitabilityConsistency`'s
+ * input shape (reuses the same `SuitabilityIssueInput` type). Marker
+ * detection reuses `extractRoadmapMarkerId` (from
+ * `discover-roadmap-graph.mts`), which already strips fenced/inline code
+ * regions before matching, so a marker quoted only in code correctly
+ * counts as absent.
+ */
+export function evaluateRoadmapIdentityConsistency(
+  issues: unknown,
+  options: {
+    markerPrefix?: unknown;
+    roadmapLabelName?: unknown;
+  } = {},
+): { warnings: string[] } {
+  const prefix =
+    typeof options.markerPrefix === 'string' && options.markerPrefix.length > 0
+      ? options.markerPrefix
+      : 'idd-skill';
+  const roadmapLabelName =
+    typeof options.roadmapLabelName === 'string' &&
+    options.roadmapLabelName.length > 0
+      ? options.roadmapLabelName
+      : POLICY_DEFAULTS.labels.roadmapLabelName;
+  // GitHub label names are case-insensitive, so compare folded copies
+  // (trimmed + lowercased) -- matching discover-roadmap-graph.mts's own
+  // normalizeLabels/normalizeLabelName treatment of the same label. The
+  // un-normalized roadmapLabelName is still used in the warning text
+  // below, so the message echoes the configured spelling.
+  const normalizedRoadmapLabelName = roadmapLabelName.trim().toLowerCase();
+  const warnings: string[] = [];
+  for (const issue of (Array.isArray(issues)
+    ? issues
+    : []) as SuitabilityIssueInput[]) {
+    const labelNames = new Set(
+      ((issue?.labels ?? []) as unknown[]).map((label) => {
+        const name =
+          typeof label === 'string'
+            ? label
+            : ((label as { name?: unknown } | null)?.name ?? '');
+        return String(name).trim().toLowerCase();
+      }),
+    );
+    if (!labelNames.has(normalizedRoadmapLabelName)) {
+      continue;
+    }
+    if (extractRoadmapMarkerId(issue?.body, prefix)) {
+      continue;
+    }
+    const number = issue?.number;
+    warnings.push(
+      `roadmap-identity: issue #${number} carries the ${roadmapLabelName} label but no ${prefix}-roadmap-id marker; Discover treats it as an ordinary issue`,
+    );
+  }
+  return { warnings };
+}
+
+/**
+ * Resolve the configured `labels.roadmapLabelName` from the live IDD
+ * config (canonical-first, legacy-`idd-policy.json` fallback), mirroring
+ * `resolveAutopilotSuitabilityPolicy`'s read pattern. Kept as its own
+ * small resolver rather than folded into that function so its existing
+ * `{floor, blockedByHumanLabelName}` return shape (pinned by several
+ * `deepEqual` tests) stays unchanged.
+ */
+function resolveRoadmapIdentityPolicy(root: string): {
+  roadmapLabelName: unknown;
+} {
+  const { config } = resolveLiveConfigDocument(root);
+  const typedConfig = config as {
+    labels?: { roadmapLabelName?: unknown };
+  } | null;
+  return {
+    roadmapLabelName: typedConfig?.labels?.roadmapLabelName,
+  };
+}
+
+function checkRoadmapIdentityConsistency(
+  root: string,
+  issues: unknown[] | null,
+  options: { markerPrefix: string | null },
+  report: DoctorReport,
+) {
+  if (!issues) {
+    return;
+  }
+  const { roadmapLabelName } = resolveRoadmapIdentityPolicy(root);
+  const { warnings } = evaluateRoadmapIdentityConsistency(issues, {
+    markerPrefix: options.markerPrefix,
+    roadmapLabelName,
   });
   for (const warning of warnings) {
     report.warnings.push(warning);
@@ -1549,6 +1686,97 @@ export function checkMergePolicyAcknowledgement(
   const finding = classifyMergePolicyAcknowledgement(
     config as { mergePolicy?: unknown; mergePolicyAck?: unknown } | null,
     file,
+  );
+  if (finding) {
+    report.warnings.push(finding.message);
+  }
+}
+
+/**
+ * `threadResolutionPolicy` phase files that must carry matching edits
+ * before a non-default profile (`hybrid-reviewer-ack` or
+ * `strict-reviewer-resolve`) actually takes effect, per
+ * `docs/idd-review-policy-profiles.md`'s "Review Thread Resolution
+ * Profiles" section (idd-skill#3295). Exported so the message-building
+ * code below reads from one source of truth for the five basenames,
+ * and so a unit test can pin this list against literals pulled
+ * straight from that doc section -- a wrong or missing basename here
+ * then fails that test instead of passing silently (the test
+ * deliberately does not derive its own expectations from this same
+ * array, which would let a defect in the array itself go undetected).
+ */
+export const THREAD_RESOLUTION_POLICY_PHASE_FILES = [
+  'idd-review-snapshot.instructions.md',
+  'idd-review-triage.instructions.md',
+  'idd-review-fix.instructions.md',
+  'idd-pre-merge.instructions.md',
+  'idd-merge.instructions.md',
+] as const;
+
+/** One reportable finding from the threadResolutionPolicy enforcement check. */
+export interface ThreadResolutionPolicyFinding {
+  level: 'warning';
+  message: string;
+}
+
+/**
+ * `threadResolutionPolicy` is a required schema key that no
+ * *enforcement* helper or gate reads (idd-skill#3295): the
+ * distributed phase files encode the `fast-agent-resolve` behavior
+ * directly, and a non-default profile takes effect only through the
+ * manual phase-file edits `docs/idd-review-policy-profiles.md`
+ * documents. This diagnostic itself reads the key -- only to emit the
+ * warning below, never to change gate or merge behavior -- so its own
+ * read does not contradict that gap. Before this check existed, an
+ * adopter who selected `hybrid-reviewer-ack` or `strict-reviewer-resolve`
+ * during onboarding got a schema-valid config with no enforcement
+ * effect, and no diagnostic said so.
+ *
+ * Returns null (no finding, stay silent) for `fast-agent-resolve`
+ * (the enforced default, nothing to warn about), for a missing/absent
+ * `threadResolutionPolicy` key, and for a non-enum string --
+ * {@link checkLiveConfigSchema} already reports an absent required key
+ * or an invalid enum value as its own finding, so this check must not
+ * double-report either case.
+ */
+export function classifyThreadResolutionPolicy(
+  config: { threadResolutionPolicy?: unknown } | null | undefined,
+): ThreadResolutionPolicyFinding | null {
+  const value = config?.threadResolutionPolicy;
+  if (value !== 'hybrid-reviewer-ack' && value !== 'strict-reviewer-resolve') {
+    return null;
+  }
+  const phaseFiles = THREAD_RESOLUTION_POLICY_PHASE_FILES.map(
+    (file) => `.github/instructions/${file}`,
+  ).join(', ');
+  return {
+    level: 'warning',
+    message:
+      `threadResolutionPolicy is "${value}", a non-default profile -- no ` +
+      'enforcement helper or gate reads this key (this diagnostic itself ' +
+      'only reads it to print this warning). It takes effect only through ' +
+      `matching edits to these phase files: ${phaseFiles}. See ` +
+      'docs/idd-review-policy-profiles.md.',
+  };
+}
+
+/**
+ * Checks the resolved live-config candidate ({@link resolveLiveConfigDocument})
+ * for the threadResolutionPolicy enforcement-gap finding above. Never
+ * errors: an unreadable or malformed config is already surfaced by
+ * {@link checkLiveConfigSchema} / {@link checkHelperRuntimeConfig}, so
+ * this silently skips instead of double-reporting.
+ */
+export function checkThreadResolutionPolicy(
+  root: string,
+  report: DoctorReport,
+) {
+  const { config } = resolveLiveConfigDocument(root);
+  if (config === null) {
+    return;
+  }
+  const finding = classifyThreadResolutionPolicy(
+    config as { threadResolutionPolicy?: unknown } | null,
   );
   if (finding) {
     report.warnings.push(finding.message);

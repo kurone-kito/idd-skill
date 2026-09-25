@@ -48,9 +48,13 @@ import {
   digestExternalCheckWaiverMarkerBody,
   renderAdvisoryWaitRecoveryMarker,
   renderExternalCheckWaiverComment,
+  renderReviewReplyStamp,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
-import { summarizeClaimValidation } from '../src/scripts/protocol-helpers.mts';
+import {
+  LIVE_STATUS_DIGEST_MARKER,
+  summarizeClaimValidation,
+} from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
@@ -99,6 +103,7 @@ function baseOptions(
     advisoryBotLogins: [],
     prAuthorLogin: '',
     headCommittedAt: RECENT,
+    headObservedAt: RECENT,
     deadlineMinutes: 1440,
     waiverMode: 'disabled',
     waiverMaxValidity: 'PT24H',
@@ -107,12 +112,26 @@ function baseOptions(
   };
 }
 
+// kurone-kito/idd-skill#3258: a recognized, clean `ccr-overview-v2` body
+// with no "Previously missed" section -- the default body every
+// `copilotReview()` call below now carries unless it explicitly overrides
+// `body`. Before #3258, an omitted body classified as `unrecognized`,
+// which the fail-closed rule this issue adds would now block; giving the
+// vast majority of existing fixtures (which only care about `itemCount`/
+// threads/claim/waiver evidence, not body-shape parsing) a minimal
+// recognized shape keeps them testing what they always tested. Tests that
+// specifically exercise body-shape parsing pass an explicit `body:`
+// override, which wins (spread after this default).
+const MINIMAL_V2_REVIEW_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n';
+
 function copilotReview(overrides: Record<string, unknown> = {}) {
   return {
     author: { login: COPILOT_LOGIN },
     submittedAt: RECENT,
     commitId: HEAD,
     itemCount: 0,
+    body: MINIMAL_V2_REVIEW_BODY,
     ...overrides,
   };
 }
@@ -298,13 +317,19 @@ test('idd-claimed scope: an indeterminate branch mismatch still falls through th
       reviews: [copilotReview()],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-different',
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -923,6 +948,86 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
   assert.equal(verdict.ready, true);
 });
 
+// #3244: `summarizeDispositionEvidenceForGate` (reused unfiltered for
+// Clause 2) no longer honors the #2135 review-reply stamp regardless of
+// author -- an untrusted account's stamped `**Accepted**` must not clear
+// a Copilot-authored thread.
+test('untrusted stamped Accepted: a stamped Accepted reply from an untrusted account does not satisfy the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_untrusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: 'someone-else' },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 1);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRT_untrusted_stamp']);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted marker actor satisfies the thread clause (#3244)', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_trusted_stamp',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 0);
+  assert.ok(!verdict.threads.blockingIds.includes('PRT_trusted_stamp'));
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
 // --- 6. deadline-passed-with-waiver -------------------------------------------
 
 test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pending PR ready', () => {
@@ -940,11 +1045,17 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
       reviews: [], // still pending -- the primary bot never reviewed
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -957,6 +1068,43 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
   assert.equal(verdict.waived, true);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, true);
+});
+
+test('deadline-passed-with-waiver: an edited idd-advisory-convergence waiver does not count toward validCount (kurone-kito/idd-skill#3246)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Copilot review API outage, maintainer verified the diff manually',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- the primary bot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          // GitHub reports this comment was body-edited after posting --
+          // it must never be trusted as waiver evidence, even though it
+          // is otherwise identical to the valid waiver above.
+          lastEditedAt: '2026-07-11T10:15:00Z',
+        },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
 });
 
 test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unless this gate is in the configured waivable list', () => {
@@ -978,11 +1126,17 @@ test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unle
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // not registered
     }),
@@ -1020,11 +1174,17 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: repoPolicy.ciGate.externalCheckWaivers.mode,
       waivableSelectors: repoPolicy.ciGate.externalChecks.waivable,
       waiverMaxValidity: repoPolicy.ciGate.externalCheckWaivers.maxValidity,
@@ -1058,11 +1218,17 @@ test('claimless waiver: a maintainer-posted none-claim-id waiver flips a stale-p
       reviews: [], // still pending -- the primary bot never reviewed
       claimEvents: [], // no IDD claim at all
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1092,11 +1258,17 @@ test('claimless waiver: a non-none claim id posted on a claimless PR does not wa
       reviews: [],
       claimEvents: [],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1111,7 +1283,11 @@ test('claimless waiver: a non-none claim id posted on a claimless PR does not wa
 test('deadline-passed-no-waiver: no waiver comment leaves a stale-pending PR blocked', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+    }),
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.deadline.passed, true);
@@ -1136,10 +1312,19 @@ test('deadline-passed-no-waiver: waiver mode disabled never waives, even with an
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.waiver.validCount, 0);
   assert.equal(verdict.waived, false);
@@ -1151,6 +1336,7 @@ test('deadline not yet passed: no waiver path is consulted even in maintainer-au
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
     }),
   );
@@ -1162,7 +1348,11 @@ test('deadline not yet passed: no waiver path is consulted even in maintainer-au
 test('regression: the deadline-passed reason names the waiver mode instead of implying a waiver would work when waivers are disabled', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [], claimEvents: [claimComment()] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.ready, false);
   assert.match(verdict.reasons.join('\n'), /no waiver is available/);
@@ -1181,22 +1371,43 @@ test('regression: the default deadline minutes come from the shared advisory-wai
 });
 
 test('regression: elapsedMinutes is floored to a non-negative whole number', () => {
-  // headCommittedAt 90 seconds before `now` -- a fractional 1.5 minutes
+  // headObservedAt 90 seconds before `now` -- a fractional 1.5 minutes
   // must floor to 1, not report a fractional value.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [copilotReview()] }),
-    baseOptions({ headCommittedAt: '2026-07-11T11:58:30Z' }),
+    baseOptions({ headObservedAt: '2026-07-11T11:58:30Z' }),
   );
   assert.equal(verdict.deadline.elapsedMinutes, 1);
   assert.equal(Number.isInteger(verdict.deadline.elapsedMinutes), true);
 });
 
-test('regression: elapsedMinutes clamps to 0 instead of going negative when headCommittedAt is after now', () => {
+test('regression: elapsedMinutes clamps to 0 instead of going negative when headObservedAt is after now', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [copilotReview()] }),
-    baseOptions({ headCommittedAt: '2026-07-11T13:00:00Z' }), // after NOW
+    baseOptions({ headObservedAt: '2026-07-11T13:00:00Z' }), // after NOW
   );
   assert.equal(verdict.deadline.elapsedMinutes, 0);
+});
+
+test('deadline clock follows headObservedAt, not the informational headCommittedAt (kurone-kito/idd-skill#3253)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: OLD, headObservedAt: RECENT }),
+  );
+  assert.equal(verdict.deadline.headCommittedAt, OLD);
+  assert.equal(verdict.deadline.headObservedAt, RECENT);
+  assert.equal(verdict.deadline.passed, false);
+});
+
+test('deadline clock never falls back to headCommittedAt when headObservedAt is empty (kurone-kito/idd-skill#3253)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: OLD, headObservedAt: '' }),
+  );
+  assert.equal(verdict.deadline.headCommittedAt, OLD);
+  assert.equal(verdict.deadline.headObservedAt, '');
+  assert.equal(verdict.deadline.elapsedMinutes, null);
+  assert.equal(verdict.deadline.passed, false);
 });
 
 // --- 8. forced-handoff / collaborator-marker-trust claim-resolution parity
@@ -1274,6 +1485,9 @@ function waiverComment({
       actor,
     }),
     createdAt: RECENT,
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -1286,6 +1500,7 @@ test('forced-handoff takeover (issue-plus-pr): a waiver bound to the successor c
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1317,6 +1532,7 @@ test('forced-handoff takeover (issue-only, predates the PR): honored via prFirst
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1351,6 +1567,7 @@ test('forced-handoff (issue-only) is rejected once it no longer predates the PR 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1383,6 +1600,7 @@ test('regression: forced-handoff options default OFF -- the marker is inert and 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -1422,6 +1640,7 @@ test('collaborator-marker trust (PR side): a waiver from a login outside trusted
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       trustedMarkerLogins: [TRUSTED, COLLABORATOR],
@@ -1461,6 +1680,7 @@ test('collaborator-marker trust (claim-issue side): a forced-handoff marker AUTH
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1495,6 +1715,7 @@ test('regression: collaborator-marker trust defaults OFF -- an untrusted marker 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       forcedHandoffEnabled: true,
@@ -1530,6 +1751,7 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
     baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       // staleAgeMs omitted -- hardcoded 24h default; the 2h gap is not stale.
@@ -1542,6 +1764,7 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
     baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000, // 1h -- the 2h gap now counts as stale.
@@ -1567,6 +1790,7 @@ test('waiver: a marker bound to the superseded claim still waives after an in-po
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000,
@@ -1595,6 +1819,7 @@ test('waiver: a two-hop-old claim id does not waive after takeover (#2080)', () 
     }),
     baseOptions({
       headCommittedAt: OLD,
+      headObservedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       staleAgeMs: 60 * 60 * 1000,
@@ -2165,6 +2390,49 @@ test('ineligibleReasons: missing-regular-comment-disposition fires alone when on
   ]);
 });
 
+// #3337: `computeAdvisoryConvergenceVerdict` reuses
+// `summarizeDispositionEvidenceForGate` with `iddAgentLogins:
+// trustedMarkerLogins` (both derived from the same configured set here) --
+// so an author outside that set is neither a trusted marker actor nor an
+// IDD agent, and their comment's disposition-evidence treatment must not
+// depend on whether its first line happens to look like the live-status
+// digest marker.
+test('#3337: an untrusted author comment produces the same disposition-evidence result whether or not its first line is the digest marker', () => {
+  const untrustedAuthor = 'not-a-trusted-marker-actor';
+  const buildVerdict = (body: string) =>
+    computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [copilotReview({ itemCount: 2 })],
+        comments: [
+          {
+            id: 1,
+            createdAt: OLD,
+            body,
+            author: { login: untrustedAuthor },
+          },
+        ],
+      }),
+      baseOptions(),
+    );
+
+  const ordinary = buildVerdict('please double check this edge case');
+  const digestShaped = buildVerdict(
+    `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+  );
+
+  assertValidVerdict(ordinary);
+  assertValidVerdict(digestShaped);
+  assert.equal(ordinary.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.equal(
+    digestShaped.dispositionEvidence.missingRegularCommentCount,
+    ordinary.dispositionEvidence.missingRegularCommentCount,
+  );
+  assert.deepEqual(
+    digestShaped.sameHeadReroll.ineligibleReasons,
+    ordinary.sameHeadReroll.ineligibleReasons,
+  );
+});
+
 test('ineligibleReasons: review-item-count-unknown fires alone when itemCount is unavailable on a matching-HEAD review', () => {
   // No `itemCount` key at all (rather than an explicit `undefined`
   // override): `Number.isFinite(undefined)` is false, so
@@ -2297,13 +2565,19 @@ test('reasons: itemCount 0 with NO suppressed-comments section still converges n
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: '<details>\n<summary>Some unrelated collapsed section</summary>\nnothing suppressed here\n</details>',
+          // #3258: v2-marker-prefixed so this stays a RECOGNIZED shape --
+          // the unrelated collapsed section must not be mistaken for a
+          // real "Previously missed" summary, which is what this test
+          // actually proves (a recognized-shape body with an unrelated
+          // section still converges).
+          body: `${MINIMAL_V2_REVIEW_BODY}\n<details>\n<summary>Some unrelated collapsed section</summary>\nnothing suppressed here\n</details>`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2311,15 +2585,22 @@ test('reasons: itemCount 0 with NO suppressed-comments section still converges n
   assert.deepEqual(verdict.reasons, []);
 });
 
-test('reasons: itemCount 0 with an empty/absent body still converges normally (no false block)', () => {
+test('reasons: itemCount 0 with a literal empty body does NOT converge (fail-closed, unrecognized shape, #3258)', () => {
+  // Before #3258, an absent/empty body silently converged (there was
+  // nothing to false-block on). The Groom-hearing maintainer decision
+  // reverses that: a Copilot review body matching no known shape is now
+  // fail-closed until a trusted review-ack covers it.
   const verdict = computeAdvisoryConvergenceVerdict(
-    baseInputs({ reviews: [copilotReview({ itemCount: 0 })] }), // no body key
+    baseInputs({ reviews: [copilotReview({ itemCount: 0, body: '' })] }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
   assert.equal(verdict.review.suppressedCount, 0);
-  assert.equal(verdict.converged, true);
-  assert.equal(verdict.ready, true);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /bodyShape: unrecognized/);
 });
 
 test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summary> tag does NOT false-block (prose-quoted-example class, #1614)', () => {
@@ -2328,18 +2609,22 @@ test('reasons: a PLAIN-TEXT mention of "Suppressed comments (N)" outside a <summ
   // real GitHub-rendered suppressed-comments heading -- the parser must
   // require the literal <summary>...</summary> wrapper, not a bare
   // substring match, or reviewing THIS pull request could self-block it.
+  // #3258: v2-marker-prefixed so the body is a recognized shape and this
+  // test still isolates the prose-quoting question from the new
+  // unrecognized-shape fail-closed rule.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: 'nit: the test fixture hardcodes the string "Suppressed comments (1)" -- consider extracting it into a shared constant.',
+          body: `${MINIMAL_V2_REVIEW_BODY}\nnit: the test fixture hardcodes the string "Suppressed comments (1)" -- consider extracting it into a shared constant.`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2350,19 +2635,21 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a code 
   // A reviewer discussing this exact detection logic could quote the real
   // HTML tags back in inline code or a fenced block rather than plain
   // prose -- the <summary> anchoring alone does not exclude that case;
-  // parseSuppressedCommentCount must strip code regions first.
+  // parseSuppressedCommentCount must strip code regions first. #3258:
+  // v2-marker-prefixed for the same reason as the test above.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: 'consider guarding against a body that contains `<summary>Suppressed comments (1)</summary>` as a quoted example rather than a real heading.',
+          body: `${MINIMAL_V2_REVIEW_BODY}\nconsider guarding against a body that contains \`<summary>Suppressed comments (1)</summary>\` as a quoted example rather than a real heading.`,
         }),
       ],
     }),
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
@@ -2376,6 +2663,7 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a fence
         copilotReview({
           itemCount: 0,
           body: [
+            MINIMAL_V2_REVIEW_BODY,
             'Example of the shape to guard against:',
             '```html',
             '<summary>Suppressed comments (1)</summary>',
@@ -2387,6 +2675,7 @@ test('reasons: the literal <summary>...</summary> tag pair QUOTED INSIDE a fence
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.suppressedCount, 0);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
@@ -2494,13 +2783,16 @@ test('review: a review body that merely QUOTES the error template inside other p
   // quote the sentence back in ordinary review prose alongside other
   // commentary -- whole-body equality (rather than a substring search)
   // already excludes that case, the same protection #1880's suppressed-
-  // comments heading needed explicit code-region stripping for.
+  // comments heading needed explicit code-region stripping for. #3258:
+  // v2-marker-prefixed so this stays a recognized shape, isolating the
+  // prose-quoting question from the new unrecognized-shape fail-closed
+  // rule.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: `nit: consider quoting "${COPILOT_ERROR_REVIEW_BODY}" verbatim in the regression test instead of paraphrasing it.`,
+          body: `${MINIMAL_V2_REVIEW_BODY}\nnit: consider quoting "${COPILOT_ERROR_REVIEW_BODY}" verbatim in the regression test instead of paraphrasing it.`,
         }),
       ],
     }),
@@ -2509,6 +2801,7 @@ test('review: a review body that merely QUOTES the error template inside other p
   assertValidVerdict(verdict);
   assert.equal(verdict.review.found, true);
   assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
@@ -2529,6 +2822,324 @@ test('review: #1880 suppressed-comments case is unaffected by the #3015 error-re
   assert.equal(verdict.review.satisfied, false);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, false);
+});
+
+// --- 9e. Copilot review-body shape classification (#3258) ------------------
+//
+// Fixtures trimmed (badge-image `<picture>` markup stripped, structural text
+// kept) from real Copilot review bodies fetched live via
+// `gh api repos/kurone-kito/idd-skill/pulls/<n>/reviews/<id>`.
+
+// PR #3196 review 5288008196 (v2, "Previously missed (1)", 2026-09-23).
+const V2_PREVIOUSLY_MISSED_1_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '### Needs a closer look',
+  '',
+  'Address the documented instruction ambiguities and add the missing',
+  'policy-schema coverage.',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary>Add schema tests for valid and malformed union values</summary>',
+  '',
+  '`schemas/policy.schema.json:353`',
+  '',
+  'The new union constraints are not exercised through the policy schema.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+// PR #3174 review 5269880575 (v2, "Resolved since last review (2)" +
+// "Previously missed (2)", 2026-09-21) -- the resolved section's own count
+// (2) coincidentally matches the previously-missed count; suppressedCount
+// must come from "Previously missed" only.
+const V2_RESOLVED_AND_PREVIOUSLY_MISSED_2_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '### Needs a closer look',
+  '',
+  'Add cursor-repeat guards to both pagination implementations to prevent',
+  'hangs on malformed or replayed responses.',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+  '',
+  '<details>',
+  '<summary><strong>Resolved since last review (2)</strong></summary>',
+  '',
+  '- [Move hostname options before graphql to support GHES](#discussion_r4064687646)',
+  '- [Place gh api hostname flags before the graphql endpoint](#discussion_r4064687609)',
+  '</details>',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (2)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary>Generated helper can loop forever on repeated pagination cursors</summary>',
+  '',
+  '`scripts/authoring-owner-provenance.mjs:633`',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Pagination loop fails to reject repeated cursors</summary>',
+  '',
+  '`src/scripts/authoring-owner-provenance.mts:775`',
+  '</details>',
+  '</details>',
+].join('\n');
+
+// PR #3095 review 5233995834 (legacy, "### Suppressed comments (1)" inside
+// a "Review details" block, 2026-09-17).
+const LEGACY_SUPPRESSED_1_BODY = [
+  '### Needs a closer look',
+  '',
+  'The regular-comment carve-out lacks a corresponding response and',
+  'transition path for resolving maintainer decisions.',
+  '',
+  '<details>',
+  '<summary>Pull request overview</summary>',
+  '',
+  'Updates E1 review-item filtering to retain plain comments awaiting',
+  'maintainer decisions.',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (1)',
+  '',
+  '**idd-template/.github/instructions/idd-review-snapshot.instructions.md:219**',
+  '* Once this clause keeps a plain comment with an AMD reply in',
+  '  `ReviewItems_snapshot`, the E6 re-entry state machine still only',
+  '  covers an resolving maintainer-decision thread.',
+  '',
+  '- **Files reviewed:** 4/4 changed files',
+  '- **Comments generated:** 0',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
+
+// PR #3108 review 5236485791 (legacy, "### Suppressed comments (3)" with a
+// nested "**Previously missed (3)**" bold line, 2026-09-20) -- the nested
+// line must NOT be separately added: suppressedCount stays 3, not 6.
+const LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY = [
+  '### Needs a closer look',
+  '',
+  'There are a few small but real edge-case mismatches that can cause',
+  'incorrect host selection behavior under valid inputs.',
+  '',
+  '<details>',
+  '<summary>Review details</summary>',
+  '',
+  '### Suppressed comments (3)',
+  '',
+  '**Previously missed (3)** — in code that has not changed since the',
+  'last review.',
+  '',
+  '**idd-template/.github/workflows/idd-advisory-convergence.yml:591**',
+  '* This step intends to mirror the trim check, but treats a',
+  '  whitespace-only value as set.',
+  '**scripts/gh-exec.mjs:116**',
+  '* Same issue as the TypeScript source.',
+  '**src/scripts/gh-exec.mts:165**',
+  '* Only treats a literal flag token as already having a hostname.',
+  '',
+  '- **Files reviewed:** 4/4 changed files',
+  '- **Comments generated:** 0 new',
+  '- **Review effort level:** Lite',
+  '</details>',
+].join('\n');
+
+for (const [label, body, expectedSuppressedCount, expectedShape] of [
+  [
+    'PR #3196 review 5288008196 (v2 Previously missed)',
+    V2_PREVIOUSLY_MISSED_1_BODY,
+    1,
+    'overview-v2',
+  ],
+  [
+    'PR #3174 review 5269880575 (v2, Resolved+Previously missed both (2))',
+    V2_RESOLVED_AND_PREVIOUSLY_MISSED_2_BODY,
+    2,
+    'overview-v2',
+  ],
+  [
+    'PR #3095 review 5233995834 (legacy Review details)',
+    LEGACY_SUPPRESSED_1_BODY,
+    1,
+    'overview-legacy',
+  ],
+  [
+    'PR #3108 review 5236485791 (legacy, nested Previously missed not double-counted)',
+    LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY,
+    3,
+    'overview-legacy',
+  ],
+] as const) {
+  test(`review-body shape (#3258): ${label} -> suppressedCount ${expectedSuppressedCount}, no ack does not converge`, () => {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({ reviews: [copilotReview({ itemCount: 0, body })] }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    assert.equal(verdict.review.bodyShape, expectedShape);
+    assert.equal(verdict.review.suppressedCount, expectedSuppressedCount);
+    assert.equal(verdict.review.satisfied, false);
+    assert.equal(verdict.converged, false);
+    assert.equal(verdict.ready, false);
+  });
+
+  test(`review-body shape (#3258): ${label} -> converges after a trusted review-ack posted after the review`, () => {
+    const ackAfterReview = '2026-07-11T10:30:00Z'; // after copilotReview()'s default RECENT submittedAt
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [copilotReview({ itemCount: 0, body })],
+        comments: [
+          {
+            author: { login: TRUSTED },
+            body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+            createdAt: ackAfterReview,
+          },
+        ],
+      }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    assert.equal(verdict.review.suppressedCount, expectedSuppressedCount);
+    assert.equal(verdict.review.satisfied, true);
+    assert.equal(verdict.converged, true);
+    assert.equal(verdict.ready, true);
+  });
+}
+
+test('review-body shape (#3258): a v2 body with NO "Previously missed" section still yields suppressedCount 0 and bodyShape overview-v2, satisfied', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: MINIMAL_V2_REVIEW_BODY })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('review-body shape (#3258): a bare "### Suppressed comments (N)" heading with NO overview/details wrapper does NOT count (prose-quoting class, PR #3390 review finding)', () => {
+  // A review body that merely discusses this exact heading in ordinary
+  // Markdown prose -- no <!-- ccr-overview-v2 -->, no "## Pull request
+  // overview" opening, no <details><summary>Review details|Pull request
+  // overview</summary> wrapper, and no code span/fence around the
+  // heading -- must not be treated as a real legacy suppressed-finding
+  // report merely because the bare ATX heading itself matches. Found by
+  // Copilot's own review of this PR's HEAD 58f15d8977fbaf3f3cd1ffa00a781c05018a2781
+  // ("Require overview markers before classifying legacy reports").
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: [
+            'nit: consider how the parser handles a line like',
+            '',
+            '### Suppressed comments (5)',
+            '',
+            'when quoted directly in review prose without any wrapping context.',
+          ].join('\n'),
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
+  assert.equal(verdict.review.suppressedCount, 0);
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.match(verdict.reasons.join('\n'), /bodyShape: unrecognized/);
+});
+
+// A plausible but non-template Copilot error sentence -- differs from the
+// exact #3015 `COPILOT_ERROR_REVIEW_BODY` template, so `isCopilotErrorReviewBody`
+// does not match it either; it carries no v2/legacy signal, so it classifies
+// as `unrecognized`.
+const UNRECOGNIZED_SHAPE_BODY =
+  'Copilot was unable to complete this review due to an internal ' +
+  'processing error. Please retry the review request.';
+
+test('review-body shape (#3258): an on-HEAD Copilot review with an unrecognized body shape does NOT converge until a trusted review-ack exists', () => {
+  const withoutAck = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: UNRECOGNIZED_SHAPE_BODY })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(withoutAck);
+  assert.equal(withoutAck.review.bodyShape, 'unrecognized');
+  assert.equal(withoutAck.review.suppressedCount, 0);
+  assert.equal(withoutAck.review.satisfied, false);
+  assert.equal(withoutAck.converged, false);
+  assert.equal(withoutAck.ready, false);
+  assert.match(withoutAck.reasons.join('\n'), /bodyShape: unrecognized/);
+  assert.match(formatAssertNextActions(withoutAck), /unrecognized body shape/);
+
+  const ackAfterReview = '2026-07-11T10:30:00Z';
+  const withAck = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body: UNRECOGNIZED_SHAPE_BODY })],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+          createdAt: ackAfterReview,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(withAck);
+  assert.equal(withAck.review.satisfied, true);
+  assert.equal(withAck.converged, true);
+  assert.equal(withAck.ready, true);
+});
+
+test('review-body shape (#3258): the same unrecognized body from a configured non-Copilot primaryBotLogin is NOT blocked by this rule', () => {
+  const nonCopilotLogin = 'coderabbitai[bot]';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: nonCopilotLogin },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: UNRECOGNIZED_SHAPE_BODY,
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: nonCopilotLogin }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'unrecognized');
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
 });
 
 test('dispositionEvidence: exposes missingRegularCommentCount feeding sameHeadReroll.eligible, plus its missingThreadCount sibling', () => {
@@ -3083,6 +3694,9 @@ function terminalWaiverComment(
       ...rest,
     }),
     createdAt: RECENT,
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -3094,7 +3708,8 @@ test('terminal-unavailable-no-waiver: COPILOT_UNAVAILABLE alone never flips read
       comments: terminalRecoveryComments(),
     }),
     baseOptions({
-      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // the ordinary 24h deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3121,7 +3736,8 @@ test('terminal-unavailable-with-waiver: a valid maintainer waiver flips ready vi
       comments: [...terminalRecoveryComments(), terminalWaiverComment()],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // still NOT past the ordinary deadline
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // still NOT past the ordinary deadline
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3147,6 +3763,7 @@ test('terminal-unavailable: a waiver bound to a different HEAD does not satisfy 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3169,6 +3786,7 @@ test('terminal-unavailable: a waiver bound to a different claim-id does not sati
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3190,6 +3808,7 @@ test('terminal-unavailable: a waiver posted by an untrusted actor does not satis
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3211,6 +3830,7 @@ test('terminal-unavailable: an expired waiver does not satisfy the terminal path
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3229,6 +3849,7 @@ test('terminal-unavailable: an otherwise-valid waiver does not satisfy the termi
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // idd-advisory-convergence never registered
     }),
@@ -3248,7 +3869,8 @@ test('outage-relief: an active provider-outage declaration satisfies the termina
       comments: terminalRecoveryComments(), // proves terminalUnavailable, no waiver comment
     }),
     baseOptions({
-      headCommittedAt: RECENT, // the ordinary 24h deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // the ordinary 24h deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3270,7 +3892,8 @@ test('outage-relief: an active declaration does NOT relieve the deadline-only pa
       comments: [], // no recovery markers at all -- terminal stays NOT_TERMINAL
     }),
     baseOptions({
-      headCommittedAt: OLD, // the ordinary 24h deadline HAS passed
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // the ordinary 24h deadline HAS passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3293,6 +3916,7 @@ test('outage-relief: an active declaration does not relieve a selector outside t
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: [], // idd-advisory-convergence never registered
       outageDeclarationActive: true,
@@ -3312,6 +3936,7 @@ test('outage-relief: waiverMode not maintainer-authorized never relieves via a d
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'disabled',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       outageDeclarationActive: true,
@@ -3346,6 +3971,7 @@ test('late Copilot review recovery: a fresh clean review landing on HEAD clears 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3455,6 +4081,7 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3464,7 +4091,8 @@ test('self-referential-bootstrap-auto: a valid auto-waiver makes ready true imme
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3498,6 +4126,7 @@ test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: 'none' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3507,6 +4136,7 @@ test('self-referential-bootstrap-auto: an indeterminate idd-claimed scope (stale
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-test',
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3555,6 +4185,7 @@ test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: 'none' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3563,6 +4194,7 @@ test('self-referential-bootstrap-auto: ambiguous closing-issue claim candidates 
     baseOptions({
       // Deliberately NOT 'idd-claimed' -- defaults to 'all-prs'.
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3589,6 +4221,7 @@ test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3596,6 +4229,7 @@ test('self-referential-bootstrap-auto: a PR that does not touch the trigger-file
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3615,6 +4249,7 @@ test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3624,6 +4259,7 @@ test('self-referential-bootstrap-auto: a pull_request-triggered run is rejected 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3642,6 +4278,7 @@ test('self-referential-bootstrap-auto: a run whose own workflow path does not ma
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3654,6 +4291,7 @@ test('self-referential-bootstrap-auto: a run whose own workflow path does not ma
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3672,6 +4310,7 @@ test('self-referential-bootstrap-auto: a run bound to a different head SHA is re
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3681,6 +4320,7 @@ test('self-referential-bootstrap-auto: a run bound to a different head SHA is re
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3699,6 +4339,7 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3711,6 +4352,7 @@ test('self-referential-bootstrap-auto: a run hosted by a different repository is
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3733,6 +4375,7 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3748,6 +4391,7 @@ test('self-referential-bootstrap-auto: a run reported with different repository-
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3772,6 +4416,7 @@ test('self-referential-bootstrap-auto: an unresolved repositoryFullName never tr
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -3784,6 +4429,7 @@ test('self-referential-bootstrap-auto: an unresolved repositoryFullName never tr
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: '',
@@ -3803,6 +4449,7 @@ test('self-referential-bootstrap-auto: a marker missing run-id: never resolves t
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ runId: null }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3810,6 +4457,7 @@ test('self-referential-bootstrap-auto: a marker missing run-id: never resolves t
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3828,6 +4476,7 @@ test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: { error: 'HTTP 404' } },
@@ -3835,6 +4484,7 @@ test('self-referential-bootstrap-auto: a run-id lookup error (unresolvable run) 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3853,6 +4503,7 @@ test('self-referential-bootstrap-auto: a different reason token never counts as 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ reason: 'some-other-automated-reason' }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3860,6 +4511,7 @@ test('self-referential-bootstrap-auto: a different reason token never counts as 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3878,6 +4530,7 @@ test('self-referential-bootstrap-auto: a human-authored marker with the same rea
           author: { login: TRUSTED },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3885,6 +4538,7 @@ test('self-referential-bootstrap-auto: a human-authored marker with the same rea
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3903,6 +4557,7 @@ test('self-referential-bootstrap-auto: waiverMode disabled means no automated wa
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3910,6 +4565,7 @@ test('self-referential-bootstrap-auto: waiverMode disabled means no automated wa
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'disabled',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -3933,11 +4589,17 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3953,11 +4615,17 @@ test('self-referential-bootstrap-auto: an ordinary person-authored waiver keeps 
       reviews: [],
       claimEvents: [claimComment()],
       comments: [
-        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
       ],
     }),
     baseOptions({
-      headCommittedAt: OLD, // deadline has passed
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // deadline has passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
     }),
@@ -3975,6 +4643,7 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -3986,7 +4655,8 @@ test('self-referential-bootstrap-auto: an indeterminate branch mismatch with a r
     baseOptions({
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-different', // branch mismatch -> indeterminate
-      headCommittedAt: RECENT, // deadline has NOT passed
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT, // deadline has NOT passed
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4008,6 +4678,7 @@ test('self-referential-bootstrap-auto: an indeterminate PR with no bindable clai
           author: { login: BOT_LOGIN },
           body: autoWaiverBody({ claimId: CLAIM_ID }),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4016,6 +4687,7 @@ test('self-referential-bootstrap-auto: an indeterminate PR with no bindable clai
       convergenceScope: 'idd-claimed',
       prHeadRefName: 'issue/1234-test',
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4045,6 +4717,7 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4054,7 +4727,8 @@ test('self-referential-bootstrap-auto: reasons is empty when a valid auto-waiver
       changedFilePaths: [ADVISORY_CONVERGENCE_WORKFLOW_PATH],
     }),
     baseOptions({
-      headCommittedAt: OLD, // deadline HAS passed -- would otherwise push a reason
+      headCommittedAt: OLD,
+      headObservedAt: OLD, // deadline HAS passed -- would otherwise push a reason
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4230,6 +4904,7 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4245,6 +4920,7 @@ test('self-referential-bootstrap-auto: a vendored-node adopter touching its own 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4265,6 +4941,7 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4280,6 +4957,7 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4300,6 +4978,7 @@ test("self-referential-bootstrap-auto: a non-origin repository touching this sou
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: {
@@ -4317,6 +4996,7 @@ test("self-referential-bootstrap-auto: a non-origin repository touching this sou
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: 'someone-else/adopter-repo',
@@ -4341,6 +5021,7 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4348,6 +5029,7 @@ test('self-referential-bootstrap-auto: this source repository ignores its own co
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4392,6 +5074,7 @@ test('self-referential-bootstrap-auto: a genuine marker deleted after posting le
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4413,6 +5096,7 @@ test('self-referential-bootstrap-auto: a genuine marker deleted after posting le
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4475,6 +5159,7 @@ test('self-referential-bootstrap-auto: a genuine comment EDITED in place after p
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4500,6 +5185,7 @@ test('self-referential-bootstrap-auto: two distinct candidates sharing the same 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4523,6 +5209,7 @@ test('self-referential-bootstrap-auto: two distinct candidates sharing the same 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4554,6 +5241,7 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4590,6 +5278,7 @@ test('self-referential-bootstrap-auto: a legitimate CI rerun (second genuine mar
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4615,6 +5304,7 @@ test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver p
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4627,6 +5317,7 @@ test('self-referential-bootstrap-auto: a marker citing a run whose self-waiver p
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4653,6 +5344,7 @@ test("self-referential-bootstrap-auto: a marker created outside the cited run's 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4669,6 +5361,7 @@ test("self-referential-bootstrap-auto: a marker created outside the cited run's 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4688,6 +5381,7 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4698,6 +5392,7 @@ test('self-referential-bootstrap-auto: a run-jobs lookup error fails closed the 
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4722,6 +5417,7 @@ test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set f
           author: { login: BOT_LOGIN },
           body: autoWaiverBody(),
           createdAt: RECENT,
+          lastEditedAt: null,
         },
       ],
       autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
@@ -4732,6 +5428,7 @@ test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set f
     }),
     baseOptions({
       headCommittedAt: RECENT,
+      headObservedAt: RECENT,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
       repositoryFullName: REPO_FULL_NAME,
@@ -4886,6 +5583,59 @@ test('pickResolvingClaimEvents: zero or multiple resolving candidates still fail
   assert.deepEqual(
     pickResolvingClaimEvents([noClaim, claimA], [TRUSTED], false),
     claimA,
+  );
+});
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// lands 19h later (2026-05-13T04:00:00Z) -- inside an 18h configured
+// staleAge, not stale under the old hardcoded 24h. The candidate's own
+// `unclaimed-by` (for the TAKEOVER claim-id) immediately follows. Whether
+// that release actually clears `activeClaimPresent` depends on the takeover
+// having activated first (idd-claim's unclaimed-by rule 5: it releases only
+// the CURRENT active claim's exact agent-id/claim-id) -- so this is the
+// #1310-window regression for `filterResolvingClaimCandidates` (exercised
+// here via the exported `pickResolvingClaimEvents`, which delegates to it):
+// with the fix (an 18h `staleAgeMs`), the takeover activates, its own
+// unclaimed-by then correctly releases it, and NO candidate resolves.
+// Without the fix (staleAgeMs omitted, the old hardcoded 24h default), the
+// takeover never activates, the stale old claim stays "active" instead, and
+// its unmatched `unclaimed-by` is ignored -- so the (wrong) old claim still
+// resolves as present.
+test('pickResolvingClaimEvents (#3270): a takeover inside a configured 18h staleAge, followed by its own unclaimed-by, yields no resolving candidate', () => {
+  const takeoverClaimId = 'claim-20260513T040000Z-337-new';
+  const candidate = [
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-12T09:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- claimed-by: ${AGENT_ID} ${takeoverClaimId} supersedes: claim-20260512T090000Z-337-old 2026-05-13T04:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
+      createdAt: '2026-05-13T04:00:00Z',
+    },
+    {
+      author: { login: TRUSTED },
+      body: `<!-- unclaimed-by: ${AGENT_ID} ${takeoverClaimId} 2026-05-13T04:05:00Z -->\n\n_${AGENT_ID}: issue claim released — IDD automation marker._`,
+      createdAt: '2026-05-13T04:05:00Z',
+    },
+  ];
+
+  assert.deepEqual(
+    pickResolvingClaimEvents(
+      [candidate],
+      [TRUSTED],
+      false,
+      18 * 60 * 60 * 1000,
+    ),
+    [],
+  );
+  // Without the fix (staleAgeMs omitted -> the primitive's own hardcoded
+  // 24h default), the takeover never activates, so the stale old claim
+  // stays wrongly "active" and the whole candidate still resolves.
+  assert.deepEqual(
+    pickResolvingClaimEvents([candidate], [TRUSTED], false),
+    candidate,
   );
 });
 
@@ -5444,7 +6194,11 @@ test('isSoleCopilotNotReviewedYetReason: false when an unrelated blocking reason
   // alongside the pending one -- reasons.length > 1, so this must not poll.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({ reviews: [] }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
   );
   assert.equal(verdict.pending, true);
   assert.equal(verdict.review.found, false);
@@ -5876,7 +6630,10 @@ test('formatAssertNextActions is empty when the verdict is ready (#2142)', () =>
           submittedAt: RECENT,
           commitId: HEAD,
           itemCount: 0,
-          body: '',
+          // #3258: a recognized shape -- an empty body is now fail-closed
+          // (unrecognized), which this "verdict is ready" fixture must not
+          // trigger.
+          body: MINIMAL_V2_REVIEW_BODY,
         },
       ],
     }),
@@ -5995,7 +6752,11 @@ test('formatAssertNextActions covers posted items, threads, and suppressed (#214
 test('formatAssertNextActions covers deadline, terminal, and reroll (#2142)', () => {
   const deadline = computeAdvisoryConvergenceVerdict(
     baseInputs(),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+    }),
   );
   assert.equal(deadline.deadline.passed, true);
   assert.match(formatAssertNextActions(deadline), /deadline/);
@@ -6079,7 +6840,10 @@ test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', ()
           submittedAt: RECENT,
           commitId: HEAD,
           itemCount: 0,
-          body: '',
+          // #3258: a recognized shape -- see the sibling
+          // formatAssertNextActions test above for why an empty body no
+          // longer fits this "ready" fixture.
+          body: MINIMAL_V2_REVIEW_BODY,
         },
       ],
     }),

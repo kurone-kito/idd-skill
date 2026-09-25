@@ -1,0 +1,28 @@
+{
+  "id": "2034",
+  "category": "merged",
+  "note": "",
+  "title": "fix(pre-merge-readiness): require a rerun before trusting coveredByWaiver",
+  "labels": [
+    "bug",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`pre-merge-readiness.mjs`'s `coveredByWaiver` mechanism (pre-existing,\nunchanged by #2021) treats a required check as covered the moment a\nvalid `idd-external-check-waiver:` marker exists, based purely on the\ncheck's currently-reported live state — it never confirms that the\ncheck has actually been re-run since the waiver became genuinely\nactive.\n\nFor `idd-advisory-convergence` specifically,\n`idd-advisory-wait.instructions.md`'s \"Terminal routing\" section\nalready documents this gap procedurally: \"rerun the existing\n`idd-advisory-convergence` run (never `workflow_dispatch`...); both\nfields recompute every call, so an expired/invalid marker reverts\nautomatically.\" In other words, a maintainer-posted waiver only makes\nthe real GitHub check-run reflect it once that check is explicitly\nre-run — the instructions already assume an agent performs that\nre-run as a manual follow-up step.\n\nIf a session trusts `pre-merge-readiness.mjs`'s `ready: true` /\n`coveredByWaiver: true` output immediately after a valid,\nprecondition-satisfied waiver is posted, without independently\nconfirming the check's live run was regenerated since, `gh pr merge`\ncan still be rejected by GitHub's branch protection: the real\ncheck-run may still carry its pre-waiver `FAILURE` conclusion.\n\nThis gap predates #2021 (confirmed present on `main` before that PR)\nand applies to the external-check-waiver mechanism in general, not\nonly `idd-advisory-convergence`. It was explicitly out of scope for\n#2021, whose acceptance criteria required existing `coveredByWaiver:\ntrue` behavior stay unchanged once the deadline/terminal precondition\nis met. Flagged by a Codex review finding on PR #2033\n(kurone-kito/idd-skill#2033) during #2021's own review.\n\n## Proposed change\n\nHave `pre-merge-readiness.mjs` compare each waived check's own\n`completedAt` against the moment its waiver became genuinely active\n(the waiver comment's `createdAt` for a generic waivable check; also\nthe deadline/terminal-precondition-open moment for\n`idd-advisory-convergence` specifically) before reporting it as\n`coveredByWaiver: true`. A check whose live run last completed before\nthat moment should stay reported as blocked, with evidence naming the\nstale run and prompting a re-run, mirroring the existing\n`idd-advisory-wait.instructions.md` Terminal-routing guidance instead\nof leaving it as an unenforced manual step.\n\n## Acceptance criteria\n\n- `pre-merge-readiness.mjs` reports a waived check as still blocked\n  when its live run's `completedAt` predates the moment the waiver\n  became genuinely active, even though a valid waiver marker exists.\n- A check whose live run already completed after that moment (a\n  genuine post-waiver pass, or a pass unrelated to the waiver) is\n  unaffected.\n- A new test in `tests/pre-merge-readiness.test.mts` covers: a valid,\n  precondition-satisfied waiver posted after the check's live run\n  last completed (still blocked, evidence names the stale run); the\n  same waiver after a fresh run completes (covered).\n\n## Candidate files\n\n- `src/scripts/pre-merge-readiness.mts`\n- `src/scripts/protocol-helpers.mts`\n- `tests/pre-merge-readiness.test.mts`\n- `.github/instructions/idd-pre-merge.instructions.md`\n\nRefs #2021.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: M -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "c209d915dd3d80822a13f7ac7d24951434cf4357e6ffc31d148b3c274f842bcc",
+  "fetchedAt": "2026-09-24T04:43:12.113Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

@@ -164,6 +164,43 @@ test('self-waiver job keeps checks: read and statuses: read in both advisory-con
   }
 });
 
+// kurone-kito/idd-skill#3253: the idd-advisory-convergence job's new
+// `getChangeRequestHeadObservedAt` port method reads `Commit.checkSuites`
+// via GraphQL, which needs the Checks API scope explicitly in a private
+// repository -- without this regression test, a future revert of the
+// grant would pass every other test in this suite while silently
+// reintroducing a permissions failure that this method's own fail-closed
+// design (empty string on any GraphQL error) would present as "no
+// observation yet" forever, rather than a loud error.
+test('idd-advisory-convergence job keeps checks: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3253)', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const jobMatch = text.match(/^ {2}idd-advisory-convergence:$/m);
+    assert.ok(
+      jobMatch?.index !== undefined,
+      `${path} must keep the idd-advisory-convergence job`,
+    );
+    const afterJob = text.slice(jobMatch.index + jobMatch[0].length);
+    const nextSibling = afterJob.match(/^ {2}\S/m);
+    const jobBody =
+      nextSibling?.index === undefined
+        ? afterJob
+        : afterJob.slice(0, nextSibling.index);
+    const permissionsMatch = jobBody.match(
+      /^ {4}permissions:\n((?: {6}.*\n)+)/m,
+    );
+    assert.ok(
+      permissionsMatch,
+      `${path}: idd-advisory-convergence job must declare a permissions: block`,
+    );
+    assert.match(
+      permissionsMatch[1],
+      /^ {6}checks: read$/m,
+      `${path}: idd-advisory-convergence job must keep checks: read (kurone-kito/idd-skill#3253 -- getChangeRequestHeadObservedAt's checkSuites read needs it)`,
+    );
+  }
+});
+
 test('comment-refresh workflows are non-required and use a different job id', () => {
   for (const path of COMMENT_PATHS) {
     const text = readWorkflow(path);

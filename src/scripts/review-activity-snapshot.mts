@@ -9,6 +9,7 @@ import { parseCliArgs } from './cli-args.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   buildActivitySnapshotSummary,
+  normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
   summarizeDispositionEvidenceForGate,
@@ -104,6 +105,20 @@ function main(): void {
       envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
       config: iddConfig,
     });
+  // Issue #3337: the viewer-merged set feeds every trust/disposition-author
+  // input below (both `buildActivitySnapshotSummary` and
+  // `summarizeDispositionEvidenceForGate`) so an agent with no configured
+  // trusted actor still has its own digest and other operational markers
+  // recognized consistently on both the E1 activity side and the
+  // disposition-evidence side -- see `resolveActivitySnapshotTrustedMarkerLogins`'s
+  // own doc comment. The diagnostic `trustedMarkerActors` field in this
+  // helper's JSON output (below) intentionally keeps reporting the
+  // configured-only `trustedMarkerLogins` resolution, unchanged.
+  const activityTrustedMarkerLogins =
+    resolveActivitySnapshotTrustedMarkerLogins(
+      trustedMarkerLogins,
+      port.resolveViewerLoginSafe(),
+    );
 
   // #1833: also reads the PR author's login (not just headSha) --
   // `summarizeDispositionEvidenceForGate` below needs it to exclude the
@@ -133,12 +148,13 @@ function main(): void {
       checks,
     },
     {
-      trustedMarkerLogins,
+      trustedMarkerLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
       advisoryBotLoginsSource,
       // Advisory bots are excluded from disposition authorship inside the
-      // summary builder, so the trusted-marker set is a safe default here.
-      dispositionAuthorLogins: trustedMarkerLogins,
+      // summary builder, so the viewer-merged trusted-marker set is a safe
+      // default here.
+      dispositionAuthorLogins: activityTrustedMarkerLogins,
     },
   );
 
@@ -157,9 +173,9 @@ function main(): void {
   const dispositionEvidence = summarizeDispositionEvidenceForGate(
     { comments: normalizedComments, threads: normalizedThreads },
     {
-      iddAgentLogins: trustedMarkerLogins,
+      iddAgentLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
-      trustedMarkerLogins,
+      trustedMarkerLogins: activityTrustedMarkerLogins,
       prAuthorLogin,
     },
   );
@@ -225,6 +241,30 @@ export function parseArgs(argv: string[]): ReviewActivitySnapshotArgs {
     advisoryBotLogins: values['advisory-bot-logins'] as string,
     help,
   };
+}
+
+/**
+ * Issue #3337: merges the current-session viewer login into the
+ * configured trusted-marker-actor set, mirroring
+ * `pre-merge-readiness.mts`'s own `[viewerLogin, ...configuredTrustedActors]`
+ * construction, so an agent with no separately configured trusted actor
+ * still has its own live-status-digest edit (and other operational
+ * markers) excluded from `buildActivitySnapshotSummary` and
+ * `summarizeDispositionEvidenceForGate` alike -- the digest-exclusion fix
+ * this issue makes to both producers otherwise stays inert for an
+ * unconfigured agent. When the viewer login is unavailable, the returned
+ * set is the configured trusted actors alone: the agent's own digest then
+ * counts as activity, the pre-#3194 behavior, which can only send a PR
+ * back to E1, never toward a merge.
+ */
+export function resolveActivitySnapshotTrustedMarkerLogins(
+  trustedMarkerLogins: readonly unknown[],
+  viewer: { viewerLogin: string; viewerLoginUnavailable: boolean },
+): string[] {
+  return normalizeTrustedMarkerLogins([
+    viewer.viewerLoginUnavailable ? '' : viewer.viewerLogin,
+    ...trustedMarkerLogins,
+  ]);
 }
 
 function printHelp(): void {

@@ -1,0 +1,27 @@
+{
+  "id": "2239",
+  "category": "merged",
+  "note": "",
+  "title": "docs(issue-authoring): scope the canonical-contract reference in contract.md to the source repository",
+  "labels": [
+    "documentation"
+  ],
+  "body": "\n## Background\n\n`skills/issue-authoring/references/contract.md`'s opening line states\nit mirrors the canonical contract in `docs/issue-authoring-skill.md`\nwith no scoping note, while `SKILL.md`'s equivalent cross-reference is\nexplicitly scoped to \"inside the source repository\". An adopter\nrepository installs `contract.md` without any `docs/issue-authoring-skill.md`\nfile present at all, so the unscoped reference points at a document\nthat does not exist in that repository. An adopter's own reviewer\n(GitHub Copilot) independently flagged this exact gap twice on the\nsame pull request.\n\n## Proposed change\n\nAdd the same source-repository scoping note `SKILL.md` already uses to\n`contract.md`'s reference, so an adopter reading the bundled contract\nunderstands the referenced canonical document only exists in this\nsource repository, not in every installed bundle.\n\n## Acceptance criteria\n\n- `contract.md`'s reference to `docs/issue-authoring-skill.md` carries\n  an explicit \"inside the source repository\" (or equivalent) scoping\n  note, matching `SKILL.md`'s existing wording for the same reference.\n- The canonical contract and its `.claude/skills/` mirror stay\n  synchronized via `node scripts/sync-docs.mjs --apply`, and\n  `node scripts/audit-docs.mjs --check` passes with no drift reported.\n- `pnpm run lint:minimum` passes against the edited files.\n\n## Candidate files\n\n- `skills/issue-authoring/references/contract.md`\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: S -->",
+  "bodySha256": "d63a466bef2643d738c958ef878cd496963b18530cecd7e5be03cfd7758f8023",
+  "fetchedAt": "2026-09-24T04:43:03.427Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

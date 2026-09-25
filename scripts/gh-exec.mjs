@@ -163,6 +163,13 @@ export function ghText(args, options = {}) {
  * override support, since no current caller needs stdin or a custom
  * stdio shape for a call whose defining trait is "the output size is not
  * safely boundable" -- add that support only if a real caller needs it.
+ *
+ * Targets the correct GHES host via {@link withResolvedApiHostname} (#3336)
+ * for a `gh api ...` call, matching {@link ghText}'s own resolution
+ * instead of always defaulting to `github.com`. A no-op for a caller that
+ * already spliced its own resolved `--hostname`
+ * (`authoring-owner-provenance.mts`, `sweep-authoring-markers.mts`,
+ * `copilot-review-wave-audit.mts`'s `ghApiPaginatedUnbounded`).
  */
 export function ghTextUnbounded(args, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gh-exec-unbounded-'));
@@ -170,7 +177,7 @@ export function ghTextUnbounded(args, options = {}) {
   try {
     const fd = openSync(outPath, 'w');
     try {
-      execFileSync('gh', args, {
+      execFileSync('gh', withResolvedApiHostname(args), {
         stdio: ['ignore', fd, 'pipe'],
         timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
       });
@@ -225,9 +232,18 @@ export function readGithubRepoDefaultBranch(owner, repo) {
  * `discover-roadmap-graph.mts` used before this extraction).
  *
  * Trims stdout, matching {@link ghText}'s convention.
+ *
+ * Targets the correct GHES host via {@link withResolvedApiHostname} (#3336)
+ * for a `gh api ...` call, matching {@link ghText}'s own resolution instead
+ * of always defaulting to `github.com` -- the live exposure this closed:
+ * both `provider-adapter-github.mts` traversal port methods
+ * (`getWorkItemForTraversalAsync`'s REST issue lookup and
+ * `listWorkItemSubIssueNodesAsync`'s hand-built `gh api graphql` call) run
+ * through this function, so a GHES Actions runner previously queried
+ * `github.com` regardless.
  */
 export async function ghTextAsync(args, options = {}) {
-  const run = execFileAsync('gh', args, {
+  const run = execFileAsync('gh', withResolvedApiHostname(args), {
     encoding: 'utf8',
     timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
     ...(options.maxBuffer !== undefined

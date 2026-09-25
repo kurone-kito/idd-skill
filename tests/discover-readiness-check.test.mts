@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -93,6 +93,20 @@ const ghError = (stderr: string) =>
     status: 1,
     stderr,
   });
+
+// #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
+// gh-http-status.test.mts and provider-adapter-github.test.mts.
+const GH_ERROR_FIXTURES = JSON.parse(
+  readFileSync(new URL('./fixtures/gh-errors.json', import.meta.url), 'utf8'),
+) as {
+  cases: Record<string, { status: number; stderr?: string; stdout?: string }>;
+};
+
+function ghErrorFixtureStderr(id: string): string {
+  const fixture = GH_ERROR_FIXTURES.cases[id];
+  assert.ok(fixture?.stderr, `missing gh-errors.json fixture stderr: ${id}`);
+  return fixture.stderr;
+}
 
 test('extractors parse blocked-by references, roadmap markers, and dependencies', () => {
   const body = `
@@ -437,6 +451,20 @@ test('extractBlockedByRoadmapMarkers regex-escapes a metacharacter prefix', () =
   assert.deepEqual(extractBlockedByRoadmapMarkers(body, 'a(b'), ['grouped']);
 });
 
+test('extractBlockedByRoadmapMarkers ignores a marker only quoted inside an inline code span (#3281)', () => {
+  const codeQuoted =
+    'See `<!-- idd-skill-blocked-by: parent-roadmap -->` for the syntax.';
+  assert.deepEqual(extractBlockedByRoadmapMarkers(codeQuoted), []);
+  // The same marker outside code still resolves — this is a scoping fix,
+  // not a regression in the real-marker path.
+  assert.deepEqual(
+    extractBlockedByRoadmapMarkers(
+      '<!-- idd-skill-blocked-by: parent-roadmap -->',
+    ),
+    ['parent-roadmap'],
+  );
+});
+
 test('buildRoadmapMarkerSearchQuery threads the prefix as a literal, unescaped term', () => {
   // Default prefix.
   assert.equal(
@@ -499,6 +527,36 @@ test('threads a configured marker prefix into blocked-by extraction and roadmap-
     summary.filteredOut[0].reasons.join(','),
     /blocked_by_open_roadmap_marker:roadmap-y/,
   );
+});
+
+test('does not report unresolvable_blocked_by_marker for a roadmap marker only quoted inside a code span (#3281)', async () => {
+  const issues = new Map([
+    [
+      1602,
+      {
+        number: 1602,
+        title: 'code-quoted blocked-by example',
+        state: 'OPEN',
+        body: 'See `<!-- idd-skill-blocked-by: parent-roadmap -->` for the syntax.',
+        labels: [],
+      },
+    ],
+  ]);
+  const searchedMarkers: string[] = [];
+  const summary = await evaluateDiscoverReadiness([1602], {
+    includeUnresolvable: true,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async (marker) => {
+      searchedMarkers.push(marker);
+      return [];
+    },
+  });
+
+  // The quoted example never reaches the roadmap-id lookup at all.
+  assert.deepEqual(searchedMarkers, []);
+  assert.equal(summary.ready.length, 1);
+  assert.deepEqual(summary.filteredOut, []);
+  assert.deepEqual(summary.unresolvable, []);
 });
 
 test('filters issue with blocked labels', async () => {
@@ -628,6 +686,54 @@ test('fails safe when blocked-by issue cannot be resolved', async () => {
   assert.match(
     summary.filteredOut[0].reasons.join(','),
     /unresolvable_blocked_by_issue/,
+  );
+});
+
+test('#3284: fails safe on a cross-repository "Blocked by" token, even alongside a closed local ref', async () => {
+  const issues = new Map([
+    [
+      211,
+      {
+        number: 211,
+        title: 'candidate',
+        state: 'OPEN',
+        body: 'Blocked by other/repo#5, #13',
+        labels: [],
+      },
+    ],
+    [
+      13,
+      {
+        number: 13,
+        title: 'closed dependency',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+  const summary = await evaluateDiscoverReadiness([211], {
+    includeUnresolvable: true,
+    currentRepo: 'kurone-kito/idd-skill',
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.match(
+    summary.filteredOut[0].reasons.join(','),
+    /unresolvable_blocked_by_issue/,
+  );
+  assert.deepEqual(
+    summary.unresolvable.filter((entry) => entry.issueNumber === 211),
+    [
+      {
+        issueNumber: 211,
+        kind: 'blocked_by_issue',
+        reference: 'other/repo#5',
+        reason: 'cross_repository_reference',
+      },
+    ],
   );
 });
 
@@ -1134,17 +1240,16 @@ test('bubbles non-recoverable loader failures', async () => {
   );
 });
 
-test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', () => {
-  // Visibility / integration-permission 403, 410, 451 -> inaccessible
+// #3335: previously fed 'Resource not accessible by integration (HTTP
+// 410)' for the 410 case -- integration wording, not GitHub's actual
+// deleted-issue message -- so it never proved 410 downgrades
+// unconditionally (regardless of wording), only that this particular
+// wording happened to match. Rewritten onto the shared realistic
+// fixtures (tests/fixtures/gh-errors.json).
+test('isInaccessibleIssueLookupError downgrades 410/451 unconditionally and 403 only on visibility/integration/SAML wording', () => {
   assert.equal(
     isInaccessibleIssueLookupError(
-      ghError('Resource not accessible by integration (HTTP 403)'),
-    ),
-    true,
-  );
-  assert.equal(
-    isInaccessibleIssueLookupError(
-      ghError('Resource not accessible by integration (HTTP 410)'),
+      ghError(ghErrorFixtureStderr('deletedIssue410')),
     ),
     true,
   );
@@ -1154,13 +1259,25 @@ test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', ()
     ),
     true,
   );
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError(ghErrorFixtureStderr('integration403')),
+    ),
+    true,
+  );
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError(ghErrorFixtureStderr('samlEnforcement403')),
+    ),
+    true,
+  );
 });
 
 test('isInaccessibleIssueLookupError fails closed on auth, rate-limit, and 404', () => {
   // 403 secondary-rate-limit must abort, not downgrade.
   assert.equal(
     isInaccessibleIssueLookupError(
-      ghError('You have exceeded a secondary rate limit (HTTP 403)'),
+      ghError(ghErrorFixtureStderr('secondaryRateLimit403')),
     ),
     false,
   );

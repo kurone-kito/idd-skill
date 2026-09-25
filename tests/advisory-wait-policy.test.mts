@@ -146,6 +146,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition keeps the hatch closed before t
   const { precondition, deadlineOpensAt } =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: '2026-08-30T18:13:24Z',
+      headObservedAt: '2026-08-30T18:13:24Z',
       deadlineMinutes: 540,
       now: '2026-08-30T22:02:24Z',
     });
@@ -153,6 +154,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition keeps the hatch closed before t
     checkSelector: 'idd-advisory-convergence',
     deadlineMinutes: 540,
     headCommittedAt: '2026-08-30T18:13:24Z',
+    headObservedAt: '2026-08-30T18:13:24Z',
     elapsedMinutes: 229,
     deadlinePassed: false,
     terminalUnavailable: false,
@@ -166,6 +168,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition opens on the deadline and repor
   const { precondition, deadlineOpensAt } =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: '2026-08-30T18:13:24Z',
+      headObservedAt: '2026-08-30T18:13:24Z',
       deadlineMinutes: 540,
       now: '2026-08-31T03:13:24Z',
     });
@@ -179,6 +182,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition opens on terminal unavailabilit
   const { precondition, deadlineOpensAt } =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: '2026-08-30T18:13:24Z',
+      headObservedAt: '2026-08-30T18:13:24Z',
       deadlineMinutes: 540,
       terminalUnavailable: true,
       now: '2026-08-30T22:02:24Z',
@@ -196,13 +200,15 @@ test('buildAdvisoryConvergenceWaiverPrecondition never opens on an unusable head
   // string is echoed back verbatim so the operator can see what was
   // configured. Either way the hatch must stay shut, which is the half that
   // matters: an unusable anchor can never prove the deadline elapsed.
-  for (const headCommittedAt of ['', null, undefined]) {
+  for (const value of ['', null, undefined]) {
     const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
-      headCommittedAt,
+      headCommittedAt: value,
+      headObservedAt: value,
       deadlineMinutes: 540,
       now: '2026-08-30T22:02:24Z',
     });
     assert.equal(precondition.headCommittedAt, 'none');
+    assert.equal(precondition.headObservedAt, 'none');
     assert.equal(precondition.elapsedMinutes, null);
     assert.equal(precondition.deadlinePassed, false);
     assert.equal(precondition.open, false);
@@ -211,10 +217,12 @@ test('buildAdvisoryConvergenceWaiverPrecondition never opens on an unusable head
   const { precondition, deadlineOpensAt } =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: 'not-a-timestamp',
+      headObservedAt: 'not-a-timestamp',
       deadlineMinutes: 540,
       now: '2026-08-30T22:02:24Z',
     });
   assert.equal(precondition.headCommittedAt, 'not-a-timestamp');
+  assert.equal(precondition.headObservedAt, 'not-a-timestamp');
   assert.equal(precondition.elapsedMinutes, null);
   assert.equal(
     precondition.deadlinePassed,
@@ -229,6 +237,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition defaults the deadline when it i
   for (const deadlineMinutes of [undefined, null, 'soon', Number.NaN]) {
     const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: '2026-08-30T18:13:24Z',
+      headObservedAt: '2026-08-30T18:13:24Z',
       deadlineMinutes,
       now: '2026-08-30T22:02:24Z',
     });
@@ -244,6 +253,7 @@ test('buildAdvisoryConvergenceWaiverPrecondition clamps a future-dated HEAD comm
   // commit.
   const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
     headCommittedAt: '2026-08-31T06:00:00Z',
+    headObservedAt: '2026-08-31T06:00:00Z',
     deadlineMinutes: 540,
     now: '2026-08-30T22:00:00Z',
   });
@@ -255,11 +265,50 @@ test('buildAdvisoryConvergenceWaiverPrecondition clamps a future-dated HEAD comm
 test('buildAdvisoryConvergenceWaiverPrecondition reports null elapsed on an unusable now (#2328 review)', () => {
   const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
     headCommittedAt: '2026-08-30T18:13:24Z',
+    headObservedAt: '2026-08-30T18:13:24Z',
     deadlineMinutes: 540,
     now: 'not-a-timestamp',
   });
   assert.equal(precondition.elapsedMinutes, null);
   assert.equal(precondition.deadlinePassed, false);
+});
+
+test('buildAdvisoryConvergenceWaiverPrecondition follows headObservedAt, not the informational headCommittedAt (kurone-kito/idd-skill#3253)', () => {
+  // headCommittedAt (committer-supplied) is 30h old -- old enough to have
+  // opened the hatch under the pre-#3253 behavior. headObservedAt
+  // (GitHub-recorded) is only 1h old, well inside the 24h deadline. The
+  // hatch must stay shut, proving the clock reads headObservedAt.
+  const { precondition, deadlineOpensAt } =
+    buildAdvisoryConvergenceWaiverPrecondition({
+      headCommittedAt: '2026-08-29T16:00:00Z',
+      headObservedAt: '2026-08-30T21:00:00Z',
+      deadlineMinutes: 1440,
+      now: '2026-08-30T22:00:00Z',
+    });
+  assert.equal(precondition.headCommittedAt, '2026-08-29T16:00:00Z');
+  assert.equal(precondition.headObservedAt, '2026-08-30T21:00:00Z');
+  assert.equal(precondition.elapsedMinutes, 60);
+  assert.equal(precondition.deadlinePassed, false);
+  assert.equal(precondition.open, false);
+  assert.equal(deadlineOpensAt, '');
+});
+
+test('buildAdvisoryConvergenceWaiverPrecondition never falls back to headCommittedAt when headObservedAt is empty (kurone-kito/idd-skill#3253)', () => {
+  // A valid, old headCommittedAt must not be used as a substitute anchor
+  // when headObservedAt (GitHub has not recorded a check suite yet) is
+  // unavailable -- the split must fail closed, not silently degrade to the
+  // pre-#3253 anchor.
+  const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
+    headCommittedAt: '2026-08-01T00:00:00Z',
+    headObservedAt: '',
+    deadlineMinutes: 1440,
+    now: '2026-08-30T22:00:00Z',
+  });
+  assert.equal(precondition.headCommittedAt, '2026-08-01T00:00:00Z');
+  assert.equal(precondition.headObservedAt, 'none');
+  assert.equal(precondition.elapsedMinutes, null);
+  assert.equal(precondition.deadlinePassed, false);
+  assert.equal(precondition.open, false);
 });
 
 // #2335: buildSecondaryQuietWindowStatus.

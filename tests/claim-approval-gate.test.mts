@@ -6,7 +6,18 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { evaluateClaimApprovalGate } from '../src/scripts/claim-approval-gate.mts';
+import {
+  collectClaimApprovalGateInputs,
+  evaluateClaimApprovalGate,
+} from '../src/scripts/claim-approval-gate.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
+import type {
+  ProviderPort,
+  ProviderTimelineEvent,
+} from '../src/scripts/provider-port.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -187,16 +198,29 @@ test('write collaborator is self-authorized under all-write policy', () => {
   assert.equal(result.reason, 'author-self-authorized');
 });
 
-test('ready label grants approval by presence', () => {
+// #3254: presence-only mode now also verifies the actor of the label's
+// latest `labeled` timeline event against `maintainerApprovalActorPolicy`
+// -- label presence alone is no longer sufficient.
+
+test('ready label grants approval by presence when the labeling actor is authorized (#3254)', () => {
   const result = evaluateClaimApprovalGate(
     {
       issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
       policy: {},
-      timeline: BASE_TIMELINE,
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+          actor: { login: 'maintainer' },
+        },
+      ],
     },
     {
       resolvePermission: permissionResolver({
         author: { known: false, permission: '' },
+        maintainer: { known: true, permission: 'admin' },
       }),
     },
   );
@@ -204,7 +228,7 @@ test('ready label grants approval by presence', () => {
   assert.equal(result.reason, 'ready-label-present');
 });
 
-test('custom configured ready label grants approval by presence', () => {
+test('custom configured ready label grants approval by presence when the labeling actor is authorized (#3254)', () => {
   const result = evaluateClaimApprovalGate(
     {
       issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
@@ -214,12 +238,21 @@ test('custom configured ready label grants approval by presence', () => {
           labelFreshnessMode: 'presence-only',
         },
       },
-      timeline: BASE_TIMELINE,
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'custom:ready' },
+          actor: { login: 'maintainer' },
+        },
+      ],
       comments: [],
     },
     {
       resolvePermission: permissionResolver({
         author: { known: true, permission: 'none' },
+        maintainer: { known: true, permission: 'maintain' },
       }),
     },
   );
@@ -231,7 +264,191 @@ test('custom configured ready label grants approval by presence', () => {
   });
 });
 
-test('event-freshness label approval requires a fresh matching label event', () => {
+test('ready label is not approved when the labeling actor has write permission only (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: { maintainerApprovalActorPolicy: 'owners-and-maintainers-only' },
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+          actor: { login: 'contributor' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+        contributor: { known: true, permission: 'write' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(findCheck(result, 'ready_label_present')?.result, 'fail');
+});
+
+test('ready label applied by a bot with no collaborator permission (404) is not approved and is not ambiguous (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: {},
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+          actor: { login: 'coderabbitai[bot]' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+        'coderabbitai[bot]': { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-missing');
+  assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'pass');
+});
+
+test('ready label actor permission-read failure is a fail-closed ambiguity (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: {},
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+          actor: { login: 'flaky-actor' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+        'flaky-actor': {
+          known: false,
+          permission: '',
+          error: 'permission lookup failed: 503',
+        },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-ambiguous');
+  assert.equal(findCheck(result, 'ambiguity_guard')?.result, 'fail');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-permission-unavailable/,
+  );
+});
+
+test('ready label present but no matching labeled event in the timeline is not approved (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: {},
+      // BASE_TIMELINE has only an 'edited' event -- no 'labeled' event at
+      // all for this label.
+      timeline: BASE_TIMELINE,
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-ambiguous');
+  assert.equal(findCheck(result, 'ready_label_present')?.result, 'fail');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-unverified/,
+  );
+});
+
+test('a labeled event with no recorded actor is not approved (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'idd:ready' }] },
+      policy: {},
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          // No `actor` field at all -- a malformed/unexpected timeline
+          // event shape, distinct from "no matching event found".
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'idd:ready' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, 'approval-ambiguous');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /ready-label-actor-unverified/,
+  );
+});
+
+test('an earlier authorized labeled event does not approve when the latest labeled event is unauthorized (presence-only, #3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'presence-only',
+        },
+      },
+      timeline: [
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T08:00:00Z',
+          label: { name: 'custom:ready' },
+          actor: { login: 'maintainer' },
+        },
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T09:00:00Z',
+          label: { name: 'custom:ready' },
+          actor: { login: 'contributor' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+        maintainer: { known: true, permission: 'admin' },
+        contributor: { known: true, permission: 'write' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+});
+
+test('event-freshness label approval requires a fresh matching label event from an authorized actor (#3254)', () => {
   const result = evaluateClaimApprovalGate(
     {
       issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
@@ -247,6 +464,7 @@ test('event-freshness label approval requires a fresh matching label event', () 
           event: 'labeled',
           created_at: '2026-05-10T12:00:00Z',
           label: { name: 'custom:ready' },
+          actor: { login: 'maintainer' },
         },
       ],
       comments: [],
@@ -254,11 +472,43 @@ test('event-freshness label approval requires a fresh matching label event', () 
     {
       resolvePermission: permissionResolver({
         author: { known: true, permission: 'none' },
+        maintainer: { known: true, permission: 'admin' },
       }),
     },
   );
   assert.equal(result.approved, true);
   assert.equal(result.reason, 'ready-label-present');
+});
+
+test('event-freshness: a fresh labeled event from an unauthorized actor is not approved (#3254)', () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: 'custom:ready' }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: 'custom:ready',
+          labelFreshnessMode: 'event-freshness',
+        },
+      },
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: 'labeled',
+          created_at: '2026-05-10T12:00:00Z',
+          label: { name: 'custom:ready' },
+          actor: { login: 'contributor' },
+        },
+      ],
+      comments: [],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+        contributor: { known: true, permission: 'write' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
 });
 
 test('event-freshness label approval becomes stale after later issue edits', () => {
@@ -472,6 +722,7 @@ test('an omitted userContentEdits input is backward-compatible: known-empty, not
           event: 'labeled',
           created_at: '2026-05-10T12:00:00Z',
           label: { name: 'custom:ready' },
+          actor: { login: 'maintainer' },
         },
       ],
       comments: [],
@@ -479,6 +730,7 @@ test('an omitted userContentEdits input is backward-compatible: known-empty, not
     {
       resolvePermission: permissionResolver({
         author: { known: true, permission: 'none' },
+        maintainer: { known: true, permission: 'admin' },
       }),
     },
   );
@@ -697,6 +949,66 @@ test('check ids stay deterministic and ordered', () => {
       'ready_comment_fresh',
       'ambiguity_guard',
     ],
+  );
+});
+
+// #3254: the CLI's input-collection step is extracted into
+// collectClaimApprovalGateInputs so a failing getWorkItemTimeline can be
+// exercised without a real gh process, proving the timeline-forwarding
+// fix -- a caught timeline failure must reach the evaluator as `null`
+// (unknown), never the flattened `[]` (known-empty) the pre-#3254 CLI
+// forwarded.
+
+test('collectClaimApprovalGateInputs forwards a failing getWorkItemTimeline as unavailable, not known-empty (#3254)', () => {
+  const fixture: FakeProviderFixture = {
+    workItems: {
+      393: {
+        number: 393,
+        title: 'helper gate',
+        body: '',
+        state: 'open',
+        user: { login: 'author' },
+        authorAssociation: 'NONE',
+        labels: [{ name: 'idd:ready' }],
+        htmlUrl: 'https://example.invalid/issues/393',
+        url: 'https://example.invalid/issues/393',
+        createdAt: '2026-05-10T00:00:00Z',
+        updatedAt: '2026-05-10T00:00:00Z',
+      },
+    },
+    comments: { 393: [] },
+  };
+  const basePort = createFakeProviderAdapter(fixture);
+  const port: ProviderPort = {
+    ...basePort,
+    getWorkItemTimeline(): ProviderTimelineEvent[] {
+      throw new Error('timeline unavailable');
+    },
+  };
+
+  const inputs = collectClaimApprovalGateInputs(port, 393);
+  assert.equal(inputs.timelineAvailable, false);
+  assert.equal(inputs.timeline, null);
+
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: inputs.issue,
+      comments: inputs.comments,
+      timeline: inputs.timeline,
+      userContentEdits: inputs.userContentEdits,
+      policy: {},
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: 'none' },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(findCheck(result, 'ready_label_present')?.result, 'fail');
+  assert.match(
+    findCheck(result, 'ambiguity_guard')?.evidence ?? '',
+    /issue-timeline-unavailable/,
   );
 });
 

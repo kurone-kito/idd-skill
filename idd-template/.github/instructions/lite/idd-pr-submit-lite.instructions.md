@@ -13,7 +13,9 @@ session already claimed and implemented. If the repository is
 - **Command sets**: `fix-validate` and `pre-push-validate` (named below)
   are read from `.github/idd/config.json`'s `commands` mapping. If that
   file is missing or the command set cannot be read, stop and ask rather
-  than guessing a command.
+  than guessing a command. Judge each run by exit status (Bash
+  `${PIPESTATUS[0]}`/`set -o pipefail`); a `tail`/`head` filter can't
+  prove success (#3139).
 - `instructions-only`: do not use this lite file; use
   `idd-pr-submit.instructions.md` instead.
 - Any mismatch between this file and the standard PR-submit phase is a
@@ -31,23 +33,22 @@ session already claimed and implemented. If the repository is
   (after the `recheck` retry budget in D1 step 1, if applicable) — this
   lite file only covers the pre-first-push rebase; the post-publication
   merge-based resync (or a closer live-state read) is out of its scope.
-  (A pushed branch with **no** open PR yet is not this case: push any
-  unpushed local commits, then skip straight to D3. An open PR with
-  `syncRecommendation: none` is not this case either: run D3.5's check,
-  then skip straight to D4.)
+  (A pushed branch with **no** open PR yet is not this case: skip
+  straight to D2 (claim re-read, **pre-push-validate**, then a normal
+  push — never force), then D3. An open PR with
+  `syncRecommendation: none` is not this case either: run D3.5's
+  check, then skip straight to D4.)
 - D1's rebase hits a content conflict this session cannot resolve
   mechanically.
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
   re-attach-and-re-rebase attempt still fails.
-- D3.5's closing-keyword self-check still fails after one corrective
-  edit.
-- `closingIssuesReferences` still does not exactly match the deliberate
-  closing set after one corrective edit.
-- The required-check set for D4 cannot be determined (protection or
-  ruleset reads are unreadable, or `ci-wait-state`'s
-  `requiredChecks.status` reports `source-pinned`, or reports
-  `no-required-checks` with an empty or failing `checks[]` fallback —
-  see D4 step 3).
+- D3.5's closing-keyword self-check, or the `closingIssuesReferences`
+  match against the deliberate closing set, still fails after one
+  corrective edit.
+- The required-check set for D4 cannot be determined: `ci-wait-state`'s
+  `requiredChecks.status` reports `unreadable` (protection or ruleset
+  reads are unreadable), `source-pinned`, or `no-required-checks` with
+  an empty or failing `checks[]` fallback — see D4 step 3/4.
 - Any required check other than `idd-advisory-convergence` reaches a
   failing terminal state, or `idd-advisory-convergence` is failing
   without satisfying D4 step 8's exception.
@@ -101,24 +102,17 @@ This section's rebase only applies **before the branch's first push**.
    '.[0].number // empty'` (`// empty` avoids misreading an empty
    list's literal `null` as a real PR number).
    - No output (empty): D2's push already happened in an earlier,
-     interrupted session. `git fetch origin {branch-name}`, then check
-     `git log --oneline origin/{branch-name}..HEAD` — if it lists any
-     commit, this or an earlier session committed more work after that
-     push without pushing it; push those commits now (a normal push,
-     not force) before continuing. Either way, skip the rest of D1
-     (nothing to rebase) and go straight to D3 (create the PR).
+     interrupted session. Skip the rest of D1 (nothing to rebase) and
+     continue at D2 (claim re-read, **pre-push-validate**, then a
+     normal push — never force), then D3.
    - An open PR exists: read its `syncRecommendation` with the
      profile-selected branch-conflict-state helper —
      `node scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
      package-manager-profile `idd:branch-conflict-state` command
      (resolve the exact command from `docs/idd-helper-scripts.md` if
-     unsure). This is the same helper `idd-review-triage.instructions.md`
-     uses for its own branch-sync check (the standard
-     `idd-pr-submit.instructions.md` file does not reference it directly,
-     since D1 there only covers the pre-first-push case), so it already
-     accounts for whether a merely-`BEHIND` head actually needs a resync
-     (branch protection requiring an up-to-date head) rather than treating
-     every non-`CLEAN` state the same:
+     unsure) — it already accounts for whether a merely-`BEHIND` head
+     needs a resync (an up-to-date-head branch-protection requirement)
+     rather than treating every non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
        earlier session. Run D3.5's closing-keyword check first — it is
        idempotent even if an earlier session already verified it, and
@@ -188,12 +182,13 @@ loop instead of returning to this D1 rebase path.
    (even under the same agent id), the claim was lost — stop.
 2. Run **pre-push-validate**. (E2E tests are verified by CI; do not run
    them locally.)
-3. Push the branch: `git push -u origin {branch-name}` on first
-   publication. Use `--force-with-lease` only when every one of these
-   holds: the branch is already published, a repository policy
-   explicitly permits a force-push exception here, and this exact
-   exception already required a rebase. If any of those does not hold,
-   stop per the condition above — do not push with `--force-with-lease`
+3. Push the branch: `git push -u origin {branch-name}` — plain on
+   first publication or a no-open-PR resume (D1 step 1). Use
+   `--force-with-lease` only when every one of these holds: the
+   branch is already published, a repository policy explicitly
+   permits a force-push exception here, and this exact exception
+   already required a rebase. If any of those does not hold, stop
+   per the condition above — do not push with `--force-with-lease`
    and do not continue in this lite flow; the merge-based resync path
    is out of this file's scope.
 4. New CI job: land it `workflow_dispatch`-only first (if its workflow
@@ -243,16 +238,12 @@ loop instead of returning to this D1 rebase path.
    stay in the PR body prose above; if one is important enough to file
    now, invoke the `issue-authoring` skill instead.
 9. **Live-operator-directed immediate-fix carve-out**: a live operator
-   may direct an immediate fix for a blocking bug unrelated to the
-   claimed work instead of routing it through `issue-authoring` first.
-   Cross-reference the originating claimed issue in the side-fix PR
-   body with a non-closing reference (`Refs #N`, never
-   `Closes`/`Fixes`/`Resolves`) — D3.5 below applies only to the
-   side-fix's own linked issue, if any, never to the originating one.
-   How the session obtains a branch/worktree/claim for the side-fix,
-   and how its own completion avoids releasing the originating claim,
-   is not yet defined (see `idd-pr-submit.instructions.md`'s matching
-   carve-out).
+   may direct an unrelated blocking-bug side-fix instead of routing it
+   through `issue-authoring` first. Cross-reference the originating
+   issue with `Refs #N` — never `Closes`/`Fixes`/`Resolves`. D3.5
+   applies only to the side-fix's linked issue, if any. Branch/
+   worktree/claim mechanics: undefined; see
+   `idd-pr-submit.instructions.md`'s carve-out.
 
 ### D3.5 — Verify closing keyword detection
 
@@ -282,6 +273,11 @@ loop instead of returning to this D1 rebase path.
      the same edit-and-recheck path as step 4 for that number.
    - Repeat once after either fix. If it still fails, stop and post a
      hold note citing the PR URL.
+6. A commit message closing keyword counts too: never place one next
+   to an issue outside the closing set. F2's `closing-set` blocker
+   re-checks the set and messages against final HEAD (skipped on a
+   non-default `{development-branch}`), blocking the handoff on a
+   stray match.
 
 ## D4 — Wait for CI
 
@@ -332,10 +328,10 @@ than the run it supersedes. Once both have completed, the later
    package-manager-profile `idd:ci-wait-state` command (same
    `docs/idd-helper-scripts.md` resolution as above). Read its
    `requiredChecks.status` field: `success`, `pending`, `failing`,
-   `missing`, `no-required-checks`, or `source-pinned`. If either helper
-   is unavailable, fails, or disagrees with live GitHub
-   state, stop and ask — do not re-derive branch-protection or ruleset
-   rules by hand.
+   `missing`, `no-required-checks`, `source-pinned`, or `unreadable`.
+   If either helper is unavailable, fails, or disagrees with live
+   GitHub state, stop and ask — do not re-derive branch-protection or
+   ruleset rules by hand.
 3. **`no-required-checks`**: a repository can legitimately have no
    _required_ checks while still running normal CI, so this is not
    automatically a stop. Instead, fall back to the same helper's
@@ -347,9 +343,10 @@ than the run it supersedes. Once both have completed, the later
    settled result yet, so treat it like `pending`); any entry `failure`
    → stop per the condition above; `checks[]` itself empty (no CI ran
    at all for this HEAD) → stop per the condition above.
-4. **`source-pinned`** (a ruleset or integration-pinned required check
-   exists but cannot be enumerated by name): always stop per the
-   condition above — this is a real gating check, never treat it like
+4. **`unreadable`** (a branch-protection or ruleset read could not be
+   determined) or **`source-pinned`** (a ruleset or integration-pinned
+   required check exists but cannot be enumerated by name): always
+   stop per the condition above — never treat either like
    `no-required-checks`.
 5. **`failing`**: check every `checks[]` entry where `required` is
    true and its `checkName` is not `idd-advisory-convergence`

@@ -26,31 +26,19 @@
 import './node-runtime-guard.mts';
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mts';
 
-// Resolve the repository root by walking up to the nearest package.json.
-// This is location-independent, so it returns the same root whether this
-// module runs as the emitted scripts/validate-schemas.mjs (one level
-// deep), the src/scripts/validate-schemas.mts source under Node
-// type-stripping (two levels deep), or is imported by another module —
-// a fixed `..` from import.meta.dirname would resolve to src/ for the
-// source.
-function resolveRepoRoot(fromDir: string): string {
-  let dir = fromDir;
-  for (let depth = 0; depth < 16; depth += 1) {
-    if (existsSync(join(dir, 'package.json'))) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-  return dir;
-}
-
-const ROOT = resolveRepoRoot(import.meta.dirname);
+// Resolve the repository/bundle root via the shared resolveBundleRoot
+// (issue #3238): the nearest ancestor containing
+// schemas/policy.schema.json, falling back to the nearest ancestor
+// containing package.json. This is location-independent, so it returns
+// the same root whether this module runs as the emitted
+// scripts/validate-schemas.mjs (one level deep), the
+// src/scripts/validate-schemas.mts source under Node type-stripping (two
+// levels deep), or is imported by another module — a fixed `..` from
+// import.meta.dirname would resolve to src/ for the source.
+const ROOT = resolveBundleRoot(import.meta.dirname);
 
 interface SchemaNode {
   type?: string | string[];

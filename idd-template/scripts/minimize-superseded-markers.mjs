@@ -643,7 +643,11 @@ function runGh(argv, timeoutMs = GH_TIMEOUT_MS) {
 // import, which would break this file's self-contained invariant (see the
 // loadIddConfig() comment above) — node:util is a built-in, so it does
 // not. This file has zero integer flags, so it needs none of the
-// wrapper's extra canonical-integer / single-dash-disambiguation helpers.
+// wrapper's extra canonical-integer / single-dash-disambiguation helpers
+// -- it does still inline that wrapper's separate leading-`--`-stripping
+// guard as a literal instead of importing it (see the #1921/#2465 comment
+// on the first line inside parseMinimizeArgs() itself, right after its
+// signature).
 // See kurone-kito/idd-skill#1486 for the full disposition writeup.
 //
 // Narrow, deliberate behavior deltas from the previous hand-rolled
@@ -682,13 +686,37 @@ function runGh(argv, timeoutMs = GH_TIMEOUT_MS) {
 //     post-parse check below exactly like `--subject-ids ''` does.
 //   - A bare trailing `--` (the POSIX end-of-options marker) is now
 //     silently accepted as a no-op, where the old loop's exact-match
-//     fallthrough rejected it as `unknown argument: --`. Not expected to
-//     matter in practice: this helper is only ever invoked from fixed,
-//     known argument lists (CI workflows, documented manual commands),
-//     never arbitrary/untrusted argv.
+//     fallthrough rejected it as `unknown argument: --`. The #3316 guard
+//     below only strips argv[0] when it is exactly `--`, so this delta
+//     is unaffected for any argv with more than the single leading `--`
+//     token: a genuinely trailing `--` still reaches parseArgs()
+//     unchanged and is still a silent no-op there. The one exception is
+//     the single-token `argv === ['--']` case, where "leading" and
+//     "trailing" coincide -- the guard strips it to an empty args array
+//     before parseArgs() ever runs, instead of parseArgs() consuming it
+//     as its own terminator, but the observable outcome (silent no-op)
+//     is the same either way. What is no longer true is the premise
+//     this bullet used to rest on: a leading `--` is a normal, expected
+//     shape here -- this repository's own documented
+//     `pnpm run idd:<name> -- <flags>` package-manager-profile
+//     convention forwards exactly one in normal use
+//     (kurone-kito/idd-skill#3316), which is why the guard below exists.
 function parseMinimizeArgs(argv) {
+  // #1921/#2465: strip a pnpm-forwarded leading `--` the same way the
+  // shared cli-args.mts wrapper's stripLeadingArgumentSeparator() strips
+  // one -- this file is excluded from importing that wrapper (see the
+  // comment above) so it must inline the equivalent one-line guard as a
+  // literal instead (kurone-kito/idd-skill#3316). Deliberately narrower
+  // than the wrapper: stripLeadingArgumentSeparator() also hard-errors on
+  // a *second* immediate leading `--` (argv[0] === argv[1] === '--');
+  // this guard does not, so a double-separator `-- -- --help` still
+  // crashes the same way it did before this fix. Out of scope: the
+  // issue's own proposed change specifies this exact one-line literal,
+  // and a double leading `--` is not a shape pnpm's own forwarding
+  // convention produces.
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
   const { values } = parseArgs({
-    args: argv,
+    args,
     options: {
       help: { type: 'boolean', short: 'h' },
       apply: { type: 'boolean' },

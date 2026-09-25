@@ -1,0 +1,28 @@
+{
+  "id": "1484",
+  "category": "merged",
+  "note": "",
+  "title": "Detect high-confidence duplicates pre-claim and surface evidence (no close)",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nA4.5 Check 4 (`idd-suitability.instructions.md`) detects duplicate or\nsuperseded work with a deliberately weak title/declaration heuristic.\nOn a hit it is read-only: it may only report and optionally apply a\n`triage:{outcome}` label, and its Mutation Policy explicitly forbids\nclosing the issue (\"must NOT ... close issues unilaterally\").\n\nA stronger mechanical supersession signal already exists, but only in\nB2.0 (`idd-work.instructions.md`) — a closing-PR reference, a merged PR\nthat changed the same files the issue scopes under `## Candidate files`,\nor the issue's acceptance criteria already holding on current `main`.\nB2.0 runs only **after** claim and B1 worktree creation.\n\nThe gap: when an issue frames a problem from a different angle than an\nalready-shipped sibling, A4.5's weak heuristic misses it, so the\nduplicate proceeds to claim plus worktree before B2.0 can catch it —\npaying claim and worktree cost — or, when B2.0 also misses the framing,\na redundant implementation begins. There is currently no **pre-claim**\npath that applies B2.0's stronger signal, and no requirement that a\nduplicate finding carry machine-derivable evidence.\n\nThis is Step 1 of a deliberately staged rollout: it only **detects and\nevidences** pre-claim; it never closes. Authorizing an autonomous\npre-claim close is a separate, human-gated follow-up.\n\n## Proposed change\n\nWork on the A-phase suitability surface — edit the template source\n`idd-template/.github/instructions/idd-suitability.instructions.md`\n(A4.5 Check 4) and regenerate the `.github/instructions/` copy with\n`node scripts/sync-docs.mjs --apply`; never hand-edit the generated\ncopy.\n\n- Add a **high-confidence duplicate/superseded tier** to Check 4 that,\n  in addition to the existing weak title/declaration heuristic,\n  evaluates the same mechanical signals B2.0 documents:\n  - the candidate issue is closed by or references a merged closing PR\n    (`closedByPullRequestsReferences`), or\n  - a PR merged at or after the candidate's relevant window changed a\n    file the issue scopes under `## Candidate files` (reuse the existing\n    `discover-shared-file-overlap` helper), and\n  - where cheaply checkable, the issue's acceptance criteria already\n    hold on current `main`.\n- Prefer reusing or extracting B2.0's signal into a **shared, reusable\n  check** so a later gated-close follow-up and B2.0 itself can gate on\n  the identical signal. Do **not** change B2.0's existing post-claim\n  runtime behavior in this issue; if a clean extraction is not\n  low-risk, implement the pre-claim detection independently and leave\n  the shared-check consolidation to the follow-up.\n- When the high-confidence tier fires, surface the finding as **both**:\n  - the existing `triage:duplicate` label, and\n  - a diagnostic comment (prefixed \"A4.5 suitability gate rejection\",\n    per the current Coordination Rule) that MUST include\n    **machine-derivable evidence** — the merged or closing PR number\n    and/or the overlapping file paths (with line anchors where\n    applicable) — not a prose assertion alone.\n- **Explicitly out of scope**: closing the issue, posting any claim or\n  operational marker, and creating a branch or worktree. This issue\n  must not cross A4.5's current no-close prohibition — it only\n  strengthens detection and evidence.\n- Keep behavior **fail-safe**: if the strong signal cannot be\n  established mechanically, fall back to exactly today's behavior\n  (weak-heuristic report, no new label or comment). Never fail toward a\n  false high-confidence duplicate flag.\n\n## Acceptance criteria\n\n- A4.5 Check 4 in the template source, and its regenerated\n  `.github/instructions/` copy, documents the high-confidence tier, the\n  required machine-derivable evidence, and the explicit\n  \"detect-only, never close\" boundary. `node scripts/sync-docs.mjs\n  --apply` leaves no drift and `node scripts/audit-docs.mjs --check`\n  passes.\n- The strong-signal detection is exercised by helper-level tests\n  (reusing or extending `discover-shared-file-overlap` and/or a new\n  shared check), covering a closing-PR-reference hit, a\n  same-candidate-files hit, and the no-signal fail-safe that reproduces\n  today's behavior.\n- No code path introduced here closes an issue, posts a claim or\n  operational marker, or creates a branch or worktree; a test or an\n  explicit review note confirms the detect-only boundary.\n- `pre-push-validate` passes (biome, dprint, markdownlint, cspell,\n  `idd-doctor`).\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "71f58f9742e8c36aca594e16500c013e4aa6bb8934a3bca0f034c5afd8fcd2da",
+  "fetchedAt": "2026-09-24T04:43:46.611Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

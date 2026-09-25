@@ -26,13 +26,9 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { parseCandidateFileEntries } from './discover-shared-file-overlap.mjs';
 import {
-  findFencedCodeRanges,
-  findHtmlBlockRanges,
-  findIndentedCodeRanges,
   findMarkdownCodeRanges,
-  maskMarkdownCodeRegionsPreservingPositions,
+  maskMarkdownForScan,
 } from './markdown-code.mjs';
-import { findHtmlCommentRanges } from './resolved-decision.mjs';
 
 /**
  * A code span inside the `## Acceptance criteria` section naming one of
@@ -391,8 +387,8 @@ function countInterruptingCheckboxItems(sectionText) {
  */
 const NEXT_ATX_HEADING_PATTERN =
   /\n(?: {0,3}#{1,6}\s|(?=(?<!(?:^|\n)(?: {0,3}[-*+][ \t]+| {0,3}\d{1,9}[.)][ \t]+| {0,3}>)[^\r\n]*\r?\n(?:[ \t]+\S[^\r\n]*\r?\n)*)(?: {0,3}(?![-*+][ \t]|\d+[.)][ \t]|>)\S[^\r\n]*\r?\n)+ {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)))/;
-/** Matches the `## Acceptance criteria` heading (any ATX level, any of
- * the two capitalization conventions used across this repository's own
+/** Matches an ATX-style `## Acceptance criteria` heading (any ATX level,
+ * either capitalization convention used across this repository's own
  * issues) on its own line. Requires at least one space/tab after the `#`
  * run (Codex review, PR #2840): CommonMark requires that whitespace (or
  * end of line) for a real ATX heading -- `##Acceptance criteria` with no
@@ -413,9 +409,123 @@ const NEXT_ATX_HEADING_PATTERN =
  * `#` sequence preceded by whitespace (`(?:[ \t]+#+)?`), e.g.
  * "## Acceptance criteria ##". Both are false-negative-only fixes (a
  * genuine heading Markdown renders that this pattern previously missed),
- * never a new false-positive surface. */
-const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
-  /^ {0,3}#{1,6}[ \t]+Acceptance[ \t]+[Cc]riteria(?:[ \t]+#+)?[ \t]*$/im;
+ * never a new false-positive surface.
+ *
+ * A trailing `:` and/or a single trailing parenthetical remark (#3287,
+ * e.g. "## Acceptance Criteria:" or "## Acceptance criteria (definition
+ * of done)" -- this repository's own closed issue #1326 used "## Acceptance
+ * criteria (draft -- refine before starting)") are further false-negative-
+ * only extensions: Markdown still renders both as the same heading text,
+ * just with extra trailing punctuation/prose this check never depended on. */
+const ACCEPTANCE_CRITERIA_ATX_HEADING_PATTERN =
+  /^ {0,3}#{1,6}[ \t]+Acceptance[ \t]+Criteria(?:[ \t]*:)?(?:[ \t]*\([^)\r\n]*\))?(?:[ \t]+#+)?[ \t]*$/gim;
+/** Matches a Setext-style `Acceptance Criteria` heading (#3287): the
+ * heading text on its own line, immediately followed by a line of only
+ * `=` (level 1) or `-` (level 2) characters -- CommonMark renders this as
+ * a real heading exactly like the ATX form above. Accepts the same
+ * trailing `:`/parenthetical suffix the ATX pattern does. The heading
+ * text is a fixed literal phrase (not arbitrary prose), so -- unlike
+ * {@link NEXT_ATX_HEADING_PATTERN}'s own general-purpose Setext lookahead,
+ * which has to guard against misreading a list item's own text as a
+ * heading -- no such guard is needed here: a line starting with a list
+ * marker (`- `, `1. `, etc.) can never match `^ {0,3}Acceptance...`.
+ *
+ * Deliberately does NOT itself guard against a non-blank line immediately
+ * preceding the heading-text line -- {@link startsFreshParagraph} filters
+ * that separately in {@link findAcceptanceCriteriaHeadings} (CodeRabbit
+ * review, #3287): CommonMark only recognizes a Setext heading when its
+ * text line begins a fresh paragraph, so "Some intro.\nAcceptance
+ * Criteria\n-----" renders as ONE combined two-line heading ("Some
+ * intro.\nAcceptance Criteria"), not a standalone "Acceptance Criteria"
+ * heading, and must not be recognized as one here. */
+const ACCEPTANCE_CRITERIA_SETEXT_HEADING_PATTERN =
+  /^ {0,3}Acceptance[ \t]+Criteria(?:[ \t]*:)?(?:[ \t]*\([^)\r\n]*\))?[ \t]*\r?\n {0,3}(?:=+|-+)[ \t]*$/gim;
+/** Whether the Setext heading-text line starting at `index` in `body`
+ * begins a fresh CommonMark paragraph (#3287): either the very start of
+ * `body`, a blank line (possibly whitespace-only) immediately precedes
+ * it, or the immediately preceding line is itself an ATX heading. A
+ * `body` consisting entirely of whitespace/blank lines up to `index`
+ * also counts -- leading blank lines at the very start of a document
+ * never themselves open a paragraph, so a heading right after them
+ * still starts the first one.
+ *
+ * The ATX-heading-immediately-before case (CodeRabbit review, round 2,
+ * #3287) closes the same false-negative class this function exists to
+ * avoid: an ATX heading line always ends whatever paragraph preceded it
+ * and can never itself take a "lazy continuation" line, so the very next
+ * line -- even with no blank line separating them, e.g. "## Background
+ * \nAcceptance Criteria\n-----" -- still begins a fresh paragraph and
+ * CommonMark still renders the Setext heading. Deliberately does NOT
+ * also check for a preceding Setext heading or thematic break (an even
+ * narrower, more contrived combination no reported finding has named);
+ * treated as an accepted limitation, the same class
+ * `NEXT_HEADING_PATTERN`'s own bold-pseudo-heading gap in
+ * `suitability-triage.mts` already carries. */
+function startsFreshParagraph(body, index) {
+  const prefix = body.slice(0, index);
+  if (/^[ \t\r\n]*$/.test(prefix) || /\n[ \t]*\r?\n$/.test(prefix)) {
+    return true;
+  }
+  const precedingLine = prefix.match(/(?:^|\n)([^\r\n]*)\r?\n$/)?.[1] ?? '';
+  return /^ {0,3}#{1,6}(?:[ \t]|$)/.test(precedingLine);
+}
+/** Matches a bold "pseudo-heading" -- a line that is only "Acceptance
+ * Criteria" wrapped in matching `**`/`__` emphasis markers, with or
+ * without a trailing `:` inside and/or outside the wrapper (#3287), e.g.
+ * "**Acceptance Criteria**", "**Acceptance Criteria:**", or "**Acceptance
+ * Criteria**:". Markdown never renders this as a real heading element --
+ * it is inline emphasis around an ordinary paragraph -- so unlike the two
+ * patterns above, {@link findAcceptanceCriteriaHeadings} only recognizes
+ * it when a caller explicitly opts in via `includeBoldPseudoHeading`. */
+const ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN =
+  /^ {0,3}(\*\*|__)Acceptance[ \t]+Criteria:?\1:?[ \t]*$/gim;
+/**
+ * Finds every recognized Acceptance Criteria heading in `body`, in body
+ * order (#3287): an ATX heading, a Setext heading, and -- only when
+ * `includeBoldPseudoHeading` is set -- a bold pseudo-heading. Single
+ * source of truth for the two independent `ACCEPTANCE_CRITERIA_PATTERN`
+ * call sites `suitability-triage.mts`'s Check 7 used to maintain as its
+ * own separate copy of this file's heading pattern, and for
+ * `hasVerificationCommandSignal` below -- previously each recognized only
+ * the plain ATX form and (for Check 7's escape-hatch scan) only the FIRST
+ * matching section in the body, silently skipping every other Acceptance
+ * Criteria section a body might contain.
+ *
+ * Each pattern above already carries the `g` flag; `String.prototype
+ * .matchAll` clones the regex per the spec (`RegExpCreate`) rather than
+ * mutating the module-level pattern's own `lastIndex`, and nothing else in
+ * this module ever calls `.exec()`/`.test()` on these three patterns
+ * directly, so repeated calls here never see a stale cursor left over from
+ * a previous scan.
+ */
+export function findAcceptanceCriteriaHeadings(body, options = {}) {
+  const patterns = [
+    ACCEPTANCE_CRITERIA_ATX_HEADING_PATTERN,
+    ACCEPTANCE_CRITERIA_SETEXT_HEADING_PATTERN,
+    ...(options.includeBoldPseudoHeading
+      ? [ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN]
+      : []),
+  ];
+  const matches = [];
+  for (const pattern of patterns) {
+    for (const match of body.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      // Setext-only guard (#3287, CodeRabbit review): an ATX or bold
+      // pseudo-heading line always starts a fresh block/inline span
+      // regardless of what precedes it, but a Setext heading's own text
+      // line does not -- see `startsFreshParagraph`'s own doc comment.
+      if (
+        pattern === ACCEPTANCE_CRITERIA_SETEXT_HEADING_PATTERN &&
+        !startsFreshParagraph(body, index)
+      ) {
+        continue;
+      }
+      matches.push({ index, length: match[0]?.length ?? 0 });
+    }
+  }
+  matches.sort((a, b) => a.index - b.index);
+  return matches;
+}
 /**
  * Mask fenced code, indented (4-space) code, real HTML comment ranges, and
  * raw HTML block ranges (Codex review, PR #2840, two rounds): an issue can
@@ -434,28 +544,31 @@ const ACCEPTANCE_CRITERIA_HEADING_PATTERN =
  * construct that can hide content from Markdown rendering; further
  * masking gaps found after this round are hardening, not a fix to this
  * mechanism's own materially-addressed root cause.
+ *
+ * Delegates to the shared `maskMarkdownForScan` entry point (#3282) with
+ * this exact composition -- the same one `discover-shared-file-overlap.mts`'s
+ * Candidate-files section scanner now uses -- instead of hand-composing
+ * the four range finders, so the two section scanners cannot drift apart
+ * again.
  */
 function maskOpaqueMarkdown(body) {
-  const fencedRanges = findFencedCodeRanges(body);
-  const codeRanges = findMarkdownCodeRanges(body);
-  return maskMarkdownCodeRegionsPreservingPositions(body, [
-    ...fencedRanges,
-    ...findIndentedCodeRanges(body, fencedRanges),
-    ...findHtmlCommentRanges(body, codeRanges),
-    ...findHtmlBlockRanges(body, fencedRanges),
-  ]);
+  return maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
 }
-/** Extract the named ATX section's offsets (heading line excluded, bounded
- * by the next ATX heading or end of body), or `null` when the heading is
- * absent. `start`/`end` are offsets into `body` itself, so a caller can
- * intersect them against ranges (e.g. inline-code-span ranges) computed
- * separately over the same `body`. */
-function extractSection(body, headingPattern) {
-  const match = body.match(headingPattern);
-  if (!match) {
+/** Extract the given heading match's own section offsets (heading itself
+ * excluded, bounded by the next ATX/Setext heading or end of body), or
+ * `null` when `headingMatch` is `null` (no recognized heading). `start`/
+ * `end` are offsets into `body` itself, so a caller can intersect them
+ * against ranges (e.g. inline-code-span ranges) computed separately over
+ * the same `body`. */
+function extractSection(body, headingMatch) {
+  if (headingMatch === null) {
     return null;
   }
-  const start = (match.index ?? 0) + (match[0]?.length ?? 0);
+  const start = headingMatch.index + headingMatch.length;
   const rest = body.slice(start);
   const nextHeadingIndex = rest.search(NEXT_ATX_HEADING_PATTERN);
   const end = nextHeadingIndex === -1 ? body.length : start + nextHeadingIndex;
@@ -504,10 +617,16 @@ function extractSection(body, headingPattern) {
  */
 export function hasVerificationCommandSignal(body) {
   const maskedBody = maskOpaqueMarkdown(String(body ?? ''));
-  const section = extractSection(
-    maskedBody,
-    ACCEPTANCE_CRITERIA_HEADING_PATTERN,
-  );
+  // Bold pseudo-headings are deliberately NOT opted in here (#3287): this
+  // signal keeps requiring a real ATX or Setext heading, matching
+  // `ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN`'s own doc comment above.
+  // Considered and rejected (CodeRabbit review, #3287): looping over every
+  // recognized section here too, the same as the escape-hatch scan in
+  // suitability-triage.mts now does -- out of this issue's own stated
+  // scope (which names only that scan for multi-section looping) and a
+  // pre-existing single-section limitation this PR doesn't regress.
+  const headingMatch = findAcceptanceCriteriaHeadings(maskedBody)[0] ?? null;
+  const section = extractSection(maskedBody, headingMatch);
   if (section === null || section.text.length === 0) {
     return false;
   }
@@ -567,15 +686,22 @@ function candidatePathVariants(rawPath) {
  * genuine inline code spans before heading/Setext-boundary detection here
  * would guard against an input that GitHub's own renderer does not
  * actually produce -- see that doc comment for the verified rationale.
+ *
+ * Passes the raw `body` straight through (#3282 review): earlier
+ * revisions pre-masked it with `maskOpaqueMarkdown` before calling
+ * `parseCandidateFileEntries`, but that function now masks fences/
+ * indented code/HTML comments/HTML blocks internally for its own
+ * heading-boundary detection (#3282), so the extra pre-mask here was
+ * redundant -- and, now that a second masking pass is a known correctness
+ * hazard elsewhere in this codebase (#3399 CodeRabbit review), no longer
+ * worth keeping even as a harmless-in-practice no-op.
  */
 export function candidateFilesExistOnDisk(
   body,
   existsAt,
   repoRoot = process.cwd(),
 ) {
-  const entries = parseCandidateFileEntries(
-    maskOpaqueMarkdown(String(body ?? '')),
-  );
+  const entries = parseCandidateFileEntries(String(body ?? ''));
   return entries.some((entry) =>
     candidatePathVariants(entry.raw).some((variant) => {
       const resolved = resolveRepoPath(repoRoot, variant);

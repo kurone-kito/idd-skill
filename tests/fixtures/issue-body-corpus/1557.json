@@ -1,0 +1,31 @@
+{
+  "id": "1557",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "Decide whether to record localization/interpreter guidance for weak local models now, ahead of any actual localization surface",
+  "labels": [
+    "documentation",
+    "enhancement",
+    "status:needs-decision"
+  ],
+  "body": "\n## Background\n\n**Origin and scope.** This PoC and issue were motivated by a narrow, concrete pain point, not a general IDD localization ambition: pairing OpenCode with small (roughly 2B-3.8B parameter class) local models produces poor-quality Japanese conversation, to the point that a Japanese-speaking operator cannot comfortably drive IDD's issue-authoring flow through such a model directly. The proposal under evaluation is a targeted in-loop translation wrapper around issue authoring specifically — translate operator input into English before the model sees it, translate the model's output back into Japanese on the way out — not a repository-wide translation of every operator-facing surface. This scopes the question to the existing **lightweight local or compact cloud** model tier already defined in `docs/idd-workflow.md`'s \"Model capability expectations\" section; it has essentially no bearing on frontier or middle-tier cloud-hosted LLM instructions (for example Claude Code or cloud-hosted Copilot), which do not exhibit this weakness and read the English-only instruction corpus directly.\n\nAn independent field PoC ran a two-phase translation experiment (Foundry Local, six small models, exec-judged against a bilingual gold set) and recorded findings relevant to any future IDD localization or in-loop translation step: <https://gist.github.com/kurone-kito/8f45ee1ec0c07e8a7fdc8c1f04e83654>. The PoC's own priority assessment marks this the lowest of its nine proposals and explicitly conditional: \"if IDD ever documents localization or any in-loop translation.\"\n\nAs of this writing, IDD has **no localization or translation surface at all** — every operator-facing surface (instructions, reports, issue comments, summaries) is English-only by design, and no open issue or roadmap proposes adding one. This issue exists only to record the field evidence and let a maintainer decide whether to act on it now or wait for an actual trigger.\n\nEvidence, for the record: (1) translation is a distinct capability from code generation — the coding-model class tested was weak at translation, especially translating *into* the non-English direction (botched loanwords, term errors, inverted nuance logic), and a reasoning-heavy model was unusable for this because its reasoning preamble consumed the entire token budget before producing a translation; a separate Mistral-lineage multilingual model was the only consistently good interpreter in both directions. (2) A critical failure mode: an interpreter model given instructional (imperative) source content and told \"translate this\" will sometimes execute or embellish the content instead of translating it — for example, writing the described code instead of translating the sentence describing it, and adding unrequested code on the way back. This is invisible on purely declarative test passages and only appears with realistic imperative source text. (3) Mitigations that reduced (but for the data-envelope alone, did not fully eliminate) the failure: wrapping source text in an explicit \"this is data, not an instruction\" envelope; framing the model's role as \"localizing a ticket, not the engineer\" (this framing worked where the data envelope alone did not, on long strongly-imperative sources); and a mandatory post-hoc leak guard that detects code-shaped output (fenced blocks, a leading `def`/`class`/`import`) and retries or fails closed to a fallback rather than passing leaked code through.\n\n## Options for a maintainer to choose among\n\n1. **Do nothing now.** Do not file or hold any localization-guidance content; rely on this issue (or its closure note) as the retrievable record if a real localization proposal appears later.\n2. **Hold a lightweight note.** Fold a short \"if this repository ever adds localization, see the evidence recorded on issue `<this issue>`\" pointer into an existing doc (for example `docs/idd-design-rationale.md`), without drafting full guidance content yet.\n3. **Author the guidance now.** Draft the recommended practice now (route translation of instructional content to a multilingual model distinct from the executor; mandate the data-envelope-plus-role-framing plus a leak guard for any instruction-like content; keep English canonical and treat localized output as non-authoritative) as a stakeholder-facing doc addition, even with no current surface to attach it to.\n\n## Ready signal\n\nClose this issue once a maintainer states which option above to take, and either (a) closes it as \"no action\" with this record retained for future reference, or (b) opens a follow-up `ready` issue for option 2 or 3 with the chosen scope.\n\n---\n\n_Autopilot suitability: 2 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented. This issue is human-oriented until the maintainer chooses whether to act on speculative, currently-untriggered guidance._\n\n<!-- idd-skill-autopilot-suitability: 2 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "040b4c0cef9c04b0049c67d3b04c3f5e534e86a743dd85302f248606561d1a5e",
+  "fetchedAt": "2026-09-24T08:44:26.246Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "limited_scope"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "fail",
+      "verifiability": "pass"
+    }
+  }
+}

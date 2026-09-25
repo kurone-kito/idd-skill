@@ -37,6 +37,25 @@ untrusted actor or a digest whose text disagrees with trusted markers is
 ignored for workflow decisions and repaired only after the authoritative
 state has been re-read.
 
+The ordinary digest helper (`live-status-digest.mjs`) enforces this
+author boundary mechanically: only a current-digest comment authored by
+a trusted marker actor is ever updated or counted toward the
+duplicate-digest check, and a digest is excluded from review activity
+and unreplied-comment counting (`buildActivitySnapshotSummary`,
+`summarizeRegularCommentsForGate`) only when its author is that same
+trusted marker actor; disposition-evidence counting
+(`summarizeDispositionEvidenceForGate`) additionally excludes a
+recognized IDD-agent author, so a second trusted session's own digest
+is never mistaken for unanswered feedback. A digest-marker comment
+from any other actor is left alone by the ordinary helper -- it
+neither rewrites nor deletes it -- and counts as ordinary PR/issue
+activity requiring the normal review disposition, exactly like any
+other stranger's comment. The maintainer-gated repair path below is the one
+exception: it deliberately sees and can retire every current-marker
+comment regardless of author, since its whole purpose is clearing a
+duplicate-digest state a maintainer has already reviewed
+(kurone-kito/idd-skill#3337).
+
 Each digest should contain these fields in a compact, editable form:
 
 | Field              | Meaning                                                             |
@@ -566,6 +585,8 @@ this manual `OUTDATED` fallback (full reasoning in each entry's own
 - `<!-- idd-provider-outage-park:` -- needs claim-lineage-aware
   supersession the marker carries no reference for (roadmap #2751
   Background).
+- `<!-- idd-out-of-loop:` -- live authorization evidence for the
+  bootstrap PR, like the waiver marker above (kurone-kito/idd-skill#3328).
 
 Always skip candidates when any of these are true:
 

@@ -3100,40 +3100,19 @@ test('trust safety still flags a supplied-content noun after an abbreviation per
   assert.equal(result.pass, false);
 });
 
-// #2767 round 4 (Codex review, PR #2840, on the sibling
-// triage-structural-evidence.mts pattern this one was copied from):
-// ACCEPTANCE_CRITERIA_PATTERN required only `\s*` (zero-or-more) between
-// the ATX `#` run and "Acceptance", so a malformed "##Acceptance
-// Criteria" line -- which CommonMark renders as plain paragraph text, not
-// a heading, since a real ATX heading requires that whitespace -- still
-// matched. Every content shape tried empirically routes to the same
-// pass/fail outcome either way here (checkVerifiability's whole-body
-// "Alternative" fallback independently recognizes the same objective
-// content when the primary AC-section gate does not fire), so this is a
-// source-text structural pin on the corrected pattern itself, the same
-// convention this file already uses for an internal not otherwise
-// observable through a behavioral difference.
-test('ACCEPTANCE_CRITERIA_PATTERN requires whitespace after the ATX # run, matching CommonMark (#2767)', () => {
-  const source = readFileSync(
-    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
-    'utf8',
-  );
-  // #2767 round 7 (Codex review, PR #2840): also pins the *interior* gap
-  // between "Acceptance" and "Criteria" as `[ \t]+`, not `\s+` -- `\s`
-  // also matches a newline, so "## Acceptance\nCriteria" (two separate
-  // lines, only the first of which Markdown renders as the actual heading
-  // text) previously still matched as one combined heading, since an ATX
-  // heading is inherently single-line.
-  // #2767 round 9 (advisor review, PR #2840): also pins the up-to-three-
-  // leading-space allowance and the optional whitespace-preceded closing
-  // `#` sequence, both real CommonMark ATX-heading shapes this pattern
-  // previously missed (e.g. "   ## Acceptance Criteria" or
-  // "## Acceptance Criteria ##").
-  assert.match(
-    source,
-    /const ACCEPTANCE_CRITERIA_PATTERN =\s*\n\s*\/\^ \{0,3\}#\+\[ \\t\]\+Acceptance\[ \\t\]\+Criteria\(\?:\[ \\t\]\+#\+\)\?\[ \\t\]\*\$\/im/,
-  );
-});
+// #2767 rounds 4/7/9 (Codex/advisor review, PR #2840) originally pinned
+// this file's own `ACCEPTANCE_CRITERIA_PATTERN` source text (the ATX
+// `#`-run whitespace requirement, the single-line interior gap, the
+// leading-space allowance, and the optional closing `#` sequence), the
+// same convention this file uses for an internal detail not otherwise
+// observable through a behavioral difference. #3287 removed that local
+// copy in favor of triage-structural-evidence.mts's shared
+// `findAcceptanceCriteriaHeadings` (used by both this file's Check 7 call
+// sites and by `hasVerificationCommandSignal`), which is now directly
+// behavior-tested there (see "hasVerificationCommandSignal: a heading
+// with no space after the # run is not a real ATX heading") -- a
+// source-text pin on the no-longer-present local constant would be
+// testing dead code.
 
 test('verifiability passes a resolved-decision issue with objective criteria', () => {
   // Check 7 false-positive that now passes: the body describes a resolved
@@ -3952,6 +3931,55 @@ test('actionability fails when ## Candidate files is present but parses to zero 
   assert.match(result.evidence, /Candidate files/);
 });
 
+// --- #3282: a fenced example of the child template's own "## Candidate
+// files" section (placeholder or path-like bullets) must not route
+// actionability to needs-decision -- the real, later section's paths must
+// still be read. -----------------------------------------------------------
+
+test('actionability passes when a fenced placeholder "## Candidate files" example precedes the real section', () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+\`\`\`markdown
+## Candidate files
+
+- \`<path>\`
+\`\`\`
+
+## Candidate files
+
+- \`scripts/real.mjs\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test("actionability passes when a fenced example's bullets are path-like (not obviously placeholder), reading only the real section that follows", () => {
+  const result = checkActionability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Acceptance Criteria
+- [ ] tests pass
+
+\`\`\`markdown
+## Candidate files
+
+- \`scripts/fake.mjs\`
+\`\`\`
+
+## Candidate files
+
+- \`scripts/real.mjs\`
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('actionability is unaffected when ## Candidate files is absent entirely (legitimate orphan omission)', () => {
   const result = checkActionability({
     issue: {
@@ -4256,6 +4284,127 @@ test('#2767: checkVerifiability never demotes the escape-hatch either/or fail (d
   } as Context);
   assert.equal(result.pass, false);
   assert.equal(result.demoted, undefined);
+});
+
+// #3287: the escape-hatch scan above used to reach only a body's FIRST
+// Acceptance Criteria heading match, and only the plain ATX form -- this
+// repository's own issue #1326 used the parenthetical form, and every one
+// of these six forms is a real Markdown heading (or, for the bold form,
+// deliberately opted into just for this scan) Check 7 must not silently
+// skip. Each variant reuses #2709's own reproduction corpus above (an
+// escape-hatch bullet whose documentation branch names no checkable
+// content, plus a "tests pass" bullet clearing the objective-signal
+// screen so the escape-hatch scan is actually reached).
+const ACCEPTANCE_CRITERIA_HEADING_FORMS: Array<{
+  name: string;
+  heading: string;
+}> = [
+  { name: 'canonical ATX', heading: '## Acceptance Criteria' },
+  { name: 'lowercase ATX', heading: '## Acceptance criteria' },
+  { name: 'trailing-colon ATX', heading: '## Acceptance Criteria:' },
+  {
+    name: 'parenthetical-suffix ATX (#1326)',
+    heading: '## Acceptance criteria (definition of done)',
+  },
+  { name: 'bold pseudo-heading', heading: '**Acceptance Criteria**' },
+  { name: 'Setext', heading: 'Acceptance Criteria\n-----' },
+];
+
+for (const { name, heading } of ACCEPTANCE_CRITERIA_HEADING_FORMS) {
+  test(`#3287: checkVerifiability fails an undocumented escape hatch under the ${name} heading form`, () => {
+    const issue = {
+      ...BASE_ISSUE,
+      body: `${heading}
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+    };
+    const result = checkVerifiability({ issue } as Context);
+    assert.equal(result.pass, false);
+    assert.match(
+      result.evidence,
+      /either\/or acceptance-criteria escape hatch/i,
+    );
+  });
+
+  test(`#3287: evaluateSuitability returns needs-decision on verifiability under the ${name} heading form`, () => {
+    const issue = {
+      ...BASE_ISSUE,
+      body: `## Purpose
+Add helper
+
+## Scope
+Implement helper behavior.
+
+${heading}
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+    };
+    const result = evaluateSuitability(issue, {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [{ number: 1, title: issue.title }],
+    });
+    assert.equal(result.outcome, 'needs-decision');
+    assert.equal(result.failedCheck, 'verifiability');
+  });
+}
+
+test('#3287: Check 7 scans a SECOND Acceptance Criteria section, not only the first', () => {
+  // A placeholder first section (an objective checklist item, so the
+  // primary substantive-content scan and hasObjectiveSignals both already
+  // pass) followed by a second, genuine section holding the undocumented
+  // escape hatch -- the pre-fix `.match()` call never looked past the
+  // first heading it found, so this body used to pass Check 7 outright.
+  const issue = {
+    ...BASE_ISSUE,
+    body: `## Acceptance Criteria
+- [ ] tests pass
+
+## Background
+
+More context, unrelated to verification.
+
+## Acceptance Criteria
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+`,
+  };
+  const result = checkVerifiability({ issue } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /either\/or acceptance-criteria escape hatch/i);
+});
+
+test('#3287: checkVerifiability fails an undocumented escape hatch under the underscore bold pseudo-heading form (Copilot review)', () => {
+  // ACCEPTANCE_CRITERIA_HEADING_FORMS above only exercises "**"; the "__"
+  // alternative (ACCEPTANCE_CRITERIA_BOLD_HEADING_PATTERN's other branch)
+  // was missing its own test.
+  const issue = {
+    ...BASE_ISSUE,
+    body: `__Acceptance Criteria__
+- Either add input validation to \`parseConfig\`, or document why validation is not needed.
+- tests pass
+`,
+  };
+  const result = checkVerifiability({ issue } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /either\/or acceptance-criteria escape hatch/i);
+});
+
+test('#3287: Check 7 passes a well-formed concrete checklist under each accepted heading form', () => {
+  for (const { heading } of ACCEPTANCE_CRITERIA_HEADING_FORMS) {
+    const issue = {
+      ...BASE_ISSUE,
+      body: `${heading}
+- Run \`node --test tests/foo.test.mts\` and it passes
+`,
+    };
+    const result = checkVerifiability({ issue } as Context);
+    assert.equal(
+      result.pass,
+      true,
+      `expected pass for heading form: ${heading}`,
+    );
+  }
 });
 
 test('verifiability accepts objective acceptance criteria without test keywords', () => {
@@ -5474,6 +5623,28 @@ Candidate files
 ---
 - [ ] ${tick}scripts/real.mjs${tick}
 `,
+    },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('verifiability bounds the Acceptance Criteria section at a CRLF-terminated Setext-style sibling heading (Copilot review, #3287, gap-2767-13)', () => {
+  // NEXT_HEADING_PATTERN's Setext branch previously required a bare "\n"
+  // after the underline -- a CRLF-terminated underline's own "\r" sat
+  // right before that required "\n"/end-of-string, so the whole
+  // alternative never matched at all in a CRLF body (a total miss, not a
+  // false match). With the boundary never found, the AC section scan
+  // became unbounded and silently absorbed a later, unrelated section's
+  // substantive bullet -- reproduces
+  // tests/fixtures/issue-body-corpus/gap-2767-13.json, whose own
+  // `expected.triage.verifiability` this fix flips from "pass" to "fail".
+  const tick = String.fromCharCode(96);
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        '## Acceptance Criteria\r\n- TBD\r\nUnrelated sibling heading\r\n---\r\n' +
+        `- Real requirement naming ${tick}src/foo.mts${tick}, which must not count as AC content\r\n`,
     },
   } as Context);
   assert.equal(result.pass, false);

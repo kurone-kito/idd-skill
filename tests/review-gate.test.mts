@@ -227,6 +227,77 @@ test('does not flag a genuinely valid review-watermark comment as malformed', ()
   );
 });
 
+// #3339: OPERATIONAL_MARKER_ENTRIES' review-watermark shape `pattern` uses
+// `\S+` for the head-SHA field, so a 12-hex-character SHA is still
+// recognized as a well-formed marker by `operationalMarkerPrefix` /
+// `detectMalformedOperationalMarker` even though `parseReviewWatermarkComment`
+// separately rejects it (it requires exactly `[0-9a-f]{40}`). Before this
+// fix, such a comment read as a genuinely absent watermark instead of a
+// malformed one.
+test('detects a review-watermark comment with a field-invalid (too short) head SHA as malformed, not absent', () => {
+  const shortShaBody = `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(
+    12,
+  )} none 0 none -->`;
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: shortShaBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  const watermark = resolveLatestReviewWatermark(comments, {
+    expectedClaimId: 'claim-1',
+    isTrustedAuthor: () => true,
+  });
+  assert.equal(
+    watermark,
+    null,
+    'a field-invalid watermark comment must not parse as a valid watermark',
+  );
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+    }),
+    true,
+    'a shape-accepted but field-invalid SHA must be distinguishable from a genuinely absent watermark',
+  );
+});
+
+// Same expectedClaimId scoping guard as the shape-malformed case above
+// (#2251 follow-up), now proven for the field-invalid path too: a
+// different claim's field-invalid watermark must not mask a genuinely
+// missing watermark for the expected claim.
+test('a field-invalid review-watermark comment scoped to a different claim id does not count against the expected claim', () => {
+  const shortShaBody = `<!-- review-watermark: claude-x other-claim ${'a'.repeat(
+    12,
+  )} none 0 none -->`;
+  const comments = [
+    {
+      author: { login: 'claude-x' },
+      body: shortShaBody,
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+  ];
+
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'claim-1',
+    }),
+    false,
+    "a different claim's field-invalid marker must not mask a genuinely missing watermark for the expected claim",
+  );
+  assert.equal(
+    detectMalformedReviewWatermarkComments(comments, {
+      isTrustedAuthor: () => true,
+      expectedClaimId: 'other-claim',
+    }),
+    true,
+    'the expectedClaimId filter must still recognize a matching field-invalid comment',
+  );
+});
+
 test('reports no malformed marker when no watermark-shaped comment exists at all', () => {
   const comments = [
     {

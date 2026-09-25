@@ -130,6 +130,129 @@ test('refuses duplicate current digests and reports repair context', () => {
   assert.match(plan.repairPath, /Do not delete or minimize/);
 });
 
+// --- #3337: ignore digest comments from untrusted authors -----------------
+
+test('findLiveStatusDigestComments filters to trusted authors only when isTrustedAuthor is provided', () => {
+  const comments = [
+    {
+      id: 1,
+      author: { login: 'idd-bot' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\ntrusted`,
+    },
+    {
+      id: 2,
+      author: { login: 'not-a-trusted-marker-actor' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\nuntrusted`,
+    },
+  ];
+
+  assert.deepEqual(
+    findLiveStatusDigestComments(comments, {
+      isTrustedAuthor: (login) => login === 'idd-bot',
+    }).map((comment) => comment.id),
+    [1],
+  );
+  // No `isTrustedAuthor` option: every author's digest is still found --
+  // the maintainer repair path's own contract stays author-blind.
+  assert.deepEqual(
+    findLiveStatusDigestComments(comments).map((comment) => comment.id),
+    [1, 2],
+  );
+});
+
+test('plans creation when the only current digest is authored by an untrusted actor', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 301,
+        author: { login: 'not-a-trusted-marker-actor' },
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'create');
+  assert.equal(plan.canApply, true);
+  assert.equal(plan.body, renderLiveStatusDigest(fields));
+});
+
+test('an untrusted digest next to one trusted digest updates the trusted one instead of reporting a duplicate', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 302,
+        author: { login: 'not-a-trusted-marker-actor' },
+        html_url: 'https://github.example/comment/302',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+      {
+        id: 303,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/303',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'update');
+  assert.equal(plan.commentId, 303);
+  assert.equal(plan.url, 'https://github.example/comment/303');
+});
+
+test('two trusted-author current digests still report a duplicate', () => {
+  const plan = planLiveStatusDigestUpsert(
+    [
+      {
+        id: 304,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/304',
+        body: renderLiveStatusDigest({ ...fields, phase: 'A5 claimed' }),
+      },
+      {
+        id: 305,
+        author: { login: 'idd-bot' },
+        html_url: 'https://github.example/comment/305',
+        body: renderLiveStatusDigest({ ...fields, phase: 'B2 planned' }),
+      },
+    ],
+    fields,
+    { isTrustedAuthor: (login) => login === 'idd-bot' },
+  );
+
+  assert.equal(plan.action, 'duplicate');
+  assert.equal(plan.canApply, false);
+  assert.deepEqual(
+    plan.duplicates.map((comment) => comment.id),
+    [304, 305],
+  );
+});
+
+test('duplicate repair retires an untrusted-author current digest while retaining the trusted one (author-blind by design)', () => {
+  const comments = [
+    { ...currentDigestComment(401, 'retained'), author: { login: 'idd-bot' } },
+    {
+      ...currentDigestComment(402, 'retired'),
+      author: { login: 'not-a-trusted-marker-actor' },
+    },
+  ];
+  const plan = planLiveStatusDigestRepair({
+    comments,
+    targetState: 'open',
+    retainedCommentId: '401',
+  });
+
+  assert.equal(plan.action, 'ready');
+  assert.equal(plan.canApply, true);
+  assert.deepEqual(
+    plan.retirements.map((retirement) => retirement.id),
+    ['402'],
+  );
+});
+
 test('duplicate repair rejects zero or one current digest', () => {
   const noDigest = planLiveStatusDigestRepair({
     comments: [],
@@ -1922,6 +2045,61 @@ test('issue-target mode (no expectedLinkedPrs) honors the handoff unconditionall
   );
   assert.equal(summary.activeClaimPresent, true);
   assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
+});
+
+// #3270: mirrors the exact options shape `readActiveClaim` builds (trusted
+// marker logins, forcedHandoffEnabled, expectedLinkedPrs, prFirstCommitAt,
+// staleAgeMs) against a plain (non-forced-handoff) takeover claim, proving
+// the staleAgeMs threading this file's own `readActiveClaim` now does.
+// WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover lands 20h
+// later (2026-05-13T05:00:00Z) -- squarely in the 18-24h gap the issue
+// describes: stale under an 18h configured age, not stale under the old
+// hardcoded 24h default.
+const WG_OLD_CLAIM_ID = 'claim-20260512T090000Z-337-old';
+const WG_TAKEOVER_CLAIM_ID = 'claim-20260513T050000Z-337-new';
+
+function wgOldClaimComment() {
+  return {
+    author: { login: 'cli-old' },
+    body: `<!-- claimed-by: cli-old ${WG_OLD_CLAIM_ID} supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_cli-old: issue claim — IDD automation marker._`,
+    createdAt: '2026-05-12T09:00:00Z',
+  };
+}
+
+function wgTakeoverClaimComment() {
+  return {
+    author: { login: 'cli-new' },
+    body: `<!-- claimed-by: cli-new ${WG_TAKEOVER_CLAIM_ID} supersedes: ${WG_OLD_CLAIM_ID} 2026-05-13T05:00:00Z branch: issue/337-feat -->\n\n_cli-new: issue claim — IDD automation marker._`,
+    createdAt: '2026-05-13T05:00:00Z',
+  };
+}
+
+test('readActiveClaim (#3270): recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const summary = summarizeClaimValidation(
+    [wgOldClaimComment(), wgTakeoverClaimComment()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      forcedHandoffEnabled: false,
+      expectedLinkedPrs: [],
+      prFirstCommitAt: null,
+      staleAgeMs: 18 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(summary.activeClaim?.claimId, WG_TAKEOVER_CLAIM_ID);
+});
+
+test('readActiveClaim (#3270): keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default', () => {
+  const summary = summarizeClaimValidation(
+    [wgOldClaimComment(), wgTakeoverClaimComment()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      forcedHandoffEnabled: false,
+      expectedLinkedPrs: [],
+      prFirstCommitAt: null,
+      staleAgeMs: 24 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(summary.activeClaim?.claimId, WG_OLD_CLAIM_ID);
 });
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));

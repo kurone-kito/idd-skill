@@ -3,8 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { ProviderPort } from '../src/scripts/provider-port.mts';
+import { renderOutOfLoopMarker } from '../src/scripts/marker-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+} from '../src/scripts/provider-port.mts';
 import {
+  activeOwnedClaim,
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   findThreadForComment,
@@ -84,9 +90,290 @@ test('isClaimlessEligible reflects live closingIssuesReferences on every call, n
   } as unknown as ProviderPort;
   assert.equal(isClaimlessEligible(port, 42), true);
   // A closing issue gets linked between two calls -- the second call must
-  // see it, not reuse the first call's answer.
+  // see it, not reuse the first call's answer. This minimal stub does not
+  // implement listWorkItemComments/resolveViewerLogin either, so the
+  // #3328 non-empty-refs branch below fails closed (caught internally)
+  // to the same `false` this test already expected before that branch
+  // existed.
   refs = [{ number: 5 }];
   assert.equal(isClaimlessEligible(port, 42), false);
+});
+
+// --- kurone-kito/idd-skill#3328: out-of-loop-authorized adoption ---------
+
+const OUT_OF_LOOP_VIEWER_LOGIN = 'claude-ad242b1f';
+
+function outOfLoopEligibilityPort(
+  overrides: {
+    prComments?: ProviderComment[];
+    closingIssueComments?: ProviderComment[];
+  } = {},
+): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName: 'issue/5-linked',
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: [{ number: 5 }],
+      },
+    },
+    comments: {
+      42: overrides.prComments ?? [],
+      5: overrides.closingIssueComments ?? [],
+    },
+  });
+}
+
+test('isClaimlessEligible accepts a PR with a closing reference, no active claim, and a valid trusted out-of-loop marker (#3328)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = outOfLoopEligibilityPort({
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), true);
+});
+
+test('isClaimlessEligible still refuses the same PR without a valid out-of-loop marker (#2017 regression)', () => {
+  const port = outOfLoopEligibilityPort();
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+test('isClaimlessEligible refuses a closing reference whose issue has an active claim, even with a valid marker (#3328)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = outOfLoopEligibilityPort({
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+    closingIssueComments: [
+      {
+        id: 2,
+        body: '<!-- claimed-by: other-agent clm-1 supersedes: none 2026-07-01T00:00:00Z branch: issue/5-x -->\n\n_other-agent: issue claim — IDD automation marker. Do not edit._',
+        createdAt: '2026-07-01T00:00:00Z',
+        updatedAt: '2026-07-01T00:00:00Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+      },
+    ],
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+test('isClaimlessEligible refuses a PR whose only closing reference is cross-repo, even with a valid marker (C1 critique regression guard)', () => {
+  // A same-repo-only extraction fed straight to the classifier would
+  // otherwise silently read this as "no closing references" (the #2017
+  // claimless case), returning eligible with no marker required -- the
+  // pre-#3328 code always refused ANY non-empty raw
+  // closingIssuesReferences regardless of repo.
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName: 'issue/5-linked',
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: [
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    comments: {
+      42: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+test('isClaimlessEligible refuses a PR whose closingIssuesReferences field is unreadable (non-array), even with a valid marker (Copilot review, PR #3421)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName: 'issue/5-linked',
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: null as unknown as unknown[],
+      },
+    },
+    comments: {
+      42: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+test('isClaimlessEligible refuses a PR with a mix of same-repo and cross-repo closing references, even with a valid marker (Copilot review, PR #3421)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName: 'issue/5-linked',
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: [
+          { number: 7 },
+          {
+            number: 5,
+            repository: { name: 'other-repo', owner: { login: 'other-owner' } },
+          },
+        ],
+      },
+    },
+    comments: {
+      42: [
+        {
+          id: 1,
+          body: markerBody,
+          createdAt: '2026-07-01T00:00:01Z',
+          updatedAt: '2026-07-01T00:00:01Z',
+          authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+          lastEditedAt: null,
+        },
+      ],
+      7: [],
+    },
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+// #3270: WG_OLD_CLAIM is created at 2026-05-12T09:00:00Z; the takeover
+// below lands 20h later (2026-05-13T05:00:00Z) -- squarely in the 18-24h
+// gap the issue describes: stale under an 18h configured age, not stale
+// under the old hardcoded 24h `resolveActiveClaimForWriteGate` silently
+// fell back to when a write-gate caller (like this file's `activeOwnedClaim`)
+// omitted `staleAgeMs`.
+function activeOwnedClaimEvents(): { body: string; createdAt: string }[] {
+  return [
+    {
+      body: [
+        '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-old: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-12T09:00:00Z',
+    },
+    {
+      body: [
+        '<!-- claimed-by: cli-new claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
+        '',
+        '_cli-new: issue claim — IDD automation marker._',
+      ].join('\n'),
+      createdAt: '2026-05-13T05:00:00Z',
+    },
+  ];
+}
+
+function fakePortWithComments(
+  events: { body: string; createdAt: string }[],
+): ProviderPort {
+  return {
+    listWorkItemComments: () =>
+      events.map((event) => ({
+        body: event.body,
+        createdAt: event.createdAt,
+        authorLogin: event.body.includes('cli-new') ? 'cli-new' : 'cli-old',
+      })),
+  } as unknown as ProviderPort;
+}
+
+test('activeOwnedClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const port = fakePortWithComments(activeOwnedClaimEvents());
+  const active = activeOwnedClaim(
+    port,
+    337,
+    'cli-new',
+    'claim-20260513T050000Z-337-new',
+    (login) => ['cli-old', 'cli-new'].includes(login),
+    { forcedHandoffEnabled: false, isAuthorizedForcedHandoff: () => false },
+    18 * 60 * 60 * 1000,
+  );
+  assert.equal(active?.claimId, 'claim-20260513T050000Z-337-new');
+  assert.equal(active?.agentId, 'cli-new');
+});
+
+test('activeOwnedClaim (#3270) keeps the old claim active for the same 20h gap when staleAgeMs is explicitly the 24h default', () => {
+  const port = fakePortWithComments(activeOwnedClaimEvents());
+  const active = activeOwnedClaim(
+    port,
+    337,
+    'cli-new',
+    'claim-20260513T050000Z-337-new',
+    (login) => ['cli-old', 'cli-new'].includes(login),
+    { forcedHandoffEnabled: false, isAuthorizedForcedHandoff: () => false },
+    24 * 60 * 60 * 1000,
+  );
+  // The takeover does not activate under the 24h default (20h < 24h), so the
+  // caller's expected claim-id ("claim-20260513T050000Z-337-new") no longer
+  // matches the still-active old claim -- activeOwnedClaim returns null.
+  assert.equal(active, null);
 });
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -541,7 +828,7 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
   }
 });
 
-test('--claimless refuses a PR with closingIssuesReferences (compiled CLI, #2616)', () => {
+test('--claimless refuses a PR with closingIssuesReferences and no out-of-loop marker (compiled CLI, #2616, #3328)', () => {
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -581,9 +868,14 @@ process.exit(1);
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
     assert.equal(failure.status, 1);
+    // #3328: a non-empty closingIssuesReferences with no out-of-loop
+    // marker evidence still fails closed -- the stub `gh` above answers
+    // only `pr view`, so isClaimlessEligible's own attempts to read
+    // closing issue #5's comments and this PR's comments both fail
+    // (caught internally), landing on the same refusal as before.
     assert.match(
       failure.stderr ?? '',
-      /--claimless requires a PR with no closingIssuesReferences; pass --claim-issue instead/,
+      /--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead/,
     );
   } finally {
     restore();

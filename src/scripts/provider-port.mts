@@ -83,7 +83,20 @@ export interface ProviderWorkItem {
  * without it keep compiling unchanged. `post-idd-marker.mts`'s
  * hide-at-post-time step is the one consumer that needs it, to pass a
  * candidate comment's GraphQL node id to
- * `minimize-superseded-markers.mts`'s `minimizeComment` mutation. */
+ * `minimize-superseded-markers.mts`'s `minimizeComment` mutation.
+ *
+ * `lastEditedAt` (#3246) is GraphQL `IssueComment.lastEditedAt`, a
+ * genuinely separate signal from `updatedAt`: GitHub's `minimizeComment`
+ * mutation (IDD's own hide-on-supersede sweeps call it) advances
+ * `updatedAt` while leaving `lastEditedAt` `null`, so `updatedAt` can
+ * never substitute for it (kurone-kito/idd-skill#3173). Three-state
+ * contract, matching `authoring-owner-provenance.mts`'s
+ * `inspectLastEditedAt`: an explicit `null` means the comment was never
+ * body-edited, a parseable ISO timestamp means it was, and `undefined`
+ * means the caller never asked {@link ProviderPort.listWorkItemComments}
+ * (or {@link ProviderPort.listWorkItemCommentsWithRetryAsync}) to resolve
+ * it -- REST alone cannot answer this, so it costs an extra GraphQL round
+ * trip callers opt into explicitly rather than pay unconditionally. */
 export interface ProviderComment {
   id: number;
   body: string;
@@ -91,6 +104,7 @@ export interface ProviderComment {
   updatedAt: string;
   authorLogin: string;
   nodeId?: string;
+  lastEditedAt?: string | null;
 }
 
 /** One GraphQL `Issue.userContentEdits` node -- see
@@ -261,6 +275,11 @@ export interface ProviderReviewThreadComment {
   authorLogin: string;
   /** The comment's parent review node id, when the query selects it (disposition-evidence matching). */
   pullRequestReviewId?: string | null;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Unlike `ProviderComment`'s own opt-in, this is
+   * always populated: the review-thread queries are already GraphQL, so
+   * selecting one more field costs nothing extra. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments} --
@@ -304,6 +323,10 @@ export interface ProviderGraphqlComment {
   createdAt: string;
   updatedAt: string;
   authorLogin: string;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Always populated, like
+   * {@link ProviderReviewThreadComment.lastEditedAt}. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestGraphqlReviews}. */
@@ -313,6 +336,12 @@ export interface ProviderGraphqlReview {
   state: string;
   submittedAt: string | null;
   authorLogin: string;
+  /** kurone-kito/idd-skill#3259: the reviewed commit's oid (GraphQL
+   * `commit { oid }`), `null` when the connection omits it. Lets a caller
+   * (`merged-pr-feedback-sweep.mts`) bind a `review-ack:` marker to THIS
+   * specific review's own reviewed commit, mirroring
+   * `ProviderReviewClauseNode.commitId` below. */
+  commitOid: string | null;
 }
 
 /** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
@@ -364,6 +393,10 @@ export interface ProviderReviewThreadCommentWithAuthorType {
   authorLogin: string;
   authorTypename: string | null;
   pullRequestReviewId: string | null;
+  /** #3246: see {@link ProviderComment.lastEditedAt}'s doc comment for the
+   * three-state contract. Always populated, like
+   * {@link ProviderReviewThreadComment.lastEditedAt}. */
+  lastEditedAt?: string | null;
 }
 
 /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithAuthorType}. */
@@ -556,8 +589,15 @@ export interface ProviderPort {
   /**
    * work-items. Single unpaginated `last:100` CONNECTED/DISCONNECTED
    * timeline fetch; adapter swallows failures and returns an empty array
-   * (fail-open) -- matches `resume-claim-routing.mts`'s existing shape
-   * exactly. NOT the same operation as
+   * (fail-open) -- a genuine lookup failure is therefore indistinguishable
+   * from "no connected PR" here, so this method is unsuitable for a trust
+   * decision that must tell the two apart. `resume-claim-routing.mts`'s
+   * `fetchOpenLinkedPrReferences` used to call this method but moved to
+   * the paginated, throw-on-failure {@link getConnectedPullRequestEventsPage}
+   * instead (#3276), which also removes this method's silent `last:100`
+   * truncation; no caller uses this method today. Kept on the port
+   * interface for now rather than removed, since no other caller needs
+   * the change and removal is unrelated cleanup. NOT the same operation as
    * {@link getConnectedPullRequestEventsPage}: different query,
    * different pagination, different failure philosophy -- see #2266's B2
    * plan critique-driven revision for why these stay separate.
@@ -608,10 +648,19 @@ export interface ProviderPort {
    * `gh --paginate` timeout (#2754, chatgpt-codex-connector review on PR
    * #2788) -- same rationale as {@link ProviderPort.getChangeRequestHeadSha}'s
    * own `options.timeoutMs`. Omit it to keep that default unchanged.
+   *
+   * `options.includeEditState` (#3246), when `true`, additionally resolves
+   * each returned comment's {@link ProviderComment.lastEditedAt} via one
+   * follow-up GraphQL batch read -- REST alone has no edit-timestamp
+   * field. A caller that omits it (the default) leaves `lastEditedAt`
+   * `undefined` on every returned comment and pays no extra round trip.
+   * When set and the GraphQL read fails or comes back incomplete for any
+   * comment, this method throws rather than returning a partial or
+   * `null`-defaulted result.
    */
   listWorkItemComments(
     number: number,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; includeEditState?: boolean },
   ): ProviderComment[];
 
   /**
@@ -620,6 +669,16 @@ export interface ProviderPort {
    * `gh pr comment` drop HTML-comment-first bodies. Consolidates
    * `post-idd-marker.mts`'s and `idd-roadmap-audit-execute.mts`'s two
    * independent existing implementations of this same shape.
+   *
+   * The GitHub adapter retries a bounded number of times only when a
+   * failure may have landed ambiguously server-side (a `5xx`, a `403`
+   * secondary rate limit, or an undetermined status such as a timeout),
+   * and only after a fresh duplicate-body re-read of the target's
+   * comments confirms no match -- a `401`/`404`/`422` fails immediately
+   * with no retry, and a failed re-read (or a `Retry-After` wait beyond a
+   * bounded cap) throws instead of guessing (#3275). Callers should treat
+   * any thrown error as "not verified" rather than assuming the comment
+   * was never posted.
    */
   postWorkItemComment(number: number, body: string): ProviderPostedComment;
 
@@ -758,8 +817,19 @@ export interface ProviderPort {
    * {@link listWorkItemComments}: that method's single `--paginate` call
    * retries (if at all) the WHOLE fetch, where this one retries one page
    * at a time -- a real granularity difference, not interchangeable.
+   *
+   * `options.includeEditState` (#3246): same opt-in contract as
+   * {@link ProviderPort.listWorkItemComments}'s own option of the same
+   * name. Since this method's return type is a raw passthrough, not
+   * {@link ProviderComment}, an opted-in edit-state value is merged onto
+   * each row as `last_edited_at` (snake_case, matching every other raw
+   * REST field this method already passes through unchanged) rather than
+   * the port's own camelCase `lastEditedAt`.
    */
-  listWorkItemCommentsWithRetryAsync(number: number): Promise<unknown[]>;
+  listWorkItemCommentsWithRetryAsync(
+    number: number,
+    options?: { includeEditState?: boolean },
+  ): Promise<unknown[]>;
 
   /**
    * work-items. `gh search issues`, the distinct server-side search
@@ -1294,6 +1364,26 @@ export interface ProviderPort {
   getChangeRequestReviewsWithHeadCommitDate(
     number: number,
   ): ProviderReviewsWithHeadCommitDate;
+
+  /**
+   * reviews-and-threads. kurone-kito/idd-skill#3253: the earliest GitHub-
+   * recorded check-suite `createdAt` for the PR's current HEAD commit -- a
+   * GitHub-observed anchor, unlike
+   * {@link getChangeRequestReviewsWithHeadCommitDate}'s `headCommittedAt`,
+   * which is committer-supplied metadata GitHub does not verify and that
+   * can lag the actual push. A sibling method, not an extension of
+   * {@link getChangeRequestReviewsWithHeadCommitDate}: the two are fetched
+   * and consumed independently.
+   *
+   * Returns an empty string -- never throws -- when the queried commit's
+   * own `oid` no longer matches the PR's live `headRefOid` (the HEAD moved
+   * between reads), the commit has no check suite, the check-suite page
+   * walk does not complete within a bounded page count, or the underlying
+   * call fails for any reason. Every consumer already has a defined
+   * fail-closed fallback for an unavailable anchor, so this degrades
+   * instead of crashing its caller.
+   */
+  getChangeRequestHeadObservedAt(number: number): string;
 
   /** merge, write. `pr merge --merge --match-head-commit {headSha}` on the
    * port's own ambient repo. */

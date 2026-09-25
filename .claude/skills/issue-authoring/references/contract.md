@@ -263,7 +263,31 @@ after claim — this scan only adds an earlier, pre-publish checkpoint.
 A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
 
-**Same-shape follow-up chains.** A different case from both checks
+**Previously declined check.** Before treating a proposal as new, you
+**MUST** check whether it was already declined. Vocabulary alone can
+miss a match: the Groom outcome recorded on issue #2996 on 2026-09-15
+closed it as not-planned, yet issue #3164's own later search missed it
+six days after. Search closed issues using the proposal's core nouns
+rather than its new framing, plus at least one alternative phrasing:
+
+```sh
+gh issue list --repo <owner>/<repo> --state closed --limit 100 \
+  --search 'reason:"not planned" <core-nouns>'
+```
+
+When the proposal changes an existing mechanism, identify the PR that
+introduced or last reshaped it (for example from `git log -S` on the
+mechanism's symbol, followed by its merge commit's `Merge pull
+request #N` subject) and read that PR's review threads for a
+**Rejected** disposition of the same idea — for example, PR #2895
+review comment `3983246464` was dispositioned Rejected on 2026-09-10
+as a deliberate trade-off; that rejection is recorded only in that
+review thread. **Cite every match** found by either search in the
+drafted issue's Background, stating what is new since that outcome.
+When nothing is new, do **not** publish the issue as `ready` — route
+it to `needs-decision` or drop the proposal and record why.
+
+**Same-shape follow-up chains.** A different case from the checks
 above: an issue whose own acceptance criteria explicitly ask for a
 follow-up issue with the same acceptance criteria when the round does
 not fully complete (a "retry again" pattern, e.g., an iterative
@@ -276,9 +300,10 @@ diagnosis, no new information beyond the predecessor), route to
 `needs-decision` (or an equivalent hold) instead of authoring another
 identical-shape issue, and record why the chain paused so a later
 session or human can see the reasoning. This is a sibling check, not a
-replacement: the checks above guard against an accidental duplicate;
-this guards against a correct-but-repeated pattern continuing past the
-point it stops being useful.
+replacement: the checks above guard against an accidental duplicate or
+a previously declined proposal; this guards against a
+correct-but-repeated pattern continuing past the point it stops being
+useful.
 
 ## Output chooser
 
@@ -841,7 +866,11 @@ Pre-publish validation checklist:
    human handoffs
 5. **Mechanical audit**: the drafted body passes the
    `audit-authored-issue` linter for its declared shape (see
-   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+   [Mechanical pre-publish gate](#mechanical-pre-publish-gate)) — for the
+   `orphan` and `child` shapes, this now also runs the same A4 criteria
+   and the six offline-evaluable A4.5 checks this table lists, catching
+   most of a would-be A4/A4.5 failure here instead of only at Discover
+   time
 
 If any check is uncertain, route the issue to `needs-decision` or
 `blocked-by-human` during drafting instead of publishing a
@@ -879,6 +908,27 @@ authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
+
+For the `orphan` and `child` shapes, the linter also runs the same A4
+viability and A4.5 suitability evaluators the IDD discover phase runs
+later, at claim time (`triage-title-missing`, one
+`triage-a4-<criterion id>` finding per A4 criterion, and one
+`triage-a45-<check id>` finding per A4.5 check) — so a body that would
+fail A4 or A4.5 at claim time is caught here, before it is ever
+published, instead of only after. `triage-a45-duplicate_or_superseded`
+(Check 4) always reports "not applicable" (it needs a live repository,
+which this offline linter never has); the `roadmap` shape reports every
+one of these findings as not applicable, since Discover never routes a
+roadmap node through A4 or A4.5 in the first place. A title is required
+for these checks to actually evaluate: pass `--title`, or lead the
+drafted body with a `# <title>` line (see the command example below);
+without either, `triage-title-missing` fails and every `triage-a45-*` finding
+reports "not evaluated" instead of a noisy Check 2/Coherence cascade
+(the three `triage-a4-*` findings still evaluate normally, since A4's
+criteria are title-independent). With `--expect-bucket`, a failing
+triage finding is downgraded to a warning instead of failing the
+report, mirroring how this linter already treats a bucket body as
+deliberately non-ready everywhere else.
 
 The linter also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
@@ -966,14 +1016,19 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
-  --marker-prefix <resolved-target-prefix> \
+  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]
 ```
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
-`--body-file` when the drafted body is not yet written to disk.
+`--body-file` when the drafted body is not yet written to disk. Omit
+`--title` when the drafted body already leads with a `# <title>` line
+(the local convention `evaluateSuitabilityLocal`'s own dry-run mode
+uses); for the `orphan` and `child` shapes, at least one of the two is
+required for the `triage-a45-*` findings to actually evaluate (see
+[Mechanical pre-publish gate](#mechanical-pre-publish-gate) above).
 **Always pass `--marker-prefix`** with the prefix resolved under
 [Target marker prefix](#target-marker-prefix): without it, the linter
 falls back to reading `.github/idd/config.json` from the current
@@ -1613,22 +1668,43 @@ only approval boundary.
   above have both succeeded -- never before, and never interleaved with
   posting -- scan that same target's prior comments (the target issue for
   `authoring-owner`; the journal issue named in the record's own `journal`
-  field for `authoring-publication-intent`, which naturally also hides other
-  authoring sets' already superseded journal records on that shared journal
-  -- intentional, since the journal read path is the same paginated scan and
-  is unaffected either way) and minimize (classifier `OUTDATED`) every prior
+  field for `authoring-publication-intent`, which naturally also fetches
+  other authoring sets' records on that shared journal -- intentional,
+  since the journal read path is the same paginated scan either way, but
+  the continuity-chain-identity restriction below means only the
+  just-posted record's own target (and, for
+  `authoring-publication-intent`, its own token too) is ever eligible for
+  minimization, never a different set's) and minimize (classifier
+  `OUTDATED`) every prior
   comment from a trusted marker actor whose body is a byte-exact match of the
-  canonical rendered template for the same marker family.
+  canonical rendered template for the same marker family AND shares the
+  just-posted record's own continuity-chain identity (`target=` alone for
+  `authoring-owner`; `target=`+`token=` together for
+  `authoring-publication-intent`) -- on the journal-hosted
+  `authoring-publication-intent` family this excludes a different target's
+  record on the same shared journal, and a same-target record under a
+  different token, even though both byte-exact-match the family template;
+  this matches the mandatory Stage 2 sweep's own fixed classifier
+  (`classifyAuthoringMarkerFamily` in `marker-helpers.mts`) so the two
+  procedures never disagree about which prior record is eligible.
   `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
-  `protocol-helpers.mts`) implements that check: it parses the candidate,
-  re-renders the parsed fields with `renderAuthoringOwnerMarker` /
-  `renderAuthoringPublicationIntentMarker`, and requires the result to equal
-  the candidate's body exactly. A candidate that deviates from the template
-  in any way -- reordered or extra fields, altered spacing, trailing
-  content, a different visible note -- is never minimized; leave it visible
-  rather than guessing. Skip the just-posted comment itself and any
-  candidate whose `isMinimized` is already `true` (idempotent; the minimize
-  helper's own probe already enforces this).
+  `protocol-helpers.mts`) implements the byte-exact-template half of that
+  check: it parses the candidate, re-renders the parsed fields with
+  `renderAuthoringOwnerMarker` / `renderAuthoringPublicationIntentMarker`,
+  and requires the result to equal the candidate's body exactly. A
+  candidate that deviates from the template in any way -- reordered or
+  extra fields, altered spacing, trailing content, a different visible
+  note -- is never minimized; leave it visible rather than guessing.
+  Apply the continuity-chain-identity half directly: parse each
+  byte-exact candidate the same way (`parseAuthoringOwnerComment` /
+  `parseAuthoringPublicationIntentComment`) and compare its `target=`
+  field (plus `token=` for `authoring-publication-intent`) against the
+  just-posted record's own fields -- the identical field comparison
+  `classifyAuthoringMarkerFamily`'s own (module-private)
+  `resolveAuthoringMarkerIdentity` performs internally for the Stage 2
+  sweep. Skip the just-posted comment itself and any candidate whose
+  `isMinimized` is already `true` (idempotent; the minimize helper's own
+  probe already enforces this).
 
   Convert each eligible candidate's REST comment id to its GraphQL node id
   (the paginated comment list already carries it as `node_id` -- no extra
@@ -1832,7 +1908,8 @@ only approval boundary.
   -- covering the anchor's own owner-marker log and the journal's
   publication-intent log -- idempotent with every earlier target's own
   sweep above, since a comment either was already minimized or was not
-  yet the newest for its own target within the family either way. Then
+  yet the newest for its own continuity-chain identity within the family
+  either way. Then
   reuse the earliest
   valid current-owner/set/session `mode=release-complete`
   marker on the anchor, or append one and record its returned comment ID.

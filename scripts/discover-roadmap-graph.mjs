@@ -15,20 +15,25 @@ import {
 import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import {
+  consumeDependencyContinuationRefLines,
+  consumeDependencyReferenceList,
+  hasDependencyReferenceListStart,
+} from './dependency-grammar.mjs';
+import {
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import { resolveLegacyClaimState } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
-  POLICY_DEFAULTS,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 import {
+  DEFAULT_STALE_AGE_MS,
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
@@ -51,11 +56,6 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
-// Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
-// the default baked into protocol-helpers' `isStaleAt`, so when the configured
-// stale age equals this default the shared `isStaleAt` path is
-// reused verbatim instead of re-deriving the 24h math here.
-const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 // Policy default claim heartbeat interval (`claimTiming.heartbeatInterval`,
 // `PT12H`), used only for the diagnostic `heartbeatOverdue` annotation
 // (#1433) — it never feeds the 24h stale-takeover gate above.
@@ -196,7 +196,6 @@ if (import.meta.main) {
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
-        roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
         milestoneScope: policy.discover?.milestoneScope,
         owner,
@@ -208,7 +207,6 @@ if (import.meta.main) {
           repo,
           policy.markerPrefix,
           buildSearchIssuesRunner(),
-          policy.labels?.roadmapLabelName,
           policy.discover?.legacyRoots,
         ),
         claimState,
@@ -217,7 +215,6 @@ if (import.meta.main) {
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
-        roadmapLabelName: policy.labels?.roadmapLabelName,
         owner,
         repo,
         loadIssue: buildIssueLoader(port),
@@ -268,7 +265,6 @@ async function mapPool(items, limit, task) {
 }
 export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
-  const roadmapLabelName = normalizeRoadmapLabelName(options.roadmapLabelName);
   const loadIssueOption = options.loadIssue;
   const loadSubIssues =
     typeof options.loadSubIssues === 'function'
@@ -324,18 +320,34 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   );
   await visitIssue(rootIssue.number, [rootIssue.number]);
   const nodes = [...nodeRecords.values()]
-    .map((node) => ({
-      number: node.number,
-      title: node.title,
-      state: node.state,
-      labels: [...node.labels].sort(),
-      classification: node.classification,
-      roadmapMarkerId: node.roadmapMarkerId,
-      autopilotSuitability: node.autopilotSuitability ?? null,
-      effort: node.effort ?? null,
-      milestone: node.milestone ?? null,
-      depth: node.depth,
-    }))
+    .map((node) => {
+      // Expose `stateReason` only for a CLOSED node whose reason is a
+      // non-null value other than `completed` -- an OPEN node, a node closed
+      // as `completed`, or a node with no reason at all keeps today's exact
+      // shape, so the default graph output stays byte-stable for them
+      // (#3326).
+      const closedWithoutCompletion =
+        node.state === 'CLOSED' &&
+        node.stateReason != null &&
+        node.stateReason !== 'completed'
+          ? node.stateReason
+          : null;
+      return {
+        number: node.number,
+        title: node.title,
+        state: node.state,
+        labels: [...node.labels].sort(),
+        classification: node.classification,
+        roadmapMarkerId: node.roadmapMarkerId,
+        autopilotSuitability: node.autopilotSuitability ?? null,
+        effort: node.effort ?? null,
+        milestone: node.milestone ?? null,
+        depth: node.depth,
+        ...(closedWithoutCompletion !== null
+          ? { stateReason: closedWithoutCompletion }
+          : {}),
+      };
+    })
     .sort(compareByNumber);
   const sortedEdges = [...edges].sort(compareEdges);
   const sortedProvenancePaths = [...provenancePaths].sort(comparePaths);
@@ -390,6 +402,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       options.readiness,
       loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
   return {
@@ -441,7 +454,30 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     }
     visitedIssuePaths.add(visitKey);
     recordNode(issue, path);
-    const references = await getReferences(issue);
+    const allReferences = await getReferences(issue);
+    // #3284: a cross-repository dependency/task-list reference is encoded
+    // as a `relationship: 'unresolvable-reference'` sentinel (see
+    // `extractKeywordReferences`/`extractTaskListReferences`) rather than
+    // a real edge -- record it directly as a diagnostic and drop it here,
+    // before it can ever become an edge, a node, or a duplicate/cycle
+    // candidate below.
+    const references = allReferences.filter((reference) => {
+      if (reference.relationship !== 'unresolvable-reference') {
+        return true;
+      }
+      recordReferenceDiagnostic(
+        diagnostics.unresolvedReferences,
+        unresolvedKeys,
+        {
+          source: issue.number,
+          target: reference.target,
+          relationship: reference.relationship,
+          evidence: reference.evidence,
+        },
+        'cross_repository_reference',
+      );
+      return false;
+    });
     // Per visit, not graph-global: the same issue can be visited again on
     // another provenance path. A later same-triple mention in this body
     // (prose + standalone `Blocked by #N`, or two identical task-list
@@ -609,7 +645,12 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   // would still fetch (and transitively expand) a target `visitIssue` itself
   // never visits, needlessly spending GitHub requests and rate-limit budget
   // on a subgraph the real traversal was designed to skip entirely
-  // (CodeRabbit, PR #2381).
+  // (CodeRabbit, PR #2381). #3284 (Copilot review, PR #3415): an
+  // `unresolvable-reference` sentinel is excluded the same way --
+  // `visitIssue` filters it into a diagnostic before it ever becomes a real
+  // edge, so its `target` (a digit parsed from a cross-repository token
+  // purely for the diagnostic, never a real local issue number) must not
+  // schedule an unrelated local issue for prefetch either.
   async function expandForPrefetch(issueNumber) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue) || issue.isPullRequest) {
@@ -617,13 +658,15 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     }
     return (await getReferences(issue))
       .filter(
-        (reference) => reference.relationship !== 'non-blocking-reference',
+        (reference) =>
+          reference.relationship !== 'non-blocking-reference' &&
+          reference.relationship !== 'unresolvable-reference',
       )
       .map((reference) => reference.target);
   }
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
-    const classification = classifyIssue(issue, markerPrefix, roadmapLabelName);
+    const classification = classifyIssue(issue, markerPrefix);
     if (issue.number === rootIssue.number) {
       classification.kind = 'roadmap';
     }
@@ -643,6 +686,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       effort: parseEffort(issue.body, markerPrefix),
       milestone: issue.openMilestoneTitle,
       depth,
+      stateReason: issue.stateReason,
     });
     recordProvenancePath(issue.number, path);
   }
@@ -697,11 +741,12 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
 /**
  * Cross-roadmap autopilot discovery (additive `--all-roadmaps` mode).
  *
- * Discovers every OPEN roadmap root (an open issue carrying the
- * `roadmap` label OR an `<!-- {markerPrefix}-roadmap-id: ... -->`
- * marker), runs the existing single-root {@link enumerateRoadmapGraph}
- * from each root, and returns the UNION of open execution leaves. A leaf
- * reachable from several sibling roots is recorded once, carrying every
+ * Discovers every OPEN roadmap root (an open issue carrying an
+ * `<!-- {markerPrefix}-roadmap-id: ... -->` marker, or a configured
+ * `discover.legacyRoots` entry), runs the existing single-root
+ * {@link enumerateRoadmapGraph} from each root, and returns the UNION of
+ * open execution leaves. A leaf reachable from several sibling roots is
+ * recorded once, carrying every
  * `sourceRoots` it is reachable from (provenance), so it is never
  * double-counted.
  *
@@ -720,6 +765,12 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
  */
 export async function enumerateAllRoadmapsGraph(options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // #3284 (Copilot review, PR #3415): threaded into `annotateReadiness`
+  // below so the union's own readiness annotation resolves a qualified
+  // `owner/repo#N` dependency token against the same repository each
+  // per-root `enumerateRoadmapGraph` call already uses for its own
+  // `currentRepoRef`.
+  const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
   // Resolve the configured suitability floor (normalized to an integer
   // 1-5, falling back to the default when unset) once, then rank unscored
   // leaves at that configured floor.
@@ -751,7 +802,6 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
     try {
       graph = await enumerateRoadmapGraph(rootNumber, {
         markerPrefix,
-        roadmapLabelName: options.roadmapLabelName,
         owner: options.owner,
         repo: options.repo,
         loadIssue: options.loadIssue,
@@ -880,6 +930,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       options.readiness,
       options.loadIssue,
       markerPrefix,
+      currentRepoRef,
     );
   }
   const scoredLeafCount = leaves.filter((leaf) =>
@@ -1029,7 +1080,13 @@ function normalizeOpenRoadmapRootNumbers(roots) {
  * the readiness classification (labels + dependencies) does not read the
  * score.
  */
-async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
+async function annotateReadiness(
+  entries,
+  readiness,
+  loadIssue,
+  markerPrefix,
+  currentRepo,
+) {
   const openEntries = entries.filter(
     (entry) => String(entry.state).toUpperCase() === 'OPEN',
   );
@@ -1052,6 +1109,14 @@ async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
       markerPrefix,
+      // #3284 (Copilot review, PR #3415): without this, a `Blocked
+      // by`/`Depends on` line naming this same repository
+      // (`owner/repo#N`) resolves to a real graph edge via
+      // `currentRepoRef` above but reports unresolvable here, splitting
+      // the same node's readiness annotation from the graph's own
+      // traversal -- exactly the cross-path disagreement this issue
+      // exists to eliminate.
+      currentRepo: currentRepo || undefined,
       now: readiness.nowIso,
     },
   );
@@ -1294,7 +1359,7 @@ function normalizeClaimComments(raw) {
  * resume-claim-routing's `isStaleByAge`.
  */
 export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
-  if (staleAgeMs === DEFAULT_CLAIM_STALE_AGE_MS) {
+  if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }
   const start = Date.parse(activeCreatedAt ?? '');
@@ -1346,9 +1411,9 @@ function sanitizedGitEnvironment() {
   delete env.GIT_OBJECT_DIRECTORY;
   return env;
 }
-function resolveCurrentSessionWorktreeIdentity() {
+function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
   try {
-    const cwd = process.cwd();
+    const cwd = cwdOverride ?? process.cwd();
     const env = sanitizedGitEnvironment();
     const discoveredRoot = removeTrailingGitLineFeed(
       execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
@@ -1377,13 +1442,24 @@ function resolveCurrentSessionWorktreeIdentity() {
     return null;
   }
 }
-export function resolveCurrentSessionClaimEvidence(claimId) {
+/**
+ * `worktreePath` (kurone-kito/idd-skill#3272): when given, every read below
+ * (the claim lock, the generated-tokens record, and Git's own worktree-root /
+ * branch identification) targets that path instead of `process.cwd()`. This
+ * lets a caller running from the primary checkout — where Resume Step 1
+ * runs, before Step 2 locates the claimed branch's own worktree — still
+ * prove ownership by naming that worktree explicitly, rather than requiring
+ * the caller's own cwd to already be inside it. Omitting it preserves the
+ * prior `process.cwd()`-only behavior exactly.
+ */
+export function resolveCurrentSessionClaimEvidence(claimId, worktreePath) {
   try {
-    const worktree = resolveCurrentSessionWorktreeIdentity();
+    const cwd = worktreePath ?? process.cwd();
+    const worktree = resolveCurrentSessionWorktreeIdentity(cwd);
     if (worktree === null) {
       return null;
     }
-    const lock = checkClaimLock(process.cwd());
+    const lock = checkClaimLock(cwd);
     const holder = lock.holder;
     if (
       !lock.present ||
@@ -1394,7 +1470,7 @@ export function resolveCurrentSessionClaimEvidence(claimId) {
     ) {
       return null;
     }
-    const tokens = readGeneratedClaimTokens(process.cwd(), claimId);
+    const tokens = readGeneratedClaimTokens(cwd, claimId);
     return tokens.status === 'present' &&
       tokens.record.claimId === claimId &&
       tokens.record.agentId === holder.agentId
@@ -1476,8 +1552,7 @@ function currentSessionOwnsOccupiedWorktree(
  */
 export function buildClaimStateResolution(port, policy, currentClaimId) {
   const staleAgeMs =
-    parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
-    DEFAULT_CLAIM_STALE_AGE_MS;
+    parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS;
   const heartbeatIntervalMs =
     parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
     DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
@@ -1572,7 +1647,7 @@ export function buildCommentLoader(port) {
 /**
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
  * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
- * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
+ * rejected so the caller falls back to `DEFAULT_STALE_AGE_MS` instead of
  * configuring a 0ms stale age that would mark every claim immediately stale.
  *
  * Thin wrapper over the shared `parseIsoDurationToMs` from policy-helpers
@@ -1591,7 +1666,7 @@ export function parseClaimStaleAgeMs(value) {
  * non-positive total, mirroring {@link parseClaimStaleAgeMs}'s
  * garbage/non-positive handling so the caller falls back to
  * `DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS` the same way a rejected stale age
- * falls back to `DEFAULT_CLAIM_STALE_AGE_MS`.
+ * falls back to `DEFAULT_STALE_AGE_MS`.
  */
 export function parseClaimHeartbeatIntervalMs(value) {
   return parseIsoDurationToMs(String(value ?? '').trim());
@@ -1604,40 +1679,24 @@ export function extractRoadmapMarkerId(
     `<!--\\s*${escapeRegex(markerPrefix)}-roadmap-id:\\s*([^\\s>]+)\\s*-->`,
     'i',
   );
-  const match = regex.exec(stripMarkdownCodeRegions(String(body ?? '')));
+  const match = regex.exec(maskMarkdownForScan(String(body ?? '')));
   return match ? match[1] : '';
 }
-export function classifyIssue(
-  issue,
-  markerPrefix = DEFAULT_MARKER_PREFIX,
-  roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
-) {
-  // Re-validate even though the parameter already has a default: a caller
-  // (direct or test) that explicitly passes an empty string would otherwise
-  // bypass the default (parameter defaults only trigger on `undefined`) and
-  // silently disable the roadmap-label check. Use a cheap non-empty-string
-  // check rather than the full normalizeRoadmapLabelName()/
-  // normalizePolicyConfig() — classifyIssue() runs once per node during
-  // graph enumeration, so rebuilding the whole policy-defaults object here
-  // would be avoidable per-node overhead; callers that need policy-level
-  // normalization already do it once via normalizeRoadmapLabelName() before
-  // reaching this function.
-  const resolvedRoadmapLabelName =
-    typeof roadmapLabelName === 'string' && roadmapLabelName.length > 0
-      ? roadmapLabelName
-      : POLICY_DEFAULTS.labels.roadmapLabelName;
+/**
+ * Classify one issue node as `roadmap` or `execution`. The `roadmap-id`
+ * marker is the ONLY roadmap identity (#3286, Groom hearing
+ * 2026-09-24): the configured roadmap label is informational only and
+ * never contributes to this classification, even though `issue.labels`
+ * is still accepted here (unused) so callers can pass a full issue
+ * object without narrowing it first. `idd-doctor`'s
+ * `evaluateRoadmapIdentityConsistency` warns separately about an open
+ * issue that carries the label without the marker.
+ */
+export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
-  const labels = normalizeLabels(issue.labels);
-  if (roadmapMarkerId || labels.has(resolvedRoadmapLabelName)) {
-    return {
-      kind: 'roadmap',
-      roadmapMarkerId,
-    };
-  }
-  return {
-    kind: 'execution',
-    roadmapMarkerId: '',
-  };
+  return roadmapMarkerId
+    ? { kind: 'roadmap', roadmapMarkerId }
+    : { kind: 'execution', roadmapMarkerId: '' };
 }
 /**
  * True when `line` opens a new Markdown block that must terminate a
@@ -1684,9 +1743,10 @@ export function isTaskListCheckboxLine(line) {
 }
 export function extractTaskListReferences(body, options = {}) {
   // Match against a code-masked copy so a checkbox merely quoted inside inline
-  // code or a fenced block is not walked as a real task-list edge — consistent
-  // with the #1121 boundary already applied to extractRoadmapMarkerId (#1204).
-  // stripMarkdownCodeRegions preserves the line count, so the masked and raw
+  // code, a fenced block, or an indented code block is not walked as a real
+  // task-list edge — consistent with the #1121 boundary already applied to
+  // extractRoadmapMarkerId (#1204). maskMarkdownForScan (#3281; originally
+  // stripMarkdownCodeRegions) preserves the line count, so the masked and raw
   // lines share an index and evidence stays the raw line for any surviving edge
   // (e.g. one that shares a line with unrelated inline code).
   //
@@ -1715,9 +1775,9 @@ export function extractTaskListReferences(body, options = {}) {
   // evaluation, before a later top-level const would have initialized
   // (TDZ).
   const bareOrLinkTextRe =
-    /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\([^)\n]*\))?/u;
+    /^\s*-\s*\[(?: |x|X)\]\s+\[?#(\d+)\b\]?(?:\(([^)\n]*)\))?/u;
   const linkUrlRe =
-    /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
+    /^\s*-\s*\[(?: |x|X)\]\s+\[[^\]\n]*\]\([^)\n]*?([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:[/?#][^)\n]*)?\)/u;
   const trailingReferenceRe =
     /(?:^|\s)\(?(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))\)?[.,;:]*\s*$/u;
   const currentRepoRef = normalizeRepoRef(
@@ -1730,21 +1790,61 @@ export function extractTaskListReferences(body, options = {}) {
   );
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
-  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  const maskedLines = maskMarkdownForScan(rawBody).split(/\r?\n/u);
   const references = [];
   for (let index = 0; index < maskedLines.length; index += 1) {
     const maskedLine = maskedLines[index];
     if (!isTaskListCheckboxLine(maskedLine)) {
       continue;
     }
-    const leadingMatch =
-      maskedLine.match(bareOrLinkTextRe) ?? maskedLine.match(linkUrlRe);
-    if (leadingMatch) {
-      const target = Number.parseInt(leadingMatch[1], 10);
+    // #3284: the leading bare/link-text form (`- [ ] #123` or
+    // `- [ ] [#123](url)`) had no repository check on its optional
+    // trailing `(url)` at all, and the leading link-URL form
+    // (`- [ ] [text](url)`) checked only the URL's trailing issue/PR
+    // number, never the owner/repo segment immediately before it -- so
+    // `- [ ] [Upstream fix](https://github.com/other/repo/issues/12)`
+    // silently became a local #12 edge. Both forms now check that
+    // segment (when present) against `currentRepoRef`, routing a genuine
+    // mismatch to the same `unresolvable-reference` sentinel the
+    // dependency-keyword handling above uses (recognized by `visitIssue`,
+    // which records it as a `cross_repository_reference` diagnostic
+    // instead of a real edge/node). An unknown `currentRepoRef` (no
+    // `owner`/`repo` supplied) skips the check and keeps resolving
+    // optimistically, unchanged from before -- this function has never
+    // required an `owner`/`repo` argument, and today's two `(#2476)`
+    // tests call it with none.
+    const bareOrLinkTextMatch = maskedLine.match(bareOrLinkTextRe);
+    const linkUrlMatch = bareOrLinkTextMatch
+      ? null
+      : maskedLine.match(linkUrlRe);
+    if (bareOrLinkTextMatch) {
+      const target = Number.parseInt(bareOrLinkTextMatch[1], 10);
+      const trailingUrlText = bareOrLinkTextMatch[2];
+      const crossRepo =
+        typeof trailingUrlText === 'string'
+          ? isCrossRepoGithubIssueUrl(trailingUrlText, currentRepoRef)
+          : false;
       if (Number.isInteger(target) && target > 0) {
         references.push({
           target,
-          relationship: 'task-list',
+          relationship: crossRepo ? 'unresolvable-reference' : 'task-list',
+          evidence: (rawLines[index] ?? maskedLine).trim(),
+        });
+      }
+      continue;
+    }
+    if (linkUrlMatch) {
+      const qualifiedRepoRef = normalizeRepoRef(
+        linkUrlMatch[1],
+        linkUrlMatch[2],
+      );
+      const target = Number.parseInt(linkUrlMatch[3], 10);
+      const crossRepo =
+        Boolean(currentRepoRef) && qualifiedRepoRef !== currentRepoRef;
+      if (Number.isInteger(target) && target > 0) {
+        references.push({
+          target,
+          relationship: crossRepo ? 'unresolvable-reference' : 'task-list',
           evidence: (rawLines[index] ?? maskedLine).trim(),
         });
       }
@@ -1800,15 +1900,27 @@ export function extractKeywordReferences(body, options = {}) {
       : options.repo,
   );
   // Run the keyword match AND the trailing-segment scan against a code-masked
-  // copy of the body so a reference merely quoted inside inline code or a fenced
-  // block is not walked as a real graph edge — consistent with the #1121
-  // boundary already applied to extractRoadmapMarkerId (#1204). Only `evidence`
-  // reads the raw line; stripMarkdownCodeRegions preserves the line count, so
-  // the masked and raw lines share an index and evidence stays byte-identical
-  // for any surviving edge that is not itself inside/adjacent to code.
+  // copy of the body so a reference merely quoted inside inline code, a fenced
+  // block, or an indented code block is not walked as a real graph edge —
+  // consistent with the #1121 boundary already applied to
+  // extractRoadmapMarkerId (#1204). Only `evidence` reads the raw line;
+  // maskMarkdownForScan (#3281; originally stripMarkdownCodeRegions) preserves
+  // the line count, so the masked and raw lines share an index and evidence
+  // stays byte-identical for any surviving edge that is not itself
+  // inside/adjacent to code.
   const rawBody = String(body ?? '');
   const rawLines = rawBody.split(/\r?\n/u);
-  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  const maskedLines = maskMarkdownForScan(rawBody).split(/\r?\n/u);
+  // #3284: a second, HTML-comment-masked view used only for the two
+  // dependency keywords (`Blocked by`/`Depends on`) below -- see the
+  // dependency branch inside the loop for why the default `maskedLines`
+  // above (HTML comments left visible, matching every other keyword's
+  // existing, unchanged behavior) isn't reused for them.
+  // `maskMarkdownForScan` always preserves length and line structure, so
+  // this stays index-aligned with `maskedLines`/`rawLines`.
+  const dependencyMaskedLines = maskMarkdownForScan(rawBody, {
+    htmlComments: 'mask',
+  }).split(/\r?\n/u);
   for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex += 1) {
     const maskedLine = maskedLines[lineIndex];
     const rawLine = rawLines[lineIndex] ?? maskedLine;
@@ -1854,6 +1966,126 @@ export function extractKeywordReferences(body, options = {}) {
         NON_BLOCKING_ANNOTATION_PATTERN.test(segment)
           ? 'non-blocking-reference'
           : baseRelationship;
+      if (baseRelationship === 'dependency') {
+        // #3284: `Blocked by`/`Depends on` share the
+        // `dependency-grammar.mts` ref-list parser instead of
+        // `extractKeywordReferenceTargets` below, gaining
+        // `https://github.com/owner/repo/issues/N` token recognition,
+        // fail-safe cross-repository reporting, and GitHub's line-wrap
+        // continuation (#2441). Unlike every other keyword this function
+        // matches anywhere on the line, a dependency match only counts
+        // when it is genuinely line-anchored (only optional indentation,
+        // blockquote markers, and at most one list marker may precede
+        // it) -- the issue's own Maintainer decision names the
+        // line-anchored grammar "the single `Blocked by` grammar shared
+        // by every helper". A non-anchored match (a narrated mid-sentence
+        // mention) produces no reference at all here, the same "no
+        // dependency" outcome a negated match produces; see the updated
+        // #2799 regression test for the resulting behavior on a body
+        // that narrates a dependency in prose and also restates it as a
+        // standalone line.
+        //
+        // The anchor check (and the segment below it) both read from
+        // `dependencyMaskedLines` (HTML comments additionally masked),
+        // never the default `maskedLine` -- an HTML comment is invisible
+        // prose that must not count as an anchor-breaking prefix any
+        // more than it counts as a keyword-suppressing one (Copilot
+        // review, PR #3415): `<!-- note --> Blocked by #12` is a genuine
+        // anchored dependency once the comment is masked away, even
+        // though `maskedLine` alone (comments visible, matching every
+        // other keyword's own unchanged behavior) would see a non-blank
+        // prefix and wrongly reject it.
+        const dependencyMaskedLine = dependencyMaskedLines[lineIndex] ?? '';
+        const dependencyLineAnchorRe =
+          /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?$/u;
+        if (
+          !dependencyLineAnchorRe.test(
+            dependencyMaskedLine.slice(0, matchIndex),
+          )
+        ) {
+          continue;
+        }
+        if (
+          dependencyMaskedLine.slice(matchIndex, segmentStart).trim() === ''
+        ) {
+          // The keyword itself sits inside an HTML comment -- suppressed,
+          // the same as a negated match.
+          continue;
+        }
+        // #3284 (Copilot review, PR #3415, rounds 2-3): the shared
+        // grammar's line pattern requires horizontal whitespace after the
+        // keyword (optionally after a colon immediately adjacent to the
+        // keyword, never after leading whitespace of its own) before it
+        // will even try to parse a ref-list -- `Blocked by#12`,
+        // `Blocked by:#12`, and `Blocked by : #12` (colon separated from
+        // the keyword by whitespace) are none of them a dependency
+        // declaration there. A hand-approximated gap check drifted from
+        // this twice already (round 2 required no gap at all; a
+        // same-round fix then accepted a bare `/^:?[ \t]+/` match, which
+        // says nothing about what follows the gap and so still let
+        // `Blocked by : #12` through), so this reuses
+        // `hasDependencyReferenceListStart` -- the exact token-start test
+        // the shared line pattern itself applies -- instead of
+        // hand-approximating a fourth time.
+        const dependencyGapMatch = dependencyMaskedLine
+          .slice(segmentStart)
+          .match(/^:?[ \t]+/u);
+        if (
+          !dependencyGapMatch ||
+          !hasDependencyReferenceListStart(
+            dependencyMaskedLine.slice(
+              segmentStart + dependencyGapMatch[0].length,
+            ),
+          )
+        ) {
+          continue;
+        }
+        // The ordinary `segmentEnd` computed above is bounded by the next
+        // `KEYWORD_REFERENCE_REGEX` match on the UNMASKED `maskedLine`, so
+        // a keyword hidden inside an HTML comment later on this same line
+        // (invisible prose) would wrongly truncate this dependency's own
+        // segment and suppress its continuation sweep below, even though
+        // the shared grammar (which masks that comment) reads straight
+        // through it. Recompute the boundary -- and the continuation
+        // eligibility below -- against a fresh keyword search over
+        // `dependencyMaskedLine`, so only a genuinely visible later
+        // keyword ends this segment early.
+        const laterKeywordInMasked = [
+          ...dependencyMaskedLine
+            .slice(segmentStart)
+            .matchAll(KEYWORD_REFERENCE_REGEX),
+        ][0];
+        const dependencySegmentEnd = laterKeywordInMasked
+          ? segmentStart + (laterKeywordInMasked.index ?? 0)
+          : dependencyMaskedLine.length;
+        const dependencySegment = dependencyMaskedLine
+          .slice(segmentStart, dependencySegmentEnd)
+          .trimStart()
+          .replace(/^:\s*/u, '');
+        const dependencyResult = consumeDependencyReferenceList(
+          dependencySegment,
+          { currentRepo: currentRepoRef || undefined },
+        );
+        pushDependencyReferences(
+          references,
+          dependencyResult,
+          relationship,
+          rawLine,
+        );
+        if (!laterKeywordInMasked && dependencyResult.remaining.trim() === '') {
+          pushDependencyReferences(
+            references,
+            consumeDependencyContinuationRefLines(
+              dependencyMaskedLines,
+              lineIndex + 1,
+              { currentRepo: currentRepoRef || undefined },
+            ),
+            relationship,
+            rawLine,
+          );
+        }
+        continue;
+      }
       for (const target of extractKeywordReferenceTargets(
         segment,
         currentRepoRef,
@@ -1870,6 +2102,37 @@ export function extractKeywordReferences(body, options = {}) {
     }
   }
   return references;
+}
+/** Extract the last run of digits in `token` (e.g. `12` from
+ * `other/repo#12` or from a `.../issues/12` URL) -- used only to give a
+ * cross-repository dependency sentinel (see {@link
+ * pushDependencyReferences}) a diagnostic-friendly `target` number; it is
+ * never treated as a real local issue number. */
+function parseTrailingDigits(token) {
+  const match = token.match(/(\d+)(?!.*\d)/u);
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+/**
+ * Push a {@link consumeDependencyReferenceList} /
+ * {@link consumeDependencyContinuationRefLines} result's resolved local
+ * numbers as ordinary `relationship`-tagged references, and its
+ * cross-repository `unresolvable` tokens as `unresolvable-reference`
+ * sentinels -- `visitIssue` recognizes that relationship and reroutes it
+ * to `diagnostics.unresolvedReferences` instead of a real edge/node (see
+ * the call site in `enumerateRoadmapGraph`).
+ */
+function pushDependencyReferences(references, result, relationship, rawLine) {
+  const evidence = rawLine.trim();
+  for (const target of result.numbers) {
+    references.push({ target, relationship, evidence });
+  }
+  for (const unresolvedToken of result.unresolvable) {
+    references.push({
+      target: parseTrailingDigits(unresolvedToken.token),
+      relationship: 'unresolvable-reference',
+      evidence,
+    });
+  }
 }
 /**
  * True when a negation term (`not`, `never`, `won't`, `doesn't`, ...) sits in
@@ -1965,6 +2228,32 @@ function normalizeRepoRef(owner, repo) {
   return normalizedOwner && normalizedRepo
     ? `${normalizedOwner}/${normalizedRepo}`
     : '';
+}
+/**
+ * #3284: `true` only when `text` is a recognizable
+ * `https://github.com/owner/repo/issues|pull/N` URL naming a repository
+ * other than `currentRepoRef`. Arbitrary non-URL prose (an ordinary
+ * parenthetical aside on a `- [ ] [#123] (context)` item) and an
+ * unrecognized URL shape both return `false` -- this is a targeted
+ * repository check, not a general "is this a GitHub URL" validator -- as
+ * does an empty `currentRepoRef` (unknown current repository), matching
+ * {@link extractTaskListReferences}'s existing repo-scope checks. The
+ * regex is function-local, not a module-level const, because this file's
+ * `import.meta.main` CLI entry block sits well above this function and a
+ * module-level const declared after it would be in the temporal dead zone
+ * for any synchronous CLI path that reaches here.
+ */
+function isCrossRepoGithubIssueUrl(text, currentRepoRef) {
+  if (!currentRepoRef) {
+    return false;
+  }
+  const githubIssueOrPrUrlRe =
+    /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/\d+/u;
+  const match = text.match(githubIssueOrPrUrlRe);
+  if (!match) {
+    return false;
+  }
+  return normalizeRepoRef(match[1], match[2]) !== currentRepoRef;
 }
 function normalizeSubIssueReferences(subIssues) {
   return normalizeSubIssueNumbers(subIssues).map((target) => ({
@@ -2204,7 +2493,25 @@ function normalizeIssue(issue) {
     isPullRequest: Boolean(issue.pull_request),
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
     openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
+    stateReason: extractStateReason(issue.state_reason),
   };
+}
+/**
+ * Read the REST `state_reason` field verbatim -- kept lowercase (unlike
+ * `state`, which is upper-cased), matching every REST issue loader this
+ * module actually uses (`provider-adapter-github.mts`'s REST fetch; the
+ * lowercase `'completed'` literal this file compares it against). A future
+ * GraphQL-sourced loader would need its own SCREAMING_SNAKE_CASE
+ * normalization before reaching this function -- GraphQL's `stateReason`
+ * enum is upper-cased, unlike REST's. Returns null for a
+ * missing/non-string/empty value -- the caller decides, once, at report-node
+ * construction, whether a `CLOSED` node with a non-`completed` reason
+ * actually exposes it (#3326).
+ */
+function extractStateReason(stateReason) {
+  return typeof stateReason === 'string' && stateReason.length > 0
+    ? stateReason
+    : null;
 }
 /**
  * Read the OPEN milestone's title from a REST `milestone` object. Returns
@@ -2267,23 +2574,13 @@ function normalizeMarkerPrefix(markerPrefix) {
   return normalized || DEFAULT_MARKER_PREFIX;
 }
 /**
- * Resolve the configured `labels.roadmapLabelName` (#1273), falling back to
- * the `policy-helpers.mts` default (`'roadmap'`) for an absent or invalid
- * value. Routing an already-`unknown` field through `normalizePolicyConfig`
- * (rather than hand-rolling the same non-empty-string check again) keeps the
- * validation and the default in the single source of truth.
- */
-function normalizeRoadmapLabelName(roadmapLabelName) {
-  return normalizePolicyConfig({ labels: { roadmapLabelName } }).labels
-    .roadmapLabelName;
-}
-/**
  * Resolve the configured `discover.legacyRoots` (issue numbers of legacy
- * roadmap roots that predate the `roadmap` label / `roadmap-id` marker),
+ * roadmap roots that predate the `roadmap-id` marker convention),
  * falling back to the `policy-helpers.mts` default (`[]`) for an absent or
- * invalid value. Same routing-through-`normalizePolicyConfig` shape as
- * {@link normalizeRoadmapLabelName}, so the fail-safe parsing stays in the
- * single source of truth.
+ * invalid value. Routing an already-`unknown` field through
+ * `normalizePolicyConfig` (rather than hand-rolling the same validation
+ * again) keeps the fail-safe parsing and the default in the single source
+ * of truth.
  */
 function normalizeLegacyRoots(legacyRoots) {
   return normalizePolicyConfig({ discover: { legacyRoots } }).discover
@@ -2347,90 +2644,67 @@ export function buildSubIssueLoader(port) {
 /**
  * Live open-roadmap-roots loader (#1017): search-narrowed root discovery.
  *
- * Replaces the previous full open-issue scan (which fetched every open
- * issue's `body` plus up to 100 labels just to detect a root) with two
- * cheap server-side searches whose union is the SAME open-root set:
+ * Replaces a full open-issue scan (which fetched every open issue's
+ * `body` just to detect a root) with one cheap server-side search unioned
+ * with configured legacy roots. The root set is the marker-identified
+ * open issues plus configured `discover.legacyRoots` -- a label-only open
+ * issue is deliberately NOT a root (#3286: the roadmap label no longer
+ * identifies a root by itself):
  *
- *   1. Label roots — `gh search issues --label <roadmapLabelName> --state
- *      open` (the configured `labels.roadmapLabelName`, #1273; defaults to
- *      `roadmap`) returns every open issue carrying that label. These are
- *      roots by label with NO body inspection needed; the old scan's
- *      `labels.has(roadmapLabelName)` branch is reproduced exactly (the
- *      GitHub search `--label` qualifier is a case-insensitive exact-name
- *      match, as is the `normalizeLabels`-backed `Set.has(...)` it
- *      replaces).
- *   2. Marker-only roots — `gh search issues --match body "<...>roadmap-id"
+ *   1. Marker roots — `gh search issues --match body "<...>roadmap-id"
  *      --state open` narrows to open issues whose body text contains the
  *      `idd-skill-roadmap-id`-style marker token, then RE-CONFIRMS each
  *      candidate with the same `extractRoadmapMarkerId(body, prefix)` regex
  *      the old scan used (the search already returns the body, so no extra
  *      per-issue fetch is made). Only confirmed markers are kept, so a
- *      non-marker text hit on the token never inflates the root set.
- *   3. Configured legacy roots (#1315) — the `discover.legacyRoots` policy
- *      array (issue numbers), for roots that predate both signals above
- *      (e.g. an ad-hoc umbrella convention adopted before IDD). No extra
- *      search or fetch: the numbers are unioned in directly, and each still
- *      goes through the normal per-root {@link enumerateRoadmapGraph} fetch
- *      downstream, so a stale or now-closed configured root is handled the
- *      same way a race-closed label/marker root already is.
+ *      non-marker text hit on the token never inflates the root set. The
+ *      roadmap label alone no longer identifies a root (#3286): the
+ *      marker is the only roadmap identity Discover recognizes, and
+ *      `idd-doctor`'s `evaluateRoadmapIdentityConsistency` warns about an
+ *      open issue that carries the label without it.
+ *   2. Configured legacy roots (#1315) — the `discover.legacyRoots` policy
+ *      array (issue numbers), for roots that predate the marker
+ *      convention (e.g. an ad-hoc umbrella adopted before IDD, or one
+ *      still missing its marker). No extra search or fetch: the numbers
+ *      are unioned in directly, and each still goes through the normal
+ *      per-root {@link enumerateRoadmapGraph} fetch downstream, so a
+ *      stale or now-closed configured root is handled the same way a
+ *      race-closed marker root already is.
  *
  * The candidate sets are unioned and deduped by number, then sorted
- * ascending. The output is the identical `number[]` (deduped, ascending) the
- * previous scan returned, so the downstream union/provenance/ranking is
- * byte-stable.
+ * ascending. The output shape is a deduped, ascending `number[]` -- the
+ * same contract the loader has always returned, so downstream
+ * union/provenance/ranking code needs no change -- but the root
+ * **membership** itself is narrower than before this file's #3286
+ * change: an open issue reachable only via the (now-removed) label
+ * search no longer appears here.
  *
  * Result-cap boundary: `gh search` is hard-capped at
- * {@link GH_SEARCH_RESULT_CAP} results per query. When a single label or
- * body-marker search returns the full cap it may have been truncated, so a
- * repo with >= {@link GH_SEARCH_RESULT_CAP} hits could silently yield an
- * incomplete root set. The loader emits a NON-FATAL one-line WARNING to stderr
- * in that case (see {@link warnOnSearchResultCap}) rather than aborting — the
- * body-marker search can legitimately match many re-confirmed-and-dropped
- * prose mentions, so a hard error would over-abort. The JSON report itself
- * goes to stdout, so the stderr warning never corrupts it.
- *
- * Boundary (documented parity note): the marker search uses GitHub's
- * full-text body index. The label search is exact and complete on its own,
- * so every LABELED root is always found regardless of the marker index. A
- * marker-ONLY root (no `roadmap` label, marker only in the body) is found
- * when the body-text index surfaces the broad `roadmap-id` token, which the
- * `re`-confirm step then verifies — this is the only path that depends on
- * the search index rather than an exact qualifier. The IDD authoring path
- * applies the `roadmap` label to roadmap roots, so in practice marker-only
- * roots are covered by the label search; the marker search is the additive
- * safety net for unlabeled markers.
+ * {@link GH_SEARCH_RESULT_CAP} results per query. When the body-marker
+ * search returns the full cap it may have been truncated, so a repo with
+ * >= {@link GH_SEARCH_RESULT_CAP} marker-token hits could silently yield
+ * an incomplete root set. The loader emits a NON-FATAL one-line WARNING to
+ * stderr in that case (see {@link warnOnSearchResultCap}) rather than
+ * aborting — the body-marker search can legitimately match many
+ * re-confirmed-and-dropped prose mentions, so a hard error would
+ * over-abort. The JSON report itself goes to stdout, so the stderr
+ * warning never corrupts it.
  */
 export function buildOpenRoadmapRootsLoader(
   owner,
   repo,
   markerPrefix,
   searchIssues = buildSearchIssuesRunner(),
-  roadmapLabelName,
   legacyRoots,
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
-  const label = normalizeRoadmapLabelName(roadmapLabelName);
   const configuredLegacyRoots = normalizeLegacyRoots(legacyRoots);
   return async () => {
-    // 3. Configured legacy roots: seeded directly into the Set ahead of the
-    //    two searches below so they dedupe against label/marker roots for
+    // 2. Configured legacy roots: seeded directly into the Set ahead of the
+    //    marker search below so they dedupe against marker roots for
     //    free; see the loader's doc comment for why no extra fetch is made.
     const numbers = new Set(configuredLegacyRoots);
-    // 1. Label roots: roadmap-labeled open issues are roots by label.
-    const labelResults = searchIssues({
-      owner,
-      repo,
-      label,
-      fields: ['number'],
-    });
-    warnOnSearchResultCap(labelResults, 'label');
-    for (const issue of labelResults) {
-      const issueNumber = normalizeSearchIssueNumber(issue);
-      if (issueNumber !== null) {
-        numbers.add(issueNumber);
-      }
-    }
-    // 2. Marker-only roots: narrow to open issues whose body carries the
+    // 1. Marker roots: narrow to open issues whose body carries the
     //    marker token, then re-confirm with the exact regex on the body the
     //    search already returned (no extra per-issue body fetch).
     const markerResults = searchIssues({

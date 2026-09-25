@@ -47,10 +47,12 @@ import {
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
+  isCodeRabbitReviewInProgressSummary,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
   normalizeTrustedMarkerLogins,
+  readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mjs';
@@ -78,6 +80,11 @@ export function noticeReason(body) {
   }
   if (/skip review by coderabbit\.ai/i.test(text)) {
     return 'review skipped (billing failure or below the manual-trigger star-count gate)';
+  }
+  // #3260: CodeRabbit's paused-review marker ("Reviews paused") -- paraphrased
+  // rather than quoting the bot's own resume/review commands.
+  if (/review paused by coderabbit\.ai/i.test(text)) {
+    return 'reviews paused by the bot; a resume is needed';
   }
   return 'advisory non-review notice';
 }
@@ -130,9 +137,17 @@ export function buildSummaryDispositionBody(botLogin, headSha, markerPrefix) {
 // findings as their own review threads) would let the disposition-evidence
 // gate treat the review as settled ahead of findings that arrive later --
 // "a false positive is a false merge", the same hazard the CodeRabbit
-// per-HEAD re-disposition above guards against. CodeRabbit's own summary
-// marker has no analogous in-progress state (only posted once a walkthrough
-// is genuinely complete), so this gate applies to Codex only. Parses the
+// per-HEAD re-disposition above guards against. #3260 corrects this
+// comment's prior claim that "CodeRabbit's own summary marker has no
+// analogous in-progress state": CodeRabbit edits its OWN summary comment in
+// place too, nesting a "review in progress by coderabbit.ai" marker next to
+// the previous review's content while it processes new commits (live
+// evidence: kurone-kito/idd-skill#3260, PR #3196 comment `5789875341`).
+// `buildDispositionPlan`'s own summary-walkthrough loop below gates on that
+// state via `isCodeRabbitReviewInProgressSummary` before this function ever
+// runs -- this table-parsing gate itself still applies to Codex only,
+// because Codex's own in-progress signal is this status table, not a
+// CodeRabbit-shaped marker. Parses the
 // comment's own status table (columns identified by header text, so a
 // reordered or renamed non-Status/Commit column does not break it) and
 // requires the row for the current HEAD's (possibly-abbreviated) commit to
@@ -366,6 +381,24 @@ export function buildDispositionPlan(input, options = {}) {
     ) {
       continue;
     }
+    // #3260: never auto-accept a CodeRabbit summary while it is still
+    // processing new commits -- checked BEFORE the "No actionable comments"
+    // check below, because CodeRabbit's in-place edit can leave an older
+    // review's "No actionable comments were generated" sentence trailing
+    // beneath the in-progress marker (live evidence: PR #3160 comment
+    // `5747892562`, 2026-09-20T11:13:47Z); that stale sentence must not be
+    // mistaken for this revision's own completed, actionable-free review.
+    if (
+      identity === 'coderabbitai' &&
+      isCodeRabbitReviewInProgressSummary(comment.body)
+    ) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'coderabbit-review-in-progress',
+      });
+      continue;
+    }
     // The gate already classifies a "No actionable comments were generated"
     // summary as RESOLVED, so it never enters `missingRegularComments` and needs
     // no disposition — auto-posting one would add brand-new noise.
@@ -538,6 +571,11 @@ per HEAD). Idempotent and fail-closed.
  * issue-scoped revalidation (`expectedLinkedPrs: null`), so a legitimate
  * issue-only handoff is accepted. Aborting on a contested claim is always
  * safe (the manual E6 path remains).
+ *
+ * `staleAgeMs` (#3270) is the configured `claimTiming.staleAge` window (e.g.
+ * via {@link readClaimStaleAgeMs}), threaded into the write-gate resolver so
+ * a takeover claim inside that window is recognized instead of being
+ * silently evaluated against the hardcoded 24h default.
  */
 function claimStillActive(
   owner,
@@ -546,6 +584,7 @@ function claimStillActive(
   claimId,
   isTrustedAuthor,
   forcedHandoffOptions,
+  staleAgeMs,
 ) {
   const comments = ghJsonPaginated([
     'api',
@@ -556,6 +595,27 @@ function claimStillActive(
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   }));
+  return resolveClaimStillActive(
+    events,
+    claimId,
+    isTrustedAuthor,
+    forcedHandoffOptions,
+    staleAgeMs,
+  );
+}
+/**
+ * Pure claim-ownership check {@link claimStillActive} delegates to, taking
+ * already-fetched comment events instead of shelling out itself -- so
+ * `tests/disposition-non-review-notices.test.mts` can exercise the #3270
+ * `staleAgeMs` threading directly, without stubbing `gh`.
+ */
+export function resolveClaimStillActive(
+  events,
+  claimId,
+  isTrustedAuthor,
+  forcedHandoffOptions,
+  staleAgeMs,
+) {
   const active = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor,
     forcedHandoffEnabled: forcedHandoffOptions.forcedHandoffEnabled,
@@ -564,6 +624,7 @@ function claimStillActive(
     isAuthorizedForcedHandoff: (forcedBy) =>
       forcedHandoffOptions.isAuthorizedForcedHandoff(forcedBy),
     requireAuthorMatchesForcedBy: true,
+    staleAgeMs,
   });
   return active?.claimId === claimId;
 }
@@ -847,6 +908,7 @@ if (import.meta.main) {
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const forcedHandoffPermissionCache = new Map();
+  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
   const forcedHandoffOptions = {
     forcedHandoffEnabled,
     isAuthorizedForcedHandoff: (forcedBy) =>
@@ -866,6 +928,7 @@ if (import.meta.main) {
       args.claimId,
       isTrustedAuthor,
       forcedHandoffOptions,
+      staleAgeMs,
     );
   if (!revalidateClaim()) {
     process.stderr.write(

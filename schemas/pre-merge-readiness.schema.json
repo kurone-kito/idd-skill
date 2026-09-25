@@ -22,6 +22,7 @@
     "claimIdentityInstalledAt",
     "staleSelfWaiver",
     "branchCurrency",
+    "closingSet",
     "ready",
     "blockers"
   ],
@@ -1252,7 +1253,8 @@
         "unauthorized",
         "malformed",
         "notConfigured",
-        "modeDisabled"
+        "modeDisabled",
+        "edited"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1517,16 +1519,45 @@
               }
             }
           }
+        },
+        "edited": {
+          "type": "array",
+          "description": "#3246: marker-shaped waivers whose comment is body-edited (editState 'edited') or whose edit state could not be resolved (editState 'unknown'); checked right after the #2657 reason-token exclusion and before every other classification, so an edited or edit-state-unresolved marker never reaches valid regardless of author, HEAD, claim, or expiry.",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "editState"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string",
+                "description": "Login of the waiver's author, normalized to lowercase."
+              },
+              "checkSelector": {
+                "type": "string",
+                "description": "Check-name selector the waiver targets."
+              },
+              "editState": {
+                "type": "string",
+                "enum": ["edited", "unknown"],
+                "description": "'edited' when GraphQL lastEditedAt is a parseable timestamp; 'unknown' when it is absent, empty, or unparseable."
+              }
+            }
+          }
         }
       }
     },
     "advisoryConvergenceWaiverPrecondition": {
       "type": "object",
-      "description": "#2021: deadline/terminal precondition gating whether a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver -- mirrors advisory-convergence.mts's own deadline clock (a 24h deadline anchored on the current HEAD commit's own committedDate) and its terminal Copilot-unavailability escape hatch, so this evidence collector never reports a check as covered before that gate itself would call the waiver waived.",
+      "description": "#2021: deadline/terminal precondition gating whether a posted idd-advisory-convergence waiver counts toward ci.coveredByWaiver -- mirrors advisory-convergence.mts's own deadline clock (a 24h deadline anchored on the earliest GitHub-recorded check suite for the current HEAD commit, kurone-kito/idd-skill#3253) and its terminal Copilot-unavailability escape hatch, so this evidence collector never reports a check as covered before that gate itself would call the waiver waived.",
       "required": [
         "checkSelector",
         "deadlineMinutes",
         "headCommittedAt",
+        "headObservedAt",
         "elapsedMinutes",
         "deadlinePassed",
         "terminalUnavailable",
@@ -1545,11 +1576,15 @@
         },
         "headCommittedAt": {
           "type": "string",
-          "description": "ISO timestamp of the current HEAD commit itself, or the literal 'none' when unavailable."
+          "description": "ISO timestamp of the current HEAD commit itself, or the literal 'none' when unavailable -- informational only, the committer-supplied timestamp that is never the clock (kurone-kito/idd-skill#3253)."
+        },
+        "headObservedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit, or the literal 'none' when unavailable -- the actual clock elapsedMinutes is measured from (kurone-kito/idd-skill#3253)."
         },
         "elapsedMinutes": {
           "type": ["integer", "null"],
-          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+          "description": "Whole minutes elapsed from headObservedAt to now, or null when headObservedAt is invalid or absent."
         },
         "deadlinePassed": {
           "type": "boolean",
@@ -1738,6 +1773,58 @@
         "baseRefName": {
           "type": "string",
           "description": "The PR's live base branch, read alongside the same headRefOid/baseRefName pr view fetch this report already performs."
+        }
+      }
+    },
+    "closingSet": {
+      "type": "object",
+      "description": "#3298: the closing-set / stray-commit-close merge-gate evidence, mirroring idd-pr-submit.instructions.md's D3.5 steps 6-7 so both the lite and standard profiles get this safety check from the helper verdict itself. Unlike developmentBranchTarget above, this is deliberately REQUIRED (a real collectPreMergeReadiness run always emits it) so an older report missing this field is caught by the lite 'missing required field -> stop' rule. A status other than 'match' or 'skipped-non-default-branch' adds a closing-set blocker.",
+      "required": ["status", "expected", "actual", "extra", "missing", "strayCommitCloses"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap) always block.",
+          "enum": ["match", "mismatch", "skipped-non-default-branch", "unavailable"]
+        },
+        "expected": {
+          "type": "array",
+          "description": "The deliberate closing set: --closing-issues when given (must include the claimed issue), else the single claimed issue number, else empty under --claimless.",
+          "items": { "type": "integer" }
+        },
+        "actual": {
+          "type": "array",
+          "description": "Every issue number from the PR's live closingIssuesReferences (GitHub's own merge-time closing-keyword resolution), including a cross-repository entry's bare number.",
+          "items": { "type": "integer" }
+        },
+        "extra": {
+          "type": "array",
+          "description": "actual entries outside the deliberate closing set, including any cross-repository entry regardless of whether its bare number coincides with an expected number.",
+          "items": { "type": "integer" }
+        },
+        "missing": {
+          "type": "array",
+          "description": "Deliberate closing-set entries with no matching same-repository closingIssuesReferences entry.",
+          "items": { "type": "integer" }
+        },
+        "strayCommitCloses": {
+          "type": "array",
+          "description": "Branch commits whose full message carries a closing keyword for an issue number outside expected -- a stray commit-message close that would auto-close an unintended issue on merge.",
+          "items": {
+            "type": "object",
+            "required": ["sha", "issue"],
+            "additionalProperties": false,
+            "properties": {
+              "sha": {
+                "type": "string",
+                "description": "Commit SHA carrying the stray closing keyword."
+              },
+              "issue": {
+                "type": "integer",
+                "description": "The stray closing keyword's captured issue number."
+              }
+            }
+          }
         }
       }
     },

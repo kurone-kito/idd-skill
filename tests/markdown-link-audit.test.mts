@@ -7,6 +7,7 @@ import {
   extractHeadingSlugs,
   extractLinkOccurrences,
   githubHeadingSlug,
+  resolveDistributedFileSet,
   resolveLinkTarget,
 } from '../src/scripts/markdown-link-audit.mts';
 
@@ -16,13 +17,17 @@ const CONFIG = {
   templateRoot: 'idd-template/',
 };
 
-function collect(files: Record<string, string>) {
+function collect(
+  files: Record<string, string>,
+  distributedFiles?: readonly string[] | null,
+) {
   const repoFiles = Object.keys(files);
   return collectMarkdownLinkAuditViolations(
     CONFIG,
     repoFiles,
     (pattern) => globFiles(pattern, repoFiles),
     (path) => files[path] ?? '',
+    distributedFiles,
   );
 }
 
@@ -408,4 +413,144 @@ test('fails closed when templateRoot is not a trailing-slash string', () => {
   assert.deepEqual(violations, [
     'markdown-link-audit: templateRoot must be a string ending with "/"',
   ]);
+});
+
+// --- distributed file set (#3296) ------------------------------------------
+
+const DISTRIBUTED_FILES = [
+  'idd-template/docs/idd-index.md',
+  'idd-template/docs/getting-started.md',
+];
+
+test('distributed set: a distributed-set source file linking a non-distributed idd-template file fails, naming the target', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '[link](../README.md)\n',
+      'idd-template/README.md': '# Template Readme\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /idd-template\/docs\/idd-index\.md:1:.*idd-template\/README\.md exists under idd-template\/ but is not in the distributed core file set/,
+  );
+});
+
+test('distributed set: a distributed-to-distributed link produces no violation', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '[link](getting-started.md#setup)\n',
+      'idd-template/docs/getting-started.md': '# Setup\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('distributed set: a non-distributed template source file (ONBOARDING.md) linking a non-distributed sibling keeps the escape-only rule and passes', () => {
+  const violations = collect(
+    {
+      'idd-template/ONBOARDING.md': '[link](README.md)\n',
+      'idd-template/README.md': '# Template Readme\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('distributed set: a directory link from a distributed-set file with no distributed entry underneath fails', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '[dir](../profiles/)\n',
+      'idd-template/profiles/README.md': '# Profiles\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /idd-template\/profiles\/ exists under idd-template\/ but is not in the distributed core file set/,
+  );
+});
+
+test('distributed set: a directory link from a distributed-set file with a distributed entry underneath passes', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '[dir](../profiles/)\n',
+      'idd-template/profiles/README.md': '# Profiles\n',
+    },
+    ['idd-template/docs/idd-index.md', 'idd-template/profiles/README.md'],
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('distributed set: a pure #fragment link from a distributed-set file resolves to the same file and passes', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '# Index\n\n[self](#index)\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('distributed set: an escaping link from a distributed-set file still reports the escape violation, not the distributed-set one', () => {
+  const violations = collect(
+    {
+      'idd-template/docs/idd-index.md': '[escapes](../../README.md)\n',
+      'README.md': '# Root Readme\n',
+    },
+    DISTRIBUTED_FILES,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /outside idd-template\/ in template context/);
+});
+
+test('resolveDistributedFileSet returns null when distributedFileSetBlockId is absent', () => {
+  assert.equal(
+    resolveDistributedFileSet(
+      { id: 'markdown-link-audit', globs: ['**/*.md'] },
+      [{ id: 'idd-template-core-files', paths: ['idd-template/README.md'] }],
+    ),
+    null,
+  );
+});
+
+test('resolveDistributedFileSet returns the named block paths on success', () => {
+  assert.deepEqual(
+    resolveDistributedFileSet(
+      {
+        id: 'markdown-link-audit',
+        globs: ['**/*.md'],
+        distributedFileSetBlockId: 'idd-template-core-files',
+      },
+      [{ id: 'idd-template-core-files', paths: ['idd-template/docs/a.md'] }],
+    ),
+    { paths: ['idd-template/docs/a.md'] },
+  );
+});
+
+test('resolveDistributedFileSet returns a config error for an unknown block id', () => {
+  const result = resolveDistributedFileSet(
+    {
+      id: 'markdown-link-audit',
+      globs: ['**/*.md'],
+      distributedFileSetBlockId: 'no-such-block',
+    },
+    [{ id: 'idd-template-core-files', paths: ['idd-template/docs/a.md'] }],
+  );
+  assert.ok(result && 'error' in result);
+});
+
+test('resolveDistributedFileSet returns a config error for a block without a paths array', () => {
+  const result = resolveDistributedFileSet(
+    {
+      id: 'markdown-link-audit',
+      globs: ['**/*.md'],
+      distributedFileSetBlockId: 'idd-template-core-files',
+    },
+    [{ id: 'idd-template-core-files' }],
+  );
+  assert.ok(result && 'error' in result);
 });

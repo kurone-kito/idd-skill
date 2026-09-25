@@ -477,13 +477,13 @@ still hold independently. See
 
 `advisoryWait.convergenceDeadline` (the maintainer-waiver escape hatch
 above) and `advisoryWait.terminalWindow` (the terminal contract's
-clock) measure differently — the deadline from the new HEAD commit's
-own `committedDate` (not the moment it is pushed), the window from the
+clock) measure differently — the deadline from when GitHub first
+recorded the new HEAD commit, the window from the
 earliest trusted, active-claim-bound, agent-bound, current-HEAD
 `advisory-wait-recovery:` marker's GitHub `created_at` — but both are
 scoped to the current HEAD, so a push to a new HEAD replaces both
 anchors rather than resetting a clock that keeps running: the deadline
-re-anchors on the new commit's own timestamp, and the terminal window
+re-anchors on when GitHub first recorded it, and the terminal window
 goes fully unanchored — no elapsed time at all — until a fresh
 current-HEAD recovery marker is posted. Waiting out either clock is
 therefore only a viable strategy once the diff has converged — no

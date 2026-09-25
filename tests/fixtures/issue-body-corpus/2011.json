@@ -1,0 +1,29 @@
+{
+  "id": "2011",
+  "category": "merged",
+  "note": "",
+  "title": "fix(audit-pr-cleanup): retry --apply internally until a re-scan reports zero new candidates",
+  "labels": [
+    "bug",
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\n`scripts/audit-pr-cleanup.mjs --apply` builds its candidate report\nexactly once (`src/scripts/audit-pr-cleanup.mts:274`,\n`const report = await buildReport(owner, repo, prNumber);`) and then\nloops over that fixed list a single time to minimize each candidate\n(lines 276-341), writing the final summary once afterward (lines\n350-351). `revalidateCandidate()` (lines 1150-1191) already re-fetches\na fresh per-candidate check immediately before minimizing, which\ncorrectly catches a sibling comment cascade-minimized earlier in the\n*same* pass (the fix already shipped for issue #1039) — but nothing\nre-scans for a candidate that only becomes eligible *after* the whole\npass already finished.\n\nReproduced independently across 6 of 6 F4 cleanup passes in one\nadopter session (`kurone-kito/setup.ubuntu`, 2026-08-12/13, PRs #97,\n#98, #100, #101, #102, #103): the first `--apply` call reports a\nsubset of the same-scoped dry-run's candidates as `applied`, with\n`status` still `needs-apply`/`applied` rather than `clean`; an\nimmediate second, byte-identical `--apply` call then converges to\n`candidates: 0, status: clean` with no further changes. Whether the\nunderlying cause is GitHub's GraphQL read-after-write propagation lag\non `minimizeComment`, or some other mid-run cascade the fixed\ncandidate list can't see, is not confirmed from source — but the\nabsence of any whole-run retry is confirmed, and is what forces the\nsecond invocation regardless of the exact cause.\n\n`.github/instructions/idd-merge.instructions.md:353-356`'s F4 cleanup\nstep currently routes any `--apply` outcome other than `applied`/`clean`\nstraight to a cleanup-failure comment, with no distinct \"re-apply once,\nthen decide\" branch — exactly the gap issue #1039's own (unmet)\nacceptance criteria anticipated (\"If any genuine re-apply-to-converge\nstate remains, `idd-merge.instructions.md` F4 documents it as distinct\nfrom a cleanup failure\").\n\nNo existing issue covers this: #1039 (closed) fixed a narrower\naccounting bug (the applied count itself was undercounted on a\nsame-run cascade) and is not this residual, whole-run-retry gap.\n\n## Proposed change\n\nHave `audit-pr-cleanup.mjs --apply` retry the whole pass internally,\nbounded (for example 3 attempts with a short backoff), re-running\n`buildReport()` and re-minimizing any newly-reported candidate after\neach pass, stopping as soon as a fresh report shows zero remaining\ncandidates or the attempt bound is reached. Report the final outcome\n(`clean`, `applied`, or — only if the bound is exhausted with\ncandidates still remaining — `incomplete`) exactly as today, so\ncallers and F4's existing status handling in\n`idd-merge.instructions.md` need no change for the common case; only\nthe \"still incomplete after the bound\" case is new, and should be\ndocumented in F4 as distinct from a hard cleanup failure (matching\n#1039's originally intended, unmet criterion), rather than routed\nstraight to the cleanup-failure comment path.\n\n## Acceptance criteria\n\n- `audit-pr-cleanup.mjs --apply` internally retries the full\n  scan-and-minimize pass, bounded (e.g. 3 attempts, short backoff),\n  until a fresh report shows zero remaining candidates or the bound is\n  reached.\n- A same-scoped dry-run immediately following a converged `--apply`\n  reports `clean` without requiring a second manual `--apply`\n  invocation, reproduced with a test simulating a candidate that only\n  becomes eligible after the first internal pass.\n- `--apply`'s final JSON output keeps its existing `clean`/`applied`\n  fields unchanged for the common (single-pass-converges) case; the\n  bound-exhausted case is distinguishable in the output from an\n  ordinary `applied`/`clean` result.\n- `.github/instructions/idd-merge.instructions.md`'s F4 cleanup step\n  documents the bound-exhausted case as distinct from a cleanup\n  failure, separate from the existing `failed`/`incomplete` routing to\n  the cleanup-failure comment format.\n- `pnpm run build` regenerates `scripts/audit-pr-cleanup.mjs` from the\n  edited `.mts` source.\n- `pnpm run lint:minimum` passes.\n\n## Candidate files\n\n- `src/scripts/audit-pr-cleanup.mts`\n- `scripts/audit-pr-cleanup.mjs` (generated; regenerate via\n  `pnpm run build`, do not hand-edit)\n- `tests/audit-pr-cleanup.test.mts`\n- `.github/instructions/idd-merge.instructions.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n---\n\n_Effort: M -- author-estimated size; a soft autopilot selection\ntie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "c659e8df65538949c865fe38f0ce532482c3c324de6d01f889470bb935f78250",
+  "fetchedAt": "2026-09-24T04:43:13.366Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

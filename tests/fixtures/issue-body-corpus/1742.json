@@ -1,0 +1,27 @@
+{
+  "id": "1742",
+  "category": "merged",
+  "note": "",
+  "title": "advisory-wait-state.mts collaborator-trust discovery misses advisory-reroll: markers",
+  "labels": [
+    "bug"
+  ],
+  "body": "`advisory-wait-state.mts`'s collaborator-trust discovery never matches `advisory-reroll:` markers\n\n## Problem\n\n`src/scripts/advisory-wait-state.mts`'s `advisoryMarkerComment()` predicate,\nused by `resolveTrustedCollaboratorMarkerLogins()` to discover which\ncollaborator logins should be added to the trusted-marker-actor set (when\n`IDD_TRUST_COLLABORATOR_MARKERS` is on), only matches:\n\n```ts\nfunction advisoryMarkerComment(body: string): boolean {\n  const normalized = String(body ?? '');\n  return (\n    normalized.startsWith('advisory-wait:') ||\n    normalized.startsWith('advisory-wait-recovery:') ||\n    normalized.startsWith('<!-- advisory-wait:')\n  );\n}\n```\n\n`advisory-reroll:` (added by AW6, `#1511`) is not in this list. A\ncollaborator whose *only* prior marker comment is an `advisory-reroll:`\nmarker is never discovered as a candidate for the collaborator-permission\ncheck, so they are never added to `trustedMarkerLogins` via this path —\neven though `marker-helpers.mts`'s canonical `OPERATIONAL_MARKERS` /\n`IDD_AGENT_DERIVED_MARKERS` tables already recognize `advisory-reroll:` as\na first-class operational marker.\n\nPractical impact: under `IDD_TRUST_COLLABORATOR_MARKERS`, a\nreroll-only-authored marker's author can be excluded from the trusted set\ncomputed by `advisory-wait-state.mjs` (the canonical helper-first path for\nthe AW1-AW5 protocol), purely because their evidence trail happens to be a\nreroll marker rather than an advisory-wait/-recovery one.\n\n## Scope note (found while working #1705)\n\nThis is the *code* analog of a doc-only gap already fixed in\n`idd-template/docs/idd-advisory-wait-shell-fallback.md` (the shell\nfallback's own `TRUSTED_MARKER_LOGIN_JSON` collaborator-discovery `jq`\nscan) — see PR #1741 / commit `e65aeb01`. `audit-pr-cleanup.mts`'s own\n`isTrustedMarkerAuthor()` was checked and does **not** have this gap: it\nchecks collaborator permission for a comment's author directly, without\nfirst pre-filtering by marker-type regex, so F4 cleanup itself is\nunaffected. This issue is scoped to `advisory-wait-state.mts` only.\n\n## Proposed change\n\nAdd `normalized.startsWith('advisory-reroll:')` to\n`advisoryMarkerComment()` in `src/scripts/advisory-wait-state.mts`, run\n`pnpm run build`, and verify `scripts/advisory-wait-state.mjs` /\n`bin/idd-advisory-wait-state.mjs` regenerate accordingly. Check whether\n`tests/advisory-wait-state.test.mts` already covers\n`resolveTrustedCollaboratorMarkerLogins()`/`advisoryMarkerComment()`, and\nadd a case for a reroll-only-authored comment if not.\n\n## Acceptance criteria\n\n- `advisoryMarkerComment()` recognizes `advisory-reroll:` as a\n  collaborator-trust-discovery candidate.\n- A test demonstrates a collaborator whose only prior marker is\n  `advisory-reroll:` is now discoverable via\n  `resolveTrustedCollaboratorMarkerLogins()`.\n- Generated `.mjs` artifacts (`scripts/`, `bin/`, `idd-template/scripts/`\n  mirror) rebuilt and committed per `docs/typescript-sources.md`.\n\nRefs #1705\n",
+  "bodySha256": "545ada953782be6bbbbb302965251555bf3e0c66051f86d88f4ff0e7988ae95d",
+  "fetchedAt": "2026-09-24T04:43:24.110Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

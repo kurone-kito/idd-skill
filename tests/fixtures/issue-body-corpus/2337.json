@@ -1,0 +1,28 @@
+{
+  "id": "2337",
+  "category": "merged",
+  "note": "",
+  "title": "feat(critique): make the critique lenses reach lite and delegate passes",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\n`docs/idd-workflow.md` carries two critique lenses — Mutation /\nwrite-side, and Gate-mirroring (`#2334`). The standard C-phase reaches\nthem: C1 routes per-agent implementation to\n`idd-overview-appendix.instructions.md`, whose Critique pass section\npoints at both.\n\nFour supported configurations never see them. Three review rounds on\npull request `#2336` found them one at a time, and each was confirmed\nthe same way — by grepping for the **existing** lens, which is absent\ntoo:\n\n| Surface | State |\n| --- | --- |\n| lite C1 (`idd-work-lite.instructions.md`) | self-contained; never reads the appendix |\n| lite E2 (`idd-review-snapshot-lite.instructions.md`) | asks for a generic critique only |\n| lite E10 (`idd-review-fix-lite.instructions.md`) | self-contained critique after an E9 fix |\n| a configured `critiqueLoop.delegate` | receives the branch diff, never a checklist |\n\n`grep -rn \"lens\\|write-side\" .github/instructions/lite/*.instructions.md`\nreturns nothing, so this is not a `#2334` regression: **neither lens has\never reached the lite profile**, and the delegate surface has never\ncarried checklist content since `#2199` introduced it.\n\nThe delegate case is the sharper one. Under `mode: fallback` with a\nsuccessful delegate — the default — or under `never`, the per-agent\npass does not run at all, so its entire checklist is suppressed, not\njust the lenses. The configured reviewer gets a diff and nothing else.\n\n## Why a pointer will not do\n\n`docs/weak-model-lite-profile-design.md` content principle 1 requires a\nlite file to restate the load-bearing rules it depends on **inline**,\nand names the standard files' \"see X\" pattern as the\nmishandled-cross-file-reference failure mode lite exists to avoid. So\nthe three lite surfaces cannot be fixed by adding a link; the checks\nhave to be written out where they are used.\n\nThat is a real cost against the lite budgets, which is why this is its\nown issue rather than a rider on `#2334`. Measured at authoring time:\n`bundle-work-lite` 71.1%, `bundle-review-snapshot-lite` 94.5%,\n`bundle-review-fix-lite` 95.5%, against a ceiling `audit-docs` enforces.\nTwo of the three have little room, so the inlined form must be the\ncondensed check names rather than the full prose.\n\n## Proposed change\n\nRestate both lenses in each of the three lite critique steps, in the\ncondensed form the lite profile uses elsewhere: the trigger condition\nand the named checks, without the rationale paragraphs the workflow\nguide carries.\n\nFor the delegate, give the configured reviewer the checklist rather than\nleaving it to chance. The mechanism is a decision this issue records\nrather than assumes — passing checklist content to an external command\nis a new capability on that surface, and the reviewer may not accept\ninput at all.\n\n## Candidate files\n\n- `idd-template/.github/instructions/lite/idd-work-lite.instructions.md`\n- `idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md`\n- `idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md`\n- `idd-template/docs/idd-workflow.md`\n- `audit/sync-manifest.json`\n\n## Acceptance criteria\n\n- Each of lite C1, lite E2, and lite E10 states both lenses inline: the\n  condition that triggers each, and its named checks. No lite file gains\n  a cross-file reference for them, per content principle 1.\n- The inlined check names match the workflow guide's exactly, so a\n  reader applying the lite form and a reader applying the standard form\n  run the same checks.\n- `node scripts/sync-docs.mjs --apply` regenerates the live copies, and\n  `node scripts/audit-docs.mjs --check` reports no drift and every lite\n  bundle within its ceiling. Any bundle that would exceed it is offset\n  inside that same bundle rather than by trimming an unrelated file.\n- The workflow guide records that a configured delegate does not receive\n  the per-agent checklist, and what an operator should therefore expect\n  from a delegate-only configuration.\n- The repository `pre-push-validate` command exits clean.\n\n## Deliberately not in scope\n\nChanging how `critiqueLoop.delegate` invokes its command so the\nchecklist reaches the external reviewer. That is a capability change on\nthe delegate surface with its own design questions — whether the\ncontract passes content at all, and what happens when the reviewer\nignores it — and it should not ride along with a documentation-parity\nfix. This issue documents the limitation; closing it is separate work.\n\nRefs `#2334`, pull request `#2336`.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: M -->\n",
+  "bodySha256": "c88218c7a78d63d30eb2873e029f9188aef36ab57d78ee009b78c14090f18404",
+  "fetchedAt": "2026-09-24T04:42:57.738Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

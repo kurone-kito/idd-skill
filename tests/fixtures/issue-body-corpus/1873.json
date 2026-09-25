@@ -1,0 +1,27 @@
+{
+  "id": "1873",
+  "category": "merged",
+  "note": "",
+  "title": "fix(schema): add missing activation-nonce-mismatch to pre-merge-readiness claim.reason enum",
+  "labels": [
+    "documentation"
+  ],
+  "body": "## Background\n\n`schemas/pre-merge-readiness.schema.json`'s `claim.reason` property\ndeclares:\n\n```json\n\"enum\": [\"match\", \"missing-active-claim\", \"claim-id-mismatch\", \"agent-id-mismatch\"]\n```\n\n`summarizeClaimValidation` in `src/scripts/protocol-helpers.mts` can\nalso set `reason` to a fifth value, `activation-nonce-mismatch`, when\nboth `expectedClaimId` and `expectedNonce` are supplied and the\ntrusted active-claim's activation-nonce winner does not match the\nexpected nonce (see the `else if (expectedClaimId && expectedNonce)`\nbranch, around line 5381). `idd-pre-merge.instructions.md`'s F2 gate\nalways passes `--nonce`, so this branch is reachable in production,\nnot merely theoretical.\n\nFlagged by CodeRabbit during review of PR #1871 (Refs #1867), which\nadded `description` fields to this schema but could not fix the enum\nitself: #1867's acceptance criteria are explicitly annotation-only —\n\"No schema property name, type, enum, pattern, required list,\nadditionalProperties rule, or emitted readiness field changes\" — so\nwidening the enum is out of scope for that PR.\n\n## Proposed change\n\nAdd `\"activation-nonce-mismatch\"` to `claim.reason`'s `enum` in\n`schemas/pre-merge-readiness.schema.json`, keeping every other enum\nvalue and the property's `description` unchanged.\n\n## Acceptance criteria\n\n- `claim.reason`'s enum includes `activation-nonce-mismatch` alongside\n  the existing four values.\n- No other property name, type, enum, pattern, required list, or\n  additionalProperties rule in the schema changes.\n- `node --test tests/schema-validation.test.mts\n  tests/schema-type-reconciliation.test.mts\n  tests/schema-output-roundtrip.test.mts` and\n  `node scripts/validate-schemas.mjs` pass.\n- A fixture or test exercises the `activation-nonce-mismatch` reason\n  against the schema (a currently-missing case: the existing\n  `fixtures/schemas/pre-merge-readiness.valid.json` /\n  `.invalid.json` pair does not cover this value).\n\nRefs #1867\n",
+  "bodySha256": "2bac2c65ff795ce8c1cd872e3cebdc6536a6ebc002a02eafd993b01884e37072",
+  "fetchedAt": "2026-09-24T04:43:19.805Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

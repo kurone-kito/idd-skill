@@ -42,6 +42,7 @@ interface NodeOverride {
   state?: string;
   classification?: 'roadmap' | 'execution';
   labels?: string[];
+  stateReason?: string;
 }
 
 function node(override: NodeOverride) {
@@ -56,6 +57,7 @@ function node(override: NodeOverride) {
     effort: null,
     milestone: null,
     depth: override.number === ROADMAP ? 0 : 1,
+    ...(override.stateReason ? { stateReason: override.stateReason } : {}),
   };
 }
 
@@ -882,9 +884,49 @@ test('the evidence body is the canonical IDD roadmap completion audit comment', 
   assert.match(body, /Closed execution leaves: #1047, #1048\./);
   assert.match(
     body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): none\./,
+  );
+  assert.match(
+    body,
     /Open \/ unresolved \/ inaccessible \/ nested-roadmap \/ open-linked-PR descendants: none\./,
   );
   assert.match(body, /Closing the roadmap as completed\./);
+});
+
+test('the evidence body lists not-planned/duplicate children instead of calling them complete (#3326)', () => {
+  const report = readyReport();
+  report.nodes = report.nodes.map((entry) => {
+    if (entry.number === 1047) {
+      return { ...entry, stateReason: 'not_planned' };
+    }
+    if (entry.number === 1048) {
+      return { ...entry, stateReason: 'duplicate' };
+    }
+    return entry;
+  });
+  const body = buildRoadmapCompletionAuditBody(report);
+  assert.match(
+    body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1047 \(not_planned\), #1048 \(duplicate\)\./,
+  );
+  assert.doesNotMatch(body, /closed or otherwise complete/);
+});
+
+test('the evidence body lists a not-planned nested-roadmap child the same way a leaf child is listed (#3398)', () => {
+  const report = readyReport();
+  report.nodes.push(
+    node({
+      number: 1049,
+      classification: 'roadmap',
+      state: 'CLOSED',
+      stateReason: 'not_planned',
+    }),
+  );
+  const body = buildRoadmapCompletionAuditBody(report);
+  assert.match(
+    body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1049 \(not_planned\)\./,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1036,61 @@ test('a stale (takeover-eligible) claim is not owned at the default age', () => 
   assert.equal(verdict.stale, true);
 });
 
+// #3270: WG_OLD_CLAIM is created at 2026-06-26T00:00:00Z; the takeover
+// below lands 20h later (2026-06-26T20:00:00Z) -- squarely in the 18-24h
+// gap the issue describes: stale under an 18h configured age, not stale
+// under the old hardcoded 24h `summarizeClaimValidation` silently fell back
+// to when `evaluateRoadmapClaim` didn't thread `staleAgeMs` into its own
+// claim-identity match. Before #3270, this scenario resolved to
+// `claim-id-mismatch` (the takeover never activated) even though the
+// caller passed the very `staleAgeMs` the second (branch/staleness) check
+// below honored -- only the FIRST (claim-identity) check ignored it.
+const WG_TAKEOVER_CLAIM_ID = 'claim-20260626T200000Z-995';
+
+function claimTakeoverComment() {
+  return {
+    body: renderClaimedByMarker({
+      agentId: 'github-copilot-cli-new',
+      claimId: WG_TAKEOVER_CLAIM_ID,
+      supersedes: CLAIM_ID,
+      timestamp: '2026-06-26T20:00:00Z',
+      branch: CLAIM_BRANCH,
+    }),
+    createdAt: '2026-06-26T20:00:00Z',
+    author: { login: 'kurone-kito' },
+  };
+}
+
+test('evaluateRoadmapClaim (#3270) recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const verdict = evaluateRoadmapClaim(
+    [claimComment(), claimTakeoverComment()],
+    {
+      roadmapNumber: ROADMAP,
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      isTrustedAuthor: () => true,
+      nowIso: '2026-06-26T20:00:01Z',
+      staleAgeMs: 18 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(verdict.owned, true);
+  assert.equal(verdict.reason, 'match');
+});
+
+test('evaluateRoadmapClaim (#3270) does not recognize the same takeover when staleAgeMs is explicitly the 24h default', () => {
+  const verdict = evaluateRoadmapClaim(
+    [claimComment(), claimTakeoverComment()],
+    {
+      roadmapNumber: ROADMAP,
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      isTrustedAuthor: () => true,
+      nowIso: '2026-06-26T20:00:01Z',
+      staleAgeMs: 24 * 60 * 60 * 1000,
+    },
+  );
+  assert.equal(verdict.owned, false);
+  assert.equal(verdict.reason, 'claim-id-mismatch');
+});
+
 test('an untrusted claim author yields no active claim', () => {
   const verdict = evaluateRoadmapClaim([claimComment()], {
     roadmapNumber: ROADMAP,
@@ -1062,6 +1159,31 @@ test('--apply on a ready roadmap posts the comment, closes, and releases the cla
   assert.equal(calls.comments[0]?.issue, ROADMAP);
   assert.match(calls.comments[0]?.body ?? '', /IDD roadmap completion audit/);
   assert.deepEqual(calls.closed, [ROADMAP]);
+  assert.equal(calls.released[0]?.claimId, CLAIM_ID);
+  // collect runs twice: initial evaluation + immediate-pre-close re-validation.
+  assert.equal(calls.collects, 2);
+});
+
+test('--apply on a ready roadmap with a not-planned child still closes and lists it in the evidence (#3326)', async () => {
+  const report = readyReport();
+  report.nodes = report.nodes.map((entry) =>
+    entry.number === 1048 ? { ...entry, stateReason: 'not_planned' } : entry,
+  );
+  const { deps, calls } = makeDeps(report);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.blockers, []);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, true);
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+  assert.equal(calls.comments.length, 1);
+  assert.equal(calls.comments[0]?.issue, ROADMAP);
+  assert.match(
+    calls.comments[0]?.body ?? '',
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1048 \(not_planned\)\./,
+  );
   assert.equal(calls.released[0]?.claimId, CLAIM_ID);
   // collect runs twice: initial evaluation + immediate-pre-close re-validation.
   assert.equal(calls.collects, 2);

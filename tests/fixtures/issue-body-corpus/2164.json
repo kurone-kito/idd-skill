@@ -1,0 +1,28 @@
+{
+  "id": "2164",
+  "category": "merged",
+  "note": "",
+  "title": "docs(review-triage): keep bot trigger phrases out of PATH B reasons",
+  "labels": [
+    "bug",
+    "documentation"
+  ],
+  "body": "## Background\n\nParent roadmap: #2166\n\nE6's PATH B non-review-notice template is\n`**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is\nnot a completed review (source: #issuecomment-{id})`. `{reason}` is\nfreeform. GitHub advisory bots scan comment bodies for their own\ncommand-trigger strings even inside Markdown code spans.\n\nObserved independently on three `kurone-kito/dotfiles` PRs in the\n2026-08-15 run (gist `52ed338da39f8cfb80b4bf8cf7c2636d`, Finding 4):\nworkers quoted the bot's documented review-request mention as the\nhonest explanation of a skip-review / low-star gate, and the bot\nreplied within seconds as if a manual review had been requested.\nE6's \"never auto-request a fresh review to upgrade a notice\" rule\ncovers API/actions, not this prose footgun.\n\nDo **not** paste the bot's literal review-request mention into this\nissue, any comment on it, or the eventual patch. Paraphrase only.\n\n## Proposed change\n\nAdd a content-safety note to E6 PATH B: `{reason}` must paraphrase a\nbot trigger or command, never reproduce the literal string (code\nspans do not suppress GitHub bot parsing). Give one canonical\nparaphrase for the low-star / manual-trigger skip-review case, for\nexample \"requires a manually triggered review for low-star\nrepositories\".\n\nDo not weaken the fail-closed honesty rule or the never-auto-request\nrule.\n\n## Acceptance criteria\n\n- `idd-template/.github/instructions/idd-review-triage.instructions.md`\n  E6 PATH B states that `{reason}` must not reproduce a bot's\n  literal command or trigger string, and why (code spans do not\n  suppress parsing).\n- The same section includes an acceptable paraphrase for the\n  low-star manual-trigger skip-review case.\n- The patched instruction text itself contains no bot review-request\n  mention that would fire if posted on GitHub.\n- `node scripts/sync-docs.mjs --apply` is clean for the edited pair.\n- `node scripts/audit-docs.mjs --check` and `pnpm run lint:minimum`\n  pass.\n\n## Candidate files\n\n- `idd-template/.github/instructions/idd-review-triage.instructions.md`\n- generated `.github/instructions/idd-review-triage.instructions.md`\n\nRefs gist Finding 4\n\n---\n\n_Autopilot suitability: 5 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 5 -->\n\n---\n\n_Effort: S -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n\n",
+  "bodySha256": "5ead23b287c35a4f6f123e6a745d00466573a7906a49737b56b2b47e1f2da162",
+  "fetchedAt": "2026-09-24T04:43:06.946Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

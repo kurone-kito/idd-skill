@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildActivitySnapshotSummary,
+  classifyCommentEditState,
   classifyThreadAckOnlyPostDisposition,
+  compareClaimEventOrder,
+  compareClaimIds,
   EDITED_AFTER_DISPOSITION_HINT,
+  isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
+  orderClaimEvents,
+  resolveActiveClaim,
   summarizeDispositionEvidenceForGate,
+  summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
 // #2014: `buildActivitySnapshotSummary` (the `reviewCurrency` producer) and
@@ -3270,9 +3278,9 @@ test('buildActivitySnapshotSummary excludes a live-status digest edit from both 
   const digestEdit = {
     id: 'D-2',
     // The digest is posted by the same trusted IDD agent that holds the
-    // claim, but recognition below must not depend on that -- it mirrors
-    // `isOperationalOrDigestCommentForGate`'s own unconditional digest
-    // branch.
+    // claim -- exclusion here does depend on that (issue #3337 gates the
+    // digest branch on `trustedMarkerLogins`); see the untrusted-author
+    // counterpart test below for the inverted case.
     author: { login: 'idd-bot' },
     body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |\n| --- | --- |\n| Phase | still waiting |`,
     createdAt: '2026-05-12T02:00:00Z',
@@ -3339,15 +3347,14 @@ test('buildActivitySnapshotSummary still counts a comment that only mentions the
   assert.equal(activitySummary.counts.comments, 1);
 });
 
-// Pins the "unconditional, not gated by trustedMarkerLogins" claim in the
-// source comment above -- an author outside `trustedMarkerLogins` still has
-// their digest-marker-shaped first line excluded, exactly like
-// `isOperationalOrDigestCommentForGate`'s own digest branch (never author-
-// gated, unlike its `forced-handoff` branch). Without this test, an
-// accidental move of the digest check to *after* the trust-gate early
-// return would still pass the two tests above (both use a trusted author)
-// while silently changing this behavior.
-test('buildActivitySnapshotSummary excludes a digest-marker-shaped first line from an untrusted author too', () => {
+// #3337: reverses the pre-#3337 "unconditional, not gated by
+// trustedMarkerLogins" digest exclusion this test used to pin. A digest is
+// only ever the posting agent's own activity, so an author outside
+// `trustedMarkerLogins` (a genuine stranger, never configured as trusted)
+// gets no special treatment at all -- their digest-marker-shaped comment now
+// counts as ordinary activity requiring disposition, exactly like any other
+// comment from that author. The trusted-author case above is unchanged.
+test('buildActivitySnapshotSummary counts a digest-marker-shaped first line from an untrusted author as activity', () => {
   const untrustedDigestShaped = {
     id: 'D-4',
     author: { login: 'not-a-trusted-marker-actor' },
@@ -3378,12 +3385,114 @@ test('buildActivitySnapshotSummary excludes a digest-marker-shaped first line fr
     },
   );
 
-  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T00:00:00Z');
+  assert.equal(activitySummary.maxActivityUpdatedAt, '2026-05-12T05:00:00Z');
   assert.equal(
     activitySummary.effective.maxActivityUpdatedAt,
-    '2026-05-12T00:00:00Z',
+    '2026-05-12T05:00:00Z',
   );
-  assert.equal(activitySummary.counts.comments, 1);
+  assert.equal(activitySummary.counts.comments, 2);
+  assert.equal(activitySummary.effective.totalItemCount, 2);
+});
+
+// #3337: `summarizeRegularCommentsForGate` mirrors `buildActivitySnapshotSummary`'s
+// trust-gated digest exclusion -- a trusted author's digest stays excluded,
+// but a genuine stranger's digest-marker-shaped comment now counts as an
+// ordinary unreplied regular comment.
+test('summarizeRegularCommentsForGate excludes a trusted author digest but counts an untrusted author digest as unreplied', () => {
+  const comments = [
+    {
+      id: 'RC-1',
+      author: { login: 'idd-bot' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      id: 'RC-2',
+      author: { login: 'not-a-trusted-marker-actor' },
+      body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+      createdAt: '2026-05-12T01:00:00Z',
+      updatedAt: '2026-05-12T01:00:00Z',
+    },
+  ];
+
+  const summary = summarizeRegularCommentsForGate(comments, {
+    iddAgentLogins: [],
+    trustedMarkerLogins: ['idd-bot'],
+  });
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['RC-2'],
+  );
+});
+
+// #3337: the digest branch must exclude on `trustedMarkerLogins.has(login)
+// || iddAgentLogins.has(login)`, never `trustedMarkerLogins` alone --
+// otherwise a digest posted by an `iddAgentLogins` member outside the
+// trusted set would wrongly count as a genuine IDD reply and advance the
+// `lastIddReplyAt` watermark past earlier, still-outstanding human
+// feedback.
+test('a digest by an iddAgentLogins member outside trustedMarkerLogins never advances lastIddReplyAt', () => {
+  const humanComment = {
+    id: 'REG-1',
+    author: { login: 'reviewer-a' },
+    body: 'Early feedback that must stay outstanding.',
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const agentDigest = {
+    id: 'REG-2',
+    author: { login: 'agent-x' },
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+
+  const summary = summarizeRegularCommentsForGate([humanComment, agentDigest], {
+    iddAgentLogins: ['agent-x'],
+    trustedMarkerLogins: [],
+  });
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['REG-1'],
+  );
+});
+
+// Same regression, on the disposition-evidence side: if the digest branch
+// excluded only on `trustedMarkerLogins`, `agent-x`'s digest would wrongly
+// enter `agentReplyComments` and clear the human comment as a
+// presence-only reply (#2139) -- it must stay outstanding instead.
+test('a digest by an iddAgentLogins member outside trustedMarkerLogins never pairs as a clearing reply', () => {
+  const humanComment = {
+    id: 'REG-3',
+    createdAt: '2026-05-12T00:00:00Z',
+    body: 'Please double-check the error-handling path here.',
+    author: { login: 'reviewer-a' },
+  };
+  const agentDigest = {
+    id: 'REG-4',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+    body: `${LIVE_STATUS_DIGEST_MARKER}\n\n| Field | Value |`,
+    author: { login: 'agent-x' },
+  };
+
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [humanComment, agentDigest], threads: [] },
+    {
+      iddAgentLogins: ['agent-x'],
+      trustedMarkerLogins: [],
+      advisoryBotLogins: [],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].id, 'REG-3');
 });
 
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
@@ -3709,4 +3818,423 @@ test('disposition evidence does not hint edited-after-disposition when the autho
 
   assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].hint, undefined);
+});
+
+// #3339: the claimed-by grammar is case-insensitive (`/i`), so a trusted,
+// otherwise well-formed first claim hand-composed with `supersedes: None`
+// or `supersedes: NONE` used to parse successfully yet carry a
+// non-lowercase token, which `applyClaimEvent` (reachable here via
+// `resolveActiveClaim`) then silently ignored -- it activates a fresh
+// claim only when `claim.supersedes === 'none'` exactly. Both
+// `parseClaimComment` and the full `resolveActiveClaim` round trip must
+// now treat each case variant as an ordinary fresh claim.
+for (const supersedesToken of ['None', 'NONE']) {
+  test(`parseClaimComment and resolveActiveClaim accept a first claim carrying supersedes: ${supersedesToken}`, () => {
+    const body =
+      `<!-- claimed-by: claude-x claim-1 supersedes: ${supersedesToken} ` +
+      '2026-05-10T00:00:00Z branch: issue/1-fix -->\n\n' +
+      '_claude-x: issue claim — IDD automation marker. Do not edit._';
+
+    const parsed = parseClaimComment(body, '2026-05-10T00:00:00Z');
+    assert.ok(parsed, `expected ${supersedesToken} to parse as a claim`);
+    assert.equal(parsed?.supersedes, 'none');
+
+    const active = resolveActiveClaim([
+      {
+        author: { login: 'claude-x' },
+        body,
+        createdAt: '2026-05-10T00:00:00Z',
+      },
+    ]);
+    assert.ok(active, `expected ${supersedesToken} to activate the claim`);
+    assert.equal(active?.claimId, 'claim-1');
+    assert.equal(active?.agentId, 'claude-x');
+  });
+}
+
+// A real claim ID must never be mistaken for a case-variant of the `none`
+// sentinel and coerced away -- only the literal sentinel normalizes.
+test('parseClaimComment leaves a real supersedes claim ID verbatim', () => {
+  const body =
+    '<!-- claimed-by: claude-y claim-2 supersedes: claim-NoneSuffix-1 ' +
+    '2026-05-10T00:00:00Z branch: issue/2-fix -->\n\n' +
+    '_claude-y: issue claim — IDD automation marker. Do not edit._';
+
+  const parsed = parseClaimComment(body, '2026-05-10T00:00:00Z');
+  assert.equal(parsed?.supersedes, 'claim-NoneSuffix-1');
+});
+
+// kurone-kito/idd-skill#3266: exhaustive same-second 3-way race.
+//
+// Before #3266, `sortClaimEvents` mixed a claim-id comparison into the
+// same comparator used for `created_at`-second/time/index ordering, which
+// is not transitive whenever a non-claim event (here, each session's own
+// activation-nonce) shares a `created_at` second with two same-second
+// competing claims. This generates every valid interleaving of 3
+// same-second claims plus 3 same-second activation-nonces -- one nonce
+// per claiming session, each constrained to follow its own claim (the
+// only realistic ordering: a session posts its nonce after its own
+// claim) -- and asserts every interleaving resolves to the
+// lexicographically earliest claim-id. 6 items with 3 same-session
+// ordering constraints leaves 6! / 2^3 = 90 valid interleavings; the
+// #3266 audit measured 20 of 90 wrong on the pre-fix comparator.
+function permutationsOf<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) {
+    return [items.slice()];
+  }
+  const result: T[][] = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+    for (const tail of permutationsOf(rest)) {
+      result.push([items[i], ...tail]);
+    }
+  }
+  return result;
+}
+
+test('resolveActiveClaim resolves every valid interleaving of a same-second 3-way race to the lexicographically earliest claim-id (0/90 wrong winners)', () => {
+  const SECOND = '2026-05-11T07:08:33Z';
+  const sessions = ['a', 'b', 'c'] as const;
+  const claimOf = (session: string) => `claim-${session.repeat(8)}`;
+  type RaceItem = { kind: 'claim' | 'nonce'; session: string; body: string };
+  const items: RaceItem[] = sessions.flatMap((session) => [
+    {
+      kind: 'claim' as const,
+      session,
+      body: `<!-- claimed-by: agent-${session} ${claimOf(session)} supersedes: none 2026-05-11T07:08:31Z branch: issue/1-task -->`,
+    },
+    {
+      kind: 'nonce' as const,
+      session,
+      body: `<!-- activation-nonce: agent-${session} ${claimOf(session)} nonce-${session} 2026-05-11T07:08:32Z -->`,
+    },
+  ]);
+
+  let interleavingCount = 0;
+  let wrongWinnerCount = 0;
+  for (const permutation of permutationsOf(items)) {
+    const claimIndex = (session: string) =>
+      permutation.findIndex(
+        (it) => it.kind === 'claim' && it.session === session,
+      );
+    const nonceIndex = (session: string) =>
+      permutation.findIndex(
+        (it) => it.kind === 'nonce' && it.session === session,
+      );
+    const isValidInterleaving = sessions.every(
+      (session) => claimIndex(session) < nonceIndex(session),
+    );
+    if (!isValidInterleaving) {
+      continue;
+    }
+    interleavingCount += 1;
+
+    const events = permutation.map((item) => ({
+      body: item.body,
+      createdAt: SECOND,
+      author: { login: 'trusted-actor' },
+    }));
+    const active = resolveActiveClaim(events, () => true);
+    if (active?.claimId !== claimOf('a')) {
+      wrongWinnerCount += 1;
+    }
+  }
+
+  assert.equal(interleavingCount, 90);
+  assert.equal(wrongWinnerCount, 0);
+});
+
+// kurone-kito/idd-skill#3266: `orderClaimEvents` and the comparators it
+// uses must be deterministic and, individually, transitive -- the
+// property the pre-#3266 single comparator lacked.
+test('orderClaimEvents returns the identical order on repeated calls over generated mixed same-second event lists', () => {
+  const SECOND = '2026-06-01T12:00:00Z';
+  const claimA = `<!-- claimed-by: agent-a claim-aaaaaaaa supersedes: none ${SECOND} branch: issue/9-task -->`;
+  const claimB = `<!-- claimed-by: agent-b claim-bbbbbbbb supersedes: none ${SECOND} branch: issue/9-task -->`;
+  const release = `<!-- unclaimed-by: agent-z claim-zzzzzzzz ${SECOND} -->`;
+  const plainComment = 'thanks for picking this up!';
+  const baseItems = [
+    { label: 'claimA', body: claimA },
+    { label: 'claimB', body: claimB },
+    { label: 'release', body: release },
+    { label: 'plain', body: plainComment },
+  ];
+
+  for (const permutation of permutationsOf(baseItems)) {
+    const events = permutation.map((item, index) => ({
+      body: item.body,
+      createdAt: SECOND,
+      author: { login: 'trusted-actor' },
+      id: index,
+    }));
+
+    const firstOrder = orderClaimEvents(events);
+    const secondOrder = orderClaimEvents(events);
+    assert.deepEqual(
+      secondOrder,
+      firstOrder,
+      `orderClaimEvents must be deterministic for permutation ${permutation.map((it) => it.label).join(',')}`,
+    );
+
+    // Structural invariant this permutation lets us check directly: the
+    // two same-second claim events must land in ascending claim-id order
+    // (claimA before claimB) in the output, while `release` and `plain`
+    // -- neither of which parses as a `claimed-by` marker -- must keep
+    // exactly the relative order they had in THIS permutation's own
+    // input (their "fetch order" within the second).
+    const claimOrder = firstOrder
+      .filter((event) => event.body === claimA || event.body === claimB)
+      .map((event) => (event.body === claimA ? 'claimA' : 'claimB'));
+    assert.deepEqual(claimOrder, ['claimA', 'claimB']);
+
+    const inputNonClaimOrder = permutation
+      .filter((item) => item.label === 'release' || item.label === 'plain')
+      .map((item) => item.label);
+    const outputNonClaimOrder = firstOrder
+      .filter((event) => event.body === release || event.body === plainComment)
+      .map((event) => (event.body === release ? 'release' : 'plain'));
+    assert.deepEqual(outputNonClaimOrder, inputNonClaimOrder);
+  }
+});
+
+/** Checks that `compare` induces a transitive weak order over `items`: for
+ * every triple, `compare(a,b) <= 0 && compare(b,c) <= 0` implies
+ * `compare(a,c) <= 0`. */
+function assertTransitiveForEveryTriple<T>(
+  compare: (left: T, right: T) => number,
+  items: readonly T[],
+  label: string,
+): void {
+  for (const a of items) {
+    for (const b of items) {
+      for (const c of items) {
+        if (compare(a, b) <= 0 && compare(b, c) <= 0) {
+          assert.ok(
+            compare(a, c) <= 0,
+            `${label} is not transitive for (${JSON.stringify(a)}, ${JSON.stringify(b)}, ${JSON.stringify(c)})`,
+          );
+        }
+      }
+    }
+  }
+}
+
+test('compareClaimEventOrder is transitive for every generated triple', () => {
+  const items = [
+    { second: 100, time: 100000, index: 0 },
+    { second: 100, time: 100000, index: 1 },
+    { second: 100, time: 100000, index: 2 },
+    { second: 100, time: 100500, index: 0 },
+    { second: 100, time: 100999, index: 3 },
+    { second: 101, time: 101000, index: 0 },
+    { second: 99, time: 99000, index: 5 },
+    { second: null, time: null, index: 0 },
+    { second: null, time: null, index: 1 },
+    { second: null, time: null, index: 2 },
+  ];
+  assertTransitiveForEveryTriple(
+    compareClaimEventOrder,
+    items,
+    'compareClaimEventOrder',
+  );
+});
+
+test('compareClaimIds is transitive for every generated triple', () => {
+  const items = [
+    'claim-aaaaaaaa',
+    'claim-bbbbbbbb',
+    'claim-zzzzzzzz',
+    'claim-aaaaaaaa',
+    'a',
+    'aa',
+    'ab',
+    'b',
+    'AAA',
+    'aaa',
+    '',
+  ];
+  assertTransitiveForEveryTriple(compareClaimIds, items, 'compareClaimIds');
+});
+
+// --- #3246: classifyCommentEditState / isTrustEvidenceComment --------------
+
+test('classifyCommentEditState: explicit null lastEditedAt is unedited', () => {
+  assert.equal(classifyCommentEditState({ lastEditedAt: null }), 'unedited');
+});
+
+test('classifyCommentEditState: a parseable timestamp is edited', () => {
+  assert.equal(
+    classifyCommentEditState({ lastEditedAt: '2026-05-17T00:10:00Z' }),
+    'edited',
+  );
+});
+
+test('classifyCommentEditState: an absent lastEditedAt is unknown', () => {
+  assert.equal(classifyCommentEditState({}), 'unknown');
+});
+
+test('classifyCommentEditState: an empty-string lastEditedAt is unknown, not coerced to edited or unedited', () => {
+  assert.equal(classifyCommentEditState({ lastEditedAt: '' }), 'unknown');
+});
+
+test('classifyCommentEditState: an unparseable lastEditedAt is unknown', () => {
+  assert.equal(
+    classifyCommentEditState({ lastEditedAt: 'not-a-date' }),
+    'unknown',
+  );
+});
+
+test('classifyCommentEditState: falls back to the snake_case last_edited_at when lastEditedAt is absent', () => {
+  assert.equal(classifyCommentEditState({ last_edited_at: null }), 'unedited');
+  assert.equal(
+    classifyCommentEditState({ last_edited_at: '2026-05-17T00:10:00Z' }),
+    'edited',
+  );
+});
+
+test('classifyCommentEditState: lastEditedAt wins over last_edited_at when both are present', () => {
+  assert.equal(
+    classifyCommentEditState({
+      lastEditedAt: null,
+      last_edited_at: '2026-05-17T00:10:00Z',
+    }),
+    'unedited',
+  );
+});
+
+test('classifyCommentEditState: never derives edit state from updatedAt/updated_at (kurone-kito/idd-skill#3173)', () => {
+  // The minimizeComment shape: updatedAt moves, lastEditedAt stays null.
+  assert.equal(
+    classifyCommentEditState({
+      lastEditedAt: null,
+      updatedAt: '2026-05-17T05:00:00Z',
+      createdAt: '2026-05-17T00:00:00Z',
+    }),
+    'unedited',
+  );
+});
+
+test('classifyCommentEditState: a null/undefined comment is unknown', () => {
+  assert.equal(classifyCommentEditState(null), 'unknown');
+  assert.equal(classifyCommentEditState(undefined), 'unknown');
+});
+
+test('isTrustEvidenceComment: true only for a trusted author with an unedited comment', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'kurone-kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: normalizes a mixed-case author login before checking trust (C1 review)', () => {
+  // isTrustedAuthor typically checks a lowercased trusted-login set --
+  // an unnormalized mixed-case GitHub login must not silently read as
+  // untrusted.
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'Kurone-Kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: '  Kurone-Kito  ' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: false for a trusted author whose comment was edited', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      {
+        author: { login: 'kurone-kito' },
+        lastEditedAt: '2026-05-17T00:10:00Z',
+      },
+      isTrusted,
+    ),
+    false,
+  );
+});
+
+test('isTrustEvidenceComment: false for an untrusted author even with an unedited comment', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { author: { login: 'stranger' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    false,
+  );
+});
+
+test('isTrustEvidenceComment: reads user.login when author.login is absent', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { user: { login: 'kurone-kito' }, lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: false for a null/undefined comment', () => {
+  const isTrusted = () => true;
+  assert.equal(isTrustEvidenceComment(null, isTrusted), false);
+  assert.equal(isTrustEvidenceComment(undefined, isTrusted), false);
+});
+
+// kurone-kito/idd-skill#3246 (Copilot review, PR #3403, round 3): the
+// nested author.login/user.login shapes above are the REST/GraphQL comment
+// shapes; provider-port.mts's own ProviderComment (and its review-thread
+// comment siblings) instead carry a flat `authorLogin` field. Before this
+// fix, a genuine provider-port comment object supplied neither nested
+// shape, so the computed login was always '' and this predicate failed
+// closed even for a trusted, unedited marker -- exactly the failure mode
+// this predicate exists to avoid for its sibling consumers (the
+// claim-marker and review/merge-evidence/disposition tracks).
+test('isTrustEvidenceComment: reads the flat authorLogin field when neither author.login nor user.login is present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'kurone-kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: prefers nested author.login over the flat authorLogin field when both are present', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      {
+        author: { login: 'kurone-kito' },
+        authorLogin: 'untrusted-actor',
+        lastEditedAt: null,
+      },
+      isTrusted,
+    ),
+    true,
+  );
+});
+
+test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field before checking trust', () => {
+  const isTrusted = (login: string) => login === 'kurone-kito';
+  assert.equal(
+    isTrustEvidenceComment(
+      { authorLogin: 'Kurone-Kito', lastEditedAt: null },
+      isTrusted,
+    ),
+    true,
+  );
 });

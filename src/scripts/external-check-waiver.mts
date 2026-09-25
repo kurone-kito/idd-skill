@@ -35,11 +35,14 @@ import {
   digestExternalCheckWaiverMarkerBody,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
+  readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
+import { fetchHeadObservedAt } from './review-clause.mts';
 
 /** Normalized policy object returned by {@link normalizePolicyConfig}. */
 type NormalizedPolicy = ReturnType<typeof normalizePolicyConfig>;
@@ -184,11 +187,19 @@ interface ExternalCheckWaiverPlanInput {
   expiresAt?: string;
   repoOwner?: string;
   /**
-   * #2328: the current HEAD commit's own timestamp, the anchor the
-   * `idd-advisory-convergence` waiver deadline is measured from. Absent or
-   * unparseable keeps the hatch shut, which is the safe direction.
+   * #2328: the current HEAD commit's own committer-supplied timestamp,
+   * informational only (kurone-kito/idd-skill#3253) -- see `headObservedAt`
+   * below for the waiver deadline's actual anchor.
    */
   headCommittedAt?: string;
+  /**
+   * kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+   * `createdAt` for the current HEAD commit, the anchor the
+   * `idd-advisory-convergence` waiver deadline is actually measured from.
+   * Absent or unparseable keeps the hatch shut, which is the safe
+   * direction.
+   */
+  headObservedAt?: string;
   /**
    * #2328: the configured `advisoryWait.convergenceDeadline` in minutes.
    * Supplied by the caller from the RAW policy document, exactly as
@@ -302,6 +313,7 @@ interface ExternalCheckWaiverReport {
     checkSelector: string;
     deadlineMinutes: number;
     headCommittedAt: string;
+    headObservedAt: string;
     elapsedMinutes: number | null;
     deadlinePassed: boolean;
     terminalUnavailable: boolean;
@@ -440,6 +452,9 @@ interface RunExternalCheckWaiverOptions {
   prComments?: WaiverCommentPayload[] | (() => WaiverCommentPayload[]);
   /** #2328: injected HEAD commit timestamp, so tests skip the commit read. */
   headCommittedAt?: string;
+  /** kurone-kito/idd-skill#3253: injected HEAD-observed anchor, so tests
+   * skip the check-suite read. */
+  headObservedAt?: string;
   /**
    * #2328 (review): injected linked-issue resolver, called once before the
    * post and once for the reconcile, so a test can model a takeover landing
@@ -828,6 +843,7 @@ export function planExternalCheckWaiver(
     ? (() => {
         const { precondition } = buildAdvisoryConvergenceWaiverPrecondition({
           headCommittedAt: input?.headCommittedAt,
+          headObservedAt: input?.headObservedAt,
           deadlineMinutes: input?.advisoryConvergenceDeadlineMinutes,
           now: now.toISOString(),
         });
@@ -851,7 +867,7 @@ export function planExternalCheckWaiver(
     blockingReasons.push(
       `${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR} waiver deadline has not passed ` +
         `(${elapsed === null ? 'elapsed unknown' : `${elapsed} of ${advisoryConvergenceWaiverPrecondition.deadlineMinutes} minutes`}` +
-        `, anchored on HEAD commit ${advisoryConvergenceWaiverPrecondition.headCommittedAt}); ` +
+        `, anchored on the HEAD's earliest recorded check suite ${advisoryConvergenceWaiverPrecondition.headObservedAt}); ` +
         'terminal Copilot unavailability was not evaluated here, so pass ' +
         '--allow-closed-precondition if that opener already applies',
     );
@@ -1060,6 +1076,30 @@ export async function runExternalCheckWaiver(
       headRefOid: String(pr.headRefOid ?? '').trim(),
     });
 
+  // kurone-kito/idd-skill#3253: the port-backed anchor for the deadline
+  // precondition check below -- a sibling read, not a replacement of
+  // `resolvedHeadCommittedAt` above, which stays wired only into the
+  // `--auto-bootstrap` expiry immediately below (explicitly unchanged by
+  // the issue: an earlier anchor there only shortens that waiver's
+  // validity window, the safe direction). Fails closed to `''` on any
+  // failure and never throws, so no try/catch is needed here.
+  //
+  // kurone-kito/idd-skill#3253 (Copilot review, PR #3404): only fetch for
+  // the exact `idd-advisory-convergence` selector this precondition
+  // actually gates (mirroring `planExternalCheckWaiver`'s own
+  // `preconditionGatedSelector` test) -- every other selector never reads
+  // `advisoryConvergenceWaiverPrecondition`, so paying for a GraphQL
+  // check-suite read (and its Checks API rate-limit budget) on every
+  // invocation regardless of selector was wasted for them. The injected
+  // test override (`options.headObservedAt`) is still honored regardless
+  // of selector, so a test can supply it without also setting
+  // `--check-selector`.
+  const resolvedHeadObservedAt =
+    options.headObservedAt ??
+    (args.checkSelector === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR
+      ? fetchHeadObservedAt(owner, name, args.prNumber)
+      : '');
+
   // kurone-kito/idd-skill#2657: the fixed, bounded validity window
   // computed from the PR's own HEAD commit timestamp -- independent of
   // `advisoryWait.convergenceDeadline` (the 2026-09-10 self-cancellation
@@ -1173,6 +1213,7 @@ export async function runExternalCheckWaiver(
       repoOwner: owner,
       claimless: args.claimless,
       headCommittedAt: resolvedHeadCommittedAt,
+      headObservedAt: resolvedHeadObservedAt,
       allowClosedPrecondition: args.allowClosedPrecondition,
       autoBootstrap: args.autoBootstrap,
       runId: args.runId,
@@ -1606,6 +1647,17 @@ export async function runExternalCheckWaiver(
  * #2328: the pull request's own issue comments, where waiver markers live.
  * Paginated so a long conversation cannot hide an existing waiver and cause
  * a duplicate to be appended.
+ *
+ * #3246: also resolves each comment's GraphQL edit state via a follow-up
+ * `fetchLastEditedAtByNodeId` batch read, keyed by the REST row's own
+ * `node_id`. Without this, `summarizeExternalCheckWaivers` would see every
+ * comment's edit state as `unknown` (never `unedited`), so an existing,
+ * genuinely-unedited waiver would never be classified `valid` -- reuse
+ * would never fire, and `--apply` would keep appending a duplicate marker.
+ * Deliberately NOT routed through `ProviderPort.listWorkItemComments`: this
+ * function's callers need `html_url`/`url` for `ReusableWaiver.commentUrl`,
+ * fields `ProviderComment` does not carry, so the existing REST read stays
+ * as-is and only gains the extra GraphQL round trip.
  */
 function fetchPrComments({
   owner,
@@ -1628,7 +1680,29 @@ function fetchPrComments({
       `external-check waiver apply blocked: could not read PR #${prNumber} comments to check for an existing waiver`,
     );
   }
-  return payload as WaiverCommentPayload[];
+  const rows = payload as WaiverCommentPayload[];
+  if (rows.length === 0) {
+    return rows;
+  }
+  const nodeIds = rows.map((row) => String(row.node_id ?? ''));
+  if (nodeIds.some((id) => id === '')) {
+    throw new Error(
+      `external-check waiver apply blocked: PR #${prNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return rows.map((row) => {
+    const nodeId = String(row.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `external-check waiver apply blocked: missing edit-state resolution for comment #${row.id} on PR #${prNumber}`,
+      );
+    }
+    return {
+      ...row,
+      lastEditedAt: lastEditedAtByNodeId.get(nodeId) ?? null,
+    };
+  });
 }
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
@@ -1640,6 +1714,14 @@ interface WaiverCommentPayload {
   created_at?: string | null;
   user?: GhAuthorPayload | null;
   author?: GhAuthorPayload | null;
+  /** REST-returned GraphQL node id, needed to batch-resolve edit state via
+   * {@link fetchLastEditedAtByNodeId} (#3246). */
+  node_id?: string | null;
+  /** #3246: see `ProviderComment.lastEditedAt`'s doc comment
+   * (provider-port.mts) for the three-state contract. Populated by
+   * `fetchPrComments` for every comment it fetches; a test that injects
+   * `options.prComments` directly must set this itself. */
+  lastEditedAt?: string | null;
 }
 
 /** An existing waiver this invocation should reuse instead of appending. */
@@ -2072,6 +2154,10 @@ function resolveLinkedIssueCandidates({
     return !issueNumber || Number(issue.number) === issueNumber;
   });
   const results: IssueCandidatePayload[] = [];
+  // #3270 (Copilot review, PR #3370): resolveHelperActiveClaim's staleAgeMs
+  // is now required -- this write-gate caller previously omitted it and
+  // silently used the hardcoded 24h default.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   for (const issue of issueRefs) {
     const comments = ghJson(
       [
@@ -2111,6 +2197,7 @@ function resolveLinkedIssueCandidates({
           }
           return auth.permission === 'admin' || auth.permission === 'maintain';
         },
+        staleAgeMs,
       },
     );
     if (!activeClaim) {

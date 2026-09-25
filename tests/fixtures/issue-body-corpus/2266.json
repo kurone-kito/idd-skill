@@ -1,0 +1,27 @@
+{
+  "id": "2266",
+  "category": "merged",
+  "note": "",
+  "title": "refactor(provider): route issue and claim state through the adapter",
+  "labels": [
+    "enhancement"
+  ],
+  "body": "## Background\n\nThe discovery, claim, roadmap-audit, and marker helpers still obtain repository state directly from GitHub CLI/API shapes. That couples issue ownership and durable marker behavior to GitHub even though the claim protocol itself is portable data. The adapter contract and provider policy are defined in the foundation issue, but these helpers still need a narrow provider seam before another platform can be introduced without rewriting workflow logic.\n\nBlocked by #2265\n\n## Proposed change\n\nRoute work-item and repository-state operations through the provider boundary and add the GitHub implementation without changing current marker or discovery semantics.\n\n- Add the GitHub adapter implementation for issue/work-item lookup, list/search, comments, labels, repository metadata, permissions, and marker writes required by discovery, claim, resume, and roadmap-audit flows.\n- Migrate the concrete issue/claim surfaces (`discover-*`, `claim-approval-gate.mts`, `post-idd-marker.mts`, `resume-claim-routing.mts`, `resume-route-selection.mts`, `idd-roadmap-audit-execute.mts`, and `collaborator-permission.mts`) to request normalized provider operations rather than constructing GitHub-specific calls themselves.\n- Keep `gh-exec.mts` as the bounded GitHub transport primitive, but make `gh` invocation an implementation detail of the GitHub adapter instead of a dependency visible to domain helpers.\n- Preserve the exact marker body formats, trusted-actor checks, issue selection filters, label semantics, and failure routing already enforced by these phases.\n\n## Acceptance criteria\n\n- [ ] The named discovery, claim, resume, roadmap-audit, and permission helpers import and use the provider port; none directly invoke `gh`, GitHub REST/GraphQL endpoints, or GitHub-specific response parsing.\n- [ ] The GitHub adapter is the only new provider-specific implementation for these operations and delegates subprocess/API execution through `gh-exec.mts` with existing timeout, pagination, and allowed-status behavior preserved.\n- [ ] Existing claim, unclaim, roadmap, label, and issue-comment marker bodies remain byte-for-byte compatible for equivalent GitHub inputs, including visible notes after HTML markers.\n- [ ] Provider errors normalize into the contract's categories and preserve current fail-closed behavior for authentication, permission, not-found, conflict, transient, and malformed-response cases.\n- [ ] Unit tests can exercise discovery and claim state with a fake provider without an authenticated `gh` process, while GitHub adapter tests cover the existing command/API argument and response shapes.\n- [ ] A static guard fails when a direct provider command or GitHub endpoint is added back to a migrated domain helper, while allowing the shared transport and GitHub adapter modules.\n- [ ] `pnpm run build`, the affected test suites, and the repository's minimum lint command pass.\n\n## Candidate files\n\n- `src/scripts/gh-exec.mts`\n- new provider contract/adapter modules under `src/scripts/`\n- `src/scripts/discover-*.mts`\n- `src/scripts/claim-approval-gate.mts`\n- `src/scripts/post-idd-marker.mts`\n- `src/scripts/resume-claim-routing.mts`\n- `src/scripts/resume-route-selection.mts`\n- `src/scripts/idd-roadmap-audit-execute.mts`\n- `src/scripts/collaborator-permission.mts`\n- `tests/`\n- generated `scripts/*.mjs` output\n\n---\n\n_Autopilot suitability: 3 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 3 -->\n\n_Effort: L -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: L -->\n",
+  "bodySha256": "31e525502ff4ac3e6fecc9974cb81288d5e46af81078e1f10ff72cacae7c2ca6",
+  "fetchedAt": "2026-09-24T04:43:01.923Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

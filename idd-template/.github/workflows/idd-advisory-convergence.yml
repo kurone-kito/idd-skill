@@ -156,16 +156,21 @@ jobs:
     # `GET /repos/{owner}/{repo}/actions/runs/{id}`, which needs this scope
     # explicitly in a private repository (an unspecified `GITHUB_TOKEN`
     # permission defaults to `none`, not inherited from the repository's
-    # own default). A job-level block replaces the workflow-level one
-    # entirely rather than adding to it, so every previously-granted scope
-    # is repeated here too. The self-waiver job below never calls this
-    # endpoint, so its own job-level permissions (unaffected by this one)
-    # do not need this scope.
+    # own default). Also adding `checks: read` (kurone-kito/idd-skill#3253):
+    # the new `getChangeRequestHeadObservedAt` port method reads
+    # `Commit.checkSuites` via GraphQL, which needs the Checks API scope in
+    # a private repository the same way the REST call above needs `actions`.
+    # A job-level block replaces the workflow-level one entirely rather
+    # than adding to it, so every previously-granted scope is repeated
+    # here too. The self-waiver job below never calls either of these, so
+    # its own job-level permissions (unaffected by this one) do not need
+    # them.
     permissions:
       contents: read
       issues: read
       pull-requests: read
       actions: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
         with:

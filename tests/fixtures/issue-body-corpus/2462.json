@@ -1,0 +1,28 @@
+{
+  "id": "2462",
+  "category": "merged",
+  "note": "",
+  "title": "feat(issue-authoring): close the gap where documented roadmap-child drafting never produces Candidate files",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "# feat(issue-authoring): close the gap where documented roadmap-child drafting never produces ## Candidate files\n\n## Background\n\n`issue-authoring`'s own \"Example roadmap package\" child-issue template\n(the shape used for every parallel-eligible roadmap child) never\nmentions `## Candidate files`, and the \"Required draft content\" list\nfor roadmap children doesn't include it either — so a roadmap authored\nstrictly through the documented flow ships children whose\n`## Candidate files` section is always absent.\n`discover-shared-file-overlap` deliberately returns `[]` when that\nsection is missing (a designed fallback, not a bug in the parser\nitself), so `candidateFiles` and `overlapFlag` come back empty/false\nfor every such candidate regardless of real file contention — the A4\nStep 2 high-contention shared-file check becomes a structural no-op for\nthe common case.\n\nClosed issue `#2237` already documented the section's parse *format*,\nbut that only helps once an authoring session independently decides to\nadd the section; it did not change what the documented drafting flow\nactually generates.\n\n## Proposed change\n\nPick (or combine) one of:\n\n- (a) require `## Candidate files` in the roadmap-child \"Required draft\n  content\" list and the \"Example roadmap package\" template, at least\n  for children expected to run under parallel/autonomous claiming, or\n- (b) have `discover-shared-file-overlap`'s own docs and/or the\n  Discover-phase instructions state loudly (not just in an internal\n  docstring) that the gate is a structural no-op unless the section is\n  independently populated.\n\nThis matters because the roadmap authoring flow is the primary way\nconcurrent-claim-eligible children get created, and the overlap gate\nexists specifically to protect that concurrency — silently no-opping it\ndefeats its purpose without any signal to the adopter that it never\nengaged.\n\n## Acceptance criteria\n\n- Either the roadmap-child template/required-content list now includes\n  `## Candidate files`, or the Discover-phase docs explicitly state the\n  no-op condition where the section is absent (or both).\n- `node scripts/audit-docs.mjs --check` passes.\n- If code changes are made to `discover-shared-file-overlap`, existing\n  tests continue to pass and a test covers the documented behavior.\n\n## Candidate files\n\n- `skills/issue-authoring/references/contract.md`\n- `skills/issue-authoring/references/draft-patterns.md`\n- `docs/idd-helper-scripts.md`\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n",
+  "bodySha256": "6008c6431348e7a64574553caf73a452ca3e34423aef57c7d1cc013a6b3c0d11",
+  "fetchedAt": "2026-09-24T04:42:55.659Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

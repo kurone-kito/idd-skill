@@ -22,7 +22,16 @@ import {
 // from the same module instead of reaching into advisory-wait-policy.mts
 // directly.
 export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
-
+// Façade re-export (kurone-kito/idd-skill#3258): `isCopilotErrorReviewBody`
+// now lives in the leaf `copilot-review-body.mts` module (alongside the new
+// review-body shape classifier `review-clause.mts` also imports), so that
+// module can be imported here -- rather than the reverse -- with no cycle.
+// Re-exporting it keeps every existing call site importing it from
+// protocol-helpers.mts (e.g. tests/pre-merge-readiness.test.mts) unchanged;
+// the separate named import below is this module's own internal use in
+// `findLastCopilotReviewCommit`, mirroring the `marker-helpers.mts` pattern
+// immediately above.
+export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
 // marker render/parse primitive now lives in the marker-helpers module.
 // Re-exporting it here keeps every existing call site importing from
@@ -31,6 +40,10 @@ export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
 // rule (it must never import back from this file).
 export * from './marker-helpers.mts';
 
+import {
+  classifyCopilotReviewBody,
+  isCopilotErrorReviewBody,
+} from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
   ParsedClaimMarker,
@@ -38,6 +51,7 @@ import type {
   ParsedReviewWatermark,
 } from './marker-helpers.mts';
 import {
+  advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
   findActivationNonceWinner,
   IDD_AGENT_DERIVED_MARKERS,
@@ -45,14 +59,17 @@ import {
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
+  parseAdvisoryWaitFamilyMarker,
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mts';
 import {
   getReviewEscalationChangesRequestedPolicy,
+  normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
 
@@ -81,6 +98,21 @@ interface CommentLike {
   updated_at?: string | null;
   html_url?: string | null;
   url?: string | null;
+  /** #3246: GraphQL `IssueComment.lastEditedAt`, or its snake_case
+   * `last_edited_at` equivalent -- see `classifyCommentEditState`'s doc
+   * comment for the three-state contract this reads. */
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
+  /** #3246 (Copilot review, PR #3403, round 3): the flat author-login shape
+   * `provider-port.mts`'s `ProviderComment` and its review-thread comment
+   * types actually carry -- distinct from this interface's own nested
+   * `author.login`/`user.login` REST/GraphQL shapes. `isTrustEvidenceComment`
+   * below reads this as a third fallback so a genuine provider-port comment
+   * object (as the sibling claim-marker and review/merge-evidence/
+   * disposition tracks this predicate exists for will pass it) doesn't
+   * silently compute an empty login and fail closed for every trusted
+   * caller. */
+  authorLogin?: string | null;
 }
 
 /** Review-thread reply node (GraphQL `reviewThreads` comment). */
@@ -121,9 +153,10 @@ interface ReviewLike {
    * (`GET /pulls/{n}/reviews`) and GraphQL already return this field under
    * the same `body` name, so no snake_case alias is needed here unlike
    * `submitted_at`/`commit_id` above. Consumed by
-   * {@link isCopilotErrorReviewBody} to exclude a Copilot
-   * "encountered an error" review from `findLastCopilotReviewCommit`'s
-   * latest-review selection. */
+   * {@link isCopilotErrorReviewBody} (a configured non-Copilot primary bot)
+   * and, as of #3265, by {@link classifyCopilotReviewBody} (the default
+   * Copilot bot) to decide whether `findLastCopilotReviewCommit` counts
+   * this review as covering its `commit_id`. */
   body?: string | null;
 }
 
@@ -463,6 +496,24 @@ export interface ExternalCheckWaiverEvidence {
     authorLogin: string;
     checkSelector: string;
     expiresAt: string;
+  }[];
+  /**
+   * #3246: waivers whose marker-shaped comment is body-edited
+   * (`editState: 'edited'`) or whose edit state could not be determined
+   * (`editState: 'unknown'`) -- checked right after the #2657
+   * reason-token exclusion and before every other classification, so a
+   * body-edited or edit-state-unresolved marker never reaches `valid`
+   * (or any other bucket) regardless of author, HEAD, claim, or expiry.
+   * GitHub lets any Write-role collaborator or App rewrite an existing
+   * comment's body in place while keeping its `id`, author, and
+   * `created_at`, so those alone are not proof the body is still the one
+   * that was posted -- see `classifyCommentEditState`'s doc comment for
+   * the three-state contract this reads.
+   */
+  edited: {
+    authorLogin: string;
+    checkSelector: string;
+    editState: 'edited' | 'unknown';
   }[];
 }
 
@@ -815,6 +866,327 @@ function waiverSelectorOverlapsConfiguredWaivable(
   );
 }
 
+/**
+ * #3246: `true` when `value` is a parseable ISO-8601 timestamp GitHub
+ * DateTime fields use. Mirrors `authoring-owner-provenance.mts`'s own
+ * `isParseableTimestamp` (the issue #3173 precedent this feature copies)
+ * rather than the stricter round-trip check `isValidIsoTimestamp`
+ * (marker-helpers.mts) uses for hand-authored marker fields -- a
+ * GraphQL-emitted timestamp is trusted server output, not
+ * operator-typed input.
+ */
+function isParseableGraphqlTimestamp(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim() !== '' &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+/**
+ * #3246: classify one comment's edit state from its GraphQL
+ * `lastEditedAt` (or a snake_case `last_edited_at`, whichever key the
+ * caller's shape carries -- {@link CommentLike} declares both). Reads
+ * nothing else off the comment: never `updatedAt`/`updated_at`, since
+ * GitHub's `minimizeComment` mutation (IDD's own hide-on-supersede
+ * sweeps call it) advances `updatedAt` while leaving `lastEditedAt`
+ * `null` (kurone-kito/idd-skill#3173).
+ *
+ * - `'unedited'`: `lastEditedAt` is an explicit JSON `null` -- GitHub
+ *   reports the comment was never body-edited.
+ * - `'edited'`: `lastEditedAt` is a parseable timestamp -- the comment
+ *   was body-edited after posting.
+ * - `'unknown'`: `lastEditedAt` is absent, empty, or unparseable -- the
+ *   caller never resolved edit state for this comment (or the read came
+ *   back incomplete). Never coerced to `'unedited'`: an unresolved edit
+ *   state must fail closed the same way a genuine edit does.
+ */
+export function classifyCommentEditState(
+  comment: CommentLike | null | undefined,
+): 'unedited' | 'edited' | 'unknown' {
+  if (comment == null) {
+    return 'unknown';
+  }
+  const raw =
+    comment.lastEditedAt !== undefined
+      ? comment.lastEditedAt
+      : comment.last_edited_at;
+  if (raw === null) {
+    return 'unedited';
+  }
+  if (isParseableGraphqlTimestamp(raw)) {
+    return 'edited';
+  }
+  return 'unknown';
+}
+
+/**
+ * #3246: `true` only when `comment`'s author passes the caller's own
+ * trust check AND its edit state is `'unedited'`. The shared per-comment
+ * trust predicate every trust-bearing-marker consumer (this file's own
+ * waiver classification below, and the sibling claim-marker and
+ * review/merge-evidence/disposition tracks) can build on so neither
+ * sibling has to re-derive edit-state trust independently.
+ */
+export function isTrustEvidenceComment(
+  comment: CommentLike | null | undefined,
+  isTrustedAuthor: (login: string) => boolean,
+): boolean {
+  if (comment == null) {
+    return false;
+  }
+  // Normalized the same way summarizeExternalCheckWaivers' own inline
+  // authorLogin computation is (#3246 C1 review): a caller-supplied
+  // isTrustedAuthor typically checks a lowercased trusted-login set, so
+  // an unnormalized mixed-case GitHub login would silently read as
+  // untrusted. #3246 (Copilot review, PR #3403, round 3): also falls back
+  // to the flat `authorLogin` field -- the shape `ProviderComment` and its
+  // review-thread comment siblings actually carry -- so a genuine
+  // provider-port comment object never computes an empty login here.
+  const authorLogin = String(
+    comment.author?.login ?? comment.user?.login ?? comment.authorLogin ?? '',
+  )
+    .trim()
+    .toLowerCase();
+  return (
+    isTrustedAuthor(authorLogin) &&
+    classifyCommentEditState(comment) === 'unedited'
+  );
+}
+
+/**
+ * kurone-kito/idd-skill#3328: whether active claim state is known for a
+ * closing issue -- `'present'` (a resolvable active claim exists),
+ * `'none'` (the issue's comments read cleanly and resolve to no active
+ * claim), or `'unknown'` (the read failed or was never attempted for at
+ * least one closing issue). An active claim always wins over a marker
+ * (see {@link classifyPrLoopMembership}), so `'unknown'` must fail the
+ * same way `'present'` does -- never optimistically treated as `'none'`.
+ */
+export type PrClosingIssueClaimState = 'present' | 'none' | 'unknown';
+
+/** PR loop-membership verdict returned by {@link classifyPrLoopMembership}. */
+export type PrLoopMembership =
+  | 'in-loop'
+  | 'out-of-loop-claimless'
+  | 'out-of-loop-authorized';
+
+/** {@link classifyPrLoopMembership}'s result: the verdict plus a
+ * human-readable reason, suitable to surface verbatim in a `--claimless`
+ * refusal message or a merge-gate blocker. */
+export interface PrLoopMembershipResult {
+  membership: PrLoopMembership;
+  reason: string;
+}
+
+/**
+ * kurone-kito/idd-skill#3328: the single shared definition of "does this PR
+ * run outside the IDD claim loop" -- replaces the pre-existing divergent
+ * `pre-merge-readiness.mts` (`--claimless` #2017) and
+ * `resolve-review-thread.mts` (`isClaimlessEligible` #2616) definitions,
+ * both of which now delegate here. Pure and network-free: every input is
+ * already-fetched data, so a caller collects the closing-issue claim state
+ * and PR comments once and reuses this function for every downstream
+ * decision.
+ *
+ * Evaluated top-to-bottom, first match wins (mirrors the Groom-hearing
+ * ruling recorded on the issue):
+ *
+ * 1. `closingIssueNumbers === null` (closing references unreadable) ->
+ *    `'in-loop'`, fail closed -- mirrors the
+ *    [fail-closed default](../../.github/instructions/idd-overview-core.instructions.md#fail-closed-default).
+ * 2. `closingIssueNumbers` is empty -> `'out-of-loop-claimless'` (#2017,
+ *    unchanged: a PR with nothing to claim against was never IDD-claimed).
+ * 3. `closingIssueClaimState` is `'present'` or `'unknown'` -> `'in-loop'`
+ *    -- an active (or unresolvable) claim always wins over a marker; a
+ *    marker only ever matters once every closing issue is confirmed to
+ *    have no active claim.
+ * 4. `prComments` contains a comment that parses via
+ *    {@link parseOutOfLoopMarker}, whose `prNumber` equals `prNumber`, and
+ *    that passes {@link isTrustEvidenceComment} (trusted author AND
+ *    unedited) -> `'out-of-loop-authorized'`. Trust is decided by the
+ *    comment's GitHub author login (via `isTrustedAuthor`), never the
+ *    marker's own embedded `{agent-id}` text.
+ * 5. Otherwise -> `'in-loop'` (no active claim and no valid marker: still
+ *    ordinary claimed-loop territory, just presently unclaimed).
+ */
+export function classifyPrLoopMembership({
+  prNumber,
+  closingIssueNumbers,
+  closingIssueClaimState,
+  prComments,
+  trustedMarkerLogins,
+}: {
+  prNumber: number;
+  closingIssueNumbers: number[] | null;
+  closingIssueClaimState: PrClosingIssueClaimState;
+  prComments: CommentLike[] | null | undefined;
+  trustedMarkerLogins: unknown[] | null | undefined;
+}): PrLoopMembershipResult {
+  if (closingIssueNumbers === null) {
+    return {
+      membership: 'in-loop',
+      reason: 'closing issue references are unreadable (fail closed)',
+    };
+  }
+  if (closingIssueNumbers.length === 0) {
+    return {
+      membership: 'out-of-loop-claimless',
+      reason: 'no closing issue references (#2017)',
+    };
+  }
+  if (
+    closingIssueClaimState === 'present' ||
+    closingIssueClaimState === 'unknown'
+  ) {
+    return {
+      membership: 'in-loop',
+      reason: `a closing issue's active claim state is ${closingIssueClaimState}`,
+    };
+  }
+  const normalizedTrustedLogins = new Set(
+    normalizeTrustedMarkerLogins(trustedMarkerLogins),
+  );
+  const isTrustedAuthor = (login: string): boolean =>
+    normalizedTrustedLogins.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  for (const comment of prComments ?? []) {
+    const marker = parseOutOfLoopMarker(
+      String(comment?.body ?? ''),
+      String(comment?.createdAt ?? comment?.created_at ?? ''),
+    );
+    if (
+      marker &&
+      marker.prNumber === prNumber &&
+      isTrustEvidenceComment(comment, isTrustedAuthor)
+    ) {
+      return {
+        membership: 'out-of-loop-authorized',
+        reason: `valid out-of-loop marker (reason:${marker.reason}) from ${marker.agentId}`,
+      };
+    }
+  }
+  return {
+    membership: 'in-loop',
+    reason:
+      'no closing issue has an active claim, and no valid out-of-loop marker was found',
+  };
+}
+
+/**
+ * kurone-kito/idd-skill#3328: same-repo positive-integer issue numbers
+ * extracted from a raw `closingIssuesReferences` passthrough, applying the
+ * identical repository-matching rules `computeClosingSetEvidence`
+ * (`supersession-detection.mts`) uses internally for its own
+ * `sameRepoNumbers` set. Shared by both `--claimless` consumers
+ * (`pre-merge-readiness.mts`'s `classifyPrLoopMembership` input and its
+ * `expectedClosingIssues` closing-set fix, `resolve-review-thread.mts`'s
+ * `isClaimlessEligible`) so neither re-derives its own copy. Deliberately
+ * best-effort rather than fail-closed the way `computeClosingSetEvidence`
+ * itself is: a malformed or unusable entry is simply skipped here, never
+ * aborting the whole extraction, because `computeClosingSetEvidence`'s OWN
+ * malformed-entry checks already fail the real merge gate closed to
+ * `'unavailable'` regardless of what this function returns for that same
+ * input -- this extraction only ever feeds a *candidate* expected/input
+ * set, never a gate's own pass/fail decision.
+ */
+export function extractSameRepoClosingIssueNumbers(
+  closingIssuesReferences: unknown,
+  owner: string,
+  repo: string,
+): number[] {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return [];
+  }
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  const numbers: number[] = [];
+  for (const entry of closingIssuesReferences) {
+    const record =
+      entry !== null && typeof entry === 'object'
+        ? (entry as Record<string, unknown>)
+        : null;
+    const rawNumber = record && 'number' in record ? record.number : entry;
+    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const repository = record?.repository;
+    if (repository !== null && repository !== undefined) {
+      if (typeof repository !== 'object') {
+        continue;
+      }
+      const repoRecord = repository as {
+        name?: unknown;
+        owner?: { login?: unknown } | null;
+      };
+      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
+      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
+      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
+        continue;
+      }
+    }
+    numbers.push(number);
+  }
+  return numbers;
+}
+
+/**
+ * kurone-kito/idd-skill#3328 (C1 critique pass, live-reproduced against
+ * both `--claimless` consumers, then further tightened per Copilot review
+ * on PR #3421): derive `classifyPrLoopMembership`'s own
+ * `closingIssueNumbers` input from a raw `closingIssuesReferences`
+ * passthrough, distinguishing three cases that must NOT collapse into
+ * each other:
+ *
+ * 1. **Genuinely no closing references** (a real, empty array) ->
+ *    `[]`, the unchanged `#2017` claimless case.
+ * 2. **The field itself is unreadable** (not an array at all -- a
+ *    malformed provider response, or a value this function was never
+ *    meant to see) -> `null`.
+ * 3. **Every entry resolves to a same-repo issue number** -> those
+ *    numbers.
+ *
+ * Any entry that does NOT resolve to a same-repo number -- cross-repo,
+ * or otherwise unparseable by
+ * {@link extractSameRepoClosingIssueNumbers} -- makes the WHOLE result
+ * `null`, even when other entries in the same array did resolve. Before
+ * #3328, both consumers refused `--claimless` outright whenever the raw
+ * `closingIssuesReferences` was non-empty, regardless of repo; a
+ * same-repo-only filter that silently drops an unresolved entry and
+ * returns the resolved subset would let the classifier -- and each
+ * consumer's own claim-state check -- run against an INCOMPLETE closing
+ * set, never checking the dropped entry's own claim state at all.
+ * `resolve-review-thread.mts` has no later closing-set gate to catch
+ * that gap the way `pre-merge-readiness.mts`'s own gate does, so this
+ * function fails the WHOLE result closed instead of accepting a partial
+ * one. `null` reproduces the pre-#3328 refusal either way: the
+ * classifier's own `null` row fails closed to `'in-loop'`.
+ */
+export function resolveClosingIssueNumbersForClassifier(
+  closingIssuesReferences: unknown,
+  owner: string,
+  repo: string,
+): number[] | null {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return null;
+  }
+  if (closingIssuesReferences.length === 0) {
+    return [];
+  }
+  const sameRepoNumbers = extractSameRepoClosingIssueNumbers(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  return sameRepoNumbers.length === closingIssuesReferences.length
+    ? sameRepoNumbers
+    : null;
+}
+
 export function summarizeExternalCheckWaivers(
   comments: CommentLike[] | null | undefined,
   {
@@ -924,6 +1296,7 @@ export function summarizeExternalCheckWaivers(
   const malformed: ExternalCheckWaiverEvidence['malformed'] = [];
   const notConfigured: ExternalCheckWaiverEvidence['notConfigured'] = [];
   const modeDisabled: ExternalCheckWaiverEvidence['modeDisabled'] = [];
+  const edited: ExternalCheckWaiverEvidence['edited'] = [];
   // An empty `mode` leaves this gate off (legacy/unit-caller default); a
   // non-empty value must equal `maintainer-authorized` exactly, mirroring
   // `advisory-convergence.mts`'s own guard.
@@ -959,6 +1332,24 @@ export function summarizeExternalCheckWaivers(
       !allowSelfReferentialBootstrapAuto &&
       parsed.reason === SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON
     ) {
+      continue;
+    }
+
+    // kurone-kito/idd-skill#3246: a body-edited (or edit-state-unresolved)
+    // marker is never trust evidence, regardless of author, HEAD, claim,
+    // or expiry -- GitHub lets any Write-role collaborator or App rewrite
+    // an existing comment's body in place while keeping its `id`, author,
+    // and `created_at`, so those alone are not proof the body is still
+    // the one that was posted. Checked before every other classification
+    // (only the #2657 reason-token exclusion above runs first) so an
+    // edited marker can never land in `valid` via any other path either.
+    const editState = classifyCommentEditState(comment);
+    if (editState !== 'unedited') {
+      edited.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        editState,
+      });
       continue;
     }
 
@@ -1117,15 +1508,33 @@ export function summarizeExternalCheckWaivers(
     malformed,
     notConfigured,
     modeDisabled,
+    edited,
   };
 }
 
 export function findLiveStatusDigestComments(
   comments: CommentLike[],
+  options: { isTrustedAuthor?: (login: string) => boolean } = {},
 ): CommentLike[] {
-  return comments.filter((comment) => {
+  const matches = comments.filter((comment) => {
     return firstLine(comment.body ?? '') === LIVE_STATUS_DIGEST_MARKER;
   });
+  // Issue #3337: the ordinary create/update/duplicate-detection callers pass
+  // `isTrustedAuthor` so a digest-marker comment from an untrusted actor is
+  // neither selected for update nor counted toward the duplicate check --
+  // the helper then creates or updates its own digest alongside it instead
+  // of rewriting a stranger's comment. The maintainer repair path
+  // (`planLiveStatusDigestRepair`, `createLiveStatusDigestSnapshot`, and
+  // `runDuplicateDigestRepair`'s own call sites) never passes this option,
+  // so it keeps seeing every author -- a maintainer can still retire a
+  // stranger's current-marker comment.
+  if (!options.isTrustedAuthor) {
+    return matches;
+  }
+  const { isTrustedAuthor } = options;
+  return matches.filter((comment) =>
+    isTrustedAuthor(String(comment.author?.login ?? comment.user?.login ?? '')),
+  );
 }
 
 function sha256Hex(value: string): string {
@@ -1427,8 +1836,9 @@ export function renderLiveStatusDigest(fields: LiveStatusDigestFields): string {
 export function planLiveStatusDigestUpsert(
   comments: CommentLike[],
   fields: LiveStatusDigestFields,
+  options: { isTrustedAuthor?: (login: string) => boolean } = {},
 ) {
-  const matches = findLiveStatusDigestComments(comments);
+  const matches = findLiveStatusDigestComments(comments, options);
   const nextBody = renderLiveStatusDigest(fields);
 
   if (matches.length > 1) {
@@ -1625,6 +2035,62 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
   escapeRegExp(CODERABBIT_SKIP_REVIEW_MARKER),
   'i',
 );
+
+// #3260: CodeRabbit edits its summary comment IN PLACE when it starts
+// reviewing new commits, nesting this inner marker (plus a "Currently
+// processing new changes in this PR" note) next to the previous review's
+// own content inside the same outer `CODERABBIT_SUMMARY_MARKER` wrapper --
+// so an in-progress revision is byte-for-byte indistinguishable from a
+// genuine walkthrough at the outer-wrapper level. Unlike
+// `CODERABBIT_SKIP_REVIEW_MARKER`, this marker deliberately does NOT
+// exclude a comment from `isReviewSummaryComment` -- it mirrors Codex's
+// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`
+// in disposition-non-review-notices.mts): the comment is still
+// summary-shaped, but a separate completeness gate
+// (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
+// auto-accept eligibility. Single-sourced so the settlement classifier,
+// `buildDispositionPlan`'s completeness gate, and
+// `classifyRegularBotComment`'s RESOLVED guard all recognize
+// byte-for-byte the same marker and cannot drift.
+export const CODERABBIT_REVIEW_IN_PROGRESS_MARKER =
+  '<!-- This is an auto-generated comment: review in progress by coderabbit.ai -->';
+
+const CODERABBIT_REVIEW_IN_PROGRESS_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_REVIEW_IN_PROGRESS_MARKER),
+  'i',
+);
+
+// #3260: CodeRabbit's paused-review marker ("Reviews paused"): like
+// `CODERABBIT_SKIP_REVIEW_MARKER`, this means the bot will not review new
+// commits until someone resumes it, so it is a terminal non-review notice
+// (declined), never a completed review -- added to
+// `ADVISORY_NON_REVIEW_NOTICE_PATTERNS` below and excluded from
+// `isReviewSummaryComment` the same way #2161 excludes the skip-review
+// marker.
+export const CODERABBIT_REVIEW_PAUSED_MARKER =
+  '<!-- This is an auto-generated comment: review paused by coderabbit.ai -->';
+
+const CODERABBIT_REVIEW_PAUSED_MARKER_RE = new RegExp(
+  escapeRegExp(CODERABBIT_REVIEW_PAUSED_MARKER),
+  'i',
+);
+
+/**
+ * True when `body` carries CodeRabbit's #3260 in-progress marker anywhere in
+ * its text -- the caller is expected to have already confirmed the body is
+ * CodeRabbit's summary shape (`isReviewSummaryComment`, which deliberately
+ * still returns `true` for this marker) before treating this as a
+ * completeness signal. Consumed by
+ * {@link computeSecondaryAdvisoryReviewSettlement} (reports pending, not
+ * settled), `disposition-non-review-notices.mts`'s `buildDispositionPlan`
+ * (skips with reason `coderabbit-review-in-progress`, mirroring Codex's own
+ * `codex-review-running`), and `classifyRegularBotComment` (never RESOLVED
+ * for it, even when an older "No actionable comments were generated"
+ * sentence is still present in the body).
+ */
+export function isCodeRabbitReviewInProgressSummary(body: unknown): boolean {
+  return CODERABBIT_REVIEW_IN_PROGRESS_MARKER_RE.test(String(body ?? ''));
+}
 
 // The exact marker `chatgpt-codex-connector[bot]` prefixes its own recurring
 // PR-level review-status comment with: a single issue-level comment it edits
@@ -1921,6 +2387,17 @@ export function classifyRegularBotComment(
   const body = (comment.body ?? '').trimStart();
 
   if (body.startsWith(CODERABBIT_SUMMARY_MARKER)) {
+    // #3260: an in-progress or paused revision must never resolve, even
+    // when an older "No actionable comments were generated" sentence (or a
+    // stale matching disposition) is still present from the review this
+    // revision superseded -- both checks below are un-reachable for either
+    // marker.
+    if (
+      isCodeRabbitReviewInProgressSummary(body) ||
+      CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(body)
+    ) {
+      return null;
+    }
     if (/No actionable comments were generated/i.test(body)) {
       return {
         classifier: 'RESOLVED',
@@ -2448,7 +2925,6 @@ export function hasFreshDisposition(
   thread: ThreadLike,
   options: {
     isDispositionAuthor?: (login: string) => boolean;
-    isIddOriginatedBody?: (body: string) => boolean;
   } = {},
 ): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
@@ -2457,18 +2933,20 @@ export function hasFreshDisposition(
   // Callers that require IDD-only dispositions (e.g., audit-pr-cleanup) should pass:
   //   { isDispositionAuthor: (login) => iddAgentLogins.has(login) }
   // This design trades stricter default behavior for backward compatibility with utility functions.
-  // `isIddOriginatedBody` (#2139) additionally accepts a stamped disposition
-  // regardless of author login: the #2135 review-reply stamp is utterance
-  // identity, so a stamped `**Accepted**` still clears an advisory thread
-  // even when the same trusted account also posts unmarked human prose.
+  // #2135's own design intent is that a spoofed/copied review-reply stamp
+  // "only makes the gate stricter for that comment" -- the stamp is
+  // utterance identity among already-trusted accounts (#2139), never an
+  // independent trust signal on its own. Honoring it regardless of author
+  // login (as an earlier revision of #2139 did) let an untrusted account's
+  // stamped `**Accepted**`/`**Rejected**` reply satisfy this gate (#3244).
+  // The stamp therefore only ever narrows who counts as an IDD disposition
+  // author -- it can never widen `dispositionAuthorPredicate` -- so honoring
+  // it is folded into that same predicate check below rather than kept as a
+  // separate, author-blind fallback.
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
-  const originatedBodyPredicate =
-    typeof options.isIddOriginatedBody === 'function'
-      ? options.isIddOriginatedBody
-      : null;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -2488,10 +2966,7 @@ export function hasFreshDisposition(
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (dispositionAuthorPredicate(authorLogin)) {
-      return true;
-    }
-    return Boolean(originatedBodyPredicate?.(String(comment.body ?? '')));
+    return dispositionAuthorPredicate(authorLogin);
   };
   const latestFeedbackAt = maxIsoTimestamp(
     comments
@@ -2608,6 +3083,10 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
   // CODERABBIT_SKIP_REVIEW_MARKER above) -- carries no review content even
   // though the outer wrapper alone cannot tell it apart from a real summary.
   CODERABBIT_SKIP_REVIEW_MARKER_RE,
+  // #3260: CodeRabbit's paused-review marker ("Reviews paused") -- like the
+  // skip-review notice above, it will not review new commits until someone
+  // resumes it, so it is a terminal decline rather than a completed review.
+  CODERABBIT_REVIEW_PAUSED_MARKER_RE,
 ];
 
 // #2641: CodeRabbit's own courtesy-acknowledgment reply shape, mirroring
@@ -3685,7 +4164,12 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // review content despite starting with the CodeRabbit summary marker, so it
 // is excluded here too -- never a summary walkthrough, always a non-review
 // notice (see isAdvisoryNonReviewNotice / ADVISORY_NON_REVIEW_NOTICE_PATTERNS).
-// No other configured bot currently has an analogous inner exclusion marker.
+// #3260: the paused-review marker (CODERABBIT_REVIEW_PAUSED_MARKER) gets the
+// same exclusion for the same reason -- a paused revision is a terminal
+// decline, never a walkthrough. The in-progress marker
+// (CODERABBIT_REVIEW_IN_PROGRESS_MARKER) is deliberately NOT excluded here --
+// see isCodeRabbitReviewInProgressSummary's own doc comment for why. No other
+// configured bot currently has an analogous inner exclusion marker.
 export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
   for (const [identity, marker] of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY) {
@@ -3694,7 +4178,8 @@ export function isReviewSummaryComment(body: unknown): boolean {
     }
     if (
       identity === 'coderabbitai' &&
-      CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text)
+      (CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text) ||
+        CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(text))
     ) {
       return false;
     }
@@ -3800,7 +4285,10 @@ export function dispositionNamesAdvisoryBot(
 //   risk `buildSecondaryQuietWindowStatus`'s settled-buffer branch still
 //   protects against.
 // - `declined: true` -- the LATEST matching comment for this HEAD is a
-//   rate-limit / skip-review notice (`isAdvisoryNonReviewNotice`). #2547's
+//   rate-limit / skip-review notice (`isAdvisoryNonReviewNotice`), which
+//   since #3260 also covers CodeRabbit's paused-review marker ("Reviews
+//   paused"): the bot will not review new commits until someone resumes
+//   it, so it is exactly as terminal as a rate-limit decline. #2547's
 //   live investigation (`gh api .../commits/{sha}/statuses` across several
 //   PRs' head commits, corroborated by hours of subsequent silence on the
 //   oldest sampled PR) found every sampled rate-limit decline reaches its
@@ -3812,8 +4300,13 @@ export function dispositionNamesAdvisoryBot(
 //   with no separately-fetched corroborating commit status still reports
 //   `declined: true` here, not the ambiguous/pending case.)
 // - Neither `settled` nor `declined` -- still pending: no comment from the
-//   bot at or after `headCommittedAt` at all, or an unparseable
-//   `headCommittedAt`/unconfigured `secondaryBotLogin`. #2335's original
+//   bot at or after `headCommittedAt` at all, an unparseable
+//   `headCommittedAt`/unconfigured `secondaryBotLogin`, or (#3260) the
+//   LATEST matching comment is CodeRabbit's own in-progress revision
+//   (`isCodeRabbitReviewInProgressSummary`) -- CodeRabbit edits its summary
+//   comment in place when it starts reviewing new commits, so the outer
+//   `summarize by coderabbit.ai` wrapper alone cannot tell an in-progress
+//   revision apart from a genuine completed walkthrough; #2335's original
 //   full-window protection is unchanged for this case.
 //
 // Only the single latest matching comment is examined -- a notice posted
@@ -3842,6 +4335,15 @@ export function dispositionNamesAdvisoryBot(
 // ever passes REST-raw comments straight through, without the CLI layer's
 // own `normalizeComment` pass, must not silently fail-closed here just
 // because it used the other field-name form.
+//
+// kurone-kito/idd-skill#3253: the `headCommittedAt` parameter here names a
+// ROLE (the cutoff timestamp this function compares comments against), not
+// a SOURCE -- this pure function is anchor-agnostic and never itself reads
+// or knows about committedDate vs. an observed check-suite time, so it is
+// not renamed. Every LIVE caller now passes the GitHub-observed anchor
+// (`headObservedAt`: the earliest check-suite `createdAt` for the current
+// HEAD) here, not the committer-supplied `committedDate` -- see
+// `buildPreMergeReadinessSummary`'s own call site below.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments: CommentLike[],
   {
@@ -3889,6 +4391,22 @@ export function computeSecondaryAdvisoryReviewSettlement(
     // finding cannot arrive after a short settled buffer (#3146).
     return { settled: false, settledAt: null, declined: false };
   }
+  if (
+    token === 'coderabbitai' &&
+    isCodeRabbitReviewInProgressSummary(latest.body)
+  ) {
+    // #3260: CodeRabbit is still processing new commits -- the outer summary
+    // wrapper is byte-for-byte identical to a genuine walkthrough, but this
+    // revision carries no review result yet. Keep the secondary bot in the
+    // ordinary pending path (full window) rather than settling on a
+    // revision that will be overwritten once the review actually finishes.
+    // Gated on `token` (Copilot review, PR #3412): this marker predicate is
+    // CodeRabbit-specific, so it must never fire for a differently
+    // configured secondary bot whose own comment happens to contain the
+    // same literal marker text -- `matches`/`latest` are already filtered
+    // to `secondaryBotLogin`'s own comments, not necessarily CodeRabbit's.
+    return { settled: false, settledAt: null, declined: false };
+  }
   return { settled: true, settledAt: latest.at, declined: false };
 }
 
@@ -3912,6 +4430,10 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // An empty `secondaryBotLogins` list reports the pre-existing unconfigured
 // shape (`{ settledAt: null, declined: false }`), matching
 // `computeSecondaryAdvisoryReviewSettlement`'s own unconfigured default.
+//
+// kurone-kito/idd-skill#3253: same parameter-name-kept-value-changed note as
+// `computeSecondaryAdvisoryReviewSettlement` above -- `headCommittedAt` here
+// is fed the GitHub-observed anchor by every live caller.
 export function foldSecondaryAdvisoryReviewSettlements(
   comments: CommentLike[],
   {
@@ -4472,6 +4994,22 @@ const EXACT_COPILOT_REVIEWER_LOGINS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Normalize a configured `primaryBotLogin` for comparison against
+ * {@link DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN}: trim, lower-case, and fall
+ * back to the default when blank. Shared by {@link isCopilotReviewerLogin}
+ * and `findLastCopilotReviewCommit` (kurone-kito/idd-skill#3265 E2 review)
+ * so the two "is this the default Copilot bot, or a configured non-Copilot
+ * one" decisions cannot drift apart.
+ */
+function normalizePrimaryBotLogin(primaryBotLogin: string): string {
+  return (
+    String(primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
+  );
+}
+
+/**
  * Match a review/reviewer login against the configured primary advisory bot.
  *
  * `primaryBotLogin` defaults to Copilot so existing callers stay behavior-
@@ -4508,10 +5046,7 @@ export function isCopilotReviewerLogin(
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
-  const configured =
-    String(primaryBotLogin ?? '')
-      .trim()
-      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const configured = normalizePrimaryBotLogin(primaryBotLogin);
   if (configured === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
     return EXACT_COPILOT_REVIEWER_LOGINS.has(normalized);
   }
@@ -4535,67 +5070,61 @@ export function isCopilotReviewerLogin(
   return false;
 }
 
+// `isCopilotErrorReviewBody` (kurone-kito/idd-skill#3258) now lives in
+// `copilot-review-body.mts` -- a leaf module `review-clause.mts` also
+// imports -- and is re-exported/imported above (see the façade re-export
+// beside `export * from './marker-helpers.mts'` near the top of this
+// file) so this module's own `findLastCopilotReviewCommit` below and every
+// existing external importer keep working unchanged.
+
 /**
- * #3015: GitHub Copilot's "encountered an error" review body, observed live
- * on PR `#3013` (issue `#2986`, commit `46bfb73b`,
- * <https://github.com/kurone-kito/idd-skill/pull/3013#pullrequestreview-5212307067>,
- * `copilot-pull-request-reviewer[bot]`, `COMMENTED`, submitted
- * 2026-09-15T15:44:53Z): Copilot failed to review the PR at all, yet the
- * review still carries `comments.totalCount` (`itemCount`) `0`, the same
- * shape a genuine "no findings" empty review has. Without this check, that
- * false-empty review both satisfies `resolveLatestCopilotReviewClause`'s
- * Clause 1 (review-clause.mts) and wins `findLastCopilotReviewCommit`'s
- * `LAST_COPILOT_COMMIT == PR_HEAD_SHA` short-circuit below, even though
- * Copilot never actually looked at the diff -- the same `itemCount === 0`
- * false-empty class `parseSuppressedCommentCount` (review-clause.mts,
- * #1880) already closed for the sibling "Suppressed comments (N)" shape.
+ * kurone-kito/idd-skill#3265: for the DEFAULT Copilot bot, coverage is now a
+ * positive-signature decision instead of the #3015 error-template denylist
+ * alone -- only a review body {@link classifyCopilotReviewBody} recognizes as
+ * `overview-v2` or `overview-legacy` counts as covering its `commit_id`. A
+ * body classified `error` (the exact #3015 template) or `unrecognized`
+ * (including any FUTURE Copilot error wording the old denylist would not
+ * know about) no longer wins the `LAST_COPILOT_COMMIT == PR_HEAD_SHA`
+ * short-circuit, closing the same class of false-empty-review gap
+ * #3015/#1880 fixed for the exact known template, this time for shape drift
+ * too. The real PR #3045 review bodies that only QUOTE the error sentence
+ * amid ordinary review prose classify `overview-legacy` (a genuine
+ * `<details><summary>...</summary>` anchor elsewhere in the body), not
+ * `error` or `unrecognized`, so those two still count -- the classifier's
+ * code-region stripping and structural anchoring (not a broad substring
+ * search) is what keeps that prose-quoting case from being misread as the
+ * error template.
  *
- * Matched by whole-body equality (after trimming and collapsing internal
- * whitespace, case-insensitively) against the exact observed template,
- * never a broad "error" substring search: this keeps the classifier
- * fail-closed toward under-matching, in the same spirit as
- * `isAdvisoryNonReviewNotice`, and -- unlike that function's substring/
- * heading search -- whole-body equality alone already excludes an advisory
- * bot quoting this exact sentence back in a larger review body (the
- * prose-quoting false-positive class `#1614` first found), with no need
- * for `parseSuppressedCommentCount`'s separate code-region-stripping step:
- * any additional content in the body (the bot's own commentary around the
- * quote) already breaks the equality match.
+ * A CONFIGURED NON-COPILOT primary bot keeps the pre-#3265 behavior
+ * unchanged (only the exact #3015 error template is excluded; a body-less
+ * or otherwise unrecognized-shaped review still counts) -- no shape
+ * signatures are known for an arbitrary bot, so a positive-signature
+ * requirement would silently break every existing non-Copilot caller.
  */
-const COPILOT_ERROR_REVIEW_BODY =
-  'copilot encountered an error and was unable to review this pull ' +
-  'request. you can try again by re-requesting a review.';
-
-/**
- * `true` when `body` is GitHub Copilot's exact "encountered an error"
- * review-body template (#3015) -- see {@link COPILOT_ERROR_REVIEW_BODY}'s
- * doc comment for the observed incident and matching rationale. Reused by
- * `findLastCopilotReviewCommit` below and by
- * `resolveLatestCopilotReviewClause` (review-clause.mts) so both "latest
- * covering review" selectors skip this review the same way, mirroring how
- * both already share {@link isCopilotReviewerLogin}.
- */
-export function isCopilotErrorReviewBody(body: unknown): boolean {
-  const normalized = String(body ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  return normalized === COPILOT_ERROR_REVIEW_BODY;
-}
-
 export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
+  const isDefaultCopilotBot =
+    normalizePrimaryBotLogin(primaryBotLogin) ===
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const latest = reviews
-    .filter(
-      (review) =>
-        isCopilotReviewerLogin(
+    .filter((review) => {
+      if (
+        !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
           review.user?.type ?? review.author?.type ?? null,
-        ) && !isCopilotErrorReviewBody(review.body),
-    )
+        )
+      ) {
+        return false;
+      }
+      if (!isDefaultCopilotBot) {
+        return !isCopilotErrorReviewBody(review.body);
+      }
+      const { shape } = classifyCopilotReviewBody(review.body);
+      return shape === 'overview-v2' || shape === 'overview-legacy';
+    })
     .map((review) => ({
       submittedAt: review.submitted_at ?? review.submittedAt ?? '',
       commitId: review.commit_id ?? review.commitId ?? '',
@@ -5308,18 +5837,24 @@ export function buildActivitySnapshotSummary(
   // #3194 (round 36 field feedback): a live-status digest edit must never
   // perturb review-currency (idd-overview-appendix.instructions.md's "Live
   // status digest" section) -- the same fail-closed, first-line-only digest
-  // recognition `isOperationalOrDigestCommentForGate` already uses for
+  // recognition `isOperationalOrDigestCommentForGate` uses for
   // `summarizeRegularCommentsForGate` / `summarizeDispositionEvidenceForGate`.
-  // Checked unconditionally (not gated by `trustedMarkerLogins`, mirroring
-  // that function's own digest branch): a comment merely mentioning the
-  // marker text on a line other than its first still counts as regular
-  // activity below.
+  // Issue #3337: gated by `trustedMarkerLogins` (unlike the pre-#3337
+  // unconditional exclusion this comment used to describe) -- a digest is
+  // only ever the agent's own activity, so only a trusted author's
+  // digest-marker comment is excluded here; an untrusted actor's
+  // digest-marker-shaped comment counts as ordinary activity requiring
+  // disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract"). A
+  // comment merely mentioning the marker text on a line other than its
+  // first still counts as regular activity below, regardless of author.
   const filteredComments = comments.filter((comment) => {
     const body = comment.body ?? '';
+    const authorLogin = (comment.author?.login ?? '').toLowerCase();
     if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
-      return false;
+      return !trustedMarkerLogins.has(authorLogin);
     }
-    if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
+    if (!trustedMarkerLogins.has(authorLogin)) {
       return true;
     }
     return operationalMarkerPrefixByStart(body) === null;
@@ -5602,14 +6137,21 @@ export function resolveLatestReviewWatermark(
 
 /**
  * Scans the same trusted-author comment stream `resolveLatestReviewWatermark`
- * consumes for a `review-watermark`/`review-baseline`-shaped comment whose
- * body fails the strict canonical `pattern` (e.g. a hand-authored note glued
- * directly to the leading underscore, `_IDD ...` with no space, missing
- * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary). Such a comment
- * already reads as absent to `resolveLatestReviewWatermark` (#2251) -- this
- * gives the F2 caller a way to tell "malformed marker found" apart from
- * "no watermark-shaped comment at all" without changing
- * `resolveLatestReviewWatermark`'s own return shape or selection behavior.
+ * consumes for a `review-watermark`/`review-baseline`-shaped comment that is
+ * malformed in either of two ways: (1) the body fails the strict canonical
+ * `pattern` (e.g. a hand-authored note glued directly to the leading
+ * underscore, `_IDD ...` with no space, missing
+ * `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`'s `\bIDD\b` boundary), or (2) for
+ * `review-watermark` specifically, the loose shape `pattern` accepts the
+ * body (so `operationalMarkerPrefix` recognizes it) but the stricter
+ * field-level `parseReviewWatermarkComment` rejects it -- e.g. a head SHA
+ * shorter than the required 40 hex characters, or a timestamp field that is
+ * neither a valid ISO-8601 string nor the literal `none` sentinel (#3339).
+ * Either way, such a comment already reads as absent to
+ * `resolveLatestReviewWatermark` (#2251) -- this gives the F2 caller a way
+ * to tell "malformed marker found" apart from "no watermark-shaped comment
+ * at all" without changing `resolveLatestReviewWatermark`'s own return
+ * shape or selection behavior.
  *
  * `options.expectedClaimId`, when set, restricts the scan to a malformed
  * comment whose own claim-id token (the second token after the marker
@@ -5641,10 +6183,28 @@ export function detectMalformedReviewWatermarkComments(
     }
     const body = comment.body ?? '';
     const label = detectMalformedOperationalMarker(body);
-    if (
-      label !== '<!-- review-watermark:' &&
-      label !== '<!-- review-baseline:'
-    ) {
+    const isShapeMalformed =
+      label === '<!-- review-watermark:' || label === '<!-- review-baseline:';
+    // #3339: OPERATIONAL_MARKER_ENTRIES' review-watermark shape `pattern`
+    // uses `\S+` for the head-SHA and both timestamp fields, so
+    // `operationalMarkerPrefix` already recognizes a body with e.g. a
+    // 12-hex-char SHA or a non-ISO/non-`none` timestamp as a well-formed
+    // marker -- `detectMalformedOperationalMarker` above then returns
+    // `null` for it (already recognized, so "not malformed" from that
+    // function's own point of view). `parseReviewWatermarkComment` then
+    // separately rejects it (`[0-9a-f]{40}` / `isValidIsoTimestamp`), so
+    // without this second check the comment silently reads as a genuinely
+    // absent watermark instead of a malformed one. Scoped to
+    // `review-watermark` only: no equivalent strict field parser exists
+    // for `review-baseline`.
+    const isFieldInvalidWatermark =
+      !isShapeMalformed &&
+      operationalMarkerPrefix(body) === '<!-- review-watermark:' &&
+      parseReviewWatermarkComment(
+        body,
+        comment.createdAt ?? comment.created_at ?? '',
+      ) === null;
+    if (!isShapeMalformed && !isFieldInvalidWatermark) {
       return false;
     }
     if (!expectedClaimId) {
@@ -5722,6 +6282,7 @@ export function summarizeRegularCommentsForGate(
         comment.body,
         comment.authorLogin,
         trustedMarkerLogins,
+        iddAgentLogins,
       ) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
@@ -5768,6 +6329,7 @@ export function summarizeRegularCommentsForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
@@ -6146,6 +6708,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .filter(
@@ -6317,6 +6880,7 @@ export function summarizeDispositionEvidenceForGate(
           comment.body,
           comment.authorLogin,
           trustedMarkerLogins,
+          iddAgentLogins,
         ),
     )
     .sort((left, right) => {
@@ -6492,8 +7056,6 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
-          isIddOriginatedBody: (body) =>
-            isIddOriginatedReply(body, markerPrefix),
         })
       ) {
         return null;
@@ -8091,9 +8653,15 @@ export function resolveRulesetDetailPath(
 }
 
 /** GitHub `pulls/{pr}/commits` REST payload fields `resolvePrFirstCommitAt`
- * consumes. */
+ * consumes, plus `sha` and `commit.message` (#3298): neither is read by
+ * `resolvePrFirstCommitAt` itself, but `pre-merge-readiness.mts` reuses this
+ * same fetched list for `closingSet.strayCommitCloses`
+ * (`supersession-detection.mts`'s `findStrayCommitCloses`), which needs
+ * both. */
 export interface PrCommitPayload {
+  sha?: string | null;
   commit?: {
+    message?: string | null;
     author?: { date?: string | null } | null;
     committer?: { date?: string | null } | null;
   } | null;
@@ -8205,11 +8773,15 @@ export function buildForcedHandoffEnableGate(options: {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
- * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
- *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
- *   (non-numeric/non-finite), or non-positive, staleness falls back to the
- *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
- *   pass it keep today's exact behavior. See `isStaleByAge`.
+ * - `staleAgeMs` (#1310) is the config-aware claim-staleness window, in
+ *   milliseconds (a parsed `claimTiming.staleAge`, e.g. via
+ *   {@link readClaimStaleAgeMs}) -- REQUIRED (#3270) so the type checker
+ *   catches a future write-gate caller that forgets it, instead of it
+ *   silently falling back to the hardcoded 24h `isStaleAt` default the way
+ *   every pre-#3270 caller did. A caller that deliberately wants the
+ *   distributed 24h default passes {@link DEFAULT_STALE_AGE_MS} explicitly.
+ *   Invalid (non-numeric/non-finite) or non-positive values still fall back
+ *   to {@link isStaleAt} via `resolveStalePredicate`. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(
   events: CommentLike[],
@@ -8224,7 +8796,7 @@ export function resolveActiveClaimForWriteGate(
       event: CommentLike,
     ) => boolean;
     requireAuthorMatchesForcedBy?: boolean;
-    staleAgeMs?: number;
+    staleAgeMs: number;
   },
 ): ParsedClaimMarker | null {
   const expectedLinkedPrReferences = new Set(
@@ -8418,6 +8990,30 @@ export function summarizeClaimValidation(
     claimLost: reason !== 'match',
     reason,
   };
+}
+
+/**
+ * Write-gate wrapper around {@link summarizeClaimValidation} with a
+ * REQUIRED `staleAgeMs` (#1310/#3270). `summarizeClaimValidation` itself
+ * keeps `staleAgeMs` optional because it also has non-write-gate callers
+ * (status/summary building such as `buildPreMergeReadinessSummary`, and
+ * tests exercising unrelated forced-handoff/nonce behavior) that must not
+ * be forced to thread a claim-staleness window they do not care about.
+ * Every claim-OWNERSHIP write-gate caller (a helper that decides whether
+ * THIS session may still mutate GitHub state) should call this wrapper
+ * instead, so the type checker catches a future write-gate caller that
+ * forgets to resolve and pass the configured window -- the exact class of
+ * bug #3270 fixes for the eight callers that previously omitted it.
+ */
+export function summarizeClaimValidationForWriteGate(
+  claimEvents: CommentLike[] = [],
+  options: Omit<
+    NonNullable<Parameters<typeof summarizeClaimValidation>[1]>,
+    'staleAgeMs'
+  > & { staleAgeMs: number },
+  captureTraceInto?: { activeSince?: string },
+): ClaimValidationSummary {
+  return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
 
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
@@ -9047,6 +9643,71 @@ export function computePreMergeReadinessBlockers(
     }
   }
 
+  // #3298: fail-closed closing-set / stray-commit-close invariant, mirroring
+  // #2272's developmentBranchTarget precedent immediately above -- absent
+  // entirely (unmigrated caller / unit fixture) adds no blocker, while
+  // `collectPreMergeReadiness` always emits a `closingSet` section. Whitelist
+  // of recognized non-blocking statuses, not a denylist, matching
+  // developmentBranchTarget's own convention: an unrecognized status must
+  // fail closed rather than silently pass. Tested with `!== undefined`, not
+  // truthiness (Copilot review, PR #3353): since the schema requires this
+  // section, only a genuinely absent key (the unmigrated-caller case above)
+  // skips the gate -- a present `closingSet: null` (or any other falsy,
+  // non-object value) is malformed evidence and must still reach
+  // `preMergeAsRecord`'s own `{}` fallback below, which resolves to
+  // `status: "unavailable"` and blocks, rather than silently passing.
+  if (report.closingSet !== undefined) {
+    const closingSet = preMergeAsRecord(report.closingSet);
+    const status = String(closingSet.status || 'unavailable');
+    if (status === 'skipped-non-default-branch' || status === 'match') {
+      // D3.5's own non-default-branch exemption, or a clean comparison --
+      // neither blocks.
+    } else if (status === 'unavailable') {
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          'closing-set evidence unavailable: the live default branch or the PR commit list could not be read, or the commit list hit the REST API’s 250-commit pagination cap',
+      });
+    } else if (status === 'mismatch') {
+      const extra = Array.isArray(closingSet.extra) ? closingSet.extra : [];
+      const missing = Array.isArray(closingSet.missing)
+        ? closingSet.missing
+        : [];
+      const strayCommitCloses = Array.isArray(closingSet.strayCommitCloses)
+        ? closingSet.strayCommitCloses
+        : [];
+      const detailParts: string[] = [];
+      if (extra.length > 0) {
+        detailParts.push(
+          `extra closing reference(s) ${extra.join(', ')} outside the deliberate closing set (pass --closing-issues to declare a deliberate multi-issue close)`,
+        );
+      }
+      if (missing.length > 0) {
+        detailParts.push(
+          `deliberate closing reference(s) ${missing.join(', ')} missing from closingIssuesReferences`,
+        );
+      }
+      for (const entry of strayCommitCloses) {
+        const strayEntry = preMergeAsRecord(entry);
+        detailParts.push(
+          `commit ${String(strayEntry.sha ?? 'unknown')} carries a stray closing keyword for #${String(strayEntry.issue ?? '?')}`,
+        );
+      }
+      blockers.push({
+        gate: 'closing-set',
+        detail:
+          detailParts.length > 0
+            ? detailParts.join('; ')
+            : 'closingSet.status is "mismatch" with no further detail available',
+      });
+    } else {
+      blockers.push({
+        gate: 'closing-set',
+        detail: `unrecognized closingSet.status "${status}" (expected "match", "mismatch", "skipped-non-default-branch", or "unavailable")`,
+      });
+    }
+  }
+
   return blockers;
 }
 
@@ -9223,15 +9884,24 @@ export function buildPreMergeReadinessSummary(
     // doesn't pass it).
     advisoryConvergenceOutageRelievedSince?: string;
     // #2021: the current HEAD commit's own `committedDate` (GraphQL),
-    // anchoring the SAME 24h deadline clock `advisory-convergence.mts`'s own
-    // gate uses before treating a posted `idd-advisory-convergence` waiver as
-    // active. Sourced by the CALLER (`pre-merge-readiness.mts`, via the
+    // informational only (kurone-kito/idd-skill#3253) -- see
+    // `advisoryConvergenceHeadObservedAt` below for the actual deadline
+    // clock. Sourced by the CALLER (`pre-merge-readiness.mts`, via the
     // identical GraphQL field `review-clause.mts`'s `fetchReviewsAndHeadCommit`
     // reads), mirroring how `copilotUnavailable` above is caller-precomputed.
+    advisoryConvergenceHeadCommittedAt?: string | null;
+    // kurone-kito/idd-skill#3253: the earliest GitHub-recorded check-suite
+    // `createdAt` for the current HEAD commit (`review-clause.mts`'s
+    // `fetchHeadObservedAt`) -- the GitHub-observed anchor for the SAME 24h
+    // deadline clock `advisory-convergence.mts`'s own gate uses before
+    // treating a posted `idd-advisory-convergence` waiver as active, and for
+    // the secondary-bot settlement cutoff below. Unlike
+    // `advisoryConvergenceHeadCommittedAt` above (committer-supplied, never
+    // verified by GitHub), this is what GitHub itself first observed.
     // Omitted/invalid (the default) resolves `elapsedMinutes` to `null` and
     // `deadlinePassed` to `false` -- the safer default, never falsely
     // treating a still-open deadline as passed.
-    advisoryConvergenceHeadCommittedAt?: string | null;
+    advisoryConvergenceHeadObservedAt?: string | null;
     // Configured `advisoryWait.convergenceDeadline` in minutes (#2021),
     // resolved by the caller, mirroring `externalCheckWaiverMaxValidity`
     // below's "policy value resolved by the CLI layer" pattern. Omitted by
@@ -9306,6 +9976,22 @@ export function buildPreMergeReadinessSummary(
       reason?: string;
       baseRefName: string;
     } | null;
+    // #3298: caller-precomputed closing-set / stray-commit-close evidence
+    // (`computeClosingSetEvidence` in supersession-detection.mts), reported
+    // verbatim -- mirrors `developmentBranchTarget` immediately above:
+    // omitted (the default) skips this gate entirely, so every pre-#3298
+    // fixture/caller is unaffected; `collectPreMergeReadiness` always
+    // resolves and passes a value. Unlike `developmentBranchTarget`, the
+    // schema marks `closingSet` required once emitted by a real collector
+    // run -- see the schema's own doc comment for why.
+    closingSet?: {
+      status: string;
+      expected: number[];
+      actual: number[];
+      extra: number[];
+      missing: number[];
+      strayCommitCloses: { sha: string; issue: number }[];
+    } | null;
     // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
     // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
     // above's "policy value resolved by the CLI layer" pattern. Omitted or
@@ -9315,7 +10001,7 @@ export function buildPreMergeReadinessSummary(
     secondaryQuietWindowMinutes?: number;
     // #2544: the configured `advisoryWait.secondaryBotLogin`(s), resolved by
     // the caller (mirroring `secondaryQuietWindowMinutes` above). Consulted
-    // together with `advisoryConvergenceHeadCommittedAt` below to detect
+    // together with `advisoryConvergenceHeadObservedAt` above to detect
     // whether each configured secondary bot has already posted a genuine
     // review for the current HEAD, so the quiet window can shorten to a
     // settled buffer instead of always requiring the full configured
@@ -9397,10 +10083,14 @@ export function buildPreMergeReadinessSummary(
   );
   // #2544/#3186: whether the configured secondary bot(s) have already
   // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
-  // `options.advisoryConvergenceHeadCommittedAt` (the HEAD commit's own
-  // `committedDate`, already resolved by the caller for the unrelated
-  // advisory-convergence-deadline precondition below) rather than a second
-  // fetch, since it is exactly "when did this HEAD land" either way.
+  // `options.advisoryConvergenceHeadObservedAt` (the earliest GitHub-recorded
+  // check-suite `createdAt` for the current HEAD, already resolved by the
+  // caller for the unrelated advisory-convergence-deadline precondition
+  // below) rather than a second fetch (kurone-kito/idd-skill#3253: this used
+  // to reuse `advisoryConvergenceHeadCommittedAt`, since it was "exactly
+  // 'when did this HEAD land' either way" -- the committer-supplied
+  // `committedDate` can lag the actual push, so both readers now share the
+  // GitHub-observed anchor instead).
   // `foldSecondaryAdvisoryReviewSettlements` combines every configured
   // login's own independent classification into the single shape
   // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
@@ -9415,7 +10105,7 @@ export function buildPreMergeReadinessSummary(
     comments,
     {
       secondaryBotLogins,
-      headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headCommittedAt: options.advisoryConvergenceHeadObservedAt,
     },
   );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
@@ -9621,18 +10311,21 @@ export function buildPreMergeReadinessSummary(
 
   // #2021: `advisory-convergence.mts`'s own gate never treats a posted
   // `idd-advisory-convergence` waiver as active until ONE of two independent
-  // preconditions is ALSO true -- a 24h deadline anchored on the current HEAD
-  // commit's own `committedDate`, or proven terminal Copilot unavailability
-  // (`copilotUnavailable` above). Reported truthfully in `waiverEvidence`
-  // itself either way (the marker is real and otherwise valid), but a check
-  // only becomes `coveredByWaiver` here once this SAME precondition has
-  // opened -- otherwise this helper reports `coveredByWaiver: true` before
+  // preconditions is ALSO true -- a 24h deadline anchored on the earliest
+  // GitHub-recorded check-suite for the current HEAD commit
+  // (kurone-kito/idd-skill#3253; `headCommittedAt` stays informational
+  // only), or proven terminal Copilot unavailability (`copilotUnavailable`
+  // above). Reported truthfully in `waiverEvidence` itself either way (the
+  // marker is real and otherwise valid), but a check only becomes
+  // `coveredByWaiver` here once this SAME precondition has opened --
+  // otherwise this helper reports `coveredByWaiver: true` before
   // `advisory-convergence.mts` itself would ever call the waiver `waived`,
   // sending an otherwise-correct session into a `gh pr merge` GitHub rejects
   // outright (root cause: kurone-kito/idd-skill#2021).
   const advisoryConvergencePreconditionResult =
     buildAdvisoryConvergenceWaiverPrecondition({
       headCommittedAt: options.advisoryConvergenceHeadCommittedAt,
+      headObservedAt: options.advisoryConvergenceHeadObservedAt,
       deadlineMinutes: options.advisoryConvergenceDeadlineMinutes,
       terminalUnavailable: copilotUnavailable,
       now,
@@ -10347,6 +11040,16 @@ export function buildPreMergeReadinessSummary(
     summary.developmentBranchTarget = options.developmentBranchTarget;
   }
 
+  // #3298: omitted entirely (not even `null`) when the caller does not pass
+  // it, mirroring developmentBranchTarget's own omission contract
+  // immediately above -- see that option's doc comment for why
+  // `computePreMergeReadinessBlockers` treats an absent section as "no
+  // gate" (unmigrated caller / unit fixture) while the real collector
+  // always emits one.
+  if (options.closingSet) {
+    summary.closingSet = options.closingSet;
+  }
+
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
   // Includes the F2 ack-only overrides (#2125) so a fully-autonomous F3
@@ -10474,7 +11177,51 @@ function resolveStalePredicate(
     isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs);
 }
 
-function compareClaimIds(left: string, right: string): number {
+/**
+ * Resolve the configured claim-staleness window (`claimTiming.staleAge`,
+ * #1310) in milliseconds from an already-loaded `.github/idd/config.json`
+ * object (or `null`) -- e.g. `loadIddConfig()`'s or `loadTrustedIddConfig()`'s
+ * return value directly, or a raw untyped config object a caller already
+ * parsed itself. The single shared config-read point every write-gate
+ * caller of {@link resolveActiveClaimForWriteGate} /
+ * {@link summarizeClaimValidationForWriteGate} should use, so a caller that
+ * already has its config in hand needs no second local copy of this
+ * parse-with-fallback (#3270 hoists this out of `pre-merge-readiness.mts`,
+ * its sole pre-#3270 home, to a shared façade every caller across the
+ * codebase can import). `normalizePolicyConfig(config).claimTiming.staleAge`
+ * is already fail-safe-normalized (a valid ISO-8601 duration, or the
+ * distributed `PT24H` default when the configured value is missing or
+ * malformed), so `parseIsoDurationToMs` only needs its own `?? fallback` for
+ * belt-and-suspenders defense, not as the primary fallback path.
+ *
+ * Deliberately defined here, not in `policy-helpers.mts` (the issue's own
+ * proposed location): `policy-helpers.mts` -> `protocol-helpers.mts` ->
+ * `idd-config.mts` -> `policy-helpers.mts` would be a real import cycle,
+ * since `idd-config.mts` already imports the critique-loop resolvers from
+ * `policy-helpers.mts` and this file already imports `loadIddConfig` from
+ * `idd-config.mts`. This file already imports `normalizePolicyConfig` /
+ * `parseIsoDurationToMs` FROM `policy-helpers.mts` with no cycle (that file
+ * has no dependency back on this one), so co-locating this reader beside
+ * {@link DEFAULT_STALE_AGE_MS} / {@link isStaleAt} / {@link isStaleByAge} —
+ * the other claim-staleness primitives it composes — avoids the cycle
+ * entirely while keeping every claim-staleness primitive in one module.
+ */
+export function readClaimStaleAgeMs(config: unknown): number {
+  return (
+    parseIsoDurationToMs(normalizePolicyConfig(config).claimTiming.staleAge) ??
+    DEFAULT_STALE_AGE_MS
+  );
+}
+
+/**
+ * Ascending, case-sensitive ASCII compare of two claim-ids -- the
+ * lexicographic tie-break `idd-claim.instructions.md` documents for
+ * same-second competing claims. A plain string comparator over a single
+ * key, so it is trivially transitive for every triple. Exported so
+ * `orderClaimEvents` below and its tests share and can directly assert
+ * against the identical primitive.
+ */
+export function compareClaimIds(left: string, right: string): number {
   if (left === right) {
     return 0;
   }
@@ -10515,60 +11262,128 @@ function isStrictlyBeforeIso(
   return leftTime < rightTime;
 }
 
+/** {@link orderClaimEvents}'s per-event decoration; also the shape
+ * {@link compareClaimEventOrder} compares directly. */
+interface DecoratedClaimEvent {
+  event: CommentLike;
+  index: number;
+  time: number | null;
+  second: number | null;
+  claimId: string | null;
+}
+
 /**
- * Chronological ordering `resolveActiveClaim` and
- * `resolveActiveClaimWithForcedHandoffTrace` both reduce over: by GitHub
- * `created_at` second, tie-broken by claim-id (same-second contenders),
- * then by sub-second time, then by original array index.
+ * Base chronological comparator: by GitHub `created_at` second (`null`
+ * sorts last), then by sub-second time (`null` sorts last), then by
+ * original array index. Deliberately excludes any claim-id comparison --
+ * a single comparator that conditionally switched to comparing claim-id
+ * only when both sides happened to parse as a claim (the pre-#3266
+ * `sortClaimEvents`) is not transitive: a claim/non-claim/claim triple in
+ * the same second can cycle (`kurone-kito/idd-skill#3266`). This
+ * comparator alone is a plain lexicographic order over a 3-tuple and is
+ * transitive for every triple; {@link orderClaimEvents} applies the
+ * claim-id tie-break as a separate, second pass instead of folding it in
+ * here. Exported so a test can assert this comparator's own transitivity
+ * directly.
  */
-function sortClaimEvents(events: CommentLike[]): CommentLike[] {
-  return events
-    .map((event, index) => {
-      const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
-      return {
-        event,
-        index,
-        claimId: claim?.claimId ?? null,
-        time: createdAtToTime(event.createdAt),
-        second: createdAtToSecond(event.createdAt),
-      };
-    })
-    .sort((left, right) => {
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.second !== right.second
-      ) {
-        return left.second - right.second;
-      }
-      if (left.second !== null && right.second === null) {
-        return -1;
-      }
-      if (left.second === null && right.second !== null) {
-        return 1;
-      }
+export function compareClaimEventOrder(
+  left: Pick<DecoratedClaimEvent, 'second' | 'time' | 'index'>,
+  right: Pick<DecoratedClaimEvent, 'second' | 'time' | 'index'>,
+): number {
+  if (
+    left.second !== null &&
+    right.second !== null &&
+    left.second !== right.second
+  ) {
+    return left.second - right.second;
+  }
+  if (left.second !== null && right.second === null) {
+    return -1;
+  }
+  if (left.second === null && right.second !== null) {
+    return 1;
+  }
 
-      if (
-        left.second !== null &&
-        right.second !== null &&
-        left.claimId &&
-        right.claimId &&
-        left.claimId !== right.claimId
-      ) {
-        return compareClaimIds(left.claimId, right.claimId);
-      }
+  if (left.time !== null && right.time !== null && left.time !== right.time) {
+    return left.time - right.time;
+  }
 
-      if (
-        left.time !== null &&
-        right.time !== null &&
-        left.time !== right.time
-      ) {
-        return left.time - right.time;
-      }
+  return left.index - right.index;
+}
 
-      return left.index - right.index;
-    })
-    .map(({ event }) => event);
+/**
+ * Total, deterministic ordering over an ALREADY trust-filtered set of
+ * claim-lifecycle comment events -- the single ordering primitive
+ * `resolveActiveClaimWithForcedHandoffTrace` (which performs the trust
+ * filtering, once, before calling this) and `resume-claim-routing.mts`'s
+ * legacy-only path both use, replacing the former `sortClaimEvents`
+ * (renamed/exported here) and the near-duplicate `compareEvents` that
+ * used to live in `resume-claim-routing.mts` (kurone-kito/idd-skill#3266).
+ *
+ * Two-step algorithm, chosen specifically to keep every comparator it
+ * uses transitive (see {@link compareClaimEventOrder}'s own doc comment
+ * for why a single mixed comparator is not):
+ *
+ * 1. A stable base sort by {@link compareClaimEventOrder} --
+ *    `(second, sub-second time, original index)`.
+ * 2. Within each maximal run of equal, non-null `second`, the *positions*
+ *    (not the events) that parsed as a `claimed-by` marker are collected
+ *    and their occupants re-sorted, ascending, by
+ *    {@link compareClaimIds} -- the lexicographic tie-break
+ *    `idd-claim.instructions.md` documents for same-second competing
+ *    claims. Every other position in that run (an activation-nonce, an
+ *    `unclaimed-by`, a forced-handoff marker, or a plain comment) keeps
+ *    exactly the slot the base sort gave it -- its "fetch order" within
+ *    the second is never disturbed by which claim-ids happen to be
+ *    interleaved with it.
+ *
+ * A run with a null `second` (an unparseable `createdAt`) never groups
+ * with any other event for step 2 -- each such event is its own
+ * single-element run, so no claim-id reordering applies to it; it simply
+ * keeps its step-1 position, same as `sortClaimEvents` before it.
+ */
+export function orderClaimEvents(events: CommentLike[]): CommentLike[] {
+  const decorated: DecoratedClaimEvent[] = events.map((event, index) => {
+    const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
+    return {
+      event,
+      index,
+      claimId: claim?.claimId ?? null,
+      time: createdAtToTime(event.createdAt),
+      second: createdAtToSecond(event.createdAt),
+    };
+  });
+
+  const base = [...decorated].sort(compareClaimEventOrder);
+
+  let i = 0;
+  while (i < base.length) {
+    const second = base[i].second;
+    let j = i + 1;
+    if (second !== null) {
+      while (j < base.length && base[j].second === second) {
+        j += 1;
+      }
+    }
+    const slots: number[] = [];
+    for (let k = i; k < j; k += 1) {
+      if (base[k].claimId !== null) {
+        slots.push(k);
+      }
+    }
+    if (slots.length > 1) {
+      const claimants = slots.map((slot) => base[slot]);
+      claimants.sort((left, right) =>
+        compareClaimIds(left.claimId as string, right.claimId as string),
+      );
+      for (let m = 0; m < slots.length; m += 1) {
+        base[slots[m]] = claimants[m];
+      }
+    }
+    i = j;
+  }
+
+  return base.map(({ event }) => event);
 }
 
 /** Result of {@link resolveActiveClaimWithForcedHandoffTrace}. */
@@ -10631,7 +11446,27 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     true,
 ): ActiveClaimResolution {
   const options = normalizeClaimResolutionOptions(isTrustedAuthor);
-  const orderedEvents = sortClaimEvents(events);
+  // kurone-kito/idd-skill#3266: filter to trusted authors ONCE, here,
+  // before ordering -- not only inside applyClaimEvent's later per-event
+  // check. Before this fix, an untrusted comment (claim-shaped or not)
+  // still occupied a slot `sortClaimEvents` itself reasoned about (its
+  // claim-id, if any, still participated in the same-second tie-break),
+  // which could shift the relative order of two genuinely trusted
+  // same-second claims around it -- part of the reported non-transitive
+  // same-second cycle, and the reason `resolveActiveClaimForWriteGate` /
+  // `summarizeClaimValidation` (both feed this function the full,
+  // unfiltered stream) could disagree with `evaluateResumeClaimRouting`
+  // (which already filtered before calling this). Filtering first means
+  // every caller -- resume routing, the write-gate, and any direct
+  // caller such as `discover-roadmap-graph.mts` /
+  // `discover-shared-file-overlap.mts` -- orders and reduces over the
+  // identical trusted event set. `applyClaimEvent`'s own per-event
+  // trust check below stays as defense in depth (always true in
+  // practice now, since every event it sees already passed this filter).
+  const trustedEvents = events.filter((event) =>
+    options.isTrustedAuthor(event.author?.login ?? ''),
+  );
+  const orderedEvents = orderClaimEvents(trustedEvents);
 
   let active: ParsedClaimMarker | null = null;
   let releasedClaim: ParsedClaimMarker | null = null;
@@ -11435,6 +12270,19 @@ function isOperationalOrDigestCommentForGate(
   body: string,
   authorLogin: unknown,
   trustedMarkerLogins: Set<string>,
+  // Issue #3337: a digest-marker comment is only ever the target's OWN
+  // agent activity, so it must be excluded here only when its author is
+  // recognized as trusted OR as an IDD agent -- never unconditionally.
+  // Checking `trustedMarkerLogins` alone would fail open: a digest posted
+  // by an `iddAgentLogins` member outside the trusted set would then count
+  // as a genuine IDD reply, wrongly advancing `lastIddReplyAt`
+  // (`summarizeRegularCommentsForGate`) or entering `agentReplyComments`
+  // (`summarizeDispositionEvidenceForGate`), which could mark earlier
+  // feedback as answered. An author in neither set is a genuine stranger,
+  // so their digest-marker-shaped comment now counts as ordinary activity
+  // requiring disposition, matching the documented digest contract
+  // (`idd-comment-minimization.md`'s "Live Status Digest Contract").
+  iddAgentLogins: Set<string> = new Set(),
 ): boolean {
   const marker = operationalMarkerPrefix(body);
   if (marker === '<!-- forced-handoff:') {
@@ -11444,32 +12292,52 @@ function isOperationalOrDigestCommentForGate(
         .toLowerCase(),
     );
   }
-  return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+  if (marker !== null) {
+    return true;
+  }
+  if (firstLine(body) === LIVE_STATUS_DIGEST_MARKER) {
+    const login = String(authorLogin ?? '')
+      .trim()
+      .toLowerCase();
+    return trustedMarkerLogins.has(login) || iddAgentLogins.has(login);
+  }
+  return false;
 }
 
 function buildBodyPreview(body: unknown): string {
   return firstLine(String(body ?? '')).slice(0, 120);
 }
 
+// #3338: delegates to the shared `parseAdvisoryWaitFamilyMarker` grammar
+// (marker-helpers.mts) instead of a hand-copied `[^ ]`-spaced regex trio,
+// so a canonical-but-differently-spaced marker (double space, tab,
+// trailing whitespace, fractional seconds, `<!--advisory-wait:`) is
+// recognized the same way `OPERATIONAL_MARKERS` recognizes it.
+// `advisory-reroll:` is deliberately excluded from same-HEAD detection --
+// unchanged from this function's pre-#3338 behavior, which never matched
+// that prefix either.
 function advisoryWaitMarkerMatchesHead(
   body: string,
   prHeadSha: string,
 ): boolean {
+  const parsed = parseAdvisoryWaitFamilyMarker(body);
   return (
-    new RegExp(`^advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(
-      body,
-    ) ||
-    new RegExp(
-      `^advisory-wait-recovery: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`,
-    ).test(body) ||
-    new RegExp(
-      `^<!-- advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)} [^ ]+ -->$`,
-    ).test(body)
+    parsed !== null &&
+    parsed.family !== 'advisory-reroll' &&
+    parsed.headSha === String(prHeadSha).trim().toLowerCase()
   );
 }
 
+// #3338: prefix-only (not full-grammar-valid), matching this function's
+// pre-#3338 behavior -- a field-invalid body (e.g. a `pending` timestamp
+// placeholder) still counts toward `requestMarkerCount`, which bounds the
+// re-request cap regardless of whether the rest of the marker parses.
+// Delegates to the shared `advisoryWaitFamilyMarkerStart` byte-0-anchored
+// predicate (marker-helpers.mts) instead of its own `<!-- advisory-wait:`
+// exact-single-space literal, so the HTML spacing variants count too.
 function advisoryWaitRequestMarker(body: string): boolean {
-  return /^advisory-wait:/.test(body) || /^<!-- advisory-wait:/.test(body);
+  const family = advisoryWaitFamilyMarkerStart(body);
+  return family === 'advisory-wait' || family === 'advisory-wait-html';
 }
 
 function escapeRegExp(value: unknown): string {
@@ -11504,6 +12372,96 @@ export function compareIsoTimestamps(left: unknown, right: unknown): number {
     return -1;
   }
   return String(left ?? '').localeCompare(String(right ?? ''));
+}
+
+// kurone-kito/idd-skill#3259: requires the FULL canonical `review-ack:`
+// marker shape -- a valid trailing ISO-8601 timestamp, end-anchored --
+// matching the `review-ack:` entry in `OPERATIONAL_MARKERS`
+// (marker-helpers.mts) exactly, so a malformed or truncated comment never
+// counts as a valid ack. Moved here verbatim from `advisory-convergence.mts`
+// (originally #2050 / #2056) so a second caller
+// (`merged-pr-feedback-sweep.mts`) can reuse the SAME `review-ack:`
+// validity check the real `idd-advisory-convergence` gate already uses,
+// instead of a second ad-hoc marker-matching implementation that could
+// drift out of sync with it; `advisory-convergence.mts` now delegates to
+// {@link hasTrustedReviewAckAfter} below. Group 1 is the embedded commit
+// SHA (compared against the caller-supplied `commitSha`) and group 2 is
+// the embedded timestamp (validated with `isValidIsoTimestamp` -- the bare
+// digit-shape match alone accepts a syntactically-digit-shaped but
+// semantically invalid calendar date/time, e.g. `2026-99-99T99:99:99Z`).
+const REVIEW_ACK_MARKER_PATTERN =
+  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
+
+/**
+ * kurone-kito/idd-skill#3259 (moved verbatim from `advisory-convergence.mts`,
+ * originally #2050 / #2056): `true` when a trusted `review-ack:` marker
+ * exists among `comments` whose OWN GitHub-assigned `created_at` (never an
+ * embedded, agent-supplied timestamp -- the same "clock anchor is marker
+ * created_at, not embedded text" trust boundary `hasFreshDisposition`
+ * above and `summarizeSameHeadRerollMarkers` (advisory-convergence.mts)
+ * both already apply) is strictly after `reviewSubmittedAt`, AND whose
+ * embedded commit SHA equals `commitSha` (the same same-commit filter
+ * `summarizeSameHeadRerollMarkers` already applies to `advisory-reroll`
+ * markers against the PR's current HEAD -- callers needing that exact
+ * semantics pass the PR's HEAD sha here; a caller acknowledging a
+ * SPECIFIC review's own reviewed commit, such as
+ * `merged-pr-feedback-sweep.mts`, passes that review's own commit sha
+ * instead).
+ *
+ * The `createdAt > reviewSubmittedAt` ordering still invalidates a
+ * pre-existing ack when a later review lands (same commit or not, e.g. an
+ * AW6 same-HEAD reroll). The SHA check closes the delayed-POST race the
+ * ordering check cannot: a marker that embedded commit A can still
+ * receive a GitHub `createdAt` after review B's `submittedAt` if the PR
+ * advanced between render and POST.
+ *
+ * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
+ * invalid, or when `commitSha` is empty, since there is then no anchor to
+ * compare an ack against -- the safe direction for every known caller: an
+ * unresolved anchor means the finding stays reported / the clause stays
+ * unsatisfied, never silently cleared.
+ *
+ * `trustedMarkerLogins` must already be normalized (trimmed, lower-cased)
+ * by the caller, matching every other trusted-login-set consumer in this
+ * file.
+ */
+export function hasTrustedReviewAckAfter(
+  comments: CommentLike[],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+  commitSha: string,
+): boolean {
+  if (!isValidIsoTimestamp(reviewSubmittedAt) || !commitSha) {
+    return false;
+  }
+  const trusted = new Set(trustedMarkerLogins);
+  return comments.some((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
+    // Group 1 = embedded commit SHA, group 2 = embedded timestamp. The
+    // timestamp is otherwise never trusted for the createdAt-vs-
+    // reviewSubmittedAt comparison below, but a marker whose OWN
+    // digit-shaped field is not a real calendar date/time is malformed --
+    // reject it here the same way `detectMalformedOperationalMarker`
+    // (marker-helpers.mts) rejects other structurally-invalid markers.
+    if (!match || match[1] !== commitSha || !isValidIsoTimestamp(match[2])) {
+      return false;
+    }
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trusted.has(login)) {
+      return false;
+    }
+    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
+    // embedded (agent-supplied) timestamp field, same anchor rule AW2
+    // already states for `advisory-wait:`.
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
+    );
+  });
 }
 
 function threadActivityAt(thread: ThreadLike): string | null | undefined {

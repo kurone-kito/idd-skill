@@ -85,7 +85,7 @@
     "review": {
       "type": "object",
       "description": "Clause 1 evidence: identity and HEAD-coverage of the primary bot's latest review, by fetch order.",
-      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "satisfied"],
+      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "bodyShape", "satisfied"],
       "additionalProperties": false,
       "properties": {
         "found": {
@@ -117,6 +117,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "Count parsed from a `Suppressed comments (N)` heading in the latest review's body (read only when matchesHead is true; 0 otherwise), 0 when no such section is present -- kurone-kito/idd-skill#1880. GitHub Copilot can fold a finding into this collapsed body section instead of posting it as a comment, which itemCount (comments.totalCount) never reflects."
+        },
+        "bodyShape": {
+          "type": ["string", "null"],
+          "enum": ["overview-v2", "overview-legacy", "error", "unrecognized", null],
+          "description": "kurone-kito/idd-skill#3258: the recognized Copilot review-body shape used to compute suppressedCount, read only when matchesHead is true; null when !found or off-HEAD. 'error' is reachable only in principle -- resolveLatestCopilotReviewClause already excludes an error-bodied review before it can become the selected latest one. 'unrecognized' (a body matching no known shape) makes satisfied false until a trusted review-ack covers it, scoped to the Copilot default primaryBotLogin only."
         },
         "satisfied": {
           "type": "boolean",
@@ -162,8 +167,8 @@
     },
     "deadline": {
       "type": "object",
-      "description": "Deadline-clock evidence anchored on the current HEAD commit's own commit timestamp, gating when the waiver escape hatch opens.",
-      "required": ["minutes", "headCommittedAt", "elapsedMinutes", "passed"],
+      "description": "Deadline-clock evidence anchored on the earliest GitHub-recorded check suite for the current HEAD commit, gating when the waiver escape hatch opens.",
+      "required": ["minutes", "headCommittedAt", "headObservedAt", "elapsedMinutes", "passed"],
       "additionalProperties": false,
       "properties": {
         "minutes": {
@@ -173,11 +178,15 @@
         },
         "headCommittedAt": {
           "type": "string",
-          "description": "ISO timestamp of the current HEAD commit itself."
+          "description": "ISO timestamp of the current HEAD commit itself -- informational only, the committer-supplied timestamp that is never the clock (kurone-kito/idd-skill#3253)."
+        },
+        "headObservedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the earliest GitHub-recorded check suite for the current HEAD commit -- the actual clock elapsedMinutes is measured from; empty (never the literal 'none') when unavailable, matching headCommittedAt's own raw-empty convention on this object -- unlike the 'none' sentinel this same field uses in pre-merge-readiness.schema.json's advisoryConvergenceWaiverPrecondition, which mirrors ITS sibling headCommittedAt's own convention there instead (kurone-kito/idd-skill#3253)."
         },
         "elapsedMinutes": {
           "type": ["number", "null"],
-          "description": "Whole minutes elapsed from headCommittedAt to now, or null when headCommittedAt is invalid or absent."
+          "description": "Whole minutes elapsed from headObservedAt to now, or null when headObservedAt is invalid or absent."
         },
         "passed": {
           "type": "boolean",

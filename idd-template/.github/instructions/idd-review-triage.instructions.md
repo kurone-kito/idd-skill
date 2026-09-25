@@ -33,11 +33,12 @@ edit. A missing, failed, or incomplete pagination fails closed.
 For each item in ReviewItems_snapshot, first classify it:
 
 - **PATH A — actionable feedback**: human reviewer threads and regular
-  comments, `CHANGES_REQUESTED` review bodies, and critique-pass
-  findings that require a code change or maintainer decision.
-- **PATH B — advisory feedback**: Copilot and CI advisory bot comments
-  included by E1 for traceability, even when they do not require a code
-  change.
+  comments, `CHANGES_REQUESTED` review bodies, critique-pass findings
+  that require a code change or maintainer decision, and Copilot
+  inline review-thread comments.
+- **PATH B — advisory feedback**: Copilot's and CI advisory bots'
+  review-summary bodies and regular comments included by E1 for
+  traceability, even when they do not require a code change.
 - If classification is ambiguous, default to PATH A.
 - Record each PATH A actor's permission standing (CODEOWNER, required
   reviewer, Triage/Write/Maintain/Admin, or none) — E5's cap reads it.
@@ -171,11 +172,10 @@ CODEOWNER/required-reviewer item (E6's AMD exception):
   <round>/<threshold>): {reason}`.
 - **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
   unchanged when off; `low`/`low-and-medium` apply from round 1).
-  Scope: PATH A only — a Copilot inline thread asking for a code
-  change falls through to PATH A under E4's ambiguous-default rule.
-  Eligibility severity is the higher of E4's own tier and Copilot's
-  label for that thread — the `alt="<Level> severity"` text next to
-  its `#discussion_r<id>` link in the Open section of any
+  Scope: PATH A only, including Copilot's inline review-thread
+  comments (E4). Eligibility severity is the higher of E4's own tier
+  and Copilot's label for that thread — the `alt="<Level> severity"`
+  text next to its `#discussion_r<id>` link in the Open section of any
   `<!-- ccr-overview-v2 -->` review on the PR; this floor only decides
   eligibility, never E4's own tier or its Accept-forced rule. An item
   is **adopt-now** (never eligible) when any holds: (a) a regression
@@ -497,10 +497,8 @@ After the review loop confirms no PATH A items remain (from E3 or E8),
 check the current branch state before routing to F-phase. This gate uses
 merge-from-`{development-branch}` (never rebase) when synchronization is
 required, preserving review history on the already-published PR branch.
-`{development-branch}` is the value resolved in
-`idd-work.instructions.md`'s B1
-[Resolve the development branch](idd-work.instructions.md#b1--create-worktree-with-branch)
-step.
+`{development-branch}` is the value resolved by
+[B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch).
 
 When helper runtime is enabled, call:
 `idd-branch-conflict-state --pr {pr-number}`
@@ -540,9 +538,10 @@ Route based on `branchState` from the helper (or `mergeable` /
   few seconds apart), then route by the first settled result. Only a
   state that is **still** `computing` / `unknown` after the budget falls
   through to the hold below.
-- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
-  a PR comment documenting the state and stop. Do not proceed to F-phase
-  without confirmed branch-state evidence.
+- **`dirty`**, **`unknown`**, or an unlisted state (e.g.
+  `force-push-exception`): hold; post a PR comment documenting the
+  state and stop. Do not proceed to F-phase without confirmed
+  branch-state evidence.
 
 **Sync path** (merge-from-`{development-branch}`):
 
@@ -632,23 +631,19 @@ carries items — **AW6** (#1511) handles that residual from F2 instead.
 
 ## Advisory courtesy-ack convergence
 
-A trusted advisory bot's post-disposition courtesy reply (e.g. "thanks
-for confirming") advances the PR's `updatedAt` — a naive review-currency
-check would treat this as new activity and loop the cycle forever.
+**Rule**: a trusted advisory bot's courtesy reply bumps the PR's
+`updatedAt`, but once every `ReviewItems_snapshot` item has an
+`**Accepted**`/`**Rejected**` disposition at the **current HEAD SHA**,
+that later **ack-only** comment does not reopen the loop — bind the
+merge to current HEAD and proceed. An **ack-only** comment opens no
+thread, carries no `CHANGES_REQUESTED`, and raises no new finding;
+anything else re-opens the loop.
 
-**Rule**: once every `ReviewItems_snapshot` item has an
-`**Accepted**`/`**Rejected**` disposition at the **current HEAD SHA**, a
-later **ack-only** comment from a trusted advisory bot does not reopen
-the loop — bind the merge to current HEAD and proceed. An **ack-only**
-comment opens no thread, carries no `CHANGES_REQUESTED`, and raises no
-new finding; anything else re-opens the loop.
-
-**Helper evidence**: when the advisory-bot identity is configured, the
-activity-snapshot / `pre-merge-readiness` evidence emits the structural
-half of this classification (`reviewCurrency.live.ackOnly.items`,
-`reviewCurrency.comparisonReason: ack-only-post-disposition`); the
-agent still confirms the semantic residual (no new finding), and this
-never weakens the disposition-evidence or unreplied-comment backstops.
+**Helper evidence**: with advisory-bot identity set,
+`pre-merge-readiness`'s `reviewCurrency.live.ackOnly.items` /
+`reviewCurrency.comparisonReason: ack-only-post-disposition` supply
+this; the agent confirms no new finding, never weakening the
+disposition-evidence or unreplied-comment backstops.
 
 **Disposition-evidence parity (advisory-only)**: the same ack can also
 re-trip the `dispositionEvidence` backstop on an already-resolved
@@ -659,4 +654,9 @@ blocking item is one such thread), autopilot may deterministically
 override `return-to-e1` and proceed (see `idd-pre-merge.instructions.md`
 F2). Any non-ack blocking cause keeps it `false`, so the backstop holds
 otherwise. (`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a
-stricter subset — not an override path of its own.)
+stricter subset — not an override path of its own.) A
+verify-then-confirm reply (analysis before the confirmation verb)
+isn't recognized, so #2125's override doesn't fire (recognized
+replies are unaffected). A repeating `missingThreads` entry that's a
+no-new-content advisory-bot reply needs a hold comment; stop instead
+of re-posting the disposition (#3324).

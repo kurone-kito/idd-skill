@@ -128,8 +128,11 @@ would let an untracked emitted artifact pass unnoticed.
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
 bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
-whose pairing guard fails when a source is missing its generated artifact
-or a banner-marked artifact is missing its source. `node --test
+whose pairing guard fails when a source is missing its generated artifact,
+a banner-marked artifact is missing its source, or a source's provenance
+banner is missing or malformed in either file — the guard requires the
+banner on every `src/scripts/**/*.mts` / `src/bin/**/*.mts` source, not
+only on an artifact that already happens to carry one. `node --test
 tests/inventory-ordering.test.mts` (part of `lint:minimum`'s test run)
 closes the remaining gap: it fails when a `scripts/*.mjs` or `bin/*.mjs`
 on disk has no matching `.mts` source at all, regardless of whether it
@@ -198,3 +201,31 @@ sibling suite registers by adding one `FIXTURE_SUITES` entry.
 > and **review the emitted `git diff`**; it is not a substitute for
 > correctness. A normal `pnpm test` / CI run never regenerates (assert-only);
 > the tool is strictly opt-in.
+
+### Issue-body corpus regression fixtures
+
+`tests/fixtures/issue-body-corpus/` vendors real (and a fixed set of
+synthetic-gap) GitHub issue bodies alongside their current A4
+(`discover-viability-gate.mts`) / A4.5 (`suitability-triage.mts`,
+local/offline mode) verdicts, so `tests/issue-body-corpus.test.mts` can
+catch a lexical-gate edit silently flipping a real issue's verdict —
+something synthetic-only fixtures cannot show. Maintained by
+`src/scripts/snapshot-issue-body-corpus.mts` →
+`scripts/snapshot-issue-body-corpus.mjs`:
+
+```sh
+node scripts/snapshot-issue-body-corpus.mjs --add <n>[,<n>...] --category merged|negative [--note <text>]
+node scripts/snapshot-issue-body-corpus.mjs --refresh          # re-fetch changed bodies
+node scripts/snapshot-issue-body-corpus.mjs --update-expected  # recompute verdicts
+```
+
+`--refresh` leaves `expected` untouched on a changed body, so a refreshed
+entry needs `--update-expected` before the test passes again. The corpus
+is test-only (no runtime path reads it) — the live A4/A4.5 gates keep
+their verdict authority; this tool only freezes a snapshot of what they
+currently say. Never run by `pnpm test`/CI.
+
+> **Guardrail.** Same contract as `--update-expected` above:
+> `--update-expected` blesses whatever the current helpers emit. Use it
+> only after an intentional gate-behavior change, review the emitted
+> `git diff`, and list every flipped entry in the PR description.

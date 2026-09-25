@@ -13,6 +13,7 @@ import {
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
+import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -102,6 +103,93 @@ test('classifyIssue rejects roadmap and blocked marker issues', () => {
     },
   );
   assert.equal(blocked.reason, 'blocked_by_marker');
+});
+
+test('#3284 review fix: classifyIssue keeps a cross-repository-only Blocked-by non-selectable', () => {
+  // A cross-repository token resolves to nothing in `blockedRefs`, so
+  // before this fix the issue read as having no dependencies at all and
+  // was wrongly classified `orphan` -- the exact false-selectable outcome
+  // the dependency-grammar's fail-safe contract exists to prevent.
+  const result = classifyIssue(
+    {
+      number: 3,
+      title: 'cross-repo blocked',
+      state: 'OPEN',
+      labels: [],
+      body: 'Blocked by other/repo#5',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      currentRepo: 'kurone-kito/idd-skill',
+    },
+  );
+  assert.equal(result.orphan, false);
+  assert.equal(result.reason, 'unresolvable_reference');
+  assert.deepEqual(result.details, [
+    { reference: 'other/repo#5', reason: 'cross_repository_reference' },
+  ]);
+});
+
+test('classifyIssue ignores roadmap-id/blocked-by markers only quoted inside code (#3281)', () => {
+  const roadmapQuoted = classifyIssue(
+    {
+      number: 1,
+      title: 'quoted roadmap-id',
+      state: 'OPEN',
+      labels: [],
+      body: ['Example:', '```', '<!-- idd-skill-roadmap-id: x -->', '```'].join(
+        '\n',
+      ),
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(roadmapQuoted.orphan, true);
+  assert.equal(roadmapQuoted.reason, 'orphan');
+
+  const blockedQuoted = classifyIssue(
+    {
+      number: 2,
+      title: 'quoted blocked-by',
+      state: 'OPEN',
+      labels: [],
+      body: 'Example: `<!-- idd-skill-blocked-by: x -->`',
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(blockedQuoted.orphan, true);
+  assert.equal(blockedQuoted.reason, 'orphan');
+});
+
+test('classifyIssue agrees with discover-roadmap-graph.mts that a label-only issue is not a roadmap (#3286)', () => {
+  const labelOnlyIssue = {
+    number: 6,
+    title: 'label-only, no marker',
+    state: 'OPEN',
+    labels: [{ name: 'roadmap' }],
+    body: 'No roadmap-id marker here.',
+  };
+
+  // The orphan filter's own marker-only rule already treats this as an
+  // ordinary orphan candidate, not a roadmap...
+  const orphanResult = classifyIssue(labelOnlyIssue, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.equal(orphanResult.orphan, true);
+  assert.equal(orphanResult.reason, 'orphan');
+
+  // ...and discover-roadmap-graph.mts's classifyIssue agrees: no marker
+  // means execution, never roadmap, even though the label is present
+  // (#3286 Groom-hearing maintainer decision -- the marker is the sole
+  // roadmap identity).
+  assert.equal(classifyGraphIssue(labelOnlyIssue).kind, 'execution');
 });
 
 test('classifyIssue excludes the configured providerOutage.declarationTarget by number (#2800)', () => {

@@ -1,0 +1,28 @@
+{
+  "id": "1650",
+  "category": "merged",
+  "note": "",
+  "title": "docs(audit): document the 3-manifest-edit checklist for adding a new lite instruction file",
+  "labels": [
+    "documentation",
+    "enhancement"
+  ],
+  "body": "## Background\n\nAdding a new lite instruction file under\n`idd-template/.github/instructions/lite/` requires editing\n`audit/sync-manifest.json` in **three** separate places for\n`node scripts/audit-docs.mjs --check` to pass:\n\n1. A `syncPairs` entry (source/target mode) — this is what\n   `sync-docs.mjs` actually reads to generate the mirrored\n   `.github/instructions/lite/*.instructions.md` copy.\n2. A `bundleBudgets` entry — the byte ceiling for the lite file's own\n   phase bundle (e.g. `bundle-review-snapshot-lite`).\n3. The file's path added to `generatedBlocks[0].paths` (the\n   `idd-template-core-files` block) — required only because\n   `audit-docs.mjs --check` compares the rendered\n   `idd-template/ONBOARDING.md` file-listing block against this list,\n   even though the block plays no role in generating the mirror\n   itself.\n\n`audit/README.md` (the manifest's own documentation) explains each of\n`syncPairs`, `bundleBudgets`, and `generatedBlocks` individually, but\nnever states that authoring a single new lite file touches all three.\nWorse, `docs/weak-model-lite-profile-design.md`'s own note on this\n(added while decomposing roadmap #1539) reads: \"`sync-docs.mjs` also\nreads `generatedBlocks` / `shellFileLists` for its separate\nconsolidated-reference-block generation ... but that path is not\nrelevant here\" — true for *generation*, but silently wrong for what\n`audit-docs.mjs --check` actually enforces, since the same\n`generatedBlocks[0].paths` list is checked, not just used for\ngeneration.\n\nThis bit issue #1617's own subagent directly: after adding\n`syncPairs` and `bundleBudgets` entries for\n`idd-review-snapshot-lite.instructions.md`, `audit-docs.mjs --check`\nstill failed until the `generatedBlocks[0].paths` list was also\nupdated — a step nowhere documented as required. #1548 (closed, PR\n#1606) documents the lite-profile *opt-in* convention for a running\nsession; it does not cover this *authoring-time* manifest checklist,\nso it does not already close this gap. Confirmed unfiled via\n`gh search issues` for `\"generatedBlocks\"`, `\"sync-manifest\nchecklist\"`, and `\"sync-manifest paths\"`.\n\n## Proposed change\n\nDocument the three-part checklist in `audit/README.md`'s existing\n\"Intentional Exceptions\" section (the natural home, since it already\ncovers the \"For generated file lists, update the manifest paths or\nglobs first\" case): spell out that adding a new file under an\nexisting `generatedBlocks[].sourceGlobs` match (such as a new lite\ninstruction file) requires (1) a `syncPairs` entry, (2) a\n`bundleBudgets` entry when the file participates in a phase bundle,\nand (3) adding the file's path to the relevant\n`generatedBlocks[].paths` list, and that step 3 is required for the\naudit to pass even though it is unrelated to `sync-docs.mjs`\ngeneration.\n\nCorrect `docs/weak-model-lite-profile-design.md`'s existing note so\nit no longer reads as \"`generatedBlocks` is not relevant here\" without\nqualification — add a short clause distinguishing \"not relevant to\ngeneration\" from \"still required for `audit-docs.mjs --check`.\"\n\nThis is a documentation-only change: no script, schema, or manifest\nbehavior changes, only correcting/completing existing prose.\n\n## Acceptance criteria\n\n- [ ] `audit/README.md`'s \"Intentional Exceptions\" section states the\n      three manifest edits required to add a new file under an\n      existing `generatedBlocks[].sourceGlobs` pattern (e.g. a new\n      lite instruction file): `syncPairs`, `bundleBudgets` (when\n      applicable), and `generatedBlocks[].paths`.\n- [ ] `docs/weak-model-lite-profile-design.md`'s note on\n      `generatedBlocks` no longer implies the block is irrelevant to\n      `audit-docs.mjs --check`, only to `sync-docs.mjs` generation.\n- [ ] `node scripts/audit-docs.mjs --check` passes.\n\n---\n\n_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 4 -->\n\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "1f44346fbc4cb6cd5c4c03e9ba80a42b7755a216811f7419771c1f1696a2e03f",
+  "fetchedAt": "2026-09-24T04:43:33.780Z",
+  "expected": {
+    "viability": {
+      "passed": true,
+      "failedCriteria": []
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "pass",
+      "autonomy": "pass",
+      "verifiability": "pass"
+    }
+  }
+}

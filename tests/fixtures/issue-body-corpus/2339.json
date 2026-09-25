@@ -1,0 +1,31 @@
+{
+  "id": "2339",
+  "category": "negative",
+  "note": "Selected as a negative entry (carries status:needs-decision); today's A4/A4.5 helpers still rate it non-ready (see expected.viability/triage).",
+  "title": "needs-decision: per-PR terminal tail under an active outage declaration",
+  "labels": [
+    "question",
+    "status:needs-decision"
+  ],
+  "body": "## Background\n\nEven with every roadmap `#2318` track landed, a pull request advancing\nunder an active outage relief declaration must still earn its own\nterminal advisory-unavailable state on its final HEAD:\n`advisoryWait.recoveryCycleCap` (default 2) completed recovery cycles,\nthen `advisoryWait.terminalWindow` (default 12 h) measured from the\nGitHub `created_at` of the earliest bound current-HEAD\n`advisory-recovery` marker. Both are current-HEAD-scoped, so each\nreview-fix push restarts them.\n\nThe declaration (`#2320`) deliberately removes only the\nper-pull-request waiver-authoring cost; it never bypasses the\nper-pull-request terminal state. The arithmetic that remains: every\nmerge during a declared outage carries a tail of roughly the recovery\ncycle time plus 12 hours after that pull request's final push. During\na multi-week outage with active CodeRabbit/Codex review rounds — whose\nfix pushes restart the clocks — sustained throughput is capped by that\ntail per pull request.\n\n## Question\n\nIs that tail the intended posture (fail-closed, bounded, slow), or\nshould policy allow tuning it while a valid declaration is active?\n\nOptions, for the record:\n\n- **Accept as designed.** Document the expected tail; no mechanism\n  changes. Cheapest, and keeps `#1572`'s non-bypass property untouched.\n- **Declaration-scoped window override.** A `providerOutage`-scoped\n  terminal-window value that applies only while a valid declaration is\n  active. A bounded loosening of a merge-gate input; needs the same\n  fail-closed review as the declaration itself.\n- **Credit the declaration's age.** Count validated repository-wide\n  outage duration toward each pull request's window. Changes evidence\n  semantics from per-HEAD observation to shared state; the most\n  invasive option.\n\n## Why this is not execution-ready\n\nAny option other than the first widens how quickly a required-check\nrelief can be reached, touching the same non-bypass property `#1572`\nprotects. That is a policy choice for the repository owner, not a\nmechanical fix, so this issue carries `status:needs-decision` and stays\nbelow the autopilot floor until the choice is recorded.\n\nRefs roadmap `#2318`; context: `#2320`, `#2327`, pull request `#2325`.\n\n---\n\n_Autopilot suitability: 2 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n<!-- idd-skill-autopilot-suitability: 2 -->\n\n_Effort: S -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n<!-- idd-skill-effort: S -->\n",
+  "bodySha256": "9c6e449c5172c63642c3de77a91cf62cf5c7a8f86dcce844803e9b9890f15b8c",
+  "fetchedAt": "2026-09-24T08:44:24.761Z",
+  "expected": {
+    "viability": {
+      "passed": false,
+      "failedCriteria": [
+        "limited_scope",
+        "clear_verification"
+      ]
+    },
+    "triage": {
+      "repository_fit": "pass",
+      "coherence": "pass",
+      "trust_safety": "pass",
+      "duplicate_or_superseded": "not_evaluated",
+      "actionability": "fail",
+      "autonomy": "pass",
+      "verifiability": "fail"
+    }
+  }
+}

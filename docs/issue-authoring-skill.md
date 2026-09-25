@@ -653,6 +653,26 @@ required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
 footers.
 
+For the `orphan` and `child` shapes, it also runs the same A4 viability
+and A4.5 suitability evaluators the IDD discover phase runs later, at
+claim time (`triage-title-missing`, one `triage-a4-<criterion id>`
+finding per A4 criterion, and one `triage-a45-<check id>` finding per
+A4.5 check) — so a body that would fail A4 or A4.5 at claim time is
+caught here, before it is ever published, instead of only after.
+`triage-a45-duplicate_or_superseded` (Check 4) always reports "not
+applicable" (it needs a live repository, which this offline linter never
+has); the `roadmap` shape reports every one of these findings as not
+applicable, since Discover never routes a roadmap node through A4 or
+A4.5 in the first place. A title is required for these checks to
+actually evaluate: pass `--title`, or lead the drafted body with a
+`# <title>` line; without either, `triage-title-missing` fails and every
+`triage-a45-*` finding reports "not evaluated" instead of a noisy Check
+2/Coherence cascade (the three `triage-a4-*` findings still evaluate
+normally, since A4's criteria are title-independent). With
+`--expect-bucket`, a failing triage finding is downgraded to a warning
+instead of failing the report, mirroring how this linter already treats
+a bucket body as deliberately non-ready everywhere else.
+
 It also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) used near coordination language (for example
@@ -714,10 +734,14 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
-  --marker-prefix <resolved-target-prefix> \
+  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+Omit `--title` when the drafted body already leads with a `# <title>`
+line; for the `orphan` and `child` shapes, at least one of the two is
+required for the `triage-a45-*` findings above to actually evaluate.
 
 **Always keep `--marker-prefix`, and always replace the placeholder**
 with the resolved target prefix before running the command — in this
@@ -1128,20 +1152,40 @@ has been posted and its own POST and re-fetch/verify above have both
 succeeded -- never before, and never interleaved with posting -- scan that
 same target's prior comments (the target issue for `authoring-owner`; the
 journal issue named in the record's own `journal` field for
-`authoring-publication-intent`, which naturally also hides other authoring
-sets' already superseded journal records on that shared journal --
-intentional, since the journal read path is the same paginated scan and is
-unaffected either way) and minimize (classifier `OUTDATED`) every prior
+`authoring-publication-intent`, which naturally also fetches other
+authoring sets' records on that shared journal -- intentional, since the
+journal read path is the same paginated scan either way, but the
+continuity-chain-identity restriction below means only the just-posted
+record's own target (and, for `authoring-publication-intent`, its own
+token too) is ever eligible for minimization, never a different set's)
+and minimize (classifier `OUTDATED`) every prior
 comment from a trusted marker actor whose body is a byte-exact match of the
-canonical rendered template for the same marker family.
+canonical rendered template for the same marker family AND shares the
+just-posted record's own continuity-chain identity (`target=` alone for
+`authoring-owner`; `target=`+`token=` together for
+`authoring-publication-intent`) -- on the journal-hosted
+`authoring-publication-intent` family this excludes a different target's
+record on the same shared journal, and a same-target record under a
+different token, even though both byte-exact-match the family template;
+this matches the mandatory Stage 2 sweep's own fixed classifier
+(`classifyAuthoringMarkerFamily` in `marker-helpers.mts`) so the two
+procedures never disagree about which prior record is eligible.
 `matchCanonicalAuthoringMarkerFamily` (`marker-helpers.mts`, re-exported by
-`protocol-helpers.mts`) implements that check: it parses the candidate,
-re-renders the parsed fields with `renderAuthoringOwnerMarker` /
-`renderAuthoringPublicationIntentMarker`, and requires the result to equal
-the candidate's body exactly. A candidate that deviates from the template in
-any way -- reordered or extra fields, altered spacing, trailing content, a
-different visible note -- is never minimized; leave it visible rather than
-guessing. Skip the just-posted comment itself and any candidate whose
+`protocol-helpers.mts`) implements the byte-exact-template half of that
+check: it parses the candidate, re-renders the parsed fields with
+`renderAuthoringOwnerMarker` / `renderAuthoringPublicationIntentMarker`,
+and requires the result to equal the candidate's body exactly. A
+candidate that deviates from the template in any way -- reordered or
+extra fields, altered spacing, trailing content, a different visible
+note -- is never minimized; leave it visible rather than guessing. Apply
+the continuity-chain-identity half directly: parse each byte-exact
+candidate the same way (`parseAuthoringOwnerComment` /
+`parseAuthoringPublicationIntentComment`) and compare its `target=` field
+(plus `token=` for `authoring-publication-intent`) against the
+just-posted record's own fields -- the identical field comparison
+`classifyAuthoringMarkerFamily`'s own (module-private)
+`resolveAuthoringMarkerIdentity` performs internally for the Stage 2
+sweep. Skip the just-posted comment itself and any candidate whose
 `isMinimized` is already `true` (idempotent; the minimize helper's own probe
 already enforces this).
 
@@ -1369,8 +1413,8 @@ command above, now scoped to `--issue <anchor-issue-number> --issue
 <journal-issue-number>` -- covering the anchor's own owner-marker log
 and the journal's publication-intent log -- idempotent with every
 earlier target's own sweep above, since a comment either was already
-minimized or was not yet the newest for its own target within the
-family either way. Then
+minimized or was not yet the newest for its own continuity-chain
+identity within the family either way. Then
 reuse or
 append the anchor-only
 `mode=release-complete` marker and record its comment ID. Reconcile that ID
@@ -1651,6 +1695,32 @@ loop's B2.0 supersession re-check (`idd-work.instructions.md`) applies
 after claim — this scan only adds an earlier, pre-publish checkpoint.
 A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
+
+**Previously declined check.** Before treating a proposal as new, the
+skill should check whether it was already declined. Vocabulary alone
+can miss a match: the Groom outcome recorded on issue #2996 on
+2026-09-15 closed it as not-planned, yet issue #3164's own later search
+missed it six days after. The skill should search closed issues using
+the proposal's core nouns rather than its new framing, plus at least
+one alternative phrasing:
+
+```sh
+gh issue list --repo <owner>/<repo> --state closed --limit 100 \
+  --search 'reason:"not planned" <core-nouns>'
+```
+
+When the proposal changes an existing mechanism, the skill should
+identify the PR that introduced or last reshaped it (for example from
+`git log -S` on the mechanism's symbol, followed by its merge
+commit's `Merge pull request #N` subject), then read that PR's review threads for
+a **Rejected** disposition of the same idea — for example, review
+comment `3983246464` on PR #2895 was dispositioned Rejected on
+2026-09-10 as a deliberate trade-off; that rejection is recorded only
+in that review thread. The skill should cite every match found
+by either search in the drafted issue's Background, stating what
+is new since that outcome. When nothing is new, do not publish the
+issue as `ready` — route it to `needs-decision` or drop the proposal
+and record why.
 
 ## Decomposition and roadmap planning rules
 

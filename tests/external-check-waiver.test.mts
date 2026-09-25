@@ -26,6 +26,7 @@ import {
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -683,6 +684,7 @@ function buildAdvisoryConvergenceInput(): BaseInput {
   ];
   input.requestedSelector = 'idd-advisory-convergence';
   input.headCommittedAt = '2026-08-30T18:13:24Z';
+  input.headObservedAt = '2026-08-30T18:13:24Z';
   // Supplied by the caller from the RAW config, as pre-merge-readiness
   // receives it: normalizePolicyConfig drops `convergenceDeadline`, so
   // reading it off the normalized policy would silently use the 24h default
@@ -706,6 +708,7 @@ test('planExternalCheckWaiver blocks an advisory-convergence waiver before its d
     checkSelector: 'idd-advisory-convergence',
     deadlineMinutes: 540,
     headCommittedAt: '2026-08-30T18:13:24Z',
+    headObservedAt: '2026-08-30T18:13:24Z',
     elapsedMinutes: 229,
     deadlinePassed: false,
     terminalUnavailable: false,
@@ -736,6 +739,38 @@ test('planExternalCheckWaiver allows an advisory-convergence waiver once the dea
   );
 });
 
+test('planExternalCheckWaiver follows the injected headObservedAt, not headCommittedAt, for the deadline precondition (kurone-kito/idd-skill#3253)', () => {
+  const input = buildAdvisoryConvergenceInput();
+  // headCommittedAt (informational) is old enough to have opened the
+  // pre-#3253 hatch; headObservedAt (the actual clock) is recent, so the
+  // hatch must stay shut.
+  input.headCommittedAt = '2026-08-01T00:00:00Z';
+  input.headObservedAt = '2026-08-30T21:33:24Z';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-30T22:02:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.headCommittedAt,
+    '2026-08-01T00:00:00Z',
+  );
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.headObservedAt,
+    '2026-08-30T21:33:24Z',
+  );
+  assert.equal(
+    report.advisoryConvergenceWaiverPrecondition?.elapsedMinutes,
+    29,
+  );
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join(' | '),
+    /anchored on the HEAD's earliest recorded check suite 2026-08-30T21:33:24Z/,
+  );
+});
+
 test('planExternalCheckWaiver honors the closed-precondition opt-in (#2328)', () => {
   const input = buildAdvisoryConvergenceInput();
   input.allowClosedPrecondition = true;
@@ -754,6 +789,7 @@ test('planExternalCheckWaiver honors the closed-precondition opt-in (#2328)', ()
 test('planExternalCheckWaiver keeps the hatch shut without a HEAD commit anchor (#2328)', () => {
   const input = buildAdvisoryConvergenceInput();
   input.headCommittedAt = '';
+  input.headObservedAt = '';
 
   const report = planExternalCheckWaiver(input, {
     now: new Date('2026-08-31T03:13:24Z'),
@@ -1169,6 +1205,9 @@ function waiverComment({
       reason: 'rate limit',
       expiresAt,
     }),
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 
@@ -1395,6 +1434,210 @@ test('runExternalCheckWaiver posts nothing when it reuses an existing waiver (#2
   assert.equal(report?.applied, false);
   assert.equal(report?.reusedWaiver?.commentId, '100');
   assert.match(String(report?.commentUrl), /issuecomment-100$/);
+});
+
+test('runExternalCheckWaiver never reuses an existing waiver whose comment was body-edited (kurone-kito/idd-skill#3246)', async () => {
+  let postCalls = 0;
+  const comments = [
+    {
+      ...waiverComment({
+        id: 100,
+        createdAt: '2026-08-30T22:05:01Z',
+        checkSelector: 'idd-advisory-convergence',
+        claimId: 'claim-20260830T222316Z-2328',
+        headSha: REUSE_HEAD_SHA,
+      }),
+      // GitHub reports this comment was body-edited after posting -- an
+      // otherwise perfectly reusable waiver must never be reused, and
+      // --apply must post a fresh marker instead.
+      lastEditedAt: '2026-08-30T22:10:00Z',
+    },
+  ];
+
+  const { report } = await runExternalCheckWaiver({
+    args: {
+      ...parseArgs([
+        '--pr',
+        '2325',
+        '--check',
+        'idd-advisory-convergence',
+        '--reason',
+        'rate limit',
+        '--expires-in',
+        'PT8H',
+        '--apply',
+        '--yes',
+        '--allow-closed-precondition',
+      ]),
+      repo: 'kurone-kito/idd-skill',
+      issueNumber: 2328,
+    },
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr: {
+      number: 2325,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+      headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+      headRefOid: REUSE_HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+    },
+    issueCandidates: [
+      {
+        number: 2328,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+        activeClaim: {
+          agentId: 'claude-6043e89f',
+          claimId: 'claim-20260830T222316Z-2328',
+          supersedes: 'none',
+          branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+          createdAt: '2026-08-30T22:23:26Z',
+        },
+      },
+    ],
+    prComments: comments,
+    headCommittedAt: '2026-08-30T18:13:24Z',
+    now: new Date('2026-08-30T22:30:00Z'),
+    isTTY: false,
+    postComment: () => {
+      postCalls += 1;
+      return { html_url: 'https://example.invalid/posted-fresh' };
+    },
+  });
+
+  assert.equal(
+    postCalls,
+    1,
+    'an edited existing waiver must not block a fresh post',
+  );
+  assert.equal(report?.applied, true);
+  assert.equal(report?.reusedWaiver, undefined);
+});
+
+// --- #3246 (C1 review): fetchPrComments' own REST+GraphQL edit-state -------
+// --- merge, exercised through a real `gh` stub instead of the -------------
+// --- `options.prComments` injection every other test in this file uses ---
+
+test("runExternalCheckWaiver reuses an existing unedited waiver via fetchPrComments' real REST+GraphQL read, with no options.prComments override (kurone-kito/idd-skill#3246)", async () => {
+  const commentId = 5471539677;
+  const nodeId = 'IC_kwDOexample3246a';
+  const waiverBody = renderExternalCheckWaiverComment({
+    actor: 'kurone-kito',
+    agentId: 'claude-6043e89f',
+    claimId: 'claim-20260830T222316Z-2328',
+    headSha: REUSE_HEAD_SHA,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'rate limit',
+    expiresAt: '2026-08-31T10:00:00Z',
+  });
+  const restComment = {
+    id: commentId,
+    node_id: nodeId,
+    html_url: `https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-${commentId}`,
+    body: waiverBody,
+    created_at: '2026-08-30T22:05:01Z',
+    user: { login: 'kurone-kito' },
+  };
+  const stubGhScript = `
+const args = process.argv.slice(2);
+function out(text) { process.stdout.write(text); process.exit(0); }
+if (args.includes('graphql')) {
+  const ids = [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === '-f' && args[i + 1].startsWith('ids[]=')) {
+      ids.push(args[i + 1].slice('ids[]='.length));
+    }
+  }
+  const nodes = ids.map((id) => ({ id, lastEditedAt: null }));
+  out(JSON.stringify({ data: { nodes } }));
+}
+if (args.includes('repos/kurone-kito/idd-skill/issues/2325/comments')) {
+  out(${JSON.stringify(JSON.stringify(restComment))} + '\\n');
+}
+if (args[0] === 'api' && args[1] === 'user') out(${JSON.stringify(JSON.stringify({ login: 'kurone-kito' }))});
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+  const restore = stubExecutable('gh', stubGhScript);
+  let postCalls = 0;
+  try {
+    const { report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          'rate limit',
+          '--expires-in',
+          'PT8H',
+          '--apply',
+          '--yes',
+          '--allow-closed-precondition',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+        issueNumber: 2328,
+      },
+      actor: 'kurone-kito',
+      authority: { known: true, permission: 'admin', roleName: 'admin' },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      // Deliberately no prComments override -- this is the point of the
+      // test: it exercises fetchPrComments' own real REST read plus its
+      // fetchLastEditedAtByNodeId GraphQL merge, not the injection seam.
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T22:30:00Z'),
+      isTTY: false,
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'should-not-be-reached' };
+      },
+    });
+
+    assert.equal(
+      postCalls,
+      0,
+      'a genuinely unedited existing waiver must be reused, not duplicated',
+    );
+    assert.equal(report?.applied, false);
+    assert.equal(report?.reusedWaiver?.commentId, String(commentId));
+  } finally {
+    restore();
+  }
 });
 
 test('the deadline reader rejects a schema-invalid advisoryWait section (#2328 review)', () => {
@@ -2023,6 +2266,9 @@ function autoBootstrapWaiverComment({
       expiresAt: '2026-08-31T10:00:00Z',
       runId,
     }),
+    // #3246: unedited by construction -- this fixture models a
+    // freshly-posted marker, never a rewritten one.
+    lastEditedAt: null,
   };
 }
 

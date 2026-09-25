@@ -135,10 +135,10 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
-  compareIsoTimestamps,
-  DEFAULT_STALE_AGE_MS,
+  hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
@@ -156,6 +156,7 @@ import {
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
 import {
+  fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   isVerifiedCopilotAuthor,
   resolveLatestCopilotReviewClause,
@@ -1150,8 +1151,32 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // `review-ack` covers it.
   const suppressedClauseSatisfied =
     review.suppressedCount === 0 || hasValidReviewAck;
+  // #3258 (Groom-hearing maintainer decision): a Copilot review body that
+  // matches none of `classifyCopilotReviewBody`'s known shapes
+  // (review-clause.mts / copilot-review-body.mts) is treated fail-closed --
+  // Clause 1 stays unsatisfied until a valid trusted `review-ack` for HEAD
+  // exists, the same `hasValidReviewAck` check `suppressedClauseSatisfied`
+  // above already uses. `unrecognized` always reports `suppressedCount: 0`
+  // (classifyCopilotReviewBody's own contract), so this term and
+  // `suppressedClauseSatisfied` above are mutually exclusive on that
+  // dimension -- this term is the ONLY thing that can fail an
+  // otherwise-clean (`itemCount: 0`, `suppressedCount: 0`) review shaped
+  // this way. Scoped to the Copilot default only: a configured non-Copilot
+  // `primaryBotLogin` (the `external-bot` review policy, #2137) has no
+  // known body shapes at all (that bot's reviews may legitimately have an
+  // empty body, e.g. CodeRabbit's reply-only reviews), so this rule leaves
+  // that case untouched, matching today's behavior.
+  const isCopilotDefaultPrimaryBot =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const unrecognizedBodyBlocksClause =
+    isCopilotDefaultPrimaryBot &&
+    review.bodyShape === 'unrecognized' &&
+    !hasValidReviewAck;
   const reviewSatisfied =
-    review.matchesHead && itemCountClauseSatisfied && suppressedClauseSatisfied;
+    review.matchesHead &&
+    itemCountClauseSatisfied &&
+    suppressedClauseSatisfied &&
+    !unrecognizedBodyBlocksClause;
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
   // `threadClause` and the disposition-aware overrides above are available
   // -- deliberately deferred from the `pending` check above (whose own `if`
@@ -1190,10 +1215,33 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     review.suppressedCount > 0 && !hasValidReviewAck
       ? '; post a trusted review-ack marker after this review to cover the suppressed comment(s)'
       : '';
+  // #3258: named once, appended (never substituted) into whichever branch
+  // below fires, so an unrecognized-body review that ALSO carries posted
+  // items still reports its item count -- see the module-header rationale
+  // on `unrecognizedBodyBlocksClause` above for why this term and the
+  // `itemCount === 0 && suppressedCount > 0` branch immediately below are
+  // mutually exclusive (an `unrecognized` shape always reports
+  // `suppressedCount: 0`).
+  const unrecognizedBodySuffix = unrecognizedBodyBlocksClause
+    ? ' (this review also carries an unrecognized body shape, bodyShape: unrecognized -- a trusted review-ack is required regardless of thread disposition)'
+    : '';
   if (!scopeBlocksConvergenceEval && !pending && !reviewSatisfied) {
     if (review.itemCount === 0 && review.suppressedCount > 0) {
       reasons.push(
         `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread${ackSuffix}`,
+      );
+    } else if (
+      review.itemCount === 0 &&
+      review.suppressedCount === 0 &&
+      unrecognizedBodyBlocksClause
+    ) {
+      // #3258 (Groom-hearing maintainer decision): an otherwise-clean
+      // review (0 posted items, 0 suppressed) whose body shape this gate
+      // does not recognize at all -- named explicitly rather than falling
+      // into the generic `itemCountReason` wording below, which would
+      // read as a contradiction ("0 actionable items" yet not converged).
+      reasons.push(
+        `latest ${primaryBotLogin} review on current HEAD has a body shape this gate does not recognize (bodyShape: unrecognized) -- treated as fail-closed until a trusted review-ack marker is posted for it`,
       );
     } else {
       const itemCountReason =
@@ -1230,8 +1278,8 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
         : `only ${latestReviewThreadIds.size} of ${review.itemCount} items have ${primaryBotLogin}-authored review-thread evidence`;
       reasons.push(
         zeroThreadEvidence || partialResolvedCoverage
-          ? `${itemCountReason}${suppressedSuffix}${ackSuffix} -- ${threadEvidenceGap}; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
-          : `${itemCountReason}${suppressedSuffix}${ackSuffix}`,
+          ? `${itemCountReason}${suppressedSuffix}${ackSuffix}${unrecognizedBodySuffix} -- ${threadEvidenceGap}; check the review body directly for an item suppressed due to low confidence, which counts toward itemCount but never appears in reviewThreads`
+          : `${itemCountReason}${suppressedSuffix}${ackSuffix}${unrecognizedBodySuffix}`,
       );
     }
   }
@@ -1418,20 +1466,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       !sameHeadRerollExhausted &&
       !sameHeadRerollInFlight,
   };
-  // --- Deadline clock, anchored on the current HEAD commit's own --------
-  // --- timestamp (not an IDD marker -- see module header for why) -------
+  // --- Deadline clock, anchored on the current HEAD commit's earliest ---
+  // --- GitHub-recorded check suite (kurone-kito/idd-skill#3253) ---------
   const deadlineMinutes = Number.isFinite(options.deadlineMinutes)
     ? Number(options.deadlineMinutes)
     : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const headCommittedAt = String(options.headCommittedAt ?? '');
-  const elapsedMinutes = isValidIsoTimestamp(headCommittedAt)
-    ? minutesBetween(headCommittedAt, now)
+  const headObservedAt = String(options.headObservedAt ?? '');
+  const elapsedMinutes = isValidIsoTimestamp(headObservedAt)
+    ? minutesBetween(headObservedAt, now)
     : null;
   const deadlinePassed =
     elapsedMinutes !== null && elapsedMinutes >= deadlineMinutes;
   const deadline = {
     minutes: deadlineMinutes,
     headCommittedAt,
+    headObservedAt,
     elapsedMinutes,
     passed: deadlinePassed,
   };
@@ -1917,79 +1967,26 @@ function summarizeSameHeadRerollMarkers(
   }
   return { count, latestAt };
 }
-// #2050 / #2056: requires the FULL canonical `review-ack:` marker shape --
-// a valid trailing ISO-8601 timestamp, end-anchored -- matching the
-// `review-ack:` entry in `OPERATIONAL_MARKERS` (marker-helpers.mts)
-// exactly, same reasoning as `summarizeSameHeadRerollMarkers`'s own
-// pattern above: a malformed or truncated comment must never count as a
-// valid ack. Kept as a fixed module-level constant: group 1 is the
-// embedded HEAD SHA (compared to the current PR HEAD in
-// `resolveHasValidReviewAck`) and group 2 is the embedded timestamp
-// (validated with `isValidIsoTimestamp` -- the bare digit-shape match
-// alone accepts a syntactically-digit-shaped but semantically invalid
-// calendar date/time, e.g. `2026-99-99T99:99:99Z`).
-const REVIEW_ACK_MARKER_PATTERN =
-  /^review-ack:\s+\S+\s+([0-9a-f]{40})\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s*$/;
-/**
- * #2050 / #2056: disposition-aware Clause 1 escape hatch -- true when a
- * trusted `review-ack:` marker exists on the PR whose OWN GitHub-assigned
- * `created_at` (never an embedded, agent-supplied timestamp -- the same
- * "clock anchor is marker created_at, not embedded text" trust boundary
- * `hasFreshDisposition` (protocol-helpers.mts) and
- * `summarizeSameHeadRerollMarkers` above both already apply) is strictly
- * after the latest primary-bot review's own `submittedAt`, AND whose
- * embedded HEAD SHA equals the current PR HEAD (the same same-HEAD
- * filter `summarizeSameHeadRerollMarkers` already applies to
- * `advisory-reroll` markers).
- *
- * The `createdAt > submittedAt` ordering still invalidates a pre-existing
- * ack when a later review lands (same HEAD or not, e.g. an AW6 same-HEAD
- * reroll). The SHA check closes the delayed-POST race the ordering
- * check cannot: a marker that embedded HEAD A can still receive a
- * GitHub `createdAt` after review B's `submittedAt` if the PR advanced
- * between render and POST.
- *
- * Fails closed (returns `false`) when `reviewSubmittedAt` is missing or
- * invalid, or when `prHeadSha` is empty, since there is then no anchor
- * to compare an ack against.
- */
+// kurone-kito/idd-skill#3259: the `review-ack:` marker validity check
+// (previously `REVIEW_ACK_MARKER_PATTERN` + this function's own body, #2050
+// / #2056) now lives in `protocol-helpers.mts` as the exported
+// `hasTrustedReviewAckAfter`, so a second caller
+// (`merged-pr-feedback-sweep.mts`) can reuse the exact same check instead of
+// a second ad-hoc implementation. This thin wrapper keeps the existing call
+// site below and this file's `prHeadSha`-shaped parameter name unchanged --
+// Clause 1 behavior is unaffected by the move.
 function resolveHasValidReviewAck(
   comments,
   trustedMarkerLogins,
   reviewSubmittedAt,
   prHeadSha,
 ) {
-  if (!isValidIsoTimestamp(reviewSubmittedAt) || !prHeadSha) {
-    return false;
-  }
-  const trusted = new Set(trustedMarkerLogins);
-  return comments.some((comment) => {
-    const body = String(comment.body ?? '').trimEnd();
-    const match = body.match(REVIEW_ACK_MARKER_PATTERN);
-    // Group 1 = embedded HEAD SHA, group 2 = embedded timestamp.
-    // The timestamp is otherwise never trusted for the
-    // createdAt-vs-submittedAt comparison below, but a marker whose OWN
-    // digit-shaped field is not a real calendar date/time is malformed --
-    // reject it here the same way `detectMalformedOperationalMarker`
-    // (marker-helpers.mts) rejects other structurally-invalid markers.
-    if (!match || match[1] !== prHeadSha || !isValidIsoTimestamp(match[2])) {
-      return false;
-    }
-    const login = String(comment.author?.login ?? comment.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (!trusted.has(login)) {
-      return false;
-    }
-    // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own
-    // embedded (agent-supplied) timestamp field, same anchor rule AW2
-    // already states for `advisory-wait:`.
-    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
-    return (
-      isValidIsoTimestamp(createdAt) &&
-      compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0
-    );
-  });
+  return hasTrustedReviewAckAfter(
+    comments,
+    trustedMarkerLogins,
+    reviewSubmittedAt,
+    prHeadSha,
+  );
 }
 /** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --
  * matching `minutesBetweenIso` (protocol-helpers.mts) exactly, so a clock-
@@ -2413,6 +2410,12 @@ export function collectFromGitHub(
     .resolveViewerLoginSafeQuiet()
     .viewerLogin.toLowerCase();
   const rawConfig = loadIddConfig();
+  // #3270: resolved once, early -- both `resolveClaimEvidence` below (the
+  // claim-candidate disambiguation) and the returned `options.staleAgeMs`
+  // (the main claim check further down) must honor the SAME configured
+  // window, not silently fall back to the hardcoded 24h default the way
+  // `filterResolvingClaimCandidates` alone used to.
+  const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
@@ -2434,8 +2437,16 @@ export function collectFromGitHub(
   // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
   // marker-shaped PR comment can be detected before that set is used to
   // resolve `claimEvents` -- see `resolveTrustedCollaboratorMarkerLogins`.
+  // #3246: `includeEditState` resolves each comment's GraphQL
+  // `lastEditedAt` -- needed so the waiver evidence built from these PR
+  // comments (below) can reject a body-edited external-check-waiver
+  // marker. `claimCandidates`' own comments (fetched separately below)
+  // deliberately do NOT opt in: the claim-marker family's own edit-state
+  // consumer is a separate, sibling issue.
   const comments = retryTransientGhFailure(() =>
-    port.listWorkItemComments(Number(args.prNumber)),
+    port.listWorkItemComments(Number(args.prNumber), {
+      includeEditState: true,
+    }),
   ).map(toIssueCommentPayload);
   // #1344: collaborator-marker trust, matching `pre-merge-readiness.mts`'s
   // `readCollaboratorTrustEnabled` exactly, except reusing the already-
@@ -2447,6 +2458,17 @@ export function collectFromGitHub(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
   const { reviews, headCommittedAt } = fetchReviewsAndHeadCommit(
+    owner,
+    repo,
+    Number(args.prNumber),
+    port,
+  );
+  // kurone-kito/idd-skill#3253: a sibling fetch, not an extension of the
+  // one above -- fail-closed to `''` on any failure, never throws (see
+  // `fetchHeadObservedAt`'s own doc comment), so no try/catch is needed
+  // here even though the sibling `headCommittedAt` fetch stays deliberately
+  // uncaught.
+  const headObservedAt = fetchHeadObservedAt(
     owner,
     repo,
     Number(args.prNumber),
@@ -2511,6 +2533,7 @@ export function collectFromGitHub(
       claimCandidates,
       trustedMarkerLogins,
       Boolean(args.claimIssueNumber),
+      staleAgeMs,
     );
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
@@ -2640,8 +2663,6 @@ export function collectFromGitHub(
       prFirstCommitAt = null;
     }
   }
-  const staleAgeMs =
-    parseIsoDurationToMs(policy.claimTiming.staleAge) ?? DEFAULT_STALE_AGE_MS;
   const convergenceScope =
     policy?.advisoryWait?.convergenceScope === 'idd-claimed'
       ? 'idd-claimed'
@@ -2995,6 +3016,7 @@ export function collectFromGitHub(
       prHeadRefName,
       prAuthorLogin,
       headCommittedAt,
+      headObservedAt,
       deadlineMinutes,
       waiverMode: String(
         policy?.ciGate?.externalCheckWaivers?.mode ?? 'disabled',
@@ -3080,11 +3102,25 @@ function fetchClaimEventCandidates(port, explicitIssueNumber, refs) {
  * resolves (`summarizeClaimValidation`). Shared by
  * {@link pickResolvingClaimEvents} and {@link classifyClaimCandidateAmbiguity}
  * (#1686) so both read the identical disambiguation result instead of two
- * independently-maintained filters that could drift. */
-function filterResolvingClaimCandidates(candidates, trustedMarkerLogins) {
+ * independently-maintained filters that could drift.
+ *
+ * `staleAgeMs` (#3270) is the configured `claimTiming.staleAge` window,
+ * threaded into `summarizeClaimValidation` so a takeover claim inside that
+ * window resolves as active instead of being silently evaluated against the
+ * hardcoded 24h default. Optional (unlike the write-gate-required primitives
+ * in `protocol-helpers.mts`): this helper is not itself exported, and its
+ * two callers below are exported, pinned by many existing
+ * `tests/advisory-convergence.test.mts` calls that predate #3270 and do not
+ * care about staleness -- omitted keeps `summarizeClaimValidation`'s own 24h
+ * fallback, unchanged for those calls. */
+function filterResolvingClaimCandidates(
+  candidates,
+  trustedMarkerLogins,
+  staleAgeMs,
+) {
   return candidates.filter((comments) =>
     Boolean(
-      summarizeClaimValidation(comments, { trustedMarkerLogins })
+      summarizeClaimValidation(comments, { trustedMarkerLogins, staleAgeMs })
         .activeClaimPresent,
     ),
   );
@@ -3117,6 +3153,7 @@ export function pickResolvingClaimEvents(
   candidates,
   trustedMarkerLogins,
   isExplicit,
+  staleAgeMs,
 ) {
   if (isExplicit) {
     return candidates[0] ?? [];
@@ -3124,6 +3161,7 @@ export function pickResolvingClaimEvents(
   const resolving = filterResolvingClaimCandidates(
     candidates,
     trustedMarkerLogins,
+    staleAgeMs,
   );
   return resolving.length === 1 ? resolving[0] : [];
 }
@@ -3145,12 +3183,14 @@ export function classifyClaimCandidateAmbiguity(
   candidates,
   trustedMarkerLogins,
   isExplicit,
+  staleAgeMs,
 ) {
   if (isExplicit) {
     return false;
   }
   return (
-    filterResolvingClaimCandidates(candidates, trustedMarkerLogins).length > 1
+    filterResolvingClaimCandidates(candidates, trustedMarkerLogins, staleAgeMs)
+      .length > 1
   );
 }
 /**
@@ -3215,11 +3255,13 @@ export function resolveClaimEvidence(
   candidates,
   trustedMarkerLogins,
   isExplicit,
+  staleAgeMs,
 ) {
   const claimEvents = pickResolvingClaimEvents(
     candidates,
     trustedMarkerLogins,
     isExplicit,
+    staleAgeMs,
   );
   // #1686: ambiguity is a distinct signal from `claimEvents` above --
   // `pickResolvingClaimEvents` deliberately collapses BOTH "zero candidates
@@ -3231,6 +3273,7 @@ export function resolveClaimEvidence(
     candidates,
     trustedMarkerLogins,
     isExplicit,
+    staleAgeMs,
   );
   // #1686: true when ANY candidate claim issue ever carried a trusted,
   // syntactically valid `claimed-by` marker -- computed over the union of
@@ -3298,6 +3341,9 @@ function toIssueCommentPayload(comment) {
     author: { login: comment.authorLogin },
     createdAt: comment.createdAt,
     updatedAt: comment.updatedAt,
+    // #3246: passthrough only -- `undefined` for every caller that did not
+    // request `includeEditState` from the port.
+    lastEditedAt: comment.lastEditedAt,
   };
 }
 /** #1906: fetch the PR's own author `login`/`__typename` via
@@ -3425,13 +3471,25 @@ export function collectAssertNextActions(verdict) {
       pointer,
     });
   }
-  if (verdict.review.suppressedCount > 0) {
+  // #3258: reuses the existing ACK_SUPPRESSED token (no new schema-enum /
+  // pinned-token-list entry) for the sibling "unrecognized body shape"
+  // fail-closed case -- both point at the same recovery action (read the
+  // body, post a trusted review-ack), so a shape-naming summary is enough
+  // to satisfy "the review-ack next action names the unrecognized shape"
+  // without a second token. `!verdict.review.satisfied` avoids firing this
+  // once a review-ack has already cleared the review (`bodyShape` would
+  // then no longer be the reason `ready` is false, if it is false at all).
+  const unrecognizedBodyNeedsAck =
+    bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
+    verdict.review.bodyShape === 'unrecognized' &&
+    !verdict.review.satisfied;
+  if (verdict.review.suppressedCount > 0 || unrecognizedBodyNeedsAck) {
     const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
-    items.push({
-      token: T.ACK_SUPPRESSED,
-      summary: `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`,
-      pointer,
-    });
+    const summary =
+      verdict.review.suppressedCount > 0
+        ? `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
+        : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
+    items.push({ token: T.ACK_SUPPRESSED, summary, pointer });
   }
   if (verdict.terminal.state === 'COPILOT_UNAVAILABLE') {
     if (verdict.waiver.mode === 'maintainer-authorized') {

@@ -106,11 +106,16 @@ is available. It mechanically catches shape and marker mistakes — a
 missing or duplicated autopilot-suitability footer, a wrong
 markerPrefix, a missing required heading for the declared shape, a
 malformed dependency marker — that a confident narrative can otherwise
-mask:
+mask. For the `orphan` and `child` shapes, it also runs the same A4/A4.5
+triage evaluators Discover runs later, so most viability/suitability
+failures surface here instead of only at claim time -- pass `--title`
+(or lead the draft with a `# <title>` line) so those checks can
+evaluate:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --body-file draft.md
+  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
+  --body-file draft.md
 ```
 
 Before newly publishing a body into the `needs-decision` or
@@ -121,11 +126,13 @@ matching value) — without it, the marker/label checks that key off
 never run through this gate at all. Passing `--expect-bucket` also
 skips the ready-shape-only checks (the suitability footer and required
 headings) that a bucket body like `#431` below is never expected to
-carry:
+carry, and downgrades a failing A4/A4.5 triage finding to a warning
+instead of a failure, since such a body is meant to be non-ready:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --body-file draft.md \
+  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
+  --body-file draft.md \
   --expect-bucket needs-decision \
   --label status:needs-decision
 ```
@@ -551,7 +558,13 @@ Before publishing an issue, apply a reuse-first decision tree:
 1. Is an existing open issue a better fit? If yes, extend it instead of
    creating a new one. Add a comment linking to the new schema request.
 2. Is the work already complete in a closed issue or merged PR? If yes,
-   create a reference or learning note instead of reopening it.
+   create a reference or learning note instead of reopening it. Was it
+   instead already declined — closed as `not planned`, or rejected in
+   a review thread of the PR that last reshaped the same mechanism
+   (the reuse-first policy's previously declined check)? If yes and
+   nothing is new since that outcome, route to `needs-decision` or
+   drop the proposal instead of publishing it as `ready`; if something
+   is new, cite the declined outcome in the Background and continue.
 3. Is a parent roadmap already managing this work? If yes, add it to the
    task list instead of filing independently.
 4. Does the issue have any of these properties? If yes, escalate to

@@ -137,6 +137,157 @@ test('listWorkItemComments: GitHub and fake adapters agree on the normalized sha
   );
 });
 
+test('listWorkItemComments: GitHub and fake adapters agree on lastEditedAt when includeEditState is requested (#3246)', () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 111,
+          node_id: 'IC_kwDOexample000',
+          body: 'hello',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:05:00Z',
+          user: { login: 'claude-bot' },
+        },
+      ],
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            nodes: [
+              {
+                id: 'IC_kwDOexample000',
+                lastEditedAt: '2026-01-01T00:10:00Z',
+              },
+            ],
+          },
+        }),
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    comments: {
+      500: [
+        {
+          id: 111,
+          nodeId: 'IC_kwDOexample000',
+          body: 'hello',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:05:00Z',
+          authorLogin: 'claude-bot',
+          lastEditedAt: '2026-01-01T00:10:00Z',
+        },
+      ],
+    },
+  });
+
+  const githubResult = githubPort.listWorkItemComments(500, {
+    includeEditState: true,
+  });
+  assert.equal(githubResult[0]?.lastEditedAt, '2026-01-01T00:10:00Z');
+  assert.deepEqual(
+    fakePort.listWorkItemComments(500, { includeEditState: true }),
+    githubResult,
+  );
+});
+
+test('listWorkItemComments: GitHub and fake adapters agree lastEditedAt is undefined when includeEditState is not requested (#3246)', () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => [
+        {
+          id: 111,
+          node_id: 'IC_kwDOexample000',
+          body: 'hello',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:05:00Z',
+          user: { login: 'claude-bot' },
+        },
+      ],
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    comments: {
+      500: [
+        {
+          id: 111,
+          nodeId: 'IC_kwDOexample000',
+          body: 'hello',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:05:00Z',
+          authorLogin: 'claude-bot',
+          // The fixture carries a value, but neither adapter must surface
+          // it -- proves the fake's opt-in stripping matches the real
+          // adapter's "never asked, never fetched" contract.
+          lastEditedAt: '2026-01-01T00:10:00Z',
+        },
+      ],
+    },
+  });
+
+  const githubResult = githubPort.listWorkItemComments(500);
+  assert.equal(githubResult[0]?.lastEditedAt, undefined);
+  assert.deepEqual(fakePort.listWorkItemComments(500), githubResult);
+});
+
+test('listWorkItemCommentsWithRetryAsync: GitHub and fake adapters agree on last_edited_at when includeEditState is requested (#3246)', async () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        if (args[1] === 'graphql') {
+          return JSON.stringify({
+            data: { nodes: [{ id: 'IC_1', lastEditedAt: null }] },
+          });
+        }
+        return JSON.stringify([
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ]);
+      },
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    traversalComments: {
+      500: [
+        {
+          id: 1,
+          node_id: 'IC_1',
+          body: 'hi',
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          user: { login: 'kurone-kito' },
+          last_edited_at: null,
+        },
+      ],
+    },
+  });
+
+  const githubResult = await githubPort.listWorkItemCommentsWithRetryAsync(
+    500,
+    { includeEditState: true },
+  );
+  assert.equal(
+    (githubResult[0] as Record<string, unknown>).last_edited_at,
+    null,
+  );
+  assert.deepEqual(
+    await fakePort.listWorkItemCommentsWithRetryAsync(500, {
+      includeEditState: true,
+    }),
+    githubResult,
+  );
+});
+
 // --- review disposition + unresolved threads -----------------------------
 
 test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree on the normalized shape', () => {
@@ -163,6 +314,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                             updatedAt: '2026-01-01T00:00:00Z',
                             author: { login: 'kurone-kito' },
                             pullRequestReview: { id: 'PRR_1' },
+                            lastEditedAt: null,
                           },
                         ],
                         pageInfo: { hasNextPage: false, endCursor: null },
@@ -180,6 +332,9 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
                             updatedAt: '2026-01-01T01:00:00Z',
                             author: { login: 'copilot-pull-request-reviewer' },
                             pullRequestReview: null,
+                            // #3246: the edited state -- proves both
+                            // adapters agree on 'edited', not just 'unedited'.
+                            lastEditedAt: '2026-01-01T01:05:00Z',
                           },
                         ],
                         pageInfo: { hasNextPage: false, endCursor: null },
@@ -207,6 +362,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
               updatedAt: '2026-01-01T00:00:00Z',
               authorLogin: 'kurone-kito',
               pullRequestReviewId: 'PRR_1',
+              lastEditedAt: null,
             },
           ],
         },
@@ -220,6 +376,7 @@ test('listChangeRequestReviewThreadsWithComments: GitHub and fake adapters agree
               updatedAt: '2026-01-01T01:00:00Z',
               authorLogin: 'copilot-pull-request-reviewer',
               pullRequestReviewId: null,
+              lastEditedAt: '2026-01-01T01:05:00Z',
             },
           ],
         },
@@ -347,6 +504,49 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
   assert.deepEqual(
     fakePort.getChangeRequestReviewsWithHeadCommitDate(42),
     githubPort.getChangeRequestReviewsWithHeadCommitDate(42),
+  );
+});
+
+test('getChangeRequestHeadObservedAt: GitHub and fake adapters agree on the earliest check-suite createdAt (kurone-kito/idd-skill#3253)', () => {
+  const githubPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: 'abc123',
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        oid: 'abc123',
+                        checkSuites: {
+                          nodes: [
+                            { createdAt: '2026-09-22T01:35:21Z' },
+                            { createdAt: '2026-09-22T01:36:00Z' },
+                          ],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const fakePort = createFakeProviderAdapter({
+    headObservedAtByChangeRequest: { 42: '2026-09-22T01:35:21Z' },
+  });
+
+  assert.equal(
+    fakePort.getChangeRequestHeadObservedAt(42),
+    githubPort.getChangeRequestHeadObservedAt(42),
   );
 });
 
