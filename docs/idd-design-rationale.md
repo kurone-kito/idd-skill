@@ -174,16 +174,12 @@ at that same shared path. Step 1.5's check therefore does **not**
 conclude ownership from `present: true` and adopt the recorded pair
 outright; it only stops Step 1.5 from silently discarding the
 candidate as an ordinary foreign claim, and routes it to
-`idd-resume.instructions.md` instead, so that file's own
-GitHub-authoritative claim-state rules — not a local file alone — make
-the actual ownership call. Resume's own Step 1 table already treats an
-active non-stale claim from another session as "STOP — not inheritable
-even if agent-id matches," and only continues with the same
-`{claim-id}` once independently verified as this session's own. That
-refusal is not a terminal end of Discover: the candidate stays
-ineligible and Step 1.5 keeps scanning, so a foreign shared-primary
-hit does not block every later candidate. Discover stops only when
-Resume actually takes the claim.
+`idd-resume.instructions.md` instead. Resume Step 0 sends a
+non-owned active claim with no forced-handoff evidence to
+`idd-resume-stall.instructions.md` before Step 1, so this route
+does not finish ownership by itself. A refusal there is not a
+terminal end of Discover: the candidate stays ineligible and
+Step 1.5 keeps scanning.
 
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to
@@ -191,10 +187,10 @@ threading an already-known claim-id through to
 stale/released claim whose local worktree is still occupied): a
 session with zero memory of its own claim, encountered during
 Discover's candidate filtering, before Resume is ever entered at all.
-`#3273`'s own gap means the route into `idd-resume.instructions.md`
-described above still depends on that file's written-table fallback
-rather than a guaranteed helper-verdict path — left for `#3273` to
-close, not duplicated here.
+`#3273`'s own gap is that Resume Step 0 stalls before Step 1
+unless the session already holds a verified claim-id. Passing the
+probe's claim-id through that entry stays in `#3273`, not this
+change.
 
 ### A4 Step 2 — Rationale: concurrent-selection desync
 

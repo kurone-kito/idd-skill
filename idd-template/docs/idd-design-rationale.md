@@ -179,24 +179,21 @@ and never proves ownership (`idd-overview-core.instructions.md`), so
 Step 1.5 does **not** gate this route on `record.agentId`. It does
 **not** adopt the recorded pair outright; it stops silently discarding
 the candidate as an ordinary foreign claim and routes a well-formed
-`present: true` result to `idd-resume.instructions.md`, so that file's
-GitHub-authoritative claim-state rules — not a local file or agent-id
-equality — make the ownership call. Resume's own Step 1 table already
-treats an active non-stale claim from another session as "STOP — not
-inheritable even if agent-id matches," and only continues with the
-same `{claim-id}` once independently verified as this session's own.
-That refusal is not a terminal end of Discover: the candidate stays
-ineligible and Step 1.5 keeps scanning, so a foreign shared-primary
-hit does not block every later candidate. Discover stops only when
-Resume actually takes the claim.
+`present: true` result to `idd-resume.instructions.md`. Resume
+Step 0 sends a non-owned active claim with no forced-handoff
+evidence to `idd-resume-stall.instructions.md` before Step 1, so
+this route does not finish ownership by itself. A refusal there
+is not a terminal end of Discover: the candidate stays ineligible
+and Step 1.5 keeps scanning.
 
 This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
 not threading an already-known claim-id through to
 `resume-claim-routing.mjs`) and kurone-kito/idd-skill#3274 (operator
 recovery for a stale/released claim whose local worktree is still
-occupied). kurone-kito/idd-skill#3273's gap means the route above still
-depends on Resume's written-table fallback — left for that issue to
-close, not duplicated here.
+occupied). kurone-kito/idd-skill#3273's gap is that Resume Step 0
+stalls before Step 1 unless the session already holds a verified
+claim-id. Passing the probe's claim-id through that entry stays in
+that issue, not this change.
 
 ### A4 Step 2 — Rationale: concurrent-selection desync
 

@@ -558,9 +558,10 @@ ascending issue-number order:
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the shared
   claim-state rules in `idd-claim.instructions.md`, including
-  forced-handoff and legacy markers. Loop the single-issue
-  `resume-claim-routing.mjs --fresh-claim-gate` resolver, or apply those
-  rules manually. A non-stale `claimed-by` with no `{claim-id}`
+  forced-handoff and legacy markers. Loop
+  `resume-claim-routing.mjs --fresh-claim-gate`, or by hand.
+  Hold `stop` until the probe below.
+  A non-stale `claimed-by` with no `{claim-id}`
   is **ineligible**. Only when it is non-stale (see
   `docs/policy-constants.md`) and has one, run
   `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
