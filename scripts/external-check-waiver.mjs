@@ -1598,7 +1598,7 @@ export function trustedLoginsForLinkedIssueClaims({
     collaboratorMarkerLogins,
   });
 }
-function resolveLinkedIssueCandidates({
+export function resolveLinkedIssueCandidates({
   owner,
   repo,
   rawConfig,
@@ -1619,6 +1619,19 @@ function resolveLinkedIssueCandidates({
   // is now required -- this write-gate caller previously omitted it and
   // silently used the hardcoded 24h default.
   const staleAgeMs = readClaimStaleAgeMs(rawConfig);
+  // #3454: the trusted-actor config and the collaborator-trust decision
+  // do not depend on a linked issue's comments, so load them once per
+  // invocation. Collaborator logins stay inside the loop: they are
+  // derived from each issue's own comments.
+  const trustConfig = loadTrustedActorConfig({
+    owner,
+    repo,
+    baseRefName,
+  });
+  const allowCollaboratorMarkers = resolveCollaboratorMarkerTrust(
+    trustConfig,
+    process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+  );
   for (const issue of issueRefs) {
     const comments = ghJson(
       [
@@ -1628,19 +1641,11 @@ function resolveLinkedIssueCandidates({
       ],
       true,
     );
-    const trustConfig = loadTrustedActorConfig({
-      owner,
-      repo,
-      baseRefName,
-    });
     const trustedMarkerLogins = trustedLoginsForLinkedIssueClaims({
       viewerLogin,
       config: trustConfig,
       envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-      collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
-        trustConfig,
-        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
-      )
+      collaboratorMarkerLogins: allowCollaboratorMarkers
         ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
         : [],
     });
