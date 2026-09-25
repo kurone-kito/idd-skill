@@ -39,6 +39,7 @@ import {
 } from './policy-helpers.mjs';
 import {
   buildPreMergeReadinessSummary,
+  CHECK_PASS_EQUIVALENT_STATES,
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -346,9 +347,10 @@ export function collectPreMergeReadiness(
   // `CheckPayload.workflowPath`'s own doc comment and this issue's
   // Background). Scoped to this ONE check name deliberately: it is the
   // only one with a documented same-display-name-different-file collision
-  // scenario in this repository today (the concurrent `pull_request`/
-  // `pull_request_target` transition window `.github/workflows/
-  // idd-advisory-convergence.yml` itself documents). The producer-identity
+  // scenario in this repository today (a same-repository PR that
+  // reintroduces a `pull_request` trigger to its own copy of
+  // `.github/workflows/idd-advisory-convergence.yml` post-#2764 Phase 2,
+  // per kurone-kito/idd-skill#3256). The producer-identity
   // KEY widens for every `groupChecksByProducer` consumer regardless (see
   // `protocol-helpers.mts`); only the SOURCING of real `workflowPath` data
   // stays this narrow, so any other check name still benefits the moment a
@@ -365,8 +367,9 @@ export function collectPreMergeReadiness(
   // stays small on its own: this repository's own live PR rollups show
   // exactly one `idd-advisory-convergence` check-run entry per PR in the
   // ordinary case (the `-self-waiver` check is a different name, not
-  // matched here), two-to-three during the documented transition window --
-  // never the up-to-20 budget the marker-verification block below spends.
+  // matched here), two-to-three in the documented same-file dedup case
+  // above -- never the up-to-20 budget the marker-verification block below
+  // spends.
   //
   // kurone-kito/idd-skill#2919 (round 2 -- Codex + Copilot review on PR
   // #2921, six new findings against a prior cap+excess-sentinel design):
@@ -442,6 +445,33 @@ export function collectPreMergeReadiness(
   // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
   // the primary required-check gate -- see the doc comment above.
   let advisoryConvergenceIdentityUnresolved = false;
+  // kurone-kito/idd-skill#3256: true when at least one live
+  // `idd-advisory-convergence` instance has a pass-equivalent state but
+  // NONE of the pass-equivalent instances was triggered by
+  // `pull_request_target` -- reported to `buildPreMergeReadinessSummary`
+  // (`advisoryConvergenceNonTargetEventOnly` option) so it can downgrade
+  // the primary required-check gate the same way
+  // `advisoryConvergenceIdentityUnresolved` does, but as a DISTINCT cause
+  // (see `summarizeRequiredChecks`'s `nonTargetEventCheckNames` doc
+  // comment for why the two are never folded into one field). Computed
+  // only once the workflow-path/event resolution below succeeds cleanly
+  // for every live instance -- an unresolved event already routes through
+  // `advisoryConvergenceIdentityUnresolved` instead (see the resolution
+  // loop's own `!event` guard), so this flag and that one are mutually
+  // exclusive in practice. Stays `false` (no downgrade) whenever no
+  // pass-equivalent instance exists at all: `classifyCiChecks` already
+  // correctly reports `failed`/`pending` for that case with no help
+  // needed here, and firing this flag regardless would spuriously
+  // downgrade an already-correct `failed`/`pending` verdict to the less
+  // informative `unknown` (accepted edge, mirrored in
+  // `summarizeRequiredChecks`'s own downgrade, which only ever narrows an
+  // already-`'success'` status). Also stays `false` whenever a
+  // `pull_request_target` instance's own pass exists alongside a
+  // DIFFERENT, non-qualifying pass-equivalent sibling (e.g. both a
+  // `pull_request` and a `pull_request_target` instance happen to pass) --
+  // "at least one qualifying pass exists" is what this check requires,
+  // never "every instance's event qualifies".
+  let advisoryConvergenceNonTargetEventOnly = false;
   if (advisoryConvergenceCheckEntries.length > 0) {
     const runIdsByIndex = new Map();
     for (const { index } of advisoryConvergenceCheckEntries) {
@@ -501,6 +531,9 @@ export function collectPreMergeReadiness(
           }
           if (!advisoryConvergenceIdentityUnresolved) {
             const pathByDetailsUrl = new Map();
+            // kurone-kito/idd-skill#3256: mirrors `pathByDetailsUrl` exactly
+            // -- same join key, same duplicate-detection guard below.
+            const eventByDetailsUrl = new Map();
             const duplicateDetailsUrls = new Set();
             for (const association of associations) {
               if (pathByDetailsUrl.has(association.detailsUrl)) {
@@ -509,6 +542,10 @@ export function collectPreMergeReadiness(
                 pathByDetailsUrl.set(
                   association.detailsUrl,
                   association.workflowPath,
+                );
+                eventByDetailsUrl.set(
+                  association.detailsUrl,
+                  association.event,
                 );
               }
             }
@@ -523,20 +560,43 @@ export function collectPreMergeReadiness(
               );
             }
             const pathsByIndex = new Map();
+            // kurone-kito/idd-skill#3256: mirrors `pathsByIndex` -- resolved
+            // (and validated) only alongside `path` below, in the SAME loop
+            // and under the SAME fail-closed guard, so an index never ends
+            // up with one resolved and the other missing.
+            const eventsByIndex = new Map();
             for (const { index } of advisoryConvergenceCheckEntries) {
               const detailsUrl = String(
                 rawStatusCheckRollup[index]?.detailsUrl ?? '',
               );
               const path = pathByDetailsUrl.get(detailsUrl);
+              const event = eventByDetailsUrl.get(detailsUrl);
               if (
                 duplicateDetailsUrls.has(detailsUrl) ||
                 (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) > 1 ||
-                !path
+                !path ||
+                !event
               ) {
+                // A missing `event` here also skips `workflowPath`
+                // enrichment for this whole check name (both are set only
+                // AFTER this loop completes cleanly, below), which in turn
+                // leaves `workflowPath` absent -- PERMISSIVE for the
+                // self-waiver candidate filter's own `!check.workflowPath`
+                // fallback (`selfConvergenceProducerCandidates` in
+                // protocol-helpers.mts), reopening #2919's decoy-masking
+                // gap for THAT unrelated path specifically. Accepted: a
+                // real `checkSuite.workflowRun.event` from GitHub is
+                // always populated, and the self-waiver marker's own
+                // condition 4 independently rejects a non-`pull_request_target`
+                // cited run regardless, so this is a fixture-completeness
+                // gap (see the `event`-less `workflowRuns` test fixtures
+                // this repository's own test suite had to backfill for
+                // #3256), never a live production hole.
                 advisoryConvergenceIdentityUnresolved = true;
                 break;
               }
               pathsByIndex.set(index, path);
+              eventsByIndex.set(index, event);
             }
             if (!advisoryConvergenceIdentityUnresolved) {
               checks = checks.map((check, index) => {
@@ -545,6 +605,27 @@ export function collectPreMergeReadiness(
                   ? check
                   : { ...check, workflowPath: path };
               });
+              // kurone-kito/idd-skill#3256: every advisory-convergence entry
+              // now has a cleanly-resolved `event` in `eventsByIndex` (the
+              // loop above would already have set
+              // `advisoryConvergenceIdentityUnresolved` and broken out
+              // otherwise) -- compute whether at least one pass-equivalent
+              // live instance exists and, if so, whether any of THOSE
+              // pass-equivalent instances was triggered by
+              // `pull_request_target`. See the flag's own doc comment below
+              // for the full rationale and the accepted edge cases.
+              advisoryConvergenceNonTargetEventOnly =
+                advisoryConvergenceCheckEntries.some(({ index }) =>
+                  CHECK_PASS_EQUIVALENT_STATES.has(
+                    String(checks[index]?.state ?? '').toUpperCase(),
+                  ),
+                ) &&
+                !advisoryConvergenceCheckEntries.some(
+                  ({ index }) =>
+                    CHECK_PASS_EQUIVALENT_STATES.has(
+                      String(checks[index]?.state ?? '').toUpperCase(),
+                    ) && eventsByIndex.get(index) === 'pull_request_target',
+                );
             }
           }
         }
@@ -1154,6 +1235,10 @@ export function collectPreMergeReadiness(
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
       advisoryConvergenceIdentityUnresolved,
+      // kurone-kito/idd-skill#3256: caller-precomputed by the same
+      // enrichment block above -- see its doc comment for the full
+      // rationale.
+      advisoryConvergenceNonTargetEventOnly,
       advisoryConvergenceOutageRelieved:
         advisoryConvergenceOutageRelief.relieved,
       advisoryConvergenceOutageRelievedSince:

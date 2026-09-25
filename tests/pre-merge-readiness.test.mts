@@ -294,6 +294,7 @@ test('required check summaries block when no merge-gate policy evidence exists',
     sourcePinnedRequiredCheckNames: [],
     sourcePinnedUnresolved: false,
     identityUnresolvedRequiredCheckNames: [],
+    nonTargetEventRequiredCheckNames: [],
     preDowngradeStatus: 'unknown',
     checks: [],
   });
@@ -9359,6 +9360,111 @@ test('buildPreMergeReadinessSummary does not spuriously append a generic detail 
     /unresolved workflow-file producer identity/,
   );
   assert.doesNotMatch(ciBlocker?.detail ?? '', /CI is not all-passing/);
+});
+
+// kurone-kito/idd-skill#3256 (#2764 Phase 2): the `advisoryConvergenceNonTargetEventOnly`
+// option mirrors `advisoryConvergenceIdentityUnresolved`'s own
+// success-to-unknown downgrade shape, but is a DISTINCT cause reported
+// under its own field/detail text -- the producer identity resolved
+// cleanly here, only the triggering event disqualified the pass.
+test('buildPreMergeReadinessSummary downgrades an otherwise-passing idd-advisory-convergence check to unknown when advisoryConvergenceNonTargetEventOnly is set, naming the cause explicitly', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'SUCCESS',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceNonTargetEventOnly: true,
+    },
+  );
+  assert.equal((summary.ci as Record<string, unknown>).status, 'unknown');
+  assert.deepEqual(
+    (summary.ci as Record<string, unknown>).nonTargetEventRequiredCheckNames,
+    [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR],
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const ciBlocker = (
+    summary.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.match(
+    ciBlocker?.detail ?? '',
+    /no `pull_request_target`-triggered pass/,
+  );
+  assert.doesNotMatch(ciBlocker?.detail ?? '', /CI is not all-passing/);
+  assert.equal(summary.ready, false);
+});
+
+// kurone-kito/idd-skill#3256: the downgrade only ever narrows a `'success'`
+// status -- it must never mask a genuinely FAILING check, matching "an
+// instance from any other event can still block, but it never satisfies
+// the check" from the issue's own Proposed change.
+test('buildPreMergeReadinessSummary never downgrades an already-failing idd-advisory-convergence check when advisoryConvergenceNonTargetEventOnly is set', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = [
+    ...(fixture.input.branchRules as Record<string, unknown>[]).map((rule) =>
+      rule.type === 'required_status_checks'
+        ? {
+            type: 'required_status_checks',
+            parameters: {
+              required_status_checks: [
+                { context: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR },
+              ],
+            },
+          }
+        : rule,
+    ),
+  ];
+  const checks = [
+    {
+      name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      state: 'FAILURE',
+      completedAt: '2026-05-11T23:57:00Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, checks },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      advisoryConvergenceNonTargetEventOnly: true,
+    },
+  );
+  assert.equal((summary.ci as Record<string, unknown>).status, 'failed');
+  // The cause is still NAMED (mirrors `identityUnresolvedRequiredCheckNames`'s
+  // own "computed independently of status" precedent) even though it never
+  // narrowed `status` itself, which was already non-success.
+  assert.deepEqual(
+    (summary.ci as Record<string, unknown>).nonTargetEventRequiredCheckNames,
+    [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR],
+  );
+  assert.equal(summary.ready, false);
 });
 
 // #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*

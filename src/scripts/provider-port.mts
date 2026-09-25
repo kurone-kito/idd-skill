@@ -407,15 +407,21 @@ export interface ProviderReviewThreadWithAuthorType {
  * treated as evidence here. `workflowPath` is sourced from
  * `checkSuite.workflowRun.file.path`, GitHub's own check-suite-to-workflow-
  * run association, `null` when that association (or its `file`) is absent.
- * A caller must fail closed (never silently proceed) whenever `detailsUrl`
- * repeats across the returned entries, or across the rollup entries it is
- * matched against -- see `pre-merge-readiness.mts`'s call site for why an
- * attacker copying a genuine check-run's own `detailsUrl` verbatim makes
- * this the only safe outcome.
+ * `event` (kurone-kito/idd-skill#3256) is sourced from the same
+ * `checkSuite.workflowRun.event` association -- the triggering event GitHub
+ * recorded for that run (e.g. `pull_request`, `pull_request_target`), `null`
+ * under the identical absence condition as `workflowPath`. A caller must
+ * fail closed (never silently proceed) whenever `detailsUrl` repeats across
+ * the returned entries, or across the rollup entries it is matched
+ * against -- see `pre-merge-readiness.mts`'s call site for why an attacker
+ * copying a genuine check-run's own `detailsUrl` verbatim makes this the
+ * only safe outcome. The same repeated-`detailsUrl` fail-closed rule
+ * protects `event` too, since it is resolved from the identical join.
  */
 export interface ProviderCheckRunWorkflowPath {
   detailsUrl: string;
   workflowPath: string | null;
+  event: string | null;
 }
 
 /**

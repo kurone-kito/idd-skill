@@ -116,8 +116,14 @@ export function parsePaginatedGhNdjson(raw) {
  * coverage (already passing, or intentionally not run) and never counts as
  * a genuinely non-passing cause. Hoisted to module scope (#2021) so both
  * {@link summarizeRequiredChecks} and {@link computePreMergeReadinessBlockers}
- * share one definition instead of two independently-maintained copies. */
-const CHECK_PASS_EQUIVALENT_STATES = new Set([
+ * share one definition instead of two independently-maintained copies.
+ * Exported (kurone-kito/idd-skill#3256) for a third consumer,
+ * `pre-merge-readiness.mts`'s collector, which needs the identical
+ * pass-equivalent test to decide whether a resolved `idd-advisory-
+ * convergence` check-run instance's SUCCESS-shaped state would otherwise
+ * satisfy the required check before it can gate that on the instance's own
+ * triggering event. */
+export const CHECK_PASS_EQUIVALENT_STATES = new Set([
   'SUCCESS',
   'SKIPPED',
   'NEUTRAL',
@@ -5758,6 +5764,7 @@ export function summarizeRequiredChecks(
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
     identityUnresolvedCheckNames = null,
+    nonTargetEventCheckNames = null,
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -5965,6 +5972,17 @@ export function summarizeRequiredChecks(
       ? identityUnresolvedCheckNames.map((name) => String(name ?? '').trim())
       : [],
   );
+  // kurone-kito/idd-skill#3256 (round 2 -- advisor review, mirroring
+  // #2919 round 4's identical reasoning for `identityUnresolvedNameSet`
+  // just above): the required-check names the downgrade below actually
+  // fired for (empty unless it fired). See `nonTargetEventCheckNames`'s
+  // own doc comment above.
+  let nonTargetEventRequiredCheckNames = [];
+  const nonTargetEventNameSet = new Set(
+    Array.isArray(nonTargetEventCheckNames)
+      ? nonTargetEventCheckNames.map((name) => String(name ?? '').trim())
+      : [],
+  );
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
       c.coveredByWaiver ? { ...c, state: 'SKIPPED' } : c,
@@ -6024,6 +6042,22 @@ export function summarizeRequiredChecks(
         }
       }
     }
+    // kurone-kito/idd-skill#3256: independent of, and checked alongside
+    // (never exclusively with), the source-pinned and identity-unresolved
+    // causes above -- mirrors identityUnresolvedNameSet's own block
+    // exactly, same "computed from requiredCheckNames independently of
+    // status" reasoning.
+    if (nonTargetEventNameSet.size > 0) {
+      const affected = requiredCheckNames.filter((name) =>
+        nonTargetEventNameSet.has(name),
+      );
+      if (affected.length > 0) {
+        nonTargetEventRequiredCheckNames = affected;
+        if (status === 'success') {
+          status = 'unknown';
+        }
+      }
+    }
     // #1753: computed from the RAW matchedRequiredChecks -- deliberately
     // NOT ciClassification.discardedNonPassingInstances above, which is
     // derived from the waiver-adjusted effectiveChecks. A valid waiver
@@ -6053,7 +6087,12 @@ export function summarizeRequiredChecks(
     protectionReadsUnreadable,
     presentRunConclusion: resolvePresentRunConclusion(
       normalizedChecks,
-      identityUnresolvedNameSet,
+      // kurone-kito/idd-skill#3256: unioned with `nonTargetEventNameSet` --
+      // `resolvePresentRunConclusion` treats any name in this set
+      // identically (fail closed into 'some-failing'), so a single
+      // combined set covers both causes without adding a third
+      // parameter. See that function's own doc comment.
+      new Set([...identityUnresolvedNameSet, ...nonTargetEventNameSet]),
     ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
@@ -6078,14 +6117,19 @@ export function summarizeRequiredChecks(
     // comment above -- empty unless the identity-unresolved downgrade
     // actually fired for this call.
     identityUnresolvedRequiredCheckNames,
-    // kurone-kito/idd-skill#2919 (round 5): see the field's own inline
-    // comment above -- the dedup+waiver-adjusted classification `status`
-    // BEFORE the source-pinned/identity-unresolved downgrades could narrow
-    // it. Lets a caller determine, exactly, whether a genuinely separate
-    // concurrent CI cause exists alongside those two named downgrades,
-    // without re-deriving per-check pass/fail evidence itself. `'unknown'`
-    // when no required checks are configured (mirrors `status`'s own
-    // initial default in that case).
+    // kurone-kito/idd-skill#3256: see the field's own inline comment
+    // above -- empty unless the non-target-event downgrade actually
+    // fired for this call.
+    nonTargetEventRequiredCheckNames,
+    // kurone-kito/idd-skill#2919 (round 5; kurone-kito/idd-skill#3256
+    // added the third downgrade): see the field's own inline comment
+    // above -- the dedup+waiver-adjusted classification `status` BEFORE
+    // the source-pinned/identity-unresolved/non-target-event downgrades
+    // could narrow it. Lets a caller determine, exactly, whether a
+    // genuinely separate concurrent CI cause exists alongside those three
+    // named downgrades, without re-deriving per-check pass/fail evidence
+    // itself. `'unknown'` when no required checks are configured (mirrors
+    // `status`'s own initial default in that case).
     preDowngradeStatus,
     checks: normalizedChecks.map((check) => ({
       name: check.name,
@@ -7240,6 +7284,19 @@ export function computePreMergeReadinessBlockers(report) {
       identityUnresolvedNames.length > 0
         ? `required ${identityUnresolvedNames.length > 1 ? 'checks' : 'check'} ${identityUnresolvedNames.join(', ')} ${identityUnresolvedNames.length > 1 ? 'have' : 'has'} an unresolved workflow-file producer identity (a transient lookup failure, a malformed run reference, or too many distinct reruns to verify this pass); cannot rule out a same-display-name decoy workflow, so this required check cannot be trusted as passing until it resolves cleanly on a later pass`
         : '';
+    // kurone-kito/idd-skill#3256: name the non-target-event cause
+    // explicitly -- see `summarizeRequiredChecks`'s
+    // `nonTargetEventRequiredCheckNames` doc comment. Independent of (and
+    // checked alongside, never exclusively with) the two causes above.
+    const nonTargetEventNames = Array.isArray(
+      ci.nonTargetEventRequiredCheckNames,
+    )
+      ? ci.nonTargetEventRequiredCheckNames.map((name) => String(name ?? ''))
+      : [];
+    const nonTargetEventDetail =
+      nonTargetEventNames.length > 0
+        ? `required ${nonTargetEventNames.length > 1 ? 'checks' : 'check'} ${nonTargetEventNames.join(', ')} ${nonTargetEventNames.length > 1 ? 'have' : 'has'} no \`pull_request_target\`-triggered pass among their live instances (only a non-target event, e.g. \`pull_request\`); a same-repository PR could edit that event's own copy of the workflow, so this required check cannot be trusted as passing until a \`pull_request_target\`-triggered instance passes`
+        : '';
     // kurone-kito/idd-skill#2919 (round 4 -- Codex review on PR #2921, P2;
     // round 5 -- advisor review, replacing an earlier per-check-name
     // reconstruction here): the specific pinned/identity-unresolved causes
@@ -7274,15 +7331,17 @@ export function computePreMergeReadinessBlockers(report) {
     // cause can exist) sees byte-identical detail text to before -- this
     // only widens the detail for the new combined shape.
     // kurone-kito/idd-skill#2919 (round 5 -- E10 critique, latent-trap
-    // note, not a bug today): on a branch with NO required checks
-    // configured at all (`ci.noRequiredChecksConfigured: true`),
-    // `sourcePinnedNames`/`identityUnresolvedNames` are always empty
-    // (both downgrades live entirely inside `summarizeRequiredChecks`'s
-    // `requiredCheckNames.length > 0` block) and `preDowngradeStatus`
-    // stays its unset `'unknown'` default -- so `hasUnexplainedConcurrentCause`
-    // is spuriously `true` here, but harmlessly: `sourcePinnedDetail` and
-    // `identityUnresolvedDetail` below are ALSO both empty in this case,
-    // so the `[...].filter(Boolean).join('; ') || genericStatusDetail`
+    // note, not a bug today; kurone-kito/idd-skill#3256 added the third
+    // cause below): on a branch with NO required checks configured at
+    // all (`ci.noRequiredChecksConfigured: true`),
+    // `sourcePinnedNames`/`identityUnresolvedNames`/`nonTargetEventNames`
+    // are always empty (all three downgrades live entirely inside
+    // `summarizeRequiredChecks`'s `requiredCheckNames.length > 0` block)
+    // and `preDowngradeStatus` stays its unset `'unknown'` default -- so
+    // `hasUnexplainedConcurrentCause` is spuriously `true` here, but
+    // harmlessly: `sourcePinnedDetail`, `identityUnresolvedDetail`, and
+    // `nonTargetEventDetail` below are ALSO all empty in this case, so
+    // the `[...].filter(Boolean).join('; ') || genericStatusDetail`
     // expression reduces to `genericStatusDetail` either way (identical to
     // pre-#2919 behavior for the unprotected-branch path; the gate itself
     // still correctly blocks via `resolvePresentRunConclusion` above,
@@ -7305,6 +7364,7 @@ export function computePreMergeReadinessBlockers(report) {
         : [
             sourcePinnedDetail,
             identityUnresolvedDetail,
+            nonTargetEventDetail,
             hasUnexplainedConcurrentCause ? genericStatusDetail : '',
           ]
             .filter(Boolean)
@@ -8096,6 +8156,13 @@ export function buildPreMergeReadinessSummary(
       options.advisoryConvergenceIdentityUnresolved === true
         ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
         : null,
+    // kurone-kito/idd-skill#3256: only `idd-advisory-convergence` is a
+    // candidate -- it is the sole check name this collector ever resolves
+    // per-instance triggering events for (see `pre-merge-readiness.mts`).
+    nonTargetEventCheckNames:
+      options.advisoryConvergenceNonTargetEventOnly === true
+        ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
+        : null,
   });
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker
   // below -- CI may currently report `idd-advisory-convergence` PASSING,
@@ -8296,11 +8363,20 @@ export function buildPreMergeReadinessSummary(
     // `ADVISORY_CONVERGENCE_WORKFLOW_DISPLAY_NAME` above is only the
     // workflow YAML's top-level `name:` string, which a DIFFERENT
     // workflow file can declare identically (Copilot review, PR #2915:
-    // this repository's own `idd-advisory-convergence.yml` documents
-    // running both `pull_request` and `pull_request_target` instances
-    // of the SAME file simultaneously during its Phase 1 transition
-    // window -- a legitimate same-file case this filter must keep
-    // passing, not the gap this constant closes). Declared as an
+    // this repository's own `idd-advisory-convergence.yml` can still
+    // produce a `pull_request` instance alongside its genuine
+    // `pull_request_target` one from the SAME file whenever a
+    // same-repository PR reintroduces that trigger to its own copy
+    // post-#2764 Phase 2 -- a legitimate same-file case this filter must
+    // keep passing, not the gap this constant closes; this candidate
+    // filter deliberately does not itself gate on triggering event --
+    // kurone-kito/idd-skill#3256's own event gate lives in
+    // `pre-merge-readiness.mts`'s collector for the PRIMARY required-check
+    // path, while this self-waiver path is independently protected by
+    // condition 4 of the self-waiver marker's own trust model, which
+    // already rejects a non-`pull_request_target` cited run -- see
+    // `docs/idd-helper-scripts.md`'s "External-check waiver contract").
+    // Declared as an
     // independent local literal rather than importing
     // `ADVISORY_CONVERGENCE_WORKFLOW_PATH` from `advisory-convergence.mts`
     // -- that file already imports FROM this one (`protocol-helpers.mts`),
