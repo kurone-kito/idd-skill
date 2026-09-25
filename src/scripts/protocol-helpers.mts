@@ -4306,9 +4306,21 @@ export function computeSecondaryAdvisoryReviewSettlement(
     return { settled: false, settledAt: null, declined: false };
   }
   if (token === 'chatgpt-codex-connector') {
+    // Copilot review (PR #3422): `isCodexReviewSummaryCompleteForHeadSha`
+    // is a pure table parser with no identity check of its own -- it
+    // requires only Status/Commit columns and a Completed row, so calling
+    // it directly on ANY comment body would credit an ordinary
+    // Codex-authored comment that merely happens to embed a
+    // matching-shaped Markdown table. Pin to the identity's own
+    // `CODEX_SUMMARY_MARKER` first, the same way the `coderabbitai` branch
+    // above is pinned to `CODERABBIT_SUMMARY_MARKER` via
+    // `isCodeRabbitCompletedReviewSummary`.
     const fullHeadSha = String(headSha ?? '').trim();
     if (
       fullHeadSha &&
+      String(latest.body ?? '')
+        .trimStart()
+        .startsWith(CODEX_SUMMARY_MARKER) &&
       isCodexReviewSummaryCompleteForHeadSha(latest.body, fullHeadSha)
     ) {
       return { settled: true, settledAt: latest.at, declined: false };

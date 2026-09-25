@@ -512,6 +512,39 @@ test('computeSecondaryAdvisoryReviewSettlement: a Codex Completed status for a D
   });
 });
 
+// Copilot review (PR #3422): isCodexReviewSummaryCompleteForHeadSha is a
+// pure table parser with no identity check of its own -- an ordinary
+// Codex-authored comment that merely happens to embed a matching-shaped
+// Markdown table (same Status/Commit columns, a Completed row for this
+// HEAD) must NOT be credited as settled unless the comment also carries
+// the identity-pinned CODEX_SUMMARY_MARKER.
+test('computeSecondaryAdvisoryReviewSettlement: a Codex-authored comment with a matching Completed table but NO summary marker -> pending, never settled (#3261, Copilot review PR #3422)', () => {
+  const lookalikeTable =
+    '## Just a regular comment, not the review-status summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    `| 📝 **Code Review** | ✅ **Completed** | \`${HEAD_SHA.slice(0, 7)}\` | PR opened |\n`;
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'chatgpt-codex-connector[bot]',
+        lookalikeTable,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'chatgpt-codex-connector[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: false,
+    settledAt: null,
+    declined: false,
+  });
+});
+
 // #3186: foldSecondaryAdvisoryReviewSettlements -- folds each configured
 // secondary login's own computeSecondaryAdvisoryReviewSettlement result
 // into the single { settledAt, declined } shape buildSecondaryQuietWindowStatus
