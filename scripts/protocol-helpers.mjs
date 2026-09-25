@@ -2980,6 +2980,63 @@ export function isAdvisoryNonReviewNotice(body) {
     isTerminalAdvisoryNonReviewNotice(text)
   );
 }
+/**
+ * Every wording-based bot-comment classifier this module (and its leaf
+ * `copilot-review-body.mts` dependency) exports, registered once so the
+ * bot-comment corpus contract test (#3263) can run each fixture entry
+ * through the classifier(s) it names without hand-wiring a new import and
+ * call for every id. A matcher not registered here is out of the corpus
+ * evidence bar entirely -- adding one is a deliberate, reviewable edit to
+ * this list, the same visibility the corpus's own grandfather list gets
+ * from being test-pinned.
+ *
+ * `coderabbit-embedded-findings` reports {@link
+ * extractCodeRabbitEmbeddedFindings}'s own finding COUNT for the body
+ * alone, not {@link countUncoveredCodeRabbitEmbeddedFindings}'s
+ * body-minus-already-threaded-comments difference -- that comparison
+ * needs a second, non-body input (the PR's already-threaded comment
+ * count) with no natural per-fixture source, breaking the uniform
+ * one-argument shape every other entry shares.
+ */
+export const BOT_WORDING_CLASSIFIERS = [
+  {
+    id: 'copilot-review-body',
+    apply: (fixture) => classifyCopilotReviewBody(fixture.body),
+  },
+  {
+    id: 'coderabbit-review-in-progress',
+    apply: (fixture) => isCodeRabbitReviewInProgressSummary(fixture.body),
+  },
+  {
+    id: 'coderabbit-already-reviewed-ack',
+    apply: (fixture) =>
+      isCodeRabbitAlreadyReviewedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-rate-limited-ack',
+    apply: (fixture) => isCodeRabbitRateLimitedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-courtesy-ack',
+    apply: (fixture) =>
+      isKnownAdvisoryAckTemplate({
+        author: { login: fixture.login },
+        body: fixture.body,
+      }),
+  },
+  {
+    id: 'coderabbit-embedded-findings',
+    apply: (fixture) => extractCodeRabbitEmbeddedFindings(fixture.body).length,
+  },
+  {
+    id: 'advisory-non-review-notice',
+    apply: (fixture) => isAdvisoryNonReviewNotice(fixture.body),
+  },
+  {
+    id: 'advisory-terminal-notice',
+    apply: (fixture) => isTerminalAdvisoryNonReviewNotice(fixture.body),
+  },
+];
 // A trusted IDD disposition of a non-review notice: the canonical
 // `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
 // completed review` reply. Requires the `**Rejected**` prefix (via

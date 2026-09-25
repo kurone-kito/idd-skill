@@ -4079,6 +4079,84 @@ export function isAdvisoryNonReviewNotice(body: unknown): boolean {
   );
 }
 
+/** A single bot-comment fixture's own login + body -- {@link
+ * BOT_WORDING_CLASSIFIERS}' uniform input shape, normalizing each
+ * classifier's own distinct call signature (most take a bare body string;
+ * {@link isKnownAdvisoryAckTemplate} additionally needs the author login)
+ * to one `(fixture) => label` shape. */
+export interface BotCommentFixtureInput {
+  login: string;
+  body: string;
+}
+
+/** One registered wording-based bot-comment classifier -- `id` is the
+ * stable key the bot-comment corpus (kurone-kito/idd-skill#3263) uses to
+ * link each fixture entry to the classifier(s) it exercises, and to name
+ * a grandfathered id in the corpus contract test's own pinned exception
+ * list when fewer than 3 real samples from 2 distinct PRs exist for it. */
+export interface BotWordingClassifierEntry {
+  id: string;
+  apply: (fixture: BotCommentFixtureInput) => unknown;
+}
+
+/**
+ * Every wording-based bot-comment classifier this module (and its leaf
+ * `copilot-review-body.mts` dependency) exports, registered once so the
+ * bot-comment corpus contract test (#3263) can run each fixture entry
+ * through the classifier(s) it names without hand-wiring a new import and
+ * call for every id. A matcher not registered here is out of the corpus
+ * evidence bar entirely -- adding one is a deliberate, reviewable edit to
+ * this list, the same visibility the corpus's own grandfather list gets
+ * from being test-pinned.
+ *
+ * `coderabbit-embedded-findings` reports {@link
+ * extractCodeRabbitEmbeddedFindings}'s own finding COUNT for the body
+ * alone, not {@link countUncoveredCodeRabbitEmbeddedFindings}'s
+ * body-minus-already-threaded-comments difference -- that comparison
+ * needs a second, non-body input (the PR's already-threaded comment
+ * count) with no natural per-fixture source, breaking the uniform
+ * one-argument shape every other entry shares.
+ */
+export const BOT_WORDING_CLASSIFIERS: BotWordingClassifierEntry[] = [
+  {
+    id: 'copilot-review-body',
+    apply: (fixture) => classifyCopilotReviewBody(fixture.body),
+  },
+  {
+    id: 'coderabbit-review-in-progress',
+    apply: (fixture) => isCodeRabbitReviewInProgressSummary(fixture.body),
+  },
+  {
+    id: 'coderabbit-already-reviewed-ack',
+    apply: (fixture) =>
+      isCodeRabbitAlreadyReviewedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-rate-limited-ack',
+    apply: (fixture) => isCodeRabbitRateLimitedAcknowledgement(fixture.body),
+  },
+  {
+    id: 'coderabbit-courtesy-ack',
+    apply: (fixture) =>
+      isKnownAdvisoryAckTemplate({
+        author: { login: fixture.login },
+        body: fixture.body,
+      }),
+  },
+  {
+    id: 'coderabbit-embedded-findings',
+    apply: (fixture) => extractCodeRabbitEmbeddedFindings(fixture.body).length,
+  },
+  {
+    id: 'advisory-non-review-notice',
+    apply: (fixture) => isAdvisoryNonReviewNotice(fixture.body),
+  },
+  {
+    id: 'advisory-terminal-notice',
+    apply: (fixture) => isTerminalAdvisoryNonReviewNotice(fixture.body),
+  },
+];
+
 // A trusted IDD disposition of a non-review notice: the canonical
 // `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
 // completed review` reply. Requires the `**Rejected**` prefix (via
