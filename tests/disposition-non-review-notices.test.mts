@@ -24,6 +24,8 @@ import {
   isDispositionComment,
   isReviewSummaryComment,
   isTerminalAdvisoryNonReviewNotice,
+  renderLiveStatusDigest,
+  retireLiveStatusDigestBody,
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -1382,6 +1384,81 @@ test('buildDispositionPlan re-plans a summary whose acceptance an older non-agen
   );
   // The acceptance (id 3) could be stolen by the older human comment (id 1), so
   // the summary (id 2) is re-planned rather than skipped.
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
+// kurone-kito/idd-skill#3267: markerCouldBeStolen routed through the shared
+// classifyIddPrComment, in place of the former blanket
+// `!trustedMarkerLogins.has(other.login)` check that skipped every comment
+// by a trusted marker login regardless of its body.
+
+test('buildDispositionPlan: a trusted historical live-status digest older than the disposition cannot steal it', () => {
+  const digestBody = retireLiveStatusDigestBody(
+    renderLiveStatusDigest({
+      phase: 'E1 snapshot',
+      claim: 'claim-test0001',
+      branch: 'issue/1-test',
+      lastChecked: '2026-05-11T00:00:00Z',
+      openBlockers: 'none',
+      nextAction: 'E2 critique',
+      authoritativeBy: 'this comment',
+    }),
+  );
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        // A trusted-author digest, older than the disposition -- IDD's own
+        // operational bookkeeping, not a genuine review comment.
+        notice(1, 'kurone-kito', digestBody, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // The digest cannot steal the disposition's pairing slot, so the summary
+  // (id 2) is correctly recognized as already covered -- skipped, not
+  // re-planned.
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [2],
+  );
+});
+
+test('buildDispositionPlan: an untrusted <!-- idd- shaped comment still counts as a genuine steal candidate', () => {
+  const spoofedBody =
+    '<!-- idd-live-status: historical -->\n\n| Field | Value |\n| --- | --- |\n';
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        // An UNTRUSTED author's marker-shaped comment, older than the
+        // disposition -- never given the operational pass.
+        notice(1, 'a-random-outsider', spoofedBody, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // Real, unaddressed activity -- it can steal the disposition's pairing
+  // slot, so the summary is re-planned rather than skipped.
   assert.deepEqual(
     plan.planned.map((entry) => entry.noticeId),
     [2],

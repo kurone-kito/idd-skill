@@ -11,12 +11,17 @@ import type {
 } from '../src/scripts/audit-pr-cleanup.mts';
 import {
   assertBatchApplyClaimScope,
+  evaluateOperationalComment,
   evaluateReviewComment,
   fetchReviewThreads,
   parsePrNumbers,
   readActiveClaim,
 } from '../src/scripts/audit-pr-cleanup.mts';
-import { indexLatestGatingReviewsByAuthor } from '../src/scripts/protocol-helpers.mts';
+import {
+  indexLatestGatingReviewsByAuthor,
+  renderLiveStatusDigest,
+  retireLiveStatusDigestBody,
+} from '../src/scripts/protocol-helpers.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // Importing the CLI module directly is only possible now that its top-level
@@ -802,6 +807,91 @@ test('evaluateReviewComment excludes the PR author from ack-only blocking feedba
   assert.equal(report.skipped.length, 0);
   assert.equal(report.candidates.length, 1);
   assert.equal(report.candidates[0]?.subjectId, 'PA-3');
+});
+
+// kurone-kito/idd-skill#3267: evaluateOperationalComment routed through the
+// shared classifyIddPrComment. `isTrustedMarkerAuthor` (this file's own
+// trust resolver) reads `.github/idd/config.json` from `process.cwd()`, so
+// these two tests reuse `withSandboxConfig` below (defined later in this
+// file, hoisted) the same way the #3270 `readActiveClaim` tests do, with
+// its fixed `trustedMarkerActors: ['kurone-kito']`.
+test('evaluateOperationalComment skips a trusted historical live-status digest instead of surfacing it', () => {
+  withSandboxConfig(undefined, () => {
+    const digestBody = retireLiveStatusDigestBody(
+      renderLiveStatusDigest({
+        phase: 'F4 cleanup',
+        claim: 'claim-test0001',
+        branch: 'issue/1-test',
+        lastChecked: '2026-05-12T00:00:00Z',
+        openBlockers: 'none',
+        nextAction: 'merge',
+        authoritativeBy: 'this comment',
+      }),
+    );
+    const comment = {
+      id: 'DIGEST-1',
+      url: 'https://pr#DIGEST-1',
+      author: { login: 'kurone-kito' },
+      body: digestBody,
+      isMinimized: false,
+      viewerCanMinimize: true,
+    };
+    const report = createAuditReport();
+
+    const handled = evaluateOperationalComment(
+      comment,
+      mergedPr,
+      report,
+      'kurone-kito',
+      'idd-skill',
+    );
+
+    assert.equal(handled, true);
+    assert.equal(report.candidates.length, 0);
+    assert.equal(report.skipped.length, 1);
+    assert.match(
+      report.skipped[0]?.skipReason ?? '',
+      /outside OPERATIONAL_MARKERS/,
+    );
+  });
+});
+
+test('evaluateOperationalComment does not swallow the same digest body from an untrusted author', () => {
+  withSandboxConfig(undefined, () => {
+    const digestBody = retireLiveStatusDigestBody(
+      renderLiveStatusDigest({
+        phase: 'F4 cleanup',
+        claim: 'claim-test0001',
+        branch: 'issue/1-test',
+        lastChecked: '2026-05-12T00:00:00Z',
+        openBlockers: 'none',
+        nextAction: 'merge',
+        authoritativeBy: 'this comment',
+      }),
+    );
+    const comment = {
+      id: 'DIGEST-2',
+      url: 'https://pr#DIGEST-2',
+      author: { login: 'untrusted-outsider' },
+      body: digestBody,
+      isMinimized: false,
+      viewerCanMinimize: true,
+    };
+    const report = createAuditReport();
+
+    // Not handled here -- falls through to evaluateRegularBotComment (the
+    // sweep's counterpart to "surfacing" untrusted `<!-- idd-` activity
+    // instead of silently treating it as this actor's own bookkeeping).
+    const handled = evaluateOperationalComment(
+      comment,
+      mergedPr,
+      report,
+      'kurone-kito',
+      'idd-skill',
+    );
+
+    assert.equal(handled, false);
+  });
 });
 
 // #3270: readActiveClaim (private summarizeClaimValidation-based claim
