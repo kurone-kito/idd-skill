@@ -912,6 +912,23 @@ test('the evidence body lists not-planned/duplicate children instead of calling 
   assert.doesNotMatch(body, /closed or otherwise complete/);
 });
 
+test('the evidence body lists a not-planned nested-roadmap child the same way a leaf child is listed (#3398)', () => {
+  const report = readyReport();
+  report.nodes.push(
+    node({
+      number: 1049,
+      classification: 'roadmap',
+      state: 'CLOSED',
+      stateReason: 'not_planned',
+    }),
+  );
+  const body = buildRoadmapCompletionAuditBody(report);
+  assert.match(
+    body,
+    /Closed without completion \(not planned \/ duplicate \/ other\): #1049 \(not_planned\)\./,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // evaluateRoadmapClaim (pure)
 // ---------------------------------------------------------------------------
@@ -1158,12 +1175,18 @@ test('--apply on a ready roadmap with a not-planned child still closes and lists
   assert.equal(verdict.ready, true);
   assert.deepEqual(verdict.blockers, []);
   assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, true);
   assert.equal(exitCode, 0);
   assert.deepEqual(calls.closed, [ROADMAP]);
+  assert.equal(calls.comments.length, 1);
+  assert.equal(calls.comments[0]?.issue, ROADMAP);
   assert.match(
     calls.comments[0]?.body ?? '',
     /Closed without completion \(not planned \/ duplicate \/ other\): #1048 \(not_planned\)\./,
   );
+  assert.equal(calls.released[0]?.claimId, CLAIM_ID);
+  // collect runs twice: initial evaluation + immediate-pre-close re-validation.
+  assert.equal(calls.collects, 2);
 });
 
 test('--apply on a blocked roadmap fails closed without mutating', async () => {
