@@ -11558,6 +11558,47 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
 
     assert.equal(result, null);
   });
+
+  // #3466 (Copilot review, PR #3470): the canonical machine-generated
+  // disposition body already names its own source notice's REST comment id
+  // in a trailing `(source: #issuecomment-{id})` suffix. An exact,
+  // unambiguous binding on that id must win over order-based guessing --
+  // the older notice must not resolve merely because it comes first when a
+  // single disposition explicitly names the NEWER one.
+  test('#3466: a disposition bound by source-comment-id resolves the notice it names, not an older one by mere order', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 101,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const newerNotice = {
+      ...codexNotice,
+      id: 102,
+      createdAt: '2026-09-25T15:10:00Z',
+    };
+    const dispositionForNewer = {
+      id: 103,
+      createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-102)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [olderNotice, newerNotice, dispositionForNewer];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+    const resolvedNewer = classifyRegularBotComment(newerNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+    assert.equal(resolvedNewer?.classifier, 'RESOLVED');
+  });
 }
 
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->

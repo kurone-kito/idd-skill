@@ -1845,6 +1845,35 @@ export function countUncoveredCodeRabbitEmbeddedFindings(
 // own chronological order rather than a bare count cap: a disposition that
 // predates every remaining notice can never validly cover any of them, so it
 // is discarded rather than counted.
+// The canonical machine-generated non-review-notice disposition
+// (`disposition-non-review-notices.mts`'s `buildDispositionBody`) always
+// names its own source notice's REST comment id in a trailing
+// `(source: #issuecomment-{id})` suffix.
+const DISPOSITION_SOURCE_ISSUECOMMENT_RE = /\(source:\s*#issuecomment-(\d+)\)/;
+const ISSUECOMMENT_URL_ID_RE = /#issuecomment-(\d+)/;
+/** The REST (numeric) comment id for `comment`, however this caller's
+ * `CommentLike` happens to carry it -- a plain/numeric-string `id` (the
+ * shape `disposition-non-review-notices.mts` and this file's own test
+ * fixtures use), or extracted from a GraphQL-shaped `url`/`html_url`
+ * (`audit-pr-cleanup.mts`'s real GraphQL node ids aren't REST ids
+ * themselves, but the comment's own web URL still ends in
+ * `#issuecomment-{REST id}` either way). `null` when neither yields one. */
+function restCommentId(comment) {
+  const rawId = comment.id;
+  if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+    return String(rawId);
+  }
+  if (typeof rawId === 'string' && /^\d+$/.test(rawId)) {
+    return rawId;
+  }
+  const url = String(comment.html_url ?? comment.url ?? '');
+  return ISSUECOMMENT_URL_ID_RE.exec(url)?.[1] ?? null;
+}
+function dispositionSourceCommentId(body) {
+  return (
+    DISPOSITION_SOURCE_ISSUECOMMENT_RE.exec(String(body ?? ''))?.[1] ?? null
+  );
+}
 function resolvedCodexUsageLimitNotices(
   comments,
   targetBotLogin,
@@ -1884,21 +1913,61 @@ function resolvedCodexUsageLimitNotices(
     }),
   );
   const resolved = new Set();
+  const consumedDispositions = new Set();
+  // Pass 1 -- exact source-comment-id binding (Copilot review, PR #3470):
+  // the canonical machine-generated disposition already names its own
+  // notice explicitly, so an exact, unambiguous binding must win over any
+  // order-based guess -- a disposition naming notice B can never be
+  // misattributed to an older notice A merely for being older. Still
+  // requires every other safety check the `dispositions` filter above
+  // already applied (trusted author, canonical template, correct bot
+  // attribution) plus chronological validity (the disposition must
+  // postdate the notice it names).
+  const noticeByRestId = new Map();
+  for (const notice of notices) {
+    const restId = restCommentId(notice.candidate);
+    if (restId) {
+      noticeByRestId.set(restId, notice);
+    }
+  }
+  dispositions.forEach((disposition, index) => {
+    const sourceId = dispositionSourceCommentId(disposition.candidate.body);
+    if (!sourceId) {
+      return;
+    }
+    const notice = noticeByRestId.get(sourceId);
+    if (!notice || !(disposition.time > notice.time)) {
+      return;
+    }
+    resolved.add(notice.candidate);
+    consumedDispositions.add(index);
+  });
+  // Pass 2 -- greedy oldest-first fallback, for every notice pass 1 left
+  // unresolved, using only dispositions pass 1 did not already consume (a
+  // hand-typed or legacy disposition with no parseable source id, or a
+  // notice this caller's `CommentLike` shape can't derive a REST id for).
+  // Mirrors the #1018 carry-forward's own count-capped convention (credit
+  // the oldest remaining notice when only one matching disposition
+  // remains), refined to also respect each pair's own chronological order:
+  // a disposition that predates every remaining notice can never validly
+  // cover any of them, so it is discarded rather than counted.
   let dispositionIndex = 0;
   for (const notice of notices) {
+    if (resolved.has(notice.candidate)) {
+      continue;
+    }
     while (
       dispositionIndex < dispositions.length &&
-      !(dispositions[dispositionIndex].time > notice.time)
+      (consumedDispositions.has(dispositionIndex) ||
+        !(dispositions[dispositionIndex].time > notice.time))
     ) {
-      // Not strictly newer than the oldest remaining notice, so it can
-      // never validly cover this or any later (newer) notice either --
-      // discard and keep looking.
       dispositionIndex += 1;
     }
     if (dispositionIndex >= dispositions.length) {
       break;
     }
     resolved.add(notice.candidate);
+    consumedDispositions.add(dispositionIndex);
     dispositionIndex += 1;
   }
   return resolved;
