@@ -24,6 +24,12 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
@@ -158,18 +164,20 @@ const NEGATION_LOOKBACK_TOKENS = 6;
 // classified as 'reference' (Refs/Ref), never to Blocked-by/Depends-on/
 // Closes/Sub-issue.
 const NON_BLOCKING_ANNOTATION_PATTERN = /\(non-blocking\)/i;
-if (import.meta.main) {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
   // --issue and --all-roadmaps are mutually exclusive: exactly one route
   // must be selected. The single-root --issue contract (required when
   // --all-roadmaps is absent) is preserved.
   if (args.allRoadmaps && hasIssue) {
-    throw new Error('--all-roadmaps cannot be combined with --issue');
+    throw markCliUsageError(
+      new Error('--all-roadmaps cannot be combined with --issue'),
+    );
   }
   if (!args.allRoadmaps && !hasIssue) {
-    throw new Error(
-      'missing required --issue <number> (or pass --all-roadmaps)',
+    throw markCliUsageError(
+      new Error('missing required --issue <number> (or pass --all-roadmaps)'),
     );
   }
   const currentRepo =
@@ -224,6 +232,20 @@ if (import.meta.main) {
         concurrency: args.concurrency,
       });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+if (import.meta.main) {
+  // #3343: call main() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note. Extracting this inline top-level
+  // await into main() adds one `at main` frame to an uncaught crash.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-roadmap-graph', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 /**
  * Normalize the traversal `concurrency` option to an integer `>= 1`, falling
@@ -2367,7 +2389,7 @@ function parseArgs(rawArgv) {
       printHelp();
       process.exit(0);
     }
-    throw new Error(`unknown argument: ${token}`);
+    throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
   return parsed;
 }

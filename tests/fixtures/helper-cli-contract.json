@@ -11,7 +11,17 @@
       "migrated": false
     },
     "idd-audit-authored-issue.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
     },
     "idd-audit-pr-cleanup.mjs": {
       "migrated": false
@@ -33,7 +43,17 @@
       "migrated": false
     },
     "idd-branch-name.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-ci-wait-policy.mjs": {
       "migrated": false
@@ -52,13 +72,43 @@
       }
     },
     "idd-claim-approval-gate.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-claim-lock.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-clone-lock.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-critique-delegate.mjs": {
       "migrated": false
@@ -67,7 +117,17 @@
       "migrated": false
     },
     "idd-discover-orphan-filter.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "transport"
+        }
+      }
     },
     "idd-discover-readiness-check.mjs": {
       "migrated": true,
@@ -83,10 +143,30 @@
       }
     },
     "idd-discover-roadmap-graph.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-discover-shared-file-overlap.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-discover-viability-gate.mjs": {
       "migrated": true,
@@ -108,7 +188,17 @@
       "migrated": false
     },
     "idd-emit-marker.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-external-check-waiver.mjs": {
       "migrated": false
@@ -141,7 +231,17 @@
       "migrated": false
     },
     "idd-phase-id-resolver.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-post-idd-marker.mjs": {
       "migrated": false
@@ -188,7 +288,17 @@
       }
     },
     "idd-resume-route-selection.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-review-activity-snapshot.mjs": {
       "migrated": false
@@ -200,22 +310,72 @@
       "migrated": false
     },
     "idd-roadmap-audit-execute.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-select-desynced-index.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-stalled-session-quiet-check.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-suggest-untrusted-labelers.mjs": {
       "migrated": false
     },
     "idd-suitability-close-execute.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-suitability-triage.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-sweep-authoring-markers.mjs": {
       "migrated": false
@@ -241,7 +401,14 @@
     "idd-discover-readiness-check.mjs": [
       {
         "name": "ghTransportFailure503ViaProviderPort",
-        "args": ["--issue", "1", "--owner", "kurone-kito", "--repo", "idd-skill"],
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503
@@ -250,7 +417,14 @@
     "idd-discover-viability-gate.mjs": [
       {
         "name": "ghTransportFailure503ViaProviderPort",
-        "args": ["--issue", "1", "--owner", "kurone-kito", "--repo", "idd-skill"],
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503
@@ -259,7 +433,14 @@
     "idd-authoring-owner-provenance.mjs": [
       {
         "name": "ghTransportFailure503ViaProviderPort",
-        "args": ["--issue", "1", "--owner", "kurone-kito", "--repo", "idd-skill"],
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503
@@ -268,7 +449,14 @@
     "idd-resume-claim-routing.mjs": [
       {
         "name": "ghTransportFailure503ViaProviderPort",
-        "args": ["--issue", "1", "--owner", "kurone-kito", "--repo", "idd-skill"],
+        "args": [
+          "--issue",
+          "1",
+          "--owner",
+          "kurone-kito",
+          "--repo",
+          "idd-skill"
+        ],
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503,

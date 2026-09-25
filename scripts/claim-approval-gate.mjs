@@ -5,6 +5,12 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
@@ -49,7 +55,13 @@ const READY_LABEL_STATE_DEFAULTS = {
   actorPermissionUnavailable: false,
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('claim-approval-gate', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 export function evaluateClaimApprovalGate(input, options = {}) {
   const issue = normalizeIssue(input.issue);
@@ -298,7 +310,9 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -355,6 +369,7 @@ function runCli() {
     userContentEditsAvailable: inputs.userContentEditsAvailable,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 function warnDeprecatedFlag(deprecated, canonical) {
   process.stderr.write(

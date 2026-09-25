@@ -187,6 +187,13 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 
 /**
  * Shape of the JSON lock body written to disk. `acquiredAt` is audit-only
@@ -243,7 +250,13 @@ const CLAIM_LOCK_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('claim-lock', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 /**
@@ -1394,29 +1407,33 @@ function selectedModeCount(args: ParsedArgs): number {
   ].filter(Boolean).length;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (selectedModeCount(args) !== 1) {
-    throw new Error(
-      'exactly one of --acquire, --check, --record-tokens, --read-tokens, or --backfill-tokens is required',
+    throw markCliUsageError(
+      new Error(
+        'exactly one of --acquire, --check, --record-tokens, --read-tokens, or --backfill-tokens is required',
+      ),
     );
   }
   if (args.worktree === null) {
-    throw new Error('--worktree is required');
+    throw markCliUsageError(new Error('--worktree is required'));
   }
 
   if (args.check) {
     process.stdout.write(`${JSON.stringify(checkClaimLock(args.worktree))}\n`);
-    return;
+    return 0;
   }
 
   if (args.readTokens) {
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --read-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --read-tokens'),
+      );
     }
     const read = readGeneratedClaimTokens(args.worktree, args.claimId);
     const outcome =
@@ -1426,15 +1443,19 @@ function runCli(): void {
           ? { path: read.path, present: true, malformed: true }
           : { path: read.path, present: false };
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
-    return;
+    return 0;
   }
 
   if (args.recordTokens) {
     if (args.agentId === null) {
-      throw new Error('--agent-id is required for --record-tokens');
+      throw markCliUsageError(
+        new Error('--agent-id is required for --record-tokens'),
+      );
     }
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --record-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --record-tokens'),
+      );
     }
     const outcome = recordGeneratedClaimTokens(args.worktree, {
       agentId: args.agentId,
@@ -1442,26 +1463,28 @@ function runCli(): void {
       ...(args.nonce === null ? {} : { nonce: args.nonce }),
     });
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
-    return;
+    return 0;
   }
 
   if (args.backfillTokens) {
     if (args.claimId === null) {
-      throw new Error('--claim-id is required for --backfill-tokens');
+      throw markCliUsageError(
+        new Error('--claim-id is required for --backfill-tokens'),
+      );
     }
     const outcome = backfillGeneratedClaimTokens(args.worktree, args.claimId);
     process.stdout.write(`${JSON.stringify(outcome)}\n`);
     if (outcome.status !== 'backfilled') {
-      process.exitCode = 2;
+      return 2;
     }
-    return;
+    return 0;
   }
 
   if (args.agentId === null) {
-    throw new Error('--agent-id is required for --acquire');
+    throw markCliUsageError(new Error('--agent-id is required for --acquire'));
   }
   if (args.claimId === null) {
-    throw new Error('--claim-id is required for --acquire');
+    throw markCliUsageError(new Error('--claim-id is required for --acquire'));
   }
   const outcome = acquireClaimLock(
     args.worktree,
@@ -1471,8 +1494,9 @@ function runCli(): void {
   );
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
   if (outcome.mode === 'collision') {
-    process.exitCode = 2;
+    return 2;
   }
+  return 0;
 }
 
 function printHelp(): void {

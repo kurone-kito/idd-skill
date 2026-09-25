@@ -59,6 +59,13 @@ import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import { evaluateA4Viability } from './discover-viability-gate.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import {
   isUpstreamEscalationEnabled,
   loadIddConfig,
@@ -665,7 +672,31 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
 export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 
 if (import.meta.main) {
-  main();
+  // #3343: fail_() still writes `error: <message>` and must not also print
+  // a stack. Catch that tagged throw here. Call main() directly on the
+  // envelope-disabled path so any other uncaught crash keeps its pre-
+  // migration stack depth.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('audit-authored-issue', () => {
+      try {
+        return main();
+      } catch (error: unknown) {
+        if (isAuditCliFail(error)) {
+          return { exitCode: 2, kind: 'usage', message: error.message };
+        }
+        throw error;
+      }
+    });
+  } else {
+    try {
+      applyHelperCliOutcomeWhenDisabled(main());
+    } catch (error: unknown) {
+      if (!isAuditCliFail(error)) {
+        throw error;
+      }
+      process.exitCode = 2;
+    }
+  }
 }
 
 /**
@@ -2797,7 +2828,7 @@ function readCommentsFile(path: string): AuthoringCommentInput[] {
   });
 }
 
-function main(): void {
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
@@ -2928,7 +2959,7 @@ function main(): void {
   });
 
   writeReport(report, args.format);
-  process.exit(report.passed ? 0 : 1);
+  return report.passed ? 0 : 1;
 }
 
 function isIssueShape(value: string): value is IssueShape {
@@ -3188,5 +3219,18 @@ Environment:
 
 function fail_(message: string): never {
   console.error(`error: ${message}`);
-  process.exit(2);
+  const error = new Error(message);
+  markCliUsageError(error);
+  Object.defineProperty(error, 'auditCliFail', {
+    value: true,
+    enumerable: false,
+  });
+  throw error;
+}
+
+function isAuditCliFail(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    (error as { auditCliFail?: boolean }).auditCliFail === true
+  );
 }

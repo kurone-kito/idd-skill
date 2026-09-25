@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/resume-route-selection.mts
 //
 // The scripts/resume-route-selection.mjs copy is generated from the .mts
@@ -13,6 +14,13 @@ import {
 } from './ci-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
@@ -123,7 +131,13 @@ const RESUME_ROUTE_SELECTION_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resume-route-selection', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export function selectResumeRoute(input: ResumeRouteInput) {
@@ -234,14 +248,16 @@ export function selectResumeRoute(input: ResumeRouteInput) {
   return result('stop', 'pr-ci-unknown-state', state, reasonParts);
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -282,6 +298,7 @@ function runCli(): void {
   }
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 export function collectRoutingInput({

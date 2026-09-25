@@ -16,6 +16,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
   findMarkdownCodeRanges,
@@ -210,7 +216,13 @@ const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-shared-file-overlap', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * Normalize a candidate-file path to its contention key. Strips surrounding
@@ -666,8 +678,10 @@ function runCli() {
     process.exit(0);
   }
   if (args.candidates.length === 0) {
-    throw new Error(
-      'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+    throw markCliUsageError(
+      new Error(
+        'at least one --issue <number> or --issues <n1,n2> is required (legacy aliases: --candidate/--candidates)',
+      ),
     );
   }
   const currentRepo =
@@ -725,6 +739,7 @@ function runCli() {
     ...analysis,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 /**
  * Discover the concurrently-active set: every issue closed by an open PR
@@ -979,7 +994,7 @@ export function parseArgs(argv) {
 function parsePositiveInt(value, flag) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`invalid ${flag} value: ${value ?? ''}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value ?? ''}`));
   }
   return parsed;
 }
