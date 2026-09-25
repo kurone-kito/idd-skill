@@ -3606,6 +3606,66 @@ test('checkHeldSchemaDrift matches a fixture basename and stays advisory on the 
   assert.equal(heldSchemaDrift.findings[0]?.schemaOrFixturePath, DRIFT_FIXTURE);
 });
 
+test('checkHeldSchemaDrift ignores a src tree reached through a symlinked ancestor', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const outside = makeFixtureDir();
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  mkdirSync(join(outside, 'scripts'), { recursive: true });
+  writeFileSync(join(outside, 'scripts', 'producer.mts'), moduleText);
+  rmSync(join(targetRoot, 'src'), { recursive: true });
+  symlinkSync(outside, join(targetRoot, 'src'));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift does not treat a symlinked schema directory as changed content', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const outside = makeFixtureDir();
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  mkdirSync(join(outside, 'schemas'), { recursive: true });
+  writeFileSync(
+    join(outside, 'schemas', 'widget.schema.json'),
+    '{ "version": 9 }\n',
+  );
+  rmSync(join(targetRoot, 'schemas'), { recursive: true });
+  symlinkSync(join(outside, 'schemas'), join(targetRoot, 'schemas'));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift flags a held vendored scripts/*.mjs module', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const modulePath = 'scripts/producer.mjs';
+  const moduleText = `const schemaPath = '${DRIFT_SCHEMA}';\n`;
+  const sourceFiles = {
+    [DRIFT_SCHEMA]: '{ "version": 2 }\n',
+    [modulePath]: moduleText,
+  };
+  const targetFiles = {
+    [DRIFT_SCHEMA]: '{ "version": 1 }\n',
+    [modulePath]: moduleText,
+  };
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [modulePath],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: modulePath },
+  ]);
+});
+
 test('runVerify exposes packagePinWarning without letting it affect blocking', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);

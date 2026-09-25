@@ -2494,6 +2494,16 @@ function manifestContentDiffers(
   if (!fileExists(sourceRoot, file.sourcePath)) {
     return false;
   }
+  // A symlinked ancestor is not a content change. Import classifies it
+  // as blocked-non-file and never reads through it; fileExists only
+  // lstats the leaf, so without this guard readFileSync would follow
+  // the link outside the root.
+  if (
+    hasNonDirectoryAncestor(sourceRoot, file.sourcePath) ||
+    hasNonDirectoryAncestor(targetRoot, file.targetPath)
+  ) {
+    return false;
+  }
   if (!fileExists(targetRoot, file.targetPath)) {
     return !pathExists(targetRoot, file.targetPath);
   }
@@ -2502,10 +2512,18 @@ function manifestContentDiffers(
   );
 }
 
-/** Regular `.mts` files under `targetRoot/src/scripts`, symlink-free. */
+/**
+ * Regular `.mts` files under `targetRoot/src/scripts`. A symlinked
+ * ancestor (`src` or `src/scripts`) is refused the same way
+ * `hasNonDirectoryAncestor` refuses an import path: `lstat` of the
+ * joined leaf would otherwise follow that ancestor out of the target.
+ */
 function listTargetScriptModules(
   targetRoot: string,
 ): { path: string; text: string }[] {
+  if (hasNonDirectoryAncestor(targetRoot, 'src/scripts/module.mts')) {
+    return [];
+  }
   const scriptsRoot = join(targetRoot, 'src', 'scripts');
   let rootStat: ReturnType<typeof lstatSync>;
   try {
@@ -2550,6 +2568,35 @@ function listTargetScriptModules(
   return modules;
 }
 
+/**
+ * Held manifest entries the src/scripts walk does not see. A
+ * vendored-node import's helpers land as `scripts/*.mjs`, and `--hold`
+ * names those target paths. Source-tree `.mts` modules stay covered by
+ * `listTargetScriptModules`.
+ */
+function isHeldDistributedScript(targetPath: string): boolean {
+  return /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath);
+}
+
+function readHeldModule(
+  targetRoot: string,
+  targetPath: string,
+): { path: string; text: string } | null {
+  if (!isHeldDistributedScript(targetPath)) {
+    return null;
+  }
+  if (hasNonDirectoryAncestor(targetRoot, targetPath)) {
+    return null;
+  }
+  if (!fileExists(targetRoot, targetPath)) {
+    return null;
+  }
+  return {
+    path: targetPath,
+    text: readFileSync(join(targetRoot, targetPath), 'utf8'),
+  };
+}
+
 function moduleReferencesManifestPath(
   text: string,
   targetPath: string,
@@ -2574,7 +2621,9 @@ function formatHeldSchemaDriftWarning(
 
 /**
  * Report a partial import that updates a schema or fixture while a
- * `src/scripts` module that names that file stays on `--hold` (#3215).
+ * module that names that file stays on `--hold` (#3215). The walk
+ * covers `src/scripts` `.mts` files. A held `scripts/*.mjs` entry — the
+ * path a vendored-node import actually copies — is read directly.
  *
  * The scan is a static text match against the entry's manifest path or
  * its basename — the same grep-level proxy the Groom hearing adopted.
@@ -2615,7 +2664,19 @@ export function checkHeldSchemaDrift(
     return { findings: [], warning: null };
   }
   const findings: HeldSchemaDriftFinding[] = [];
-  for (const module of listTargetScriptModules(targetRoot)) {
+  const modules = listTargetScriptModules(targetRoot);
+  const seen = new Set(modules.map((module) => module.path));
+  for (const heldPath of holdSet) {
+    if (seen.has(heldPath)) {
+      continue;
+    }
+    const heldModule = readHeldModule(targetRoot, heldPath);
+    if (heldModule !== null) {
+      modules.push(heldModule);
+      seen.add(heldPath);
+    }
+  }
+  for (const module of modules) {
     if (!holdSet.has(module.path)) {
       continue;
     }
@@ -4781,7 +4842,8 @@ mutable default archive URL instead of an audited pin), and
 heldSchemaDrift (advisory only, never blocking: for each schema
 (schemas/*.json) or fixture (fixtures/**/*.json) manifest entry that
 --hold does not exclude and whose content differs between --source and
---target, reports each held src/scripts/**/*.mts module that textually
+--target, reports each held src/scripts .mts module, and each held
+scripts/*.mjs module a vendored import copies, that textually
 references that entry's path or basename).
 
 Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest

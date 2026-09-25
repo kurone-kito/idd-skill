@@ -681,9 +681,10 @@ error), so an agent can gate on the exit code without parsing prose.
   — see
   [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
   and a non-blocking held-schema drift advisory (a schema or fixture
-  `--import` would update, while a held `src/scripts` module still
-  names it). A missing manifest file, leftover placeholder, or
-  helper-load failure is blocking; the stale-import signal, package-pin
+  `--import` would update, while a held `src/scripts` module or a held
+  vendored `scripts` module still names it). A missing manifest file,
+  leftover placeholder, or helper-load failure is blocking; the
+  stale-import signal, package-pin
   advisory, and held-schema drift advisory are never blocking. Repeat
   `--hold` with a manifest target path to name content left unchanged;
   an unknown path is a usage error.
