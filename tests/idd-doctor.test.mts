@@ -2661,6 +2661,42 @@ test('containsWorkshopReference also ignores tilde-fence code blocks', () => {
   assert.equal(containsWorkshopReference(md), false);
 });
 
+// #3283's four-row CommonMark fence/span table: containsWorkshopReference
+// must find the real link in the first two rows and not find the code one
+// in the last two.
+test('containsWorkshopReference finds a real link after a backtick fence whose content has a tilde-fence-shaped line', () => {
+  const md = [
+    '```',
+    'inside content',
+    '~~~',
+    'nested-looking line',
+    '~~~',
+    '```',
+    '[workshop](docs/workshop/README.md)',
+  ].join('\n');
+  assert.equal(containsWorkshopReference(md), true);
+});
+
+test('containsWorkshopReference finds a real link on the line after a 4-space-indented backtick-shaped line (indented code, not a fence)', () => {
+  const md = [
+    'paragraph',
+    '',
+    '    ```',
+    '[workshop](docs/workshop/README.md)',
+  ].join('\n');
+  assert.equal(containsWorkshopReference(md), true);
+});
+
+test('containsWorkshopReference ignores a link inside a tilde fence', () => {
+  const md = ['~~~', '[workshop](docs/workshop/README.md)', '~~~'].join('\n');
+  assert.equal(containsWorkshopReference(md), false);
+});
+
+test('containsWorkshopReference ignores a link inside a double-backtick code span', () => {
+  const md = '``[workshop](docs/workshop/README.md)``';
+  assert.equal(containsWorkshopReference(md), false);
+});
+
 test('containsWorkshopReference rejects unrelated targets and empty content', () => {
   assert.equal(containsWorkshopReference('see [other](docs/index.md)'), false);
   assert.equal(containsWorkshopReference('plain prose without links'), false);
@@ -3204,10 +3240,12 @@ inline \`code\` span
 after`;
   const stripped = stripMarkdownNonText(md);
   assert.equal(stripped.includes('fenced'), false);
-  assert.equal(
-    stripped.includes('inline  span') || stripped.includes('inline span'),
-    true,
-  );
+  // The shared #3281 entry point masks (replaces with spaces) rather than
+  // deletes each region, preserving offsets -- so "inline" and "span"
+  // stay separated by whitespace (its exact width no longer asserted
+  // here), not necessarily by exactly one or two spaces.
+  assert.equal(/inline\s+span/.test(stripped), true);
+  assert.equal(stripped.includes('code'), false);
   assert.equal(stripped.includes('comment'), false);
   assert.equal(stripped.includes('indented code line'), false);
   assert.equal(stripped.includes('before'), true);

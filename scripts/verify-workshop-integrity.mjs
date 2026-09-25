@@ -21,6 +21,7 @@ import {
   sep,
 } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 
 const WORKSHOP_ROOTS = ['docs/workshop'];
 const WORKSHOP_ASSET_DIRS = ['docs/workshop/assets'];
@@ -163,70 +164,61 @@ export function runVerification(repoRoot, options = {}) {
   }
   return report;
 }
-// Strips fenced code blocks (``` and ~~~) before pattern scanning so
-// example Markdown inside code samples is never interpreted as a real
-// link or heading. Tracks both fence character and opening length so a
-// 4-backtick block is not closed by a later 3-backtick line. Closing
-// fences must contain ONLY optional whitespace after the fence marker
-// (per CommonMark §4.5), so a line like ```js inside a fenced block
-// is treated as content, not as a close. Replaces masked lines with
-// blank lines (same line count) so downstream offset → line-number
-// calculations remain correct.
+// Masks fenced AND indented code blocks (CommonMark §4.4/§4.5, via the
+// shared #3281 entry point) before pattern scanning so example Markdown
+// inside a code sample is never interpreted as a real link or heading.
+// Unlike a naive backtick/tilde toggle, the shared entry point tracks
+// fence character, opening length, and the <= 3-space indent limit on a
+// valid fence opener, so a 4-space-indented line that merely looks like
+// a fence stays plain content instead of swallowing the rest of the
+// file as "still fenced". Each masked region is replaced with spaces
+// (newlines kept), so downstream offset -> line-number calculations
+// remain correct.
 export function stripFencedCodeBlocks(content) {
-  const lines = String(content).split(/\r?\n/);
-  const out = [];
-  let fence = null;
-  for (const line of lines) {
-    const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
-    if (openMatch) {
-      const fenceMarker = openMatch[1];
-      const afterFence = openMatch[2];
-      const fenceChar = fenceMarker[0];
-      const fenceLen = fenceMarker.length;
-      const onlyWhitespaceAfter = /^\s*$/.test(afterFence);
-      if (fence === null) {
-        // Opening fence: info string after the marker is allowed.
-        fence = { char: fenceChar, length: fenceLen };
-        out.push('');
-        continue;
-      }
-      if (
-        fenceChar === fence.char &&
-        fenceLen >= fence.length &&
-        onlyWhitespaceAfter
-      ) {
-        fence = null;
-        out.push('');
-        continue;
-      }
-    }
-    out.push(fence === null ? line : '');
-  }
-  return out.join('\n');
+  return maskMarkdownForScan(String(content), {
+    inlineCode: 'keep',
+    htmlComments: 'keep',
+  });
 }
-// Replaces HTML-comment regions (`<!-- ... -->`, possibly multi-line)
-// with whitespace, preserving newlines so offset → line numbers
-// remain accurate. Markdown links inside comments are not real.
+// Masks HTML-comment regions (`<!-- ... -->`, possibly multi-line) via
+// the shared #3281 entry point, preserving newlines so offset -> line
+// numbers remain accurate. Markdown links inside comments are not real.
 export function stripHtmlComments(content) {
-  return String(content).replace(/<!--[\s\S]*?-->/g, (match) =>
-    match.replace(/[^\r\n]/g, ' '),
-  );
+  return maskMarkdownForScan(String(content), {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  });
 }
-// Strips inline code spans (`...`, ``...``, etc.) so
-// `[demo](./missing.md)` inside backticks is not extracted as a
-// real link. The lazy `[\s\S]+?` allows code spans to cross
-// newlines so multi-line spans are also covered. The replacement
+// Masks inline code spans (`...`, ``...``, etc., via the shared #3281
+// entry point) so `[demo](./missing.md)` inside backticks is not
+// extracted as a real link. The entry point's inline-span scan is
+// CommonMark-aware and covers multi-line spans; the replacement
 // preserves newlines so downstream offset → line numbers stay
 // accurate.
 export function stripInlineCodeSpans(content) {
-  return String(content).replace(
-    /(`+)((?:(?!\1)[\s\S])+?)\1/g,
-    (match, fence) =>
-      `${fence}${match.slice(fence.length, -fence.length).replace(/[^\r\n]/g, ' ')}${fence}`,
-  );
+  return maskMarkdownForScan(String(content), {
+    inlineCode: 'mask',
+    htmlComments: 'keep',
+  });
 }
 export function extractReferenceDefinitions(markdown) {
-  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
+  // One combined pass (rather than the two chained wrapper calls this
+  // used before -- each of which independently re-runs the entry
+  // point's own fenced/indented scan) so fenced/indented code, inline
+  // code spans, and HTML comments are all masked together. Masking
+  // inline code (Copilot review round 2, PR #3424) matters on its own,
+  // not only for comment-opener exclusion: a reference definition has
+  // no legitimate reason to live inside inline code, but a multiline
+  // code span's own visible text (`inlineCode: 'keep'` previously left
+  // it that way) could still contain a `[label]: target`-shaped line,
+  // which this function's line-by-line regex scan below cannot tell
+  // apart from a real definition -- a caller resolving `[text][label]`
+  // against the returned map could then resolve to a target that was
+  // only ever shown as a code example.
+  const stripped = maskMarkdownForScan(String(markdown), {
+    inlineCode: 'mask',
+    htmlComments: 'mask',
+  });
   const map = new Map();
   const lines = stripped.split(/\r?\n/);
   for (const line of lines) {
@@ -246,13 +238,23 @@ export function extractReferenceDefinitions(markdown) {
 }
 export function extractReferences(markdown, refDefs = new Map()) {
   const refs = [];
-  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
-  // Mask inline code spans and backslash-escaped link delimiters
-  // before any pattern matching so `[demo](./x.md)` inside backticks
-  // and \[demo](./x.md) in escaped prose are not parsed as real
-  // links. Both passes preserve newlines so offset → line numbers
+  // One combined pass masks fenced/indented code, inline code spans, AND
+  // HTML comments together (rather than the three separately chained
+  // wrapper calls this used before). Masking inline code spans in the
+  // SAME pass as HTML comments -- not a later, separate pass -- matters:
+  // the entry point excludes an already-masked inline-code region from
+  // comment-opener consideration, so a literal `<!--` inside a code span
+  // is never misread as a real comment opener the way the old two-stage
+  // chain (comments stripped first, inline spans only stripped
+  // afterward) could. Backslash-escaped link delimiters are masked
+  // afterward; all passes preserve newlines so offset → line numbers
   // computed below remain accurate.
-  const sanitized = maskBackslashEscapes(stripInlineCodeSpans(stripped));
+  const sanitized = maskBackslashEscapes(
+    maskMarkdownForScan(String(markdown), {
+      inlineCode: 'mask',
+      htmlComments: 'mask',
+    }),
+  );
   extractInlineFromContent(sanitized, refs);
   extractReferenceStyleFromContent(sanitized, refs, refDefs);
   extractShortcutReferencesFromContent(sanitized, refs, refDefs);
@@ -417,7 +419,13 @@ function lineContaining(content, offset) {
 export function extractHeadingSlugs(markdown) {
   const slugs = new Set();
   const counts = new Map();
-  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
+  // One combined pass, not two chained wrapper calls; inline code spans
+  // stay unmasked ('keep') since slugifyHeading below does its own
+  // backtick-unwrapping and needs the inner text to survive.
+  const stripped = maskMarkdownForScan(String(markdown), {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  });
   const lines = stripped.split(/\r?\n/);
   const consider = (raw) => {
     const slug = slugifyHeading(raw);
