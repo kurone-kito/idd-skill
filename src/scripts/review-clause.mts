@@ -110,9 +110,13 @@ export interface AdvisoryConvergenceReviewClause {
   matchesHead: boolean;
   itemCount: number | null;
   submittedAt: string;
-  /** #1880: count parsed from a `Suppressed comments (N)` heading in the
-   * review body, `0` when no such section is present (or the review is
-   * off-HEAD). See {@link parseSuppressedCommentCount}. */
+  /** #1880: count of thread-less findings parsed from the latest review
+   * body, `0` when no recognized section is present (or the review is
+   * off-HEAD). The three recognized sources are the current
+   * `ccr-overview-v2` shape's `Previously missed (N)` section, the legacy
+   * overview's `### Suppressed comments (N)` heading, and the original
+   * August `<summary>Suppressed comments (N)</summary>` form. See
+   * {@link parseSuppressedCommentCount}. */
   suppressedCount: number;
   /** kurone-kito/idd-skill#3258: the recognized review-body shape
    * {@link parseSuppressedCommentCount} used to compute `suppressedCount`
