@@ -427,8 +427,11 @@ function findInlineResolvedDecisionSpansFromMasked(
  * offsets into `body` AFTER `\r\n` normalization (`\r\n` -> `\n`); a caller
  * comparing indices from a separately-scanned corpus must normalize that
  * corpus the same way first, or the two coordinate spaces can drift by one
- * byte per CRLF line -- an edge case with no realistic GitHub-fetched issue
- * body, whose API responses are already `\n`-only.
+ * byte per CRLF line -- a real, observed case (#3282), not merely
+ * theoretical: the REST issues endpoint returns `\r\n` verbatim when the
+ * author's client sent it (confirmed against pull requests #475 and #2974
+ * via `gh api repos/kurone-kito/idd-skill/issues/<n>` + `od -c`), so a
+ * GitHub-fetched issue body is NOT reliably `\n`-only.
  */
 export function findInlineResolvedDecisionSpans(body) {
   const { normalizedBody, paragraphSpans, codeMaskedBody } =

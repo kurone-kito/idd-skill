@@ -585,6 +585,8 @@ this manual `OUTDATED` fallback (full reasoning in each entry's own
 - `<!-- idd-provider-outage-park:` -- needs claim-lineage-aware
   supersession the marker carries no reference for (roadmap #2751
   Background).
+- `<!-- idd-out-of-loop:` -- live authorization evidence for the
+  bootstrap PR, like the waiver marker above (kurone-kito/idd-skill#3328).
 
 Always skip candidates when any of these are true:
 
