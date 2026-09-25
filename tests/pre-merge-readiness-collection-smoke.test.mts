@@ -2496,6 +2496,62 @@ test('collectPreMergeReadiness against a fake provider: #3256 an older pull_requ
   ]);
 });
 
+// kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding, PR
+// #3425, Medium): a genuinely qualifying pull_request_target pass from the
+// REAL checker file must never be invalidated by an UNRELATED,
+// same-display-name decoy workflow file's own non-qualifying pass -- the
+// two are separate producers (#2919's own motivating scenario), and
+// classifyCiChecks already treats two independent, both-passing producers
+// as an all-passing rollup regardless of the decoy's own event. An earlier
+// revision of the fix for the round-1 finding above flagged the whole
+// check name whenever ANY group's own selected representative was
+// non-qualifying, which wrongly caught this decoy case too.
+test('collectPreMergeReadiness against a fake provider: #3256 an unrelated decoy workflow file pass never invalidates a genuinely qualifying pull_request_target pass from the real file', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const DECOY_PATH = '.github/workflows/some-other-workflow.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91010/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91011/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91010': { path: REAL_PATH, event: 'pull_request_target' },
+      // A completely different file, triggered by pull_request -- not the
+      // same-file reintroduced-trigger scenario above.
+      'o/r/91011': { path: DECOY_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected the unrelated decoy's own non-qualifying pass to never invalidate the real file's qualifying pull_request_target pass, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
 test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_target pass alongside a same-named, same-file pull_request FAILURE still fails when the FAILURE is dedup-selected as latest', () => {
   const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
   const report = runSelfWaiverCollection({

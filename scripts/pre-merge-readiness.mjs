@@ -428,10 +428,22 @@ export function collectPreMergeReadiness(
   // rather than "identity unresolved": it never had resolvable evidence
   // to begin with, matching the pre-#1483 absent-discriminator
   // convention every other `type`/`workflowName`-absent check already
-  // gets. A MIXED check name (some instances parseable, some not) is NOT
-  // given this same pass -- the parseable instances DO have resolvable
-  // identity evidence, so treating the whole name as "no evidence" could
-  // mask a genuine decoy hiding behind one malformed `detailsUrl`
+  // gets. As of kurone-kito/idd-skill#3256 (live Copilot review, PR
+  // #3425, rejected -- see that PR's own review thread), this also
+  // leaves the new `event` gate below unresolved for this branch: the
+  // genuine checker instance always has a parseable `detailsUrl`, so this
+  // branch only fires when NO genuine instance is present at all (a
+  // forged-only-instance window #2919/#2926's own producer-identity
+  // provenance already targets, not a `pull_request`-vs-
+  // `pull_request_target` problem this issue's own scope covers), and a
+  // genuine instance alongside a `detailsUrl`-less forged one already
+  // routes through the MIXED branch below instead, which fails closed
+  // regardless. Same accepted zero-evidence posture, deliberately not
+  // widened or narrowed by this issue. A MIXED check name (some instances
+  // parseable, some not) is NOT given this same pass -- the parseable
+  // instances DO have resolvable identity evidence, so treating the
+  // whole name as "no evidence" could mask a genuine decoy hiding behind
+  // one malformed `detailsUrl`
   // (Copilot finding, round 2); it is instead folded into "identity
   // unresolved" like any other partial-resolution case.
   const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 50;
@@ -446,22 +458,30 @@ export function collectPreMergeReadiness(
   // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
   // the primary required-check gate -- see the doc comment above.
   let advisoryConvergenceIdentityUnresolved = false;
-  // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding,
-  // PR #3425): true when at least one same-producer
-  // `(type, workflowName, workflowPath)` group among the live
-  // `idd-advisory-convergence` instances has a pass-equivalent
+  // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review, PR #3425,
+  // two findings against two successive revisions -- see the resolution
+  // loop's own doc comment below for the full history): true when, among
+  // the live `idd-advisory-convergence` instances grouped by same-producer
+  // `(type, workflowName, workflowPath)` and reduced to each group's own
   // DEDUP-SELECTED representative (the same `selectLatestCheckInstance`
-  // tie-break `classifyCiChecks` itself applies -- see the resolution
-  // loop below) that was NOT triggered by `pull_request_target`.
-  // Deliberately keyed on the SELECTED representative per group, never
-  // "does any instance anywhere qualify": a same-file group can carry an
-  // older, qualifying `pull_request_target` pass alongside a newer,
-  // non-qualifying `pull_request` pass (a PR that reintroduced that
-  // trigger and pushed again) -- `classifyCiChecks` dedupes the group
-  // down to the NEWER instance before ever classifying pass/fail, so the
-  // older pass never actually backs the reported `success`; checking
-  // "any instance qualifies" would wrongly stay permissive in exactly
-  // that case. Reported to `buildPreMergeReadinessSummary`
+  // tie-break `classifyCiChecks` itself applies), at least one
+  // representative is pass-equivalent (something exists that would
+  // otherwise read as a pass) AND no representative is BOTH pass-equivalent
+  // AND triggered by `pull_request_target` (no genuinely qualifying pass
+  // exists anywhere to back that reported success). Deliberately keyed on
+  // each group's SELECTED representative, never a raw, un-deduped instance:
+  // a same-file group can carry an older, qualifying `pull_request_target`
+  // pass alongside a newer, non-qualifying `pull_request` pass (a PR that
+  // reintroduced that trigger and pushed again) -- `classifyCiChecks`
+  // dedupes the group down to the NEWER instance before ever classifying
+  // pass/fail, so the older pass never actually backs the reported
+  // `success`. Equally deliberately, an UNRELATED producer group (a
+  // same-display-name decoy workflow file, #2919's own motivating
+  // scenario) never spoils an otherwise-qualifying pass in a DIFFERENT
+  // group: `classifyCiChecks` treats two independent, both-passing
+  // producers as an all-passing rollup regardless of the decoy's own
+  // event, so this flag only ever fires when NO group anywhere has a
+  // qualifying representative. Reported to `buildPreMergeReadinessSummary`
   // (`advisoryConvergenceNonTargetEventOnly` option) so it can downgrade
   // the primary required-check gate the same way
   // `advisoryConvergenceIdentityUnresolved` does, but as a DISTINCT cause
@@ -471,11 +491,11 @@ export function collectPreMergeReadiness(
   // for every live instance -- an unresolved event already routes through
   // `advisoryConvergenceIdentityUnresolved` instead (see the resolution
   // loop's own `!event` guard), so this flag and that one are mutually
-  // exclusive in practice. A group whose selected representative is
-  // genuinely FAILING (not pass-equivalent) never sets this flag for that
-  // group -- `classifyCiChecks` already reports `failed` for it with no
-  // help needed here, matching `summarizeRequiredChecks`'s own downgrade
-  // precedent of only ever narrowing an already-`'success'` status.
+  // exclusive in practice. Stays `false` whenever no representative is
+  // pass-equivalent at all -- `classifyCiChecks` already reports
+  // `failed`/`pending` for that case with no help needed here, matching
+  // `summarizeRequiredChecks`'s own downgrade precedent of only ever
+  // narrowing an already-`'success'` status.
   let advisoryConvergenceNonTargetEventOnly = false;
   if (advisoryConvergenceCheckEntries.length > 0) {
     const runIdsByIndex = new Map();
@@ -589,14 +609,21 @@ export function collectPreMergeReadiness(
                 // self-waiver candidate filter's own `!check.workflowPath`
                 // fallback (`selfConvergenceProducerCandidates` in
                 // protocol-helpers.mts), reopening #2919's decoy-masking
-                // gap for THAT unrelated path specifically. Accepted: a
-                // real `checkSuite.workflowRun.event` from GitHub is
-                // always populated, and the self-waiver marker's own
-                // condition 4 independently rejects a non-`pull_request_target`
-                // cited run regardless, so this is a fixture-completeness
-                // gap (see the `event`-less `workflowRuns` test fixtures
-                // this repository's own test suite had to backfill for
-                // #3256), never a live production hole.
+                // gap for THAT unrelated path specifically. Accepted: `event`
+                // is populated whenever `checkSuite.workflowRun` itself is
+                // non-null -- i.e. for every GENUINE Actions-triggered
+                // check-run -- and is `null` only when `workflowRun` itself
+                // is (a non-Actions check-run posted directly via the
+                // Checks API, this file's own `provider-adapter-github.test.mts`
+                // models exactly this). That non-Actions case is what this
+                // MIXED branch (a genuine instance alongside a workflowRun-
+                // less one) already fails closed on today; the self-waiver
+                // marker's own condition 4 independently rejects a
+                // non-`pull_request_target` cited run regardless. So this
+                // is a fixture-completeness gap (see the `event`-less
+                // `workflowRuns` test fixtures this repository's own test
+                // suite had to backfill for #3256), never a live
+                // production hole.
                 advisoryConvergenceIdentityUnresolved = true;
                 break;
               }
@@ -610,34 +637,54 @@ export function collectPreMergeReadiness(
                   ? check
                   : { ...check, workflowPath: path };
               });
-              // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review
-              // finding, PR #3425): every advisory-convergence entry now has
-              // a cleanly-resolved `event` in `eventsByIndex` (the loop
-              // above would already have set
+              // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review,
+              // PR #3425, two findings): every advisory-convergence entry
+              // now has a cleanly-resolved `event` in `eventsByIndex` (the
+              // loop above would already have set
               // `advisoryConvergenceIdentityUnresolved` and broken out
-              // otherwise). An earlier revision checked "does ANY
-              // pass-equivalent live instance have a qualifying event"
-              // across the whole check name -- wrong, because
+              // otherwise).
+              //
+              // Round-1 finding (High): the original formula checked "does
+              // ANY pass-equivalent live instance have a qualifying event"
+              // across the RAW, un-deduped entries -- wrong, because
               // `classifyCiChecks` (via `groupChecksByProducer` +
               // `selectLatestCheckInstance`) dedupes same-producer
-              // `(type, workflowName, workflowPath)` instances down to
-              // ONE representative BEFORE ever classifying pass/fail, and
-              // an older qualifying pass can coexist with a newer,
+              // `(type, workflowName, workflowPath)` instances down to ONE
+              // representative before ever classifying pass/fail, and an
+              // older qualifying pass can coexist with a newer,
               // dedup-SELECTED non-qualifying pass from the very same real
               // workflow file (a PR that reintroduces `pull_request` and
-              // pushes a later, still-green run there) -- the earlier
+              // pushes a later, still-green run there) -- the raw-entry
               // check found the older instance and stayed permissive while
               // the newer, actually-representative instance was the one
-              // `ci.status` would report `success` from. Mirror the SAME
-              // producer grouping and latest-selection `classifyCiChecks`
-              // itself uses: group by `(type, workflowName, workflowPath)`
-              // (name is already constant across every entry here), pick
-              // each group's own `selectLatestCheckInstance` (the identical
-              // tie-break protocol-helpers.mts exports for this exact
-              // purpose), and flag only when a group's own SELECTED
-              // representative is pass-equivalent yet not
-              // `pull_request_target`-triggered -- exactly the instance
-              // that would otherwise let this check name read `success`.
+              // `ci.status` would report `success` from.
+              //
+              // Round-2 finding (Medium), against this file's own FIRST
+              // fix for the round-1 finding: that fix over-corrected to
+              // "flag when ANY group's own selected representative is a
+              // non-qualifying pass" -- wrong in the OPPOSITE direction, for
+              // a genuinely SEPARATE producer (a same-display-name decoy
+              // workflow file, #2919's own motivating scenario):
+              // `classifyCiChecks` treats a `pull_request_target` SUCCESS
+              // in one group and an unrelated `pull_request` SUCCESS in a
+              // DIFFERENT group as an all-passing rollup (two independent,
+              // both-passing producers), so flagging the whole check name
+              // over the unrelated decoy's own non-qualifying event wrongly
+              // downgraded an available, genuinely qualifying pass.
+              //
+              // Correct formula (mirrors the ORIGINAL round-1 existence
+              // check, but over each group's DEDUP-SELECTED representative
+              // instead of raw entries): group by
+              // `(type, workflowName, workflowPath)` (name is already
+              // constant across every entry here), pick each group's own
+              // `selectLatestCheckInstance` (the identical tie-break
+              // protocol-helpers.mts exports for this exact purpose), then
+              // flag only when at least one group's selected representative
+              // is pass-equivalent (there is something that would
+              // otherwise read as a pass) AND no group's selected
+              // representative is BOTH pass-equivalent AND
+              // `pull_request_target`-triggered (no genuinely qualifying
+              // pass exists anywhere to back that reported success).
               const advisoryConvergenceProducerGroups = new Map();
               for (const { index } of advisoryConvergenceCheckEntries) {
                 const check = checks[index];
@@ -659,15 +706,22 @@ export function collectPreMergeReadiness(
                   advisoryConvergenceProducerGroups.set(key, [entry]);
                 }
               }
-              advisoryConvergenceNonTargetEventOnly = [
+              const advisoryConvergenceSelectedRepresentatives = [
                 ...advisoryConvergenceProducerGroups.values(),
-              ].some((group) => {
-                const selected = selectLatestCheckInstance(group);
-                return (
-                  CHECK_PASS_EQUIVALENT_STATES.has(selected.state) &&
-                  selected.event !== 'pull_request_target'
+              ].map((group) => selectLatestCheckInstance(group));
+              const advisoryConvergenceHasPassEquivalentGroup =
+                advisoryConvergenceSelectedRepresentatives.some((selected) =>
+                  CHECK_PASS_EQUIVALENT_STATES.has(selected.state),
                 );
-              });
+              const advisoryConvergenceHasQualifyingTargetPass =
+                advisoryConvergenceSelectedRepresentatives.some(
+                  (selected) =>
+                    CHECK_PASS_EQUIVALENT_STATES.has(selected.state) &&
+                    selected.event === 'pull_request_target',
+                );
+              advisoryConvergenceNonTargetEventOnly =
+                advisoryConvergenceHasPassEquivalentGroup &&
+                !advisoryConvergenceHasQualifyingTargetPass;
             }
           }
         }
