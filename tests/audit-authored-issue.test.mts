@@ -1304,6 +1304,59 @@ test('dependency-line-grammar does not treat "unblocked by" as a keyword mention
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar fails on a second, independent mid-line mention following a valid declaration on the same line (E2 review, Copilot: "Blocked by #12. Depends on #13")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12. Depends on #13',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
+test('dependency-line-grammar fails on a second, independent mid-line mention joined by "and" on the same line (E2 review, Copilot: "Blocked by #12 and Depends on #13")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12 and Depends on #13',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
+test('dependency-line-grammar still accepts the first, genuinely valid declaration on a line that also carries a later independent mention (no double-counting the accepted numbers)', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12. Depends on #13',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  // The line fails overall (the second mention is a genuine defect), but
+  // this pins that the failure text names the SECOND mention, not the
+  // first well-formed "Blocked by #12" -- a wrong diagnosis would point
+  // the author at the wrong half of the line.
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.doesNotMatch(finding.detail, /"Blocked by"/);
+});
+
+test('dependency-line-grammar fails on a syntactically token-shaped but malformed reference (E2 review, Copilot: "Blocked by #12foo" has no word boundary after the digits)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #12foo');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a non-positive issue number (E2 review, Copilot: "Blocked by #0" is excluded by consumeDependencyReferenceList\'s target > 0 check)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #0');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {

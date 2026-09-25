@@ -219,6 +219,26 @@ const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[
 // reference token -- otherwise the keyword match doesn't count as a
 // dependency declaration at all (e.g. a bare "Blocked by" with nothing
 // following it, or one whose only following text is unparseable prose).
+// Deliberately loose (no trailing `\b`): this only gates whether
+// {@link matchDependencyKeywordLine}'s line pattern is even worth trying
+// to parse a reference list from, and whether
+// {@link hasDependencyReferenceListStart}'s own caller (in particular
+// `checkDependencyLineGrammar`'s `findDependencyKeywordMisuse`,
+// `idd-skill#3285`) should treat what follows a keyword as "looks like an
+// attempted reference, worth reporting as a misuse if it turns out
+// malformed" -- tightening this to require the same boundary the strict
+// consumer regexes below already enforce (`#\d+\b`) would make
+// `#12foo` (a malformed, not-really-a-token mention) invisible to BOTH
+// paths instead of being caught by either: `matchDependencyKeywordLine`
+// already independently rejects it (see its own doc comment: an
+// accepted match that consumes zero real numbers/unresolvable tokens
+// returns `undefined`), and a tightened `TOKEN_START` would then also
+// stop `findDependencyKeywordMisuse` from recognizing it as a
+// reference-shaped mention worth flagging, silently dropping the
+// near-miss report the loose test intentionally still provides
+// (confirmed empirically during the #3285 review: a tightened
+// `TOKEN_START` regressed `Blocked by #12foo` from "flagged as a
+// near-miss" to "not reported at all").
 const TOKEN_START = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+)`;
 const TOKEN_START_RE = new RegExp(`^${TOKEN_START}`, 'u');
 
@@ -248,6 +268,22 @@ export function hasDependencyReferenceListStart(text: string): boolean {
 export interface DependencyKeywordLineMatch {
   numbers: number[];
   unresolvable: DependencyGrammarUnresolvedToken[];
+  /**
+   * The same-line text left over after the accepted reference list
+   * stopped consuming -- e.g. `". Depends on #13"` for a line reading
+   * `"Blocked by #12. Depends on #13"`, or `""` when the reference list
+   * consumed the rest of the line outright. This grammar recognizes at
+   * most ONE dependency declaration per line, so `remaining` is never
+   * itself re-parsed as a second declaration here; it is only the
+   * left-over text so a caller like `checkDependencyLineGrammar`
+   * (`idd-skill#3285` review, Copilot) can still scan it for an
+   * independent, second keyword-plus-reference mention instead of
+   * treating the whole line as fully validated. Always the *same-line*
+   * unconsumed tail, even when a continuation sweep (below) pulled in
+   * numbers from later lines -- those later lines are a different index
+   * in `lines` and get their own `remaining` when matched directly.
+   */
+  remaining: string;
 }
 
 /**
@@ -256,8 +292,16 @@ export interface DependencyKeywordLineMatch {
  * following GitHub-wrapped continuation lines (#2441) the same way
  * {@link extractDependencyReferences} does. Returns `undefined` when the
  * line does not open a keyword dependency declaration at all -- no
- * keyword match, or the captured tail does not start with a recognized
- * reference token.
+ * keyword match, the captured tail does not start with a recognized
+ * reference token, or (`idd-skill#3285` review, Copilot) the token-shaped
+ * text that followed the keyword still produced zero usable references
+ * after parsing (both `numbers` and `unresolvable` empty even after any
+ * continuation sweep) -- for example `Blocked by #0`, where `#0` matches
+ * {@link TOKEN_START}'s loose shape but {@link consumeDependencyReferenceList}
+ * excludes it as a non-positive number. Without this, a caller like
+ * `checkDependencyLineGrammar` would treat such a line as "the shared
+ * grammar already accepts this" and never re-examine it, even though no
+ * real dependency was ever extracted from it.
  *
  * Unlike {@link extractDependencyReferences}, this function never masks
  * its input: `lines` must already be the caller's own masked-and-split
@@ -306,7 +350,10 @@ export function matchDependencyKeywordLine(
     numbers.push(...continuation.numbers);
     unresolvable.push(...continuation.unresolvable);
   }
-  return { numbers, unresolvable };
+  if (numbers.length === 0 && unresolvable.length === 0) {
+    return undefined;
+  }
+  return { numbers, unresolvable, remaining: lineResult.remaining };
 }
 
 /**

@@ -1726,7 +1726,14 @@ function checkDependencyLineGrammar(
     htmlComments: 'mask',
   }).split('\n');
   const visibleLines = text.split('\n');
-  const acceptedLineNumbers = new Set<number>();
+  // Maps a 1-based accepted line number to how many trailing characters of
+  // that line the shared grammar's match left unconsumed (#3285 review,
+  // Copilot): the grammar recognizes at most ONE dependency declaration
+  // per line, so a second, independent keyword-plus-reference mention
+  // after it -- "Blocked by #12. Depends on #13" -- is not itself
+  // validated by the accepted match and must still be scanned below,
+  // rather than the whole line being skipped outright.
+  const acceptedRemainingLength = new Map<number, number>();
   const issues: string[] = [];
 
   for (const keyword of ['Blocked by', 'Depends on'] as const) {
@@ -1741,7 +1748,7 @@ function checkDependencyLineGrammar(
         continue;
       }
       const lineNo = index + 1;
-      acceptedLineNumbers.add(lineNo);
+      acceptedRemainingLength.set(lineNo, result.remaining.length);
       // Cross-repository design decision (#3285): unlike the advisory
       // prose-dependency check (which can afford to lean toward flagging
       // when currentRepo is unknown, since a false positive there only
@@ -1766,10 +1773,22 @@ function checkDependencyLineGrammar(
 
   for (let index = 0; index < visibleLines.length; index += 1) {
     const lineNo = index + 1;
-    if (acceptedLineNumbers.has(lineNo)) {
-      continue;
-    }
-    const misuse = findDependencyKeywordMisuse(visibleLines[index] ?? '');
+    const visibleLine = visibleLines[index] ?? '';
+    // `discoverMaskedLines[index]` and `visibleLine` are always the same
+    // length (both derive from maskMarkdownForScan against the same
+    // normalized rawText, which preserves length and line structure
+    // regardless of which regions each call happens to mask), so a
+    // trailing-character count measured against the discover-masked line
+    // slices the correct suffix of the VISIBLE line too -- re-scanning
+    // the visible text (not the discover-masked one) keeps a hidden
+    // HTML-comment mention detectable the same way the no-prior-match
+    // branch below already scans it.
+    const remainingLength = acceptedRemainingLength.get(lineNo);
+    const scanText =
+      remainingLength === undefined
+        ? visibleLine
+        : visibleLine.slice(visibleLine.length - remainingLength);
+    const misuse = findDependencyKeywordMisuse(scanText);
     if (misuse !== undefined) {
       issues.push(
         `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,

@@ -5,6 +5,7 @@ import {
   consumeDependencyContinuationRefLines,
   consumeDependencyReferenceList,
   extractDependencyReferences,
+  matchDependencyKeywordLine,
   normalizeDependencyRepoRef,
 } from '../src/scripts/dependency-grammar.mts';
 import { extractBlockedByReferences } from '../src/scripts/discover-orphan-filter.mts';
@@ -271,5 +272,58 @@ test('#3284 review fix: trailing prose on the keyword line suppresses the contin
   assert.deepEqual(
     extractDependencyReferences('Blocked by #10.\n#20', 'Blocked by'),
     { numbers: [10], unresolvable: [] },
+  );
+});
+
+// --- matchDependencyKeywordLine (#3285) ---
+
+test('matchDependencyKeywordLine returns numbers plus the same-line unconsumed remaining text', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(
+      ['Blocked by #12. Depends on #13'],
+      0,
+      'Blocked by',
+    ),
+    { numbers: [12], unresolvable: [], remaining: '. Depends on #13' },
+  );
+});
+
+test('matchDependencyKeywordLine returns an empty remaining string when the reference list consumes the rest of the line', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by #12'], 0, 'Blocked by'),
+    { numbers: [12], unresolvable: [], remaining: '' },
+  );
+});
+
+test('matchDependencyKeywordLine returns undefined for a malformed token with no word boundary after the digits (#3285 E2 review, Copilot: "Blocked by #12foo")', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['Blocked by #12foo'], 0, 'Blocked by'),
+    undefined,
+  );
+});
+
+test('matchDependencyKeywordLine returns undefined for a non-positive issue number (#3285 E2 review, Copilot: "Blocked by #0")', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['Blocked by #0'], 0, 'Blocked by'),
+    undefined,
+  );
+});
+
+test('matchDependencyKeywordLine still returns a defined result for a cross-repository token even though it resolves zero local numbers', () => {
+  // An unresolvable (cross-repository) token is a genuine, meaningful
+  // outcome distinct from "nothing was extracted at all" -- the
+  // numbers.length === 0 && unresolvable.length === 0 guard must not
+  // also suppress this case.
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by other/repo#5'], 0, 'Blocked by', {
+      currentRepo: 'kurone-kito/idd-skill',
+    }),
+    {
+      numbers: [],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+      remaining: '',
+    },
   );
 });
