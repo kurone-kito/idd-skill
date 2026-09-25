@@ -76,6 +76,7 @@ export function consumeDependencyReferenceList(segment, options = {}) {
   const currentRepoRef = resolveCurrentRepoRef(options);
   const numbers = [];
   const unresolvable = [];
+  const invalidTokens = [];
   let remaining = segment;
   let consumedTokenEnd = 0;
   while (remaining) {
@@ -111,6 +112,8 @@ export function consumeDependencyReferenceList(segment, options = {}) {
       const target = Number.parseInt(bareMatch[1], 10);
       if (Number.isInteger(target) && target > 0) {
         numbers.push(target);
+      } else {
+        invalidTokens.push(match[0]);
       }
     }
     remaining = remaining.slice(match[0].length);
@@ -121,7 +124,7 @@ export function consumeDependencyReferenceList(segment, options = {}) {
     }
     remaining = remaining.slice(separatorMatch[0].length);
   }
-  return { numbers, unresolvable, remaining, consumedTokenEnd };
+  return { numbers, unresolvable, remaining, consumedTokenEnd, invalidTokens };
 }
 /**
  * #2441: GitHub line-wraps a long, comma-separated "Blocked by"/"Depends
@@ -143,6 +146,7 @@ export function consumeDependencyContinuationRefLines(
 ) {
   const numbers = [];
   const unresolvable = [];
+  const invalidTokens = [];
   let index = startIndex;
   while (index < lines.length) {
     const trimmed = (lines[index] ?? '').trim();
@@ -153,6 +157,7 @@ export function consumeDependencyContinuationRefLines(
       numbers: lineNumbers,
       unresolvable: lineUnresolvable,
       remaining,
+      invalidTokens: lineInvalidTokens,
     } = consumeDependencyReferenceList(trimmed, options);
     if (lineNumbers.length === 0 && lineUnresolvable.length === 0) {
       break;
@@ -162,9 +167,10 @@ export function consumeDependencyContinuationRefLines(
     }
     numbers.push(...lineNumbers);
     unresolvable.push(...lineUnresolvable);
+    invalidTokens.push(...lineInvalidTokens);
     index += 1;
   }
-  return { numbers, unresolvable };
+  return { numbers, unresolvable, invalidTokens };
 }
 // Leading-anchor source for a dependency-keyword line: optional
 // indentation, any number of blockquote `>` markers, and at most one list
@@ -267,6 +273,7 @@ export function matchDependencyKeywordLine(
   const lineResult = consumeDependencyReferenceList(match[1], options);
   const numbers = [...lineResult.numbers];
   const unresolvable = [...lineResult.unresolvable];
+  const invalidTokens = [...lineResult.invalidTokens];
   // #2441's line-wrap sweep only applies when the keyword line's own
   // reference list is the *entire* rest of the line -- trailing prose
   // (`Blocked by #10.`) means the next line is unrelated text, not a
@@ -281,6 +288,7 @@ export function matchDependencyKeywordLine(
     );
     numbers.push(...continuation.numbers);
     unresolvable.push(...continuation.unresolvable);
+    invalidTokens.push(...continuation.invalidTokens);
   }
   if (numbers.length === 0 && unresolvable.length === 0) {
     return undefined;
@@ -300,6 +308,7 @@ export function matchDependencyKeywordLine(
     numbers,
     unresolvable,
     remaining: match[1].slice(lineResult.consumedTokenEnd),
+    invalidTokens,
   };
 }
 /**

@@ -1381,6 +1381,28 @@ test('dependency-line-grammar fails on a hidden HTML-comment mention immediately
   assert.match(finding.detail, /Depends on/);
 });
 
+test('dependency-line-grammar fails on an invalid token mixed in with an otherwise-valid list (final review round, Copilot: "Blocked by #0, #12" must not pass merely because #12 alone is valid)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #0, #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /"#0"/);
+});
+
+test('dependency-line-grammar fails on an invalid token in a GitHub-wrapped continuation line', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12,\n#0, #13',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, /"#0"/);
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {

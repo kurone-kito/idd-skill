@@ -78,6 +78,24 @@ export interface DependencyReferenceListResult {
    * own input may itself be a masked view of something else (#3285).
    */
   consumedTokenEnd: number;
+  /**
+   * Every bare `#N` token that matched the reference-token shape but was
+   * rejected as a non-positive or non-integer number (e.g. `#0`) --
+   * silently dropped from `numbers` with no other record otherwise,
+   * since (unlike a qualified/URL token, which always lands in either
+   * `numbers` or `unresolvable`) a rejected bare token has no
+   * `unresolvable` entry either. A caller that must not silently ignore
+   * an invalid list member mixed in with otherwise-valid ones --
+   * `checkDependencyLineGrammar` (`idd-skill#3285` review, Copilot):
+   * `Blocked by #0, #12` must still fail on the invalid `#0`, even
+   * though `#12` alone is perfectly valid -- reads this field instead
+   * of only checking whether `numbers`/`unresolvable` are non-empty.
+   * Deliberately does NOT change `extractDependencyReferences`'s own
+   * behavior or Discover's runtime resolution: `numbers` still resolves
+   * every valid token in the same list regardless of a sibling invalid
+   * one, exactly as before.
+   */
+  invalidTokens: string[];
 }
 
 export interface DependencyGrammarOptions {
@@ -135,6 +153,7 @@ export function consumeDependencyReferenceList(
   const currentRepoRef = resolveCurrentRepoRef(options);
   const numbers: number[] = [];
   const unresolvable: DependencyGrammarUnresolvedToken[] = [];
+  const invalidTokens: string[] = [];
   let remaining = segment;
   let consumedTokenEnd = 0;
   while (remaining) {
@@ -170,6 +189,8 @@ export function consumeDependencyReferenceList(
       const target = Number.parseInt((bareMatch as RegExpMatchArray)[1], 10);
       if (Number.isInteger(target) && target > 0) {
         numbers.push(target);
+      } else {
+        invalidTokens.push(match[0]);
       }
     }
     remaining = remaining.slice(match[0].length);
@@ -180,7 +201,7 @@ export function consumeDependencyReferenceList(
     }
     remaining = remaining.slice(separatorMatch[0].length);
   }
-  return { numbers, unresolvable, remaining, consumedTokenEnd };
+  return { numbers, unresolvable, remaining, consumedTokenEnd, invalidTokens };
 }
 
 /**
@@ -203,9 +224,13 @@ export function consumeDependencyContinuationRefLines(
 ): {
   numbers: number[];
   unresolvable: DependencyGrammarUnresolvedToken[];
+  /** Every bare invalid token (e.g. `#0`) seen on a swept continuation
+   * line -- see {@link DependencyReferenceListResult.invalidTokens}. */
+  invalidTokens: string[];
 } {
   const numbers: number[] = [];
   const unresolvable: DependencyGrammarUnresolvedToken[] = [];
+  const invalidTokens: string[] = [];
   let index = startIndex;
   while (index < lines.length) {
     const trimmed = (lines[index] ?? '').trim();
@@ -216,6 +241,7 @@ export function consumeDependencyContinuationRefLines(
       numbers: lineNumbers,
       unresolvable: lineUnresolvable,
       remaining,
+      invalidTokens: lineInvalidTokens,
     } = consumeDependencyReferenceList(trimmed, options);
     if (lineNumbers.length === 0 && lineUnresolvable.length === 0) {
       break;
@@ -225,9 +251,10 @@ export function consumeDependencyContinuationRefLines(
     }
     numbers.push(...lineNumbers);
     unresolvable.push(...lineUnresolvable);
+    invalidTokens.push(...lineInvalidTokens);
     index += 1;
   }
-  return { numbers, unresolvable };
+  return { numbers, unresolvable, invalidTokens };
 }
 
 // Leading-anchor source for a dependency-keyword line: optional
@@ -313,6 +340,20 @@ export interface DependencyKeywordLineMatch {
    * their own `remaining` when matched directly.
    */
   remaining: string;
+  /**
+   * Every invalid bare token (e.g. `#0`) seen while parsing the accepted
+   * reference list, aggregated across the main match and any swept
+   * continuation lines -- see
+   * {@link DependencyReferenceListResult.invalidTokens}. Non-empty here
+   * does NOT by itself make this function return `undefined`: a line
+   * like `Blocked by #0, #12` still has a genuine valid token (`#12`,
+   * landing in `numbers`), so the shared grammar has extracted something
+   * real and this remains a defined match -- but a caller like
+   * `checkDependencyLineGrammar` (`idd-skill#3285` review, Copilot) that
+   * must not silently ignore the invalid `#0` reads this field to still
+   * fail the line, distinct from the `remaining`-scan path above.
+   */
+  invalidTokens: string[];
 }
 
 /**
@@ -364,6 +405,7 @@ export function matchDependencyKeywordLine(
   const lineResult = consumeDependencyReferenceList(match[1], options);
   const numbers = [...lineResult.numbers];
   const unresolvable = [...lineResult.unresolvable];
+  const invalidTokens = [...lineResult.invalidTokens];
   // #2441's line-wrap sweep only applies when the keyword line's own
   // reference list is the *entire* rest of the line -- trailing prose
   // (`Blocked by #10.`) means the next line is unrelated text, not a
@@ -378,6 +420,7 @@ export function matchDependencyKeywordLine(
     );
     numbers.push(...continuation.numbers);
     unresolvable.push(...continuation.unresolvable);
+    invalidTokens.push(...continuation.invalidTokens);
   }
   if (numbers.length === 0 && unresolvable.length === 0) {
     return undefined;
@@ -397,6 +440,7 @@ export function matchDependencyKeywordLine(
     numbers,
     unresolvable,
     remaining: match[1].slice(lineResult.consumedTokenEnd),
+    invalidTokens,
   };
 }
 
