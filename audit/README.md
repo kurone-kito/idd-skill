@@ -282,7 +282,7 @@ reserve the marker for a link this checker cannot correctly evaluate.
 Most lite files under `idd-template/.github/instructions/lite/` state
 that any mismatch with their standard-file counterpart (within the
 lite file's declared scope) is a bug in the lite file, but nothing
-mechanical checked that promise. Parity has been restored by hand,
+mechanically checked that promise. Parity has been restored by hand,
 repeatedly, after each gap was found by chance: issue
 [#1700](https://github.com/kurone-kito/idd-skill/issues/1700) and
 [#1701](https://github.com/kurone-kito/idd-skill/issues/1701) (lite E14
