@@ -223,8 +223,10 @@ template's sections when one exists:
 must never call `gh issue create` (or the REST issues API) itself.
 Recommended follow-ups stay in the PR body's own prose above. If a
 follow-up is important enough to file in-repo now, invoke the
-`issue-authoring` skill (its Stage 1 hold) instead of improvising a
-body. Do not add a parallel "worker-lite authoring" contract.
+`issue-authoring` skill (its Stage 1 hold; when the published body
+carries the `review-fix-loop-cutoff` defer-source marker, continue
+at once to that skill's Stage 2 narrow auto-release exception)
+instead of improvising a body. Do not add a parallel "worker-lite authoring" contract.
 
 ### Live-operator-directed immediate-fix carve-out
 

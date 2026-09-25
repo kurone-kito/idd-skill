@@ -236,7 +236,9 @@ loop instead of returning to this D1 rebase path.
 8. **Do not create follow-up issues directly** — never call `gh issue
    create` (or the REST issues API) yourself. Recommended follow-ups
    stay in the PR body prose above; if one is important enough to file
-   now, invoke the `issue-authoring` skill instead.
+   now, invoke the `issue-authoring` skill (Stage 1 hold; continue
+   to its Stage 2 narrow auto-release exception when the published
+   body carries the `review-fix-loop-cutoff` defer-source marker).
 9. **Live-operator-directed immediate-fix carve-out**: a live operator
    may direct an unrelated blocking-bug side-fix instead of routing it
    through `issue-authoring` first. Cross-reference the originating
