@@ -10,8 +10,15 @@ version: '0.2'
 # #3288: vendored real (and synthetic-gap) GitHub issue prose, quoted
 # verbatim for the issue-body-corpus regression fixtures -- spelling in
 # someone else's issue body is not this repository's own prose to fix.
+# #3263: same rationale for the bot-comment corpus -- almost every entry
+# is a verbatim CodeRabbit/Copilot/Codex comment body, including GitHub's
+# own mid-word "…" table-cell truncation artifacts, that must stay
+# byte-identical to what its cited `gh api` command re-fetches (one
+# grandfathered exception, its own `note` field says so, has no fetchable
+# id at all); none of this is this repository's own prose to fix.
 ignorePaths:
   - tests/fixtures/issue-body-corpus/**
+  - tests/fixtures/bot-comment-corpus/**
 words:
   - desync
   - desynced
