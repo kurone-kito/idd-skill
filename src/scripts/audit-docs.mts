@@ -303,7 +303,7 @@ function main(): void {
     manifest.markdownLinkAudit ?? null,
     manifest.generatedBlocks ?? [],
   );
-  checkLiteGateParity(manifest.liteGateParity ?? []);
+  checkLiteGateParity(manifest.liteGateParity);
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();

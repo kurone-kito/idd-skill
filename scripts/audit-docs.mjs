@@ -192,7 +192,7 @@ function main() {
     manifest.markdownLinkAudit ?? null,
     manifest.generatedBlocks ?? [],
   );
-  checkLiteGateParity(manifest.liteGateParity ?? []);
+  checkLiteGateParity(manifest.liteGateParity);
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();

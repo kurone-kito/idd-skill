@@ -44,15 +44,12 @@ function fakeReader(
   return (path) => (Object.hasOwn(files, path) ? files[path] : null);
 }
 
-// Under `docs/lite/` (not a bare `lite/` prefix) so the path genuinely
-// contains a `/lite/` path segment the way every real repo-relative path
-// this registry points at does (e.g.
-// `idd-template/.github/instructions/lite/...`); a bare leading `lite/`
-// prefix has no preceding `/` and would not exercise the same check.
-const LITE_FILE = 'docs/lite/standard-lite.instructions.md';
+const INSTRUCTIONS_PREFIX = 'idd-template/.github/instructions/';
+const STANDARD_FILE = `${INSTRUCTIONS_PREFIX}standard.instructions.md`;
+const LITE_FILE = `${INSTRUCTIONS_PREFIX}lite/standard-lite.instructions.md`;
 
 const FILES: Record<string, string> = {
-  'standard.instructions.md': STANDARD_TEXT,
+  [STANDARD_FILE]: STANDARD_TEXT,
   [LITE_FILE]: LITE_TEXT,
 };
 
@@ -61,7 +58,7 @@ function baseEntry(): Record<string, unknown> {
     id: 'closing-set-example',
     phase: 'F2',
     standard: {
-      file: 'standard.instructions.md',
+      file: STANDARD_FILE,
       heading: 'The Gate',
       contains: 'confirm the closing set matches exactly',
     },
@@ -80,7 +77,7 @@ test('passes on a well-formed entry with both a lite and an omittedByDesign entr
       id: 'omitted-example',
       phase: 'F2',
       standard: {
-        file: 'standard.instructions.md',
+        file: STANDARD_FILE,
         heading: 'Another Section',
         contains: 'Unrelated text.',
       },
@@ -101,15 +98,15 @@ test('passes on a well-formed entry with both a lite and an omittedByDesign entr
   );
 });
 
-test('null/undefined entries collect no violations', () => {
-  assert.deepEqual(
-    collectLiteGateParityViolations(null, fakeReader(FILES)),
-    [],
-  );
-  assert.deepEqual(
-    collectLiteGateParityViolations(undefined, fakeReader(FILES)),
-    [],
-  );
+test('absent or empty registry is a configuration error', () => {
+  for (const entries of [null, undefined, []]) {
+    const violations = collectLiteGateParityViolations(
+      entries,
+      fakeReader(FILES),
+    );
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /registry must be present and non-empty/);
+  }
 });
 
 test('fails when an entry carries neither lite nor omittedByDesign', () => {
@@ -177,7 +174,8 @@ test('fails on a duplicate id', () => {
 
 test('fails when a location file does not exist', () => {
   const entry = baseEntry();
-  (entry.standard as Record<string, unknown>).file = 'missing.instructions.md';
+  (entry.standard as Record<string, unknown>).file =
+    `${INSTRUCTIONS_PREFIX}missing.instructions.md`;
   const violations = collectLiteGateParityViolations(
     [entry],
     fakeReader(FILES),
@@ -185,7 +183,7 @@ test('fails when a location file does not exist', () => {
   assert.equal(violations.length, 1);
   assert.match(
     violations[0],
-    /standard location file missing\.instructions\.md does not exist/,
+    /standard location file idd-template\/\.github\/instructions\/missing\.instructions\.md does not exist/,
   );
 });
 
@@ -203,7 +201,7 @@ test('fails when a heading has no matching GitHub slug', () => {
 test('fails closed on a heading that repeats in its own file (#3310 review)', () => {
   const files = {
     ...FILES,
-    'duplicate-heading.instructions.md': [
+    [`${INSTRUCTIONS_PREFIX}duplicate-heading.instructions.md`]: [
       '# Doc',
       '',
       '## The Gate',
@@ -218,7 +216,7 @@ test('fails closed on a heading that repeats in its own file (#3310 review)', ()
   };
   const entry = baseEntry();
   (entry.standard as Record<string, unknown>).file =
-    'duplicate-heading.instructions.md';
+    `${INSTRUCTIONS_PREFIX}duplicate-heading.instructions.md`;
   const violations = collectLiteGateParityViolations(
     [entry],
     fakeReader(files),
@@ -230,7 +228,7 @@ test('fails closed on a heading that repeats in its own file (#3310 review)', ()
 test('ignores a heading-shaped line inside a tilde-fenced example (#3428 review)', () => {
   const files = {
     ...FILES,
-    'tilde-fence.instructions.md': [
+    [`${INSTRUCTIONS_PREFIX}tilde-fence.instructions.md`]: [
       '# Doc',
       '',
       '~~~markdown',
@@ -245,7 +243,7 @@ test('ignores a heading-shaped line inside a tilde-fenced example (#3428 review)
   };
   const entry = baseEntry();
   (entry.standard as Record<string, unknown>).file =
-    'tilde-fence.instructions.md';
+    `${INSTRUCTIONS_PREFIX}tilde-fence.instructions.md`;
   assert.deepEqual(
     collectLiteGateParityViolations([entry], fakeReader(files)),
     [],
@@ -322,13 +320,13 @@ test('fails when the standard location lives under lite/', () => {
   assert.equal(violations.length, 1);
   assert.match(
     violations[0],
-    /standard location file .* must not live under lite\//,
+    /standard location file .* must be under idd-template\/\.github\/instructions\/ and not under lite\//,
   );
 });
 
-test('fails when a lite location lives outside lite/', () => {
+test('fails when a lite location is outside the canonical lite prefix', () => {
   const entry = baseEntry();
-  (entry.lite as Record<string, unknown>).file = 'standard.instructions.md';
+  (entry.lite as Record<string, unknown>).file = STANDARD_FILE;
   (entry.lite as Record<string, unknown>).heading = 'The Gate';
   (entry.lite as Record<string, unknown>).contains =
     'confirm the closing set matches exactly';
@@ -337,7 +335,48 @@ test('fails when a lite location lives outside lite/', () => {
     fakeReader(FILES),
   );
   assert.equal(violations.length, 1);
-  assert.match(violations[0], /lite location file .* must live under lite\//);
+  assert.match(
+    violations[0],
+    /lite location file .* must be under idd-template\/\.github\/instructions\/lite\//,
+  );
+});
+
+test('rejects a lite path that only contains a /lite/ segment', () => {
+  const entry = baseEntry();
+  (entry.lite as Record<string, unknown>).file =
+    'project/lite/other.instructions.md';
+  const files = {
+    ...FILES,
+    'project/lite/other.instructions.md': LITE_TEXT,
+  };
+  const violations = collectLiteGateParityViolations(
+    [entry],
+    fakeReader(files),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /must be under idd-template\/\.github\/instructions\/lite\//,
+  );
+});
+
+test('rejects a standard path outside the canonical instructions prefix', () => {
+  const entry = baseEntry();
+  (entry.standard as Record<string, unknown>).file =
+    'docs/other.instructions.md';
+  const files = {
+    ...FILES,
+    'docs/other.instructions.md': STANDARD_TEXT,
+  };
+  const violations = collectLiteGateParityViolations(
+    [entry],
+    fakeReader(files),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /must be under idd-template\/\.github\/instructions\/ and not under lite\//,
+  );
 });
 
 test('fails when a helperGate literal is missing from its source', () => {

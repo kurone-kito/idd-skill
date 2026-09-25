@@ -1814,7 +1814,20 @@ export function collectOkfFrontmatterViolations(bundles, listFiles, readFile) {
   }
   return errors;
 }
-const LITE_PATH_SEGMENT = '/lite/';
+const INSTRUCTIONS_PREFIX = 'idd-template/.github/instructions/';
+const LITE_INSTRUCTIONS_PREFIX = `${INSTRUCTIONS_PREFIX}lite/`;
+function isCanonicalInstructionPath(file, lite) {
+  if (file.split('/').includes('..')) {
+    return false;
+  }
+  if (lite) {
+    return file.startsWith(LITE_INSTRUCTIONS_PREFIX);
+  }
+  return (
+    file.startsWith(INSTRUCTIONS_PREFIX) &&
+    !file.startsWith(LITE_INSTRUCTIONS_PREFIX)
+  );
+}
 // Strips the same inline markdown syntax extractHeadingSlugs's own
 // heading-text normalization strips (markdown-link-audit.mts's private
 // stripHeadingMarkup) before slugging: backtick code spans and link text.
@@ -1891,8 +1904,10 @@ function extractHeadingSection(text, heading) {
   return { found: true, section: lines.slice(found.lineIndex, end).join('\n') };
 }
 // Validates one `standard`/`lite`/`omittedByDesign.lite` location: file
-// existence and path scope (a `standard` location must not live under
-// `lite/`; every other role must), heading resolvability, and exactly one
+// existence and path scope (a `standard` location must be under
+// `idd-template/.github/instructions/` and not `lite/`; every other role
+// must be under `idd-template/.github/instructions/lite/`), heading
+// resolvability, and exactly one
 // of `contains`/`pattern` actually matching within that heading's section.
 // Pushes onto `violations` in place rather than returning a list, since
 // every call site already has one shared accumulator per entry.
@@ -1910,14 +1925,14 @@ function validateLiteGateParityLocation(
     violations.push(`${label}: ${role} location is missing a string file`);
     return;
   }
-  const underLite = file.includes(LITE_PATH_SEGMENT);
-  if (role === 'standard' && underLite) {
+  const canonical = isCanonicalInstructionPath(file, role !== 'standard');
+  if (!canonical && role === 'standard') {
     violations.push(
-      `${label}: standard location file ${file} must not live under lite/`,
+      `${label}: standard location file ${file} must be under ${INSTRUCTIONS_PREFIX} and not under lite/`,
     );
-  } else if (role !== 'standard' && !underLite) {
+  } else if (!canonical) {
     violations.push(
-      `${label}: ${role} location file ${file} must live under lite/`,
+      `${label}: ${role} location file ${file} must be under ${LITE_INSTRUCTIONS_PREFIX}`,
     );
   }
   const text = readFile(file);
@@ -1991,8 +2006,12 @@ function validateLiteGateParityLocation(
  * file. See `audit/README.md` for the full contract.
  */
 export function collectLiteGateParityViolations(entries, readFile) {
-  if (entries === null || entries === undefined) {
-    return [];
+  if (
+    entries === null ||
+    entries === undefined ||
+    (Array.isArray(entries) && entries.length === 0)
+  ) {
+    return ['liteGateParity: registry must be present and non-empty'];
   }
   if (!Array.isArray(entries)) {
     return ['liteGateParity: entries must be an array'];
