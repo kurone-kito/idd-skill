@@ -931,6 +931,9 @@ function runResumeRouteSelectionCli(
         cwd: REPO_ROOT,
         encoding: 'utf8',
         env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     ),
   );
@@ -972,6 +975,9 @@ test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias',
           cwd: REPO_ROOT,
           encoding: 'utf8',
           env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
       assert.fail('expected the CLI to exit non-zero');

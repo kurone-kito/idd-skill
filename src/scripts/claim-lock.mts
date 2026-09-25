@@ -299,9 +299,20 @@ function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
  * indefinitely — callers must not assume it is ever cleaned up.
  */
 function resolveWorktreeAdminDir(cwd: string): string {
+  // #3434: no explicit `stdio` sets Node's own `inheritStderr =
+  // !options.stdio` internal flag, which relays `git`'s captured stderr
+  // (e.g. `fatal: cannot change to '<path>': No such file or directory`)
+  // to the parent's own real stderr stream in addition to the thrown
+  // error's `.stderr`/`.message` -- the same mechanism #3076 fixed for
+  // `ghApiJson`. Passing `stdio: ['ignore', 'pipe', 'pipe']` disables the
+  // duplicate relay while leaving the error's `.stderr`/`.message` fully
+  // populated, so `runHelperCli`'s `classifyHelperError` (which renders
+  // `error.message` for this "internal" kind) still surfaces the same
+  // diagnostic text.
   return execFileSync('git', ['-C', cwd, 'rev-parse', '--absolute-git-dir'], {
     encoding: 'utf8',
     env: sanitizedGitEnvironment(),
+    stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 }
 

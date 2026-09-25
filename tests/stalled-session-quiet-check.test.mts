@@ -210,6 +210,9 @@ function runStalledSessionQuietCheckCli(
         cwd: REPO_ROOT,
         encoding: 'utf8',
         env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     ),
   );
@@ -252,6 +255,9 @@ describe('stalled-session-quiet-check CLI --gh-token / --token', () => {
             cwd: REPO_ROOT,
             encoding: 'utf8',
             env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         );
         assert.fail('expected the CLI to exit non-zero');

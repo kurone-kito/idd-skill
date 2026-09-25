@@ -627,6 +627,9 @@ for (const [binary, helpText] of [
         execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', binary)], {
           encoding: 'utf8',
           timeout: 60_000,
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
       },
       (error: unknown) => {
@@ -657,7 +660,13 @@ test('audit-pr-cleanup.mjs without --pr fails before any gh invocation', () => {
       execFileSync(
         process.execPath,
         [join(REPO_ROOT, 'scripts/audit-pr-cleanup.mjs')],
-        { encoding: 'utf8', timeout: 60_000 },
+        {
+          encoding: 'utf8',
+          timeout: 60_000,
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     },
     (error: unknown) => {

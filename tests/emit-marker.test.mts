@@ -287,6 +287,10 @@ function runEmitMarkerExpectingFailure(argv: string[]): string {
     execFileSync(process.execPath, [EMIT_MARKER_CLI, ...argv], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      // #3434: suppress the duplicate raw-stderr relay execFileSync
+      // performs when no `stdio` override is given -- the captured
+      // `failure.stderr` this helper returns below is unaffected.
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
