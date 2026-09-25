@@ -18,7 +18,7 @@
 // Pure decision logic (`evaluateDebounceSkip`) is separated from live
 // data collection, mirroring `stalled-session-quiet-check.mts`'s shape,
 // so the decision is unit-testable without a live PR or a real wait.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeSync } from 'node:fs';
 import { parseDurationToMs } from './ci-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -253,13 +253,23 @@ function ghPaginatedJson(args) {
     }),
   );
 }
+function writeStderrSync(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
 function fail_(message) {
-  console.error(`error: ${message}`);
+  const rendered = `error: ${message}\n`;
   // #3344: keep exit 2. The runner never sees this path because
   // process.exit returns control to the OS, so write the envelope here
   // when it is enabled. Argument failures only -- gh failures throw.
+  // Both lines are synchronous: process.exit drops a pending async
+  // stderr write, which would truncate the envelope.
   if (isHelperErrorEnvelopeEnabled()) {
-    process.stderr.write(
+    writeStderrSync(rendered);
+    writeStderrSync(
       `${JSON.stringify(
         buildHelperErrorEnvelope('advisory-comment-debounce', 2, {
           kind: 'usage',
@@ -268,6 +278,8 @@ function fail_(message) {
         }),
       )}\n`,
     );
+  } else {
+    console.error(`error: ${message}`);
   }
   process.exit(2);
 }

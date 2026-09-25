@@ -30,6 +30,7 @@
 //
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
+import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -771,9 +772,18 @@ export function applyDispositionPlan(plan, deps) {
   }
   return { applied, failed, staleSkipped, claimLost, knownViewerCommentIds };
 }
+function writeStderrSync(text) {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
 function exitClassified(code, kind, message) {
   if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
-    process.stderr.write(
+    // Synchronous: process.exit drops a pending async stderr write, which
+    // would truncate this envelope line.
+    writeStderrSync(
       `${JSON.stringify(
         buildHelperErrorEnvelope('disposition-non-review-notices', code, {
           kind,

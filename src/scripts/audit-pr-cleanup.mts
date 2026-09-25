@@ -5,7 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CleanupReport } from './audit-pr-cleanup-summary.mts';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mts';
@@ -2152,22 +2152,34 @@ Environment:
 `);
 }
 
+function writeStderrSync(text: string): void {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+
 function fail(message: string, error?: unknown): never {
-  console.error(`error: ${message}`);
+  const rendered = `error: ${message}\n`;
   // #3344: keep exit 2 for every fail() path. process.exit never returns
   // to runHelperCli, so classify and write the envelope here. A bare
   // message is an argument error; a passed error keeps its real kind
-  // (a gh failure stays transport, not usage).
+  // (a gh failure stays transport, not usage). Both lines are
+  // synchronous: process.exit drops a pending async stderr write.
   if (isHelperErrorEnvelopeEnabled()) {
     const classified =
       error === undefined
         ? { kind: 'usage' as const, message, httpStatus: null }
         : classifyHelperError(error);
-    process.stderr.write(
+    writeStderrSync(rendered);
+    writeStderrSync(
       `${JSON.stringify(
         buildHelperErrorEnvelope('audit-pr-cleanup', 2, classified),
       )}\n`,
     );
+  } else {
+    console.error(`error: ${message}`);
   }
   process.exit(2);
 }
