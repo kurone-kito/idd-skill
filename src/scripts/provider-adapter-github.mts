@@ -1120,6 +1120,16 @@ function findRecentExactBodyMatch(
 class MalformedPostWorkItemCommentResponseError extends Error {}
 
 /**
+ * #3435: a successful POST whose stored `body` differs from the body this
+ * process sent is an environment mutation, not a transient failure.
+ * Retrying cannot undo it, and {@link findRecentExactBodyMatch}'s exact
+ * match can never recognize the mutated comment, so a retry would post
+ * another mismatched duplicate. Fail once, with the created comment's
+ * coordinates, and do not strip or normalize the stored text.
+ */
+class PostWorkItemCommentBodyMismatchError extends Error {}
+
+/**
  * #3275: thrown instead of retrying when a possibly-landed POST failure's
  * outcome could not be confirmed -- either the duplicate-body re-read
  * itself failed (so neither "it landed" nor "it didn't" can be proven), or
@@ -1211,7 +1221,11 @@ function deriveRetryAfterMs(error: unknown, nowMs: number): number | null {
  * into re-posting the same marker (code review, #3275). Also validates the
  * response shape before treating the marker as posted (catches a
  * 200-with-malformed-body edge case a bare retry would not -- see
- * {@link MalformedPostWorkItemCommentResponseError}).
+ * {@link MalformedPostWorkItemCommentResponseError}). A usable
+ * id/`html_url` whose stored `body` differs from the argument fails the
+ * same way, via {@link PostWorkItemCommentBodyMismatchError} (#3435) --
+ * checked only after the malformed-shape test, so a missing id stays
+ * that error.
  */
 function postWorkItemCommentWithRetry(
   deps: GithubProviderAdapterDeps,
@@ -1269,6 +1283,7 @@ function postWorkItemCommentWithRetry(
       const parsed = JSON.parse(responseBody) as {
         id?: unknown;
         html_url?: unknown;
+        body?: unknown;
       };
       const id = Number(parsed.id);
       const htmlUrl = String(parsed.html_url ?? '');
@@ -1277,9 +1292,20 @@ function postWorkItemCommentWithRetry(
           `postWorkItemComment: malformed POST response for ${repoPath}/issues/${number} (missing id/html_url)`,
         );
       }
+      // #3435: compare only after id/html_url are usable. A missing
+      // `body` is `''` and therefore a mismatch, matching a stored
+      // comment that does not equal the payload this process sent.
+      if (String(parsed.body ?? '') !== body) {
+        throw new PostWorkItemCommentBodyMismatchError(
+          `postWorkItemComment: stored body does not match the body sent for ${repoPath}/issues/${number} (comment id ${id}, ${htmlUrl})`,
+        );
+      }
       return { id, htmlUrl };
     } catch (error) {
-      if (error instanceof MalformedPostWorkItemCommentResponseError) {
+      if (
+        error instanceof MalformedPostWorkItemCommentResponseError ||
+        error instanceof PostWorkItemCommentBodyMismatchError
+      ) {
         throw error;
       }
       const status = deriveGhHttpStatus(error);
