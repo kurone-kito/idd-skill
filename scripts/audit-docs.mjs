@@ -728,6 +728,20 @@ function checkMarkdownLinkAudit(config, generatedBlocks) {
 // path, not a glob `globFiles` already filtered to existing files.
 function checkLiteGateParity(entries) {
   const repoFileSet = new Set(repoFiles);
+  const registryMissing =
+    entries == null || (Array.isArray(entries) && entries.length === 0);
+  const hasLiteCorpus = repoFiles.some(
+    (path) =>
+      path.startsWith('idd-template/.github/instructions/lite/') &&
+      path.endsWith('.instructions.md'),
+  );
+  // A manifest that is not this source repo's full instruction tree
+  // (CLI fixtures, adopters without the lite corpus) keeps an omitted
+  // registry optional. The presence requirement applies only once the
+  // canonical lite corpus is actually in the tree (#3428 review).
+  if (registryMissing && !hasLiteCorpus) {
+    return;
+  }
   errors.push(
     ...collectLiteGateParityViolations(entries ?? [], (path) =>
       repoFileSet.has(path) ? readText(path) : null,

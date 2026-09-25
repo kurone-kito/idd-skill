@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
 import { collectLiteGateParityViolations } from '../src/scripts/consistency-helpers.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 // Coverage for kurone-kito/idd-skill#3310: `collectLiteGateParityViolations`
 // fails the docs audit when a lite instructions file drops a safety gate
@@ -360,6 +368,19 @@ test('rejects a lite path that only contains a /lite/ segment', () => {
   );
 });
 
+test('rejects a notes.md file under the canonical instructions prefix', () => {
+  const entry = baseEntry();
+  const notes = `${INSTRUCTIONS_PREFIX}notes.md`;
+  (entry.standard as Record<string, unknown>).file = notes;
+  const files = { ...FILES, [notes]: STANDARD_TEXT };
+  const violations = collectLiteGateParityViolations(
+    [entry],
+    fakeReader(files),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /\*\.instructions\.md/);
+});
+
 test('rejects a standard path outside the canonical instructions prefix', () => {
   const entry = baseEntry();
   (entry.standard as Record<string, unknown>).file =
@@ -503,4 +524,77 @@ test("deleting a real seed entry's lite fragment is detected", () => {
   );
   assert.equal(matching.length, 1);
   assert.match(matching[0], /contains fragment not found/);
+});
+
+function runAuditDocs(cwd: string): { status: number; stderr: string } {
+  try {
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      {
+        cwd,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { status: 0, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.status === 'number' ? e.status : 1,
+      stderr: typeof e.stderr === 'string' ? e.stderr : '',
+    };
+  }
+}
+
+function initFixture(): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), 'audit-docs-lite-corpus-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: dir, env: fixtureEnv() });
+  mkdirSync(join(dir, 'audit'), { recursive: true });
+  return {
+    dir,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+test('an omitted registry is optional when the lite corpus is absent', (t) => {
+  const fixture = initFixture();
+  t.after(fixture.cleanup);
+  writeFileSync(
+    join(fixture.dir, 'audit', 'sync-manifest.json'),
+    '{}\n',
+    'utf8',
+  );
+  const result = runAuditDocs(fixture.dir);
+  assert.equal(
+    result.stderr.includes('registry must be present and non-empty'),
+    false,
+  );
+});
+
+test('an omitted registry fails when the canonical lite corpus is present', (t) => {
+  const fixture = initFixture();
+  t.after(fixture.cleanup);
+  const liteDir = join(
+    fixture.dir,
+    'idd-template',
+    '.github',
+    'instructions',
+    'lite',
+  );
+  mkdirSync(liteDir, { recursive: true });
+  writeFileSync(
+    join(liteDir, 'example.instructions.md'),
+    '# Example\n\n## Gate\n\ntext\n',
+    'utf8',
+  );
+  writeFileSync(
+    join(fixture.dir, 'audit', 'sync-manifest.json'),
+    '{}\n',
+    'utf8',
+  );
+  const result = runAuditDocs(fixture.dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /registry must be present and non-empty/);
 });

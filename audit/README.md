@@ -352,11 +352,12 @@ does not exist; a heading with no matching GitHub slug in its file, or
 one that matches more than one heading there; a
 location carrying both or neither of `contains`/`pattern`; a
 `contains` substring or `pattern` match missing from its heading's
-section; a `standard` location that is not under
-`idd-template/.github/instructions/` (or that is under `lite/`), or a
-`lite` location outside `idd-template/.github/instructions/lite/`; a
-missing or empty `liteGateParity` registry; a `helperGate` literal
-missing from its `source`; and a
+section; a location that is not a
+`idd-template/.github/instructions/*.instructions.md` file (standard
+paths must not sit under `lite/`; lite paths must); a missing or empty
+`liteGateParity` registry when the canonical lite corpus is present in
+the tree (a manifest with no lite corpus may omit it); a `helperGate`
+literal missing from its `source`; and a
 `helperGate` on an `omittedByDesign` entry, which has no lite
 location to delegate a verdict from.
 

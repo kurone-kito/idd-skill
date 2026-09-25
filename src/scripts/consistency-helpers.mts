@@ -2249,7 +2249,7 @@ const INSTRUCTIONS_PREFIX = 'idd-template/.github/instructions/';
 const LITE_INSTRUCTIONS_PREFIX = `${INSTRUCTIONS_PREFIX}lite/`;
 
 function isCanonicalInstructionPath(file: string, lite: boolean): boolean {
-  if (file.split('/').includes('..')) {
+  if (file.split('/').includes('..') || !file.endsWith('.instructions.md')) {
     return false;
   }
   if (lite) {
@@ -2376,11 +2376,11 @@ function validateLiteGateParityLocation(
   const canonical = isCanonicalInstructionPath(file, role !== 'standard');
   if (!canonical && role === 'standard') {
     violations.push(
-      `${label}: standard location file ${file} must be under ${INSTRUCTIONS_PREFIX} and not under lite/`,
+      `${label}: standard location file ${file} must be under ${INSTRUCTIONS_PREFIX} and not under lite/ (*.instructions.md)`,
     );
   } else if (!canonical) {
     violations.push(
-      `${label}: ${role} location file ${file} must be under ${LITE_INSTRUCTIONS_PREFIX}`,
+      `${label}: ${role} location file ${file} must be under ${LITE_INSTRUCTIONS_PREFIX} (*.instructions.md)`,
     );
   }
 
