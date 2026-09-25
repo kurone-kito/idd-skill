@@ -427,9 +427,14 @@ export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 // boundary the same as whitespace or punctuation does. This does NOT by
 // itself exclude a real machine marker like `idd-skill-blocked-by` (a
 // `-` is not a letter/digit either, so the boundary check still passes
-// there) -- that case is excluded by requiring a genuine reference to
-// follow, in findDependencyKeywordMisuse further down, not by this
-// pattern alone. Same TDZ hazard as REAL_ISSUE_REFERENCE_PATTERN and its
+// there) -- a marker whose value happens to look like a reference (e.g.
+// `<!-- idd-skill-blocked-by: #12 -->`) is instead excluded upstream, by
+// checkDependencyLineGrammar masking every well-formed
+// `{markerPrefix}-blocked-by` marker out of its near-miss scan input
+// before this pattern ever runs against it (#3285 final review round,
+// Copilot) -- not by requiring a genuine reference to follow, which
+// alone is not enough, since the marker's own value can itself look
+// like one. Same TDZ hazard as REAL_ISSUE_REFERENCE_PATTERN and its
 // siblings above -- declared here, ahead of the import.meta.main
 // trigger, not next to
 // findDependencyKeywordMisuse()/checkDependencyLineGrammar() further down
@@ -1415,15 +1420,20 @@ function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
   // near-miss scan's own visible-line source before running it, so a
   // marker with a reference-shaped value is never misread as a
   // "blocked-by" near-miss/mid-line mention -- the two are unrelated
-  // grammars that merely share a keyword substring. Uses the identical
-  // marker pattern `extractBlockedByRoadmapMarkers` itself matches
-  // against (source-shared: the escaped-prefix regex string below is the
-  // exact literal that function builds), not a hand-approximation, so
-  // the two can never drift apart on what counts as "a well-formed
-  // marker" the way this file's own TOKEN_START comment warns about
-  // elsewhere. Blanks only non-newline characters, so `nearMissScanLines`
-  // keeps the exact same per-line length/count as a plain `text.split('\n')`
-  // would produce, keeping every other offset computation below valid.
+  // grammars that merely share a keyword substring. The pattern below is
+  // copied verbatim from `extractBlockedByRoadmapMarkers`'s own regex
+  // source (discover-readiness-check.mts) rather than hand-approximated
+  // from scratch -- unlike `hasDependencyReferenceListStart`'s single
+  // shared implementation, there is no common helper the two call sites
+  // can both import here, since one masks-and-extracts a marker value
+  // and the other only needs to blank a match, so keeping the two
+  // literal regex sources in sync by inspection (not by construction) is
+  // this function's own responsibility if either ever changes -- see
+  // this file's own TOKEN_START comment for the general hazard of
+  // independently re-deriving a shared pattern. Blanks only non-newline
+  // characters, so `nearMissScanLines` keeps the exact same per-line
+  // length/count as a plain `text.split('\n')` would produce, keeping
+  // every other offset computation below valid.
   const blockedByMarkerPattern = new RegExp(
     `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*[^\\s>]+\\s*-->`,
     'gi',
