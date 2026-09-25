@@ -668,7 +668,17 @@ Validation expectations:
 
 - Roadmap identity via `<!-- <marker-prefix>-roadmap-id: ... -->`
 - Active child issues via roadmap task-list links
-- Issue-to-issue dependencies via `Blocked by #NNN`
+- Issue-to-issue dependencies via `Blocked by #NNN`, line-anchored
+  (after optional indentation, blockquote `>` markers, and at most one
+  list marker), with a bare `#NNN`, a qualified `owner/repo#NNN`, or a
+  full GitHub issue URL as the reference. A mid-line mention, a
+  near-miss spelling or shape (an emphasis-wrapped keyword,
+  `Blocked-by`/`BlockedBy`/`Depends-on`, a full-width colon, or a
+  Markdown-link reference), and a cross-repository token on an
+  otherwise well-formed line are all rejected by the
+  `dependency-line-grammar` mechanical check (see
+  [Mechanical pre-publish gate](#mechanical-pre-publish-gate)) — none
+  of these produce a dependency Discover can actually resolve.
 - Sequential roadmap dependencies via
   `<!-- <marker-prefix>-blocked-by: ... -->` only when a separate
   roadmap
@@ -908,6 +918,31 @@ authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
+
+It also emits a **failing** finding, `dependency-line-grammar`: a
+`Blocked by`/`Depends on` mention that the shared line-anchored grammar
+(`dependency-grammar.mjs`, the same grammar every Discover helper uses
+to resolve a real dependency) would never resolve fails the audit
+outright, naming the offending line number. This covers a mid-line
+mention (the keyword appears after other prose, or hidden inside an
+HTML comment), a near-miss line at the otherwise-correct position (an
+emphasis-wrapped keyword, a hyphenated/camelCase spelling such as
+`Blocked-by` or `BlockedBy`, a full-width colon, or a Markdown-link
+reference instead of the three plain forms the grammar accepts), and a
+cross-repository token on an otherwise well-formed line — the last one
+only when the caller supplies `--current-repo` and it does not match,
+since without that context a qualified reference is treated as
+unverifiable rather than malformed (the same precedent this contract's
+own `roadmap-tracks-parse` check already follows for an unverifiable
+qualified reference). A real
+`<!-- <marker-prefix>-blocked-by: ... -->` roadmap marker (see
+[Required dependency encoding](#required-dependency-encoding)) is never
+mistaken for a near-miss: nothing that looks like an issue reference
+follows the marker's own roadmap-id value, so the
+required-trailing-reference test simply does not match. Unlike
+`prose-dependency` below, `dependency-line-grammar` is not advisory: it
+flips `passed` to `false` and the linter's exit code the same as any
+other structural check above.
 
 For the `orphan` and `child` shapes, the linter also runs the same A4
 viability and A4.5 suitability evaluators the IDD discover phase runs
