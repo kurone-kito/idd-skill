@@ -572,6 +572,10 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
             commitId: 'abc123',
             commentCount: 1,
             body: 'LGTM with one comment.',
+            // #3262: the GitHub adapter's fixture above has no
+            // `comments.nodes`, so its derived `replyOnly` fails closed to
+            // `false` (a truncated connection) -- match it here for parity.
+            replyOnly: false,
           },
         ],
         headCommittedAt: '2026-01-01T01:00:00Z',

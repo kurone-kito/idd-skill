@@ -1920,7 +1920,13 @@ export function normalizeClaimComment(comment) {
  */
 export function normalizeReview(review) {
   return {
-    author: { login: review.user?.login ?? '' },
+    author: {
+      login: review.user?.login ?? '',
+      // #3262: `findLastCopilotReviewCommit` reads `author.type` for the
+      // bare-login vs `[bot]`-suffix match. Dropping it here made a
+      // configured `[bot]` login fail closed on this REST path.
+      type: review.user?.type ?? null,
+    },
     state: review.state ?? '',
     commitId: review.commit_id ?? '',
     submittedAt: review.submitted_at ?? '',

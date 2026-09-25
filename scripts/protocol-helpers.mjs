@@ -4510,13 +4510,32 @@ function normalizePrimaryBotLogin(primaryBotLogin) {
  * preserving. For the Copilot default, the login must be an exact member of
  * {@link EXACT_COPILOT_REVIEWER_LOGINS} (#1686 -- previously a broader
  * `copilot-pull-request-reviewer*` prefix match; see that constant's doc
- * comment for why it was narrowed). A non-Copilot configured login is
- * matched by exact normalized (trimmed, lower-cased) equality, since an
- * arbitrary bot login has no analogous prefix family.
+ * comment for why it was narrowed); `authorType` is not consulted on this
+ * path.
+ *
+ * A non-Copilot configured login matches on exact normalized (trimmed,
+ * lower-cased) equality first. Otherwise (#3262), GitHub reports a GitHub
+ * App's login in two spellings -- GraphQL `author.login` bare
+ * (`coderabbitai`) vs. REST `user.login` `[bot]`-suffixed
+ * (`coderabbitai[bot]`) -- so also compare via
+ * {@link advisoryBotIdentityToken}, which strips the trailing `[bot]`
+ * suffix from both sides:
+ * - an observed `[bot]`-suffixed login matches a bare configured login
+ *   unconditionally once the tokens agree, since a genuine user login
+ *   cannot contain `[`;
+ * - an observed bare login matches a `[bot]`-suffixed configured login
+ *   only when `authorType` is exactly `'Bot'` -- a missing or non-`'Bot'`
+ *   type fails closed, since a bare login alone could otherwise be a
+ *   same-named user account.
+ *
+ * A look-alike login whose token does not match the configured token
+ * (e.g. `coderabbitai1` against `coderabbitai[bot]`) never matches,
+ * regardless of `authorType`.
  */
 export function isCopilotReviewerLogin(
   login,
   primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  authorType,
 ) {
   const normalized = String(login ?? '')
     .trim()
@@ -4525,7 +4544,24 @@ export function isCopilotReviewerLogin(
   if (configured === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
     return EXACT_COPILOT_REVIEWER_LOGINS.has(normalized);
   }
-  return normalized === configured;
+  if (normalized === configured) {
+    return true;
+  }
+  if (
+    advisoryBotIdentityToken(normalized) !==
+    advisoryBotIdentityToken(configured)
+  ) {
+    return false;
+  }
+  const normalizedIsBotSuffixed = normalized.endsWith('[bot]');
+  const configuredIsBotSuffixed = configured.endsWith('[bot]');
+  if (normalizedIsBotSuffixed && !configuredIsBotSuffixed) {
+    return true;
+  }
+  if (!normalizedIsBotSuffixed && configuredIsBotSuffixed) {
+    return authorType === 'Bot';
+  }
+  return false;
 }
 // `isCopilotErrorReviewBody` (kurone-kito/idd-skill#3258) now lives in
 // `copilot-review-body.mts` -- a leaf module `review-clause.mts` also
@@ -4570,6 +4606,7 @@ export function findLastCopilotReviewCommit(
         !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
+          review.user?.type ?? review.author?.type ?? null,
         )
       ) {
         return false;

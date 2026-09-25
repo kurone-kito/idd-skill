@@ -688,6 +688,84 @@ test('reviewPolicy external-bot: keeps the configured primaryBotLogin path', () 
   assert.equal(verdict.ready, false);
 });
 
+test('#3262: an external primary bot review is found across the REST/GraphQL login-spelling split, both directions', () => {
+  // GraphQL-shaped: bare `author.login` with a `Bot` __typename -- matches
+  // a `[bot]`-suffixed configured login only because the type proves it is
+  // a genuine bot.
+  const bareLoginVerdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai[bot]' }),
+  );
+  assertValidVerdict(bareLoginVerdict);
+  assert.equal(bareLoginVerdict.review.found, true);
+  assert.equal(bareLoginVerdict.review.matchesHead, true);
+  assert.equal(bareLoginVerdict.converged, true);
+
+  // Configured bare, observed `[bot]`-suffixed: matches unconditionally.
+  const suffixedLoginVerdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          author: { login: 'coderabbitai[bot]', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai' }),
+  );
+  assertValidVerdict(suffixedLoginVerdict);
+  assert.equal(suffixedLoginVerdict.review.found, true);
+  assert.equal(suffixedLoginVerdict.review.matchesHead, true);
+  assert.equal(suffixedLoginVerdict.converged, true);
+});
+
+test('#3262: a reply-only review from the external primary bot does not mask an earlier full on-HEAD review (PR #3160 shape)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        {
+          id: 'PRR_full',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 0,
+          body: '',
+        },
+        // The reply-only review is fetch-order-latest (as on PR #3160,
+        // 2026-09-20T07:17:35Z) but must never win Clause 1's "latest"
+        // selection over the full review above.
+        {
+          id: 'PRR_reply_only',
+          author: { login: 'coderabbitai', __typename: 'Bot' },
+          submittedAt: RECENT,
+          commitId: HEAD,
+          itemCount: 1,
+          body: '',
+          replyOnly: true,
+        },
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'coderabbitai[bot]' }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.reviewId, 'PRR_full');
+  assert.equal(verdict.ready, true);
+});
+
 test('reviewPolicy human-required wins under idd-claimed with a matching claim (hybrid PR)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({

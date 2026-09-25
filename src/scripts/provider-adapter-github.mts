@@ -3875,7 +3875,10 @@ export function createGithubProviderAdapter(
                   commit { oid }
                   submittedAt
                   author { login __typename }
-                  comments { totalCount }
+                  comments(first: 100) {
+                    totalCount
+                    nodes { replyTo { id } }
+                  }
                   body
                 }
               }
@@ -3890,7 +3893,10 @@ export function createGithubProviderAdapter(
         commit?: { oid?: unknown } | null;
         submittedAt?: unknown;
         author?: { login?: unknown; __typename?: unknown } | null;
-        comments?: { totalCount?: unknown } | null;
+        comments?: {
+          totalCount?: unknown;
+          nodes?: ({ replyTo?: { id?: unknown } | null } | null)[] | null;
+        } | null;
         body?: unknown;
       }[] = [];
       let headCommittedAt = '';
@@ -3951,22 +3957,37 @@ export function createGithubProviderAdapter(
         cursor = pageInfo.endCursor;
       }
       return {
-        reviews: nodes.map((node) => ({
-          id: String(node.id ?? ''),
-          authorLogin: String(node.author?.login ?? ''),
-          authorTypename:
-            node.author?.__typename == null
-              ? null
-              : String(node.author.__typename),
-          submittedAt:
-            node.submittedAt == null ? null : String(node.submittedAt),
-          commitId: node.commit?.oid == null ? null : String(node.commit.oid),
-          commentCount:
+        reviews: nodes.map((node) => {
+          const totalCount =
             typeof node.comments?.totalCount === 'number'
               ? node.comments.totalCount
-              : null,
-          body: node.body == null ? null : String(node.body),
-        })),
+              : null;
+          const commentNodes = node.comments?.nodes ?? [];
+          // #3262: fail closed toward NOT reply-only -- a truncated
+          // connection (more comments exist than the first 100 fetched),
+          // zero comments, or any comment lacking `replyTo` all mean this
+          // is not (provably) a reply-only review.
+          const truncated =
+            totalCount == null || totalCount > commentNodes.length;
+          const replyOnly =
+            !truncated &&
+            commentNodes.length > 0 &&
+            commentNodes.every((comment) => comment?.replyTo?.id != null);
+          return {
+            id: String(node.id ?? ''),
+            authorLogin: String(node.author?.login ?? ''),
+            authorTypename:
+              node.author?.__typename == null
+                ? null
+                : String(node.author.__typename),
+            submittedAt:
+              node.submittedAt == null ? null : String(node.submittedAt),
+            commitId: node.commit?.oid == null ? null : String(node.commit.oid),
+            commentCount: totalCount,
+            body: node.body == null ? null : String(node.body),
+            replyOnly,
+          };
+        }),
         headCommittedAt,
       };
     },
