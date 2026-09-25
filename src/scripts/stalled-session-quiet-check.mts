@@ -13,6 +13,7 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
+  tagGhCommandError,
 } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -586,7 +587,12 @@ function runGh(args: string[]): string {
     });
   } catch (error) {
     const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
-    if (stderr) throw new Error(`gh command failed: ${stderr}`);
+    if (stderr) {
+      // Keep the compatibility message, and retag the wrapper so the
+      // envelope classifies the original gh failure (the message still
+      // carries the HTTP text deriveGhHttpStatus reads).
+      throw tagGhCommandError(new Error(`gh command failed: ${stderr}`));
+    }
     throw error;
   }
 }

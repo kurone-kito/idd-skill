@@ -54,7 +54,7 @@ import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
  * error already carries the tag, or is not an object at all (a rejection
  * reason that is not an `Error`, defensively).
  */
-function tagGhCommandError<T>(error: T): T {
+export function tagGhCommandError<T>(error: T): T {
   if (
     error &&
     typeof error === 'object' &&
