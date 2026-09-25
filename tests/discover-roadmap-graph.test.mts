@@ -2061,8 +2061,21 @@ test('a CLOSED child carries stateReason only when closed without completion (#3
 });
 
 test('a CLOSED nested-roadmap child carries stateReason the same way a leaf child does (#3398)', async () => {
+  // Mirrors the sibling '#3326' leaf test's full negative-case coverage
+  // (#3426): a nested-roadmap child closed as `completed`, and one
+  // still `OPEN`, both keep today's exact shape (no `stateReason` key)
+  // -- the exposure rule in discover-roadmap-graph.mts tests only
+  // `node.state`/`node.stateReason`, never `node.classification`, so a
+  // `classification: 'roadmap'` node behaves identically to a leaf here.
   const issues = new Map<number, unknown>([
-    [690, roadmapIssue(690, '- [ ] #691', 'nested-state-reason-roadmap')],
+    [
+      690,
+      roadmapIssue(
+        690,
+        '- [ ] #691\n- [ ] #692\n- [ ] #693',
+        'nested-state-reason-roadmap',
+      ),
+    ],
     [
       691,
       {
@@ -2075,6 +2088,26 @@ test('a CLOSED nested-roadmap child carries stateReason the same way a leaf chil
         state_reason: 'not_planned',
       },
     ],
+    [
+      692,
+      {
+        ...roadmapIssue(
+          692,
+          'nested roadmap, completed',
+          'nested-child-roadmap-completed',
+          'closed',
+        ),
+        state_reason: 'completed',
+      },
+    ],
+    [
+      693,
+      roadmapIssue(
+        693,
+        'nested roadmap, still open',
+        'nested-child-roadmap-open',
+      ),
+    ],
   ]);
 
   const graph = await enumerateRoadmapGraph(690, {
@@ -2084,6 +2117,10 @@ test('a CLOSED nested-roadmap child carries stateReason the same way a leaf chil
   const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
   assert.equal(byNumber.get(691)?.classification, 'roadmap');
   assert.equal(byNumber.get(691)?.stateReason, 'not_planned');
+  assert.equal(byNumber.get(692)?.classification, 'roadmap');
+  assert.equal('stateReason' in (byNumber.get(692) ?? {}), false);
+  assert.equal(byNumber.get(693)?.classification, 'roadmap');
+  assert.equal('stateReason' in (byNumber.get(693) ?? {}), false);
 });
 
 function scoredExecutionIssue(number: number, score: number, state = 'open') {

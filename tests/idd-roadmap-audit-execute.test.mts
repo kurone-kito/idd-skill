@@ -922,11 +922,37 @@ test('the evidence body lists a not-planned nested-roadmap child the same way a 
       stateReason: 'not_planned',
     }),
   );
+  // Kept internally consistent with the pushed node -- a matching edge,
+  // provenance path, roadmapNodes entry, and updated summary counts --
+  // even though buildRoadmapCompletionAuditBody itself never reads
+  // report.edges/report.provenancePaths and only reads
+  // report.summary.nodeCount/edgeCount for its own "Graph: N nodes..."
+  // evidence line (#3426). This makes the fixture match what
+  // enumerateRoadmapGraph would actually emit for a root with a
+  // childless nested-roadmap child -- exactly the shape
+  // evaluateRoadmapAuditGates's own "no reachable execution-leaf
+  // descendants" nested-roadmap blocker exists to catch, since #1049
+  // still has no outgoing edge of its own -- rather than leaving a
+  // silently stale node/edge/summary mismatch behind for a future
+  // reuse of this same fixture to trip over.
+  report.edges.push({
+    source: ROADMAP,
+    target: 1049,
+    relationship: 'task-list',
+    evidence: '- [x] #1049',
+  });
+  report.provenancePaths.push({ target: 1049, path: [ROADMAP, 1049] });
+  report.roadmapNodes.push(1049);
+  report.summary.nodeCount = report.nodes.length;
+  report.summary.edgeCount = report.edges.length;
+  report.summary.roadmapNodeCount = report.roadmapNodes.length;
+
   const body = buildRoadmapCompletionAuditBody(report);
   assert.match(
     body,
     /Closed without completion \(not planned \/ duplicate \/ other\): #1049 \(not_planned\)\./,
   );
+  assert.match(body, /Closed nested roadmaps: #1049\./);
 });
 
 // ---------------------------------------------------------------------------
