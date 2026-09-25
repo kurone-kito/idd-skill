@@ -1323,7 +1323,8 @@ test('#2549: a run-attempt-unknown live-coverage-recovered instance is NOT promo
   assert.equal(recovered?.rerunBudgetHeld, true);
   assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
   assert.deepEqual(plan.recoveryRefreshPlan, []);
-  assert.notEqual(plan.rerunPolicyHoldNotice, '');
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
 });
 
 // A live-coverage-recovered instance with NO passing sibling anywhere in
@@ -1464,6 +1465,30 @@ test('#3472: rerunPolicy hold does not prescribe --refresh-latest for a live-cov
   assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
   assert.deepEqual(plan.plan, []);
   assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+});
+
+test('#3472: an unconfirmed live-coverage attempt keeps the maintainer-decision notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      prNumber: 3467,
+      instances: [
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '7003',
+          conclusion: 'failure',
+          runAttempt: null,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.instances[0]?.isLiveCoverageRecovery, true);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
 });
 
 // A repository that opted out of ALL automatic reruns (`ciWait.rerunPolicy:
