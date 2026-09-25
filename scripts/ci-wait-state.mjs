@@ -32,6 +32,7 @@ import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  isPreMergeCiAllPassing,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
@@ -574,6 +575,33 @@ function buildRequiredChecksRollup(
     protectionReadsUnreadable,
     status,
   };
+}
+/**
+ * #3465: map this helper's required-check rollup onto
+ * {@link isPreMergeCiAllPassing}, the predicate pre-merge readiness
+ * already uses. A rollup `status` of `success` is the only value that
+ * means every enumerated required check is present and passing with no
+ * source-pinned or unreadable downgrade. `no-required-checks` falls
+ * through to that predicate's present-run clause. A failing check that
+ * is not in the required set does not change a `success` rollup.
+ */
+export function ciWaitSummaryIsPreMergeCiPassing(summary) {
+  const rollup = summary.requiredChecks;
+  const presentRunConclusion =
+    summary.checks.length === 0
+      ? 'none'
+      : summary.checks.every((check) => check.status === 'success')
+        ? 'all-passing'
+        : 'some-failing';
+  return isPreMergeCiAllPassing({
+    protectionReadsUnreadable:
+      rollup.protectionReadsUnreadable || rollup.status === 'unreadable',
+    requiredChecksPassing:
+      rollup.names.length > 0 && rollup.status === 'success',
+    status: rollup.status === 'success' ? 'success' : 'failed',
+    noRequiredChecksConfigured: rollup.status === 'no-required-checks',
+    presentRunConclusion,
+  });
 }
 /**
  * Restores this file's pre-#1450 permissive `Number.parseInt` contract:

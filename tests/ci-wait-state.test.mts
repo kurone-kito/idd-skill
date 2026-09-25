@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildCiWaitStateSummary,
+  ciWaitSummaryIsPreMergeCiPassing,
   collectCiWaitState,
   isProtectionReadUnreadable,
   parseArgs,
@@ -1222,4 +1223,68 @@ test('collectCiWaitState against a fake provider: an empty baseRefName with no r
       ),
     /cannot resolve a trusted ref for \.github\/idd\/config\.json/,
   );
+});
+
+test('#3465: pre-merge CI predicate follows required-check success, pending, failure, and a non-required failure', () => {
+  const passing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+        checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(passing), true);
+
+  const failing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'FAILURE' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
+
+  const pending = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', status: 'IN_PROGRESS', conclusion: '' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(pending), false);
+
+  const unreadable = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: ['lint'], protectionReadsUnreadable: true },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(unreadable), false);
+
+  const sourcePinned = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    {
+      requiredCheckNames: ['lint'],
+      requiredCheckSourcePinned: true,
+    },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(sourcePinned), false);
+
+  const noRequired = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'ci', conclusion: 'SUCCESS' })],
+    },
+    {},
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(noRequired), true);
 });

@@ -20,7 +20,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-
+import {
+  ciWaitSummaryIsPreMergeCiPassing,
+  collectCiWaitState,
+} from './ci-wait-state.mts';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
@@ -1843,6 +1846,37 @@ if (import.meta.main) {
         `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.\n`,
       );
       process.exit(1);
+    }
+    // #3465: a --from-pr watermark must not post while the required-check
+    // predicate pre-merge readiness already uses is false. Pending and
+    // failure are the same refusal. The disposition-evidence warning above
+    // stays a warning and is only emitted on the success path below.
+    // Advisory-family --from-pr types derive only head-sha and are not gated.
+    if (isWatermark) {
+      let requiredChecksPassing = false;
+      try {
+        requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(
+          collectCiWaitState([
+            '--pr',
+            String(args.fromPr),
+            '--owner',
+            args.owner,
+            '--repo',
+            args.repo,
+          ]),
+        );
+      } catch (error) {
+        process.stderr.write(
+          `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${(error as Error).message}\n`,
+        );
+        process.exit(1);
+      }
+      if (!requiredChecksPassing) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.\n`,
+        );
+        process.exit(1);
+      }
     }
   }
 
