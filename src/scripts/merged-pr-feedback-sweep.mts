@@ -818,6 +818,10 @@ function fetchMergedPr(
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
       author: { login: comment.authorLogin },
+      // #3249: carried through so `hasTrustedReviewAckAfter` can require
+      // `unedited` -- `listChangeRequestGraphqlComments` always populates
+      // this field.
+      lastEditedAt: comment.lastEditedAt,
     })),
     reviews: port.listChangeRequestGraphqlReviews(number).map((review) => ({
       body: review.body,
@@ -839,6 +843,10 @@ function fetchMergedPr(
             createdAt: comment.createdAt,
             updatedAt: comment.updatedAt,
             author: { login: comment.authorLogin },
+            // #3249: carried through so `hasFreshDisposition` can require
+            // `unedited` -- `listChangeRequestReviewThreadsExtended`
+            // always populates this field.
+            lastEditedAt: comment.lastEditedAt,
           })),
         },
       })),
