@@ -811,6 +811,7 @@ export function auditAuthoredIssue(
       text,
       rawText,
       normalizeCurrentRepo(options.currentRepo),
+      markerPrefix,
     ),
     checkCandidateFilesNotEmpty(
       rawText,
@@ -1691,23 +1692,30 @@ function findDependencyKeywordMisuse(line: string): string | undefined {
  * produces a dependency Discover can never resolve (the issue stays
  * blocked forever until someone edits the line).
  *
- * Operates on two masked views of the same body, each computed exactly
- * once (never per line -- re-masking a single line in isolation loses
- * the surrounding document context a structural code-block mask depends
- * on, silently mis-masking a validly indented/nested line; see
+ * Operates on masked views of the same body, each computed exactly once
+ * (never per line -- re-masking a single line in isolation loses the
+ * surrounding document context a structural code-block mask depends on,
+ * silently mis-masking a validly indented/nested line; see
  * `matchDependencyKeywordLine`'s own doc comment):
  *
  * - `text` (already computed by the caller via `maskMarkdownForScan`
  *   with its default options -- fenced/indented/inline code masked, HTML
- *   comments left visible) is used for the near-miss/mid-line scan below,
- *   since a hidden dependency line inside an HTML comment must stay
- *   visible to this check.
- * - A second view, masked here with `{ htmlComments: 'mask' }` --
- *   matching `extractDependencyReferences`'s own internal masking, i.e.
- *   Discover's real view of the body -- is used to ask "does the shared
- *   grammar already accept this line", via `matchDependencyKeywordLine`
- *   (which never masks its input, so calling it per line here never
- *   re-masks).
+ *   comments left visible) is the base for the near-miss/mid-line scan
+ *   below, since a hidden dependency line inside an HTML comment must
+ *   stay visible to this check.
+ * - `nearMissScanLines` additionally masks every well-formed
+ *   `{markerPrefix}-blocked-by` sequential-roadmap marker out of `text`
+ *   (#3285 review, Copilot) before the near-miss scan runs, since that
+ *   marker's own grammar accepts a reference-shaped value (`#12`) and
+ *   would otherwise be misread as a "blocked-by" near-miss/mid-line
+ *   mention -- the two grammars are unrelated and only coincidentally
+ *   share the substring "blocked-by".
+ * - A second, separately masked view, masked here with
+ *   `{ htmlComments: 'mask' }` -- matching `extractDependencyReferences`'s
+ *   own internal masking, i.e. Discover's real view of the body -- is
+ *   used to ask "does the shared grammar already accept this line", via
+ *   `matchDependencyKeywordLine` (which never masks its input, so
+ *   calling it per line here never re-masks).
  *
  * A line the shared grammar already accepts is only re-examined for a
  * cross-repository token (`unresolvable`, and only when `currentRepo` is
@@ -1718,6 +1726,7 @@ function checkDependencyLineGrammar(
   text: string,
   rawText: string,
   currentRepo: string | undefined,
+  markerPrefix: string,
 ): AuditFinding {
   const id = 'dependency-line-grammar';
   const name =
@@ -1725,7 +1734,32 @@ function checkDependencyLineGrammar(
   const discoverMaskedLines = maskMarkdownForScan(rawText, {
     htmlComments: 'mask',
   }).split('\n');
-  const visibleLines = text.split('\n');
+  // A well-formed `<!-- {markerPrefix}-blocked-by: <value> -->` sequential-
+  // roadmap marker (checkDependencyMarkerRule above) coincidentally
+  // contains the literal substring "blocked-by", and its own grammar
+  // (extractBlockedByRoadmapMarkers) accepts ANY non-whitespace value --
+  // including one that happens to look like an issue reference (`#12`),
+  // even though a roadmap-id is meant to be a descriptive slug, not a
+  // reference (#3285 review, Copilot). Mask every such marker out of the
+  // near-miss scan's own visible-line source before running it, so a
+  // marker with a reference-shaped value is never misread as a
+  // "blocked-by" near-miss/mid-line mention -- the two are unrelated
+  // grammars that merely share a keyword substring. Uses the identical
+  // marker pattern `extractBlockedByRoadmapMarkers` itself matches
+  // against (source-shared: the escaped-prefix regex string below is the
+  // exact literal that function builds), not a hand-approximation, so
+  // the two can never drift apart on what counts as "a well-formed
+  // marker" the way this file's own TOKEN_START comment warns about
+  // elsewhere. Blanks only non-newline characters, so `nearMissScanLines`
+  // keeps the exact same per-line length/count as a plain `text.split('\n')`
+  // would produce, keeping every other offset computation below valid.
+  const blockedByMarkerPattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*[^\\s>]+\\s*-->`,
+    'gi',
+  );
+  const nearMissScanLines = text
+    .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
+    .split('\n');
   // Maps a 1-based accepted line number to how many trailing characters of
   // that line the shared grammar's match left unconsumed (#3285 review,
   // Copilot): the grammar recognizes at most ONE dependency declaration
@@ -1771,23 +1805,26 @@ function checkDependencyLineGrammar(
     }
   }
 
-  for (let index = 0; index < visibleLines.length; index += 1) {
+  for (let index = 0; index < nearMissScanLines.length; index += 1) {
     const lineNo = index + 1;
-    const visibleLine = visibleLines[index] ?? '';
-    // `discoverMaskedLines[index]` and `visibleLine` are always the same
-    // length (both derive from maskMarkdownForScan against the same
-    // normalized rawText, which preserves length and line structure
-    // regardless of which regions each call happens to mask), so a
-    // trailing-character count measured against the discover-masked line
-    // slices the correct suffix of the VISIBLE line too -- re-scanning
-    // the visible text (not the discover-masked one) keeps a hidden
-    // HTML-comment mention detectable the same way the no-prior-match
-    // branch below already scans it.
+    const scanLine = nearMissScanLines[index] ?? '';
+    // `discoverMaskedLines[index]` and `scanLine` are always the same
+    // length (both ultimately derive from maskMarkdownForScan against the
+    // same normalized rawText, which preserves length and line structure
+    // regardless of which regions each call happens to mask -- marker
+    // masking above only blanks non-newline characters in place, so it
+    // doesn't change this either), so a trailing-character count measured
+    // against the discover-masked line slices the correct suffix of
+    // `scanLine` too -- re-scanning the marker-masked VISIBLE text (not
+    // the discover-masked one) keeps a hidden HTML-comment mention
+    // detectable the same way the no-prior-match branch below already
+    // scans it, while a well-formed blocked-by marker's own "blocked-by"
+    // substring stays masked out either way.
     const remainingLength = acceptedRemainingLength.get(lineNo);
     const scanText =
       remainingLength === undefined
-        ? visibleLine
-        : visibleLine.slice(visibleLine.length - remainingLength);
+        ? scanLine
+        : scanLine.slice(scanLine.length - remainingLength);
     const misuse = findDependencyKeywordMisuse(scanText);
     if (misuse !== undefined) {
       issues.push(

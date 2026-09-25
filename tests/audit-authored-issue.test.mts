@@ -1290,6 +1290,20 @@ test('dependency-line-grammar passes a real sequential-roadmap blocked-by marker
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar passes a real sequential-roadmap blocked-by marker whose value happens to look like an issue reference (final review round, Copilot: extractBlockedByRoadmapMarkers accepts any non-whitespace value)', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    '<!-- idd-skill-blocked-by: #12 -->',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar still fails a blocked-by-shaped mention whose marker prefix does not match the configured one', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    '<!-- other-prefix-blocked-by: #12 -->',
+  );
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar passes a same-repo qualified reference when currentRepo is not supplied (unverifiable, not malformed)', () => {
   const { finding } = dependencyLineGrammarFinding(
     'Blocked by kurone-kito/idd-skill#1391',
