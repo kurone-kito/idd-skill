@@ -49,12 +49,16 @@ comment when its author is a trusted marker actor OR a recognized
 IDD-agent author -- otherwise an agent's own digest posted outside the
 trusted set would count as a genuine reply and wrongly clear earlier,
 still-unanswered feedback as already addressed. A digest-marker comment
-from any other actor is left alone by the ordinary helper -- it
-neither rewrites nor deletes it -- and counts as ordinary PR/issue
+whose author is in neither set is left alone by the ordinary helper --
+it neither rewrites nor deletes it -- and counts as ordinary PR/issue
 activity requiring the normal review disposition, exactly like any
-other stranger's comment. The maintainer-gated repair path below is the one
-exception: it deliberately sees and can retire every current-marker
-comment regardless of author, since its whole purpose is clearing a
+other stranger's comment. A recognized IDD-agent author who is not a
+trusted marker actor is also left alone by that helper, but those same
+unreplied-comment and disposition-evidence gates still exclude that
+digest, so it does not count as ordinary activity. The
+maintainer-gated repair path below is the one exception: it
+deliberately sees and can retire every current-marker comment
+regardless of author, since its whole purpose is clearing a
 duplicate-digest state a maintainer has already reviewed
 (kurone-kito/idd-skill#3337).
 
