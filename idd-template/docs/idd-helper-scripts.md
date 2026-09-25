@@ -126,6 +126,71 @@ so this is a deliberate, disclosed trade-off (see
 `src/scripts/helper-cli-runner.mts` for why). A caller parsing the
 envelope line itself is unaffected either way.
 
+**Required call-site pattern.** A migrated helper's own
+`if (import.meta.main)` trigger must call `main`/`runCli` directly,
+never through `runHelperCli`, when the envelope is disabled --
+applying the returned outcome afterward via
+`applyHelperCliOutcomeWhenDisabled` instead of discarding it:
+
+```ts
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('helper-name', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+```
+
+This split exists because `runHelperCli` itself unavoidably adds its
+own frame to the V8-captured stack of any error constructed while
+`main` runs from inside it -- true regardless of `runHelperCli`'s own
+internal structure, since a `try`/`catch` does not add or remove a
+captured stack frame; only the identity of the function that actually
+invokes `main` does. Routing through `runHelperCli` unconditionally,
+even only for its classification bookkeeping, would add that frame to
+a helper's raw, unclassified (`internal`) uncaught-crash text with the
+envelope disabled -- the one failure shape `run-helper.mjs`'s
+shaped-parse-error handling does not intercept and replace outright,
+so this is the one path where the added frame would otherwise be
+directly visible. Discarding `main`'s return value entirely instead of
+calling `applyHelperCliOutcomeWhenDisabled` would be a different
+regression: none of the six first-batch helpers currently returns
+non-zero (each only ever `return`s `0` or throws), but the
+`HelperCliResult` contract itself anticipates one that does, and a
+future helper relying on that would silently exit `0` on its own
+`gate` verdict otherwise.
+
+**Known residual limitation (two async-bodied helpers).**
+`discover-readiness-check.mjs` and `discover-viability-gate.mjs` had
+their CLI body as literal top-level-await code directly inside
+`if (import.meta.main)` before this migration, not a separate
+function; migrating them onto `runHelperCli` required extracting that
+body into a callable `async function main()` so `runHelperCli` (when
+the envelope is enabled) can invoke it and inspect its returned/thrown
+outcome. That extraction, independent of `runHelperCli`'s own added
+frame above, itself adds one `at main (...)` frame to these two
+helpers' raw uncaught-crash text relative to their true pre-migration
+output -- unlike `runHelperCli`'s own frame, this one cannot be
+avoided by a call-site pattern change, since `main` must be an
+invokable function for the enabled path to work at all.
+
+The other four migrated helpers carry no such residual frame, for two
+different reasons depending on the helper: `ci-wait-state.mjs`,
+`resume-claim-routing.mjs`, and `authoring-owner-provenance.mjs`
+already had `main`/`runCli` as a separate, pre-existing function
+before this track, so extracting nothing new means adding nothing
+new. `pre-merge-readiness.mjs` is different: its `main()` is _also_
+newly extracted by this same migration (its CLI body was inline
+before this track too), but its own `try`/`catch` (see the function's
+own code comment) never lets any exception escape uncaught in the
+first place -- there is no raw crash text for an extraction-added
+frame to appear in at all, regardless of whether `main` is a separate
+function or inline code. This is a narrower, more fragile invariant
+than the other three helpers' genuine pre-existing-function history:
+it would stop holding if a future edit ever let some error class
+propagate out of that `try`/`catch` uncaught.
+
 ### Shape
 
 ```json
@@ -163,16 +228,22 @@ exports `runHelperCli(helperName, main)`. `main` returns an exit code
 (`0` for success, any other value classified `gate`) or a
 pre-classified outcome object, or throws. The runner classifies a
 thrown `CliUsageError` (or a plain `Error` tagged via
-`markCliUsageError`) as `usage`; a `gh-exec.mts`-tagged error as
-`not-found` or `transport` (via `deriveGhHttpStatus`); and anything
-else as `internal`. It keeps each helper's existing exit code for
-every case. `classifyHelperError(error)` is also exported directly for
-a helper whose entrypoint already catches errors to render its own
-compatibility output (see `pre-merge-readiness.mjs` below) --
-classifying the error itself and reporting the result as an outcome
-object keeps that existing rendering unchanged while still giving the
-runner a real `kind` instead of the generic `gate` a returned non-zero
-exit code would otherwise get.
+`markCliUsageError`) as `usage`; a `gh-exec.mts`-tagged error, found by
+walking a bounded `.cause` chain (not only the thrown value itself --
+some helpers reach `gh-exec.mts` only through a wrapper like
+`provider-adapter-github.mts`'s `toProviderError`, which preserves the
+original tagged error solely as `.cause`) as `not-found` or `transport`
+(via `deriveGhHttpStatus`); and anything else as `internal`. It keeps
+each helper's existing exit code for every case. `classifyHelperError(error)`
+is also exported directly for a helper whose entrypoint already
+catches errors to render its own compatibility output (see
+`pre-merge-readiness.mjs` below) -- classifying the error itself and
+reporting the result as an outcome object keeps that existing
+rendering unchanged while still giving the runner a real `kind`
+instead of the generic `gate` a returned non-zero exit code would
+otherwise get. `isHelperErrorEnvelopeEnabled()` and
+`applyHelperCliOutcomeWhenDisabled(outcome)` support the required
+call-site pattern described above.
 
 ### Migrated helpers (first batch)
 

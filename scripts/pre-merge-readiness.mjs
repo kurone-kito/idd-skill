@@ -31,7 +31,9 @@ import {
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
@@ -1374,7 +1376,17 @@ export function renderCliUsageError(error) {
 }
 // CLI: emit the readiness report as JSON when invoked directly.
 if (import.meta.main) {
-  runHelperCli('pre-merge-readiness', main);
+  // #3342: call main() directly when the envelope is disabled, for the
+  // same uniform pattern every migrated helper's own trigger uses -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment. Moot in
+  // practice for this file specifically: main()'s own try/catch below
+  // never lets an exception escape uncaught, so there is no raw crash
+  // text for the runHelperCli-added-frame concern to affect here.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('pre-merge-readiness', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 // #3342: this file already had a top-level catch that renders its own
 // `{"error": ...}` stdout JSON and exits 1 on any failure -- unlike the

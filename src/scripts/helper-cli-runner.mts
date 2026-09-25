@@ -394,6 +394,89 @@ function isEnvelopeEnabled(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
+ * True when the opt-in JSON error envelope (`IDD_HELPER_ERROR_ENVELOPE=1`,
+ * see module header) is enabled. Exported so a migrated helper's own
+ * `if (import.meta.main)` trigger can decide, AT THE CALL SITE, whether
+ * to route through {@link runHelperCli} at all -- see {@link
+ * applyHelperCliOutcomeWhenDisabled}'s own doc comment for why this
+ * split is required, not merely a style preference.
+ */
+export function isHelperErrorEnvelopeEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return isEnvelopeEnabled(env);
+}
+
+/**
+ * Applies a migrated helper's `HelperCliResult` outcome the same way
+ * {@link runHelperCli} would -- setting the process exit code from a
+ * RETURNED (never thrown) outcome -- but doing no envelope-related work
+ * at all, for a caller that already knows the envelope is disabled and
+ * has therefore called `main`/`runCli` DIRECTLY instead of through
+ * {@link runHelperCli}.
+ *
+ * Why the split is required (verified empirically, #3342 review round
+ * 5, Copilot): `runHelperCli` itself unavoidably adds its own frame to
+ * the V8-captured stack of any error CONSTRUCTED while `main` is
+ * invoked from inside it -- a plain `try`/`catch` does not add or
+ * remove a captured stack frame, so wrapping `main` in ANY function,
+ * regardless of that function's own internal structure, adds that
+ * function's frame the moment it calls `main`. This breaks the module
+ * header's own "byte-identical when the envelope is unset" contract
+ * for a helper's raw, unclassified (`internal`) uncaught-crash text --
+ * the one case `run-helper.mts`'s shaped-parse-error handling does NOT
+ * intercept and replace outright. Calling `main`/`runCli` directly at
+ * the SAME call-site depth pre-migration code always used, then
+ * handing its return value to THIS function afterward (never to
+ * `main`/`runCli` itself), is the only way to both avoid that added
+ * frame AND still correctly apply a future helper's non-zero-return
+ * `gate` verdict -- none of the six first-batch helpers currently
+ * returns non-zero (each only ever `return`s `0` or throws), but the
+ * `HelperCliResult` contract itself anticipates one that does, and
+ * silently discarding a returned outcome instead of ever calling this
+ * function would silently regress that case to a false "exit 0" the
+ * moment a future edit added one.
+ *
+ * Required call-site pattern (see any of the six first-batch migrated
+ * helpers' own `if (import.meta.main)` trigger for a worked example):
+ *
+ * ```ts
+ * if (import.meta.main) {
+ *   if (isHelperErrorEnvelopeEnabled()) {
+ *     runHelperCli('helper-name', main);
+ *   } else {
+ *     applyHelperCliOutcomeWhenDisabled(main());
+ *   }
+ * }
+ * ```
+ *
+ * For an async `main`, chain instead of calling directly:
+ * `main().then(applyHelperCliOutcomeWhenDisabled, (error) => { throw error; })`
+ * -- verified empirically that a `.then()` callback attached directly at
+ * the call site (never inside an intermediate named function) does not
+ * itself add a frame to an eventually-uncaught rejection's printed
+ * stack, unlike a genuine wrapping function call: Node's zero-cost
+ * async stack traces reconstruct the pre-`await` call chain for a
+ * rejection propagated this way, rather than including the `.then()`
+ * callback's own synchronous call frame. The explicit rethrowing
+ * `onRejected` handler is not strictly load-bearing under this
+ * repository's own runtime today -- verified empirically that omitting
+ * it entirely (`main().then(applyHelperCliOutcomeWhenDisabled)`)
+ * produces the same crash text and exit code under Node's default
+ * `--unhandled-rejections=throw` mode, since neither this repository
+ * nor Node's own default installs a `process.on('unhandledRejection',
+ * ...)` handler that would otherwise swallow it -- but it is kept
+ * explicit rather than relying on that default, so this call site's own
+ * behavior does not silently change if either of those ever does.
+ */
+export function applyHelperCliOutcomeWhenDisabled(
+  outcome: HelperCliResult,
+  io: Pick<RunHelperCliIo, 'setExitCode'> = DEFAULT_HELPER_CLI_IO,
+): void {
+  io.setExitCode(typeof outcome === 'number' ? outcome : outcome.exitCode);
+}
+
+/**
  * Write `text` to stderr (fd 2) synchronously, looping until every byte is
  * written -- a single `writeSync` call is not guaranteed to write the
  * whole buffer (`write(2)` may legitimately return fewer bytes than

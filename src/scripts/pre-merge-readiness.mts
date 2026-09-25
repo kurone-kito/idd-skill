@@ -35,7 +35,9 @@ import {
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
+  applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
@@ -1649,7 +1651,17 @@ export function renderCliUsageError(error: unknown): {
 
 // CLI: emit the readiness report as JSON when invoked directly.
 if (import.meta.main) {
-  runHelperCli('pre-merge-readiness', main);
+  // #3342: call main() directly when the envelope is disabled, for the
+  // same uniform pattern every migrated helper's own trigger uses -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment. Moot in
+  // practice for this file specifically: main()'s own try/catch below
+  // never lets an exception escape uncaught, so there is no raw crash
+  // text for the runHelperCli-added-frame concern to affect here.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('pre-merge-readiness', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 
 // #3342: this file already had a top-level catch that renders its own

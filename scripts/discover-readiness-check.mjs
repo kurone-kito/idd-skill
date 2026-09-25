@@ -15,7 +15,12 @@ import {
 import { parseCliArgs } from './cli-args.mjs';
 import { extractDependencyReferences } from './dependency-grammar.mjs';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mjs';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
@@ -98,7 +103,17 @@ const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runHelperCli('discover-readiness-check', main);
+  // #3342: call main() directly (chained via .then(), not awaited through
+  // runHelperCli) when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-readiness-check', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,
 // #3342) so importing this module (for unit tests) does not parse

@@ -10,7 +10,12 @@ import {
   isCurrentSessionWorktreeOwner,
   resolveCurrentSessionClaimEvidence,
 } from './discover-roadmap-graph.mjs';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import {
@@ -65,7 +70,15 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runHelperCli('resume-claim-routing', runCli);
+  // #3342: call runCli() directly when the envelope is disabled, rather
+  // than always routing through runHelperCli, so an uncaught exception's
+  // raw crash stack has no added runHelperCli frame -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resume-claim-routing', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * Build the `isForcedHandoffEnabled` gate used by the resume CLI.

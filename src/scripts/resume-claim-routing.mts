@@ -13,7 +13,12 @@ import {
   resolveCurrentSessionClaimEvidence,
 } from './discover-roadmap-graph.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranch,
@@ -198,7 +203,15 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runHelperCli('resume-claim-routing', runCli);
+  // #3342: call runCli() directly when the envelope is disabled, rather
+  // than always routing through runHelperCli, so an uncaught exception's
+  // raw crash stack has no added runHelperCli frame -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('resume-claim-routing', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 /**

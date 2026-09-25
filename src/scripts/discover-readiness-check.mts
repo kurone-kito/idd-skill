@@ -18,7 +18,12 @@ import { parseCliArgs } from './cli-args.mts';
 import { extractDependencyReferences } from './dependency-grammar.mts';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
@@ -270,7 +275,17 @@ const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runHelperCli('discover-readiness-check', main);
+  // #3342: call main() directly (chained via .then(), not awaited through
+  // runHelperCli) when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-readiness-check', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 
 // The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,

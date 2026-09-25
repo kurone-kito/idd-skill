@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ghText } from '../src/scripts/gh-exec.mts';
 import type {
@@ -8,16 +12,23 @@ import type {
   RunHelperCliIo,
 } from '../src/scripts/helper-cli-runner.mts';
 import {
+  applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
   CliUsageError,
   classifyHelperError,
   ERROR_ENVELOPE_ENV_VAR,
+  isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from '../src/scripts/helper-cli-runner.mts';
 import { collectVendoredFiles } from '../src/scripts/helper-runtime-manifest.mts';
 import { createGithubProviderAdapter } from '../src/scripts/provider-adapter-github.mts';
 import { stubExecutable } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const HELPER_CLI_RUNNER_MJS_URL = pathToFileURL(
+  join(REPO_ROOT, 'scripts', 'helper-cli-runner.mjs'),
+).href;
 
 // ---------------------------------------------------------------------------
 // #3342 — runHelperCli()'s opt-in JSON error envelope. These tests exercise
@@ -493,6 +504,112 @@ test('buildHelperErrorEnvelope: assembles the documented single-line shape', () 
       httpStatus: null,
     },
   });
+});
+
+// --- disabled-path call-site helpers (#3342 review round 5, Copilot) -----
+//
+// A migrated helper's own `if (import.meta.main)` trigger must call
+// `main`/`runCli` DIRECTLY (never through `runHelperCli`) when the
+// envelope is disabled, applying the returned outcome via
+// `applyHelperCliOutcomeWhenDisabled` afterward -- routing through
+// `runHelperCli` unconditionally, even just for its try/catch
+// classification bookkeeping, adds `runHelperCli`'s own frame to the
+// V8-captured stack of any error constructed while `main` runs, which
+// breaks the "byte-identical when the envelope is unset" contract for a
+// helper's raw, unclassified uncaught-crash text. See
+// `applyHelperCliOutcomeWhenDisabled`'s own doc comment in
+// `helper-cli-runner.mts` for the full empirical reasoning.
+// ---------------------------------------------------------------------------
+
+test('isHelperErrorEnvelopeEnabled: true only when the variable is exactly "1"', () => {
+  assert.equal(
+    isHelperErrorEnvelopeEnabled({ [ERROR_ENVELOPE_ENV_VAR]: '1' }),
+    true,
+  );
+  assert.equal(isHelperErrorEnvelopeEnabled({}), false);
+  assert.equal(
+    isHelperErrorEnvelopeEnabled({ [ERROR_ENVELOPE_ENV_VAR]: 'true' }),
+    false,
+  );
+  assert.equal(
+    isHelperErrorEnvelopeEnabled({ [ERROR_ENVELOPE_ENV_VAR]: '0' }),
+    false,
+  );
+});
+
+test('applyHelperCliOutcomeWhenDisabled: sets the exit code from a plain numeric outcome, success or gate alike', () => {
+  const fake = createFakeIo(false);
+  applyHelperCliOutcomeWhenDisabled(0, fake.io);
+  assert.equal(fake.getExitCode(), 0);
+  applyHelperCliOutcomeWhenDisabled(2, fake.io);
+  assert.equal(fake.getExitCode(), 2);
+  // No envelope write either way -- this function does no envelope work
+  // at all, by design (the caller already knows the envelope is disabled).
+  assert.deepEqual(fake.stderrWrites, []);
+});
+
+test('applyHelperCliOutcomeWhenDisabled: sets the exit code from an already-classified outcome object (pre-merge-readiness pattern)', () => {
+  const fake = createFakeIo(false);
+  applyHelperCliOutcomeWhenDisabled(
+    {
+      exitCode: 1,
+      kind: 'transport',
+      message: 'gh: HTTP 503',
+      httpStatus: 503,
+    },
+    fake.io,
+  );
+  assert.equal(fake.getExitCode(), 1);
+  assert.deepEqual(fake.stderrWrites, []);
+});
+
+/**
+ * Spawns a synthetic fixture module that reproduces the exact required
+ * call-site pattern (`if (envelopeEnabled) { runHelperCli(...) } else {
+ * applyHelperCliOutcomeWhenDisabled(main()) }`) against the REAL built
+ * `scripts/helper-cli-runner.mjs`, with `main` throwing uncaught, and
+ * returns the captured stderr -- proving the fix against the actual
+ * shipped module, not a hand-rolled stand-in.
+ */
+function spawnDisabledPathFixture(envelopeEnabled: boolean): string {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-disabled-path-fixture-'));
+  try {
+    const fixturePath = join(tempRoot, 'fixture.mjs');
+    writeFileSync(
+      fixturePath,
+      [
+        `import { applyHelperCliOutcomeWhenDisabled, isHelperErrorEnvelopeEnabled, runHelperCli } from ${JSON.stringify(HELPER_CLI_RUNNER_MJS_URL)};`,
+        envelopeEnabled ? "process.env.IDD_HELPER_ERROR_ENVELOPE = '1';" : '',
+        'function main() {',
+        "  throw new Error('boom');",
+        '}',
+        'if (isHelperErrorEnvelopeEnabled()) {',
+        "  runHelperCli('fixture-helper', main);",
+        '} else {',
+        '  applyHelperCliOutcomeWhenDisabled(main());',
+        '}',
+      ].join('\n'),
+    );
+    const result = spawnSync(process.execPath, [fixturePath], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    return result.stderr ?? '';
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+test('disabled-path call-site pattern: an uncaught crash carries no runHelperCli stack frame when the envelope is disabled', () => {
+  const stderr = spawnDisabledPathFixture(false);
+  assert.match(stderr, /at main \(/);
+  assert.doesNotMatch(stderr, /runHelperCli/);
+});
+
+test('control: the SAME fixture, with the envelope enabled, DOES carry a runHelperCli frame (proves the disabled-path assertion above is actually meaningful, not vacuously true)', () => {
+  const stderr = spawnDisabledPathFixture(true);
+  assert.match(stderr, /at main \(/);
+  assert.match(stderr, /runHelperCli/);
 });
 
 // --- helper-runtime-manifest integration -----------------------------------

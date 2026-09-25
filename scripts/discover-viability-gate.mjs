@@ -7,7 +7,12 @@
 import { existsSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
@@ -249,7 +254,17 @@ const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runHelperCli('discover-viability-gate', main);
+  // #3342: call main() directly (chained via .then(), not awaited through
+  // runHelperCli) when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
+  // the async-specific .then() note.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('discover-viability-gate', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,
 // #3342) so importing this module (for unit tests) does not parse

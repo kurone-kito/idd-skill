@@ -60,7 +60,12 @@
 import { createHash } from 'node:crypto';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghTextUnbounded } from './gh-exec.mjs';
-import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { parseAuthoringOwnerComment } from './marker-helpers.mjs';
 import { resolveGhHostnameArgs } from './minimize-superseded-markers.mjs';
@@ -675,7 +680,13 @@ const AUTHORING_OWNER_PROVENANCE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runHelperCli('authoring-owner-provenance', runCli);
+  // #3342: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('authoring-owner-provenance', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(
