@@ -1258,12 +1258,14 @@ function isHtmlBlockContainerEnded(
 // per-line-only tracker helpers {@link findHtmlBlockRanges} uses
 // ({@link createListContentIndentTrackerState},
 // {@link resetListContentIndentTrackerForLine},
-// {@link adoptListContentIndentForLine} -- no fence/HTML-block
-// coupling needed, unlike that function's own loop), supplies the
-// inherited content indent applicable to the physical line containing
-// `openIndex`, reset exactly as {@link findHtmlBlockRanges} resets it
-// (container-depth mismatch, an indentation drop, or two consecutive
-// blank lines). A continuation line qualifies when its own
+// {@link adoptListContentIndentForLine} -- see
+// {@link computeLineListContentIndents}'s own doc comment for how it
+// stays synchronized with that function's fence/HTML-block state
+// too), supplies the inherited content indent applicable to the
+// physical line containing `openIndex`, reset exactly as
+// {@link findHtmlBlockRanges} resets it (container-depth mismatch, an
+// indentation drop, or two consecutive blank lines). A continuation
+// line qualifies when its own
 // (blockquote-stripped) leading whitespace reaches that indent, plus
 // at most 3 more columns -- the same "at most 3 leading spaces" rule a
 // bare or list-opening line already applies past its own required
@@ -1306,10 +1308,12 @@ function isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents) {
  * {@link isAtHtmlBlockOpenerPosition}'s own per-call input, built once
  * up front rather than per `<!--` occurrence. A standalone forward pass
  * using only the list-content-indent tracker half of
- * {@link findHtmlBlockRanges}'s loop, with none of that function's own
- * fence/HTML-block bookkeeping -- this scan does not need it, since it
- * only ever reads `lineTracker.contentIndent`, never the fence or
- * HTML-block state those other fields drive.
+ * {@link findHtmlBlockRanges}'s loop, with a lighter-weight opaque-range
+ * freeze in place of that function's own fence/HTML-block/paragraph
+ * bookkeeping (see the round 4 and round 6 notes below for exactly what
+ * that freeze needs to cover, and why) -- this scan only ever reads
+ * `lineTracker.contentIndent`, never any of the other state that
+ * bookkeeping drives.
  *
  * Copilot review round 4, same PR: a fenced example's own content is
  * opaque to this tracker too, the same "frozen while inside a fence"
@@ -1338,13 +1342,28 @@ function isAtHtmlBlockOpenerPosition(text, openIndex, lineListContentIndents) {
  * Discover/audit issue-body scanners, is the motivating case -- can pass
  * it straight through instead of this function silently repeating that
  * scan. Omitted (the default), it is computed here exactly as before.
+ *
+ * Copilot review round 6, same PR: a raw/generic HTML block's own
+ * content (e.g. `<div>...`, ending at the next blank line) is opaque to
+ * this tracker for the same reason a fence's content is -- it is never
+ * parsed as Markdown, so a line inside it that merely *looks* like a
+ * list marker must not update list-content-indent state either.
+ * `opaqueRanges` merges `fencedRanges` with `htmlBlockRanges` (the
+ * caller's own {@link findHtmlBlockRanges} result when it already has
+ * one, or computed here otherwise) into one combined freeze set,
+ * reusing the identical opaque-content condition above for both.
  */
 function computeLineListContentIndents(
   text,
   fencedRanges = findFencedCodeRanges(text),
+  htmlBlockRanges = findHtmlBlockRanges(text, fencedRanges),
 ) {
   const indents = new Map();
-  let fencedRangeIndex = 0;
+  const opaqueRanges = mergeMarkdownCodeRanges([
+    ...fencedRanges,
+    ...htmlBlockRanges,
+  ]);
+  let opaqueRangeIndex = 0;
   const listTracker = createListContentIndentTrackerState();
   let lineStart = 0;
   while (lineStart <= text.length) {
@@ -1352,17 +1371,17 @@ function computeLineListContentIndents(
     const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
     const line = text.slice(lineStart, lineEnd);
     while (
-      fencedRangeIndex < fencedRanges.length &&
-      lineStart >= (fencedRanges[fencedRangeIndex]?.end ?? text.length)
+      opaqueRangeIndex < opaqueRanges.length &&
+      lineStart >= (opaqueRanges[opaqueRangeIndex]?.end ?? text.length)
     ) {
-      fencedRangeIndex += 1;
+      opaqueRangeIndex += 1;
     }
-    const fencedRange = fencedRanges[fencedRangeIndex];
-    const isOpaqueFenceContent =
-      fencedRange !== undefined &&
-      lineStart > fencedRange.start &&
-      lineStart < fencedRange.end;
-    if (isOpaqueFenceContent) {
+    const opaqueRange = opaqueRanges[opaqueRangeIndex];
+    const isOpaqueContent =
+      opaqueRange !== undefined &&
+      lineStart > opaqueRange.start &&
+      lineStart < opaqueRange.end;
+    if (isOpaqueContent) {
       indents.set(lineStart, listTracker.contentIndent);
       if (newlineIndex === -1) {
         break;
@@ -1390,11 +1409,17 @@ export function findHtmlCommentRanges(
   // comment) can pass them through rather than triggering a second
   // findFencedCodeRanges scan here.
   fencedRanges,
+  // Copilot review round 6, same PR: same reasoning, for a caller that
+  // already has {@link findHtmlBlockRanges}'s own result (e.g.
+  // {@link maskMarkdownForScan} when `htmlBlocks: 'mask'` is also
+  // requested).
+  htmlBlockRanges,
 ) {
   const ranges = [];
   const lineListContentIndents = computeLineListContentIndents(
     text,
     fencedRanges,
+    htmlBlockRanges,
   );
   const openPattern = /<!--/g;
   let openMatch = openPattern.exec(text);
@@ -2450,11 +2475,21 @@ export function maskMarkdownForScan(text, options = {}) {
     inlineCode === 'mask'
       ? mergeMarkdownCodeRanges([...structuralRanges, ...inlineRanges])
       : structuralRanges;
+  // Computed at most once, exactly when either mask category below
+  // needs it (Copilot review round 6, PR #3413): findHtmlCommentRanges's
+  // own list-content-indent tracker must freeze across a raw/generic
+  // HTML block's content too (see computeLineListContentIndents's own
+  // doc comment), the same reason it already freezes across fenced
+  // ranges -- computing it here and threading it through avoids a
+  // second findHtmlBlockRanges scan whenever both `htmlBlocks: 'mask'`
+  // and `htmlComments: 'mask'` are requested together (the
+  // maskOpaqueMarkdown composition several scanners already use).
+  const htmlBlockRanges =
+    htmlBlocks === 'mask' || htmlComments === 'mask'
+      ? findHtmlBlockRanges(normalized, fencedRanges)
+      : undefined;
   if (htmlBlocks === 'mask') {
-    ranges = mergeMarkdownCodeRanges([
-      ...ranges,
-      ...findHtmlBlockRanges(normalized, fencedRanges),
-    ]);
+    ranges = mergeMarkdownCodeRanges([...ranges, ...(htmlBlockRanges ?? [])]);
   }
   if (htmlComments === 'mask') {
     // ignoredOpenerRanges always includes the inline ranges (see the
@@ -2467,7 +2502,12 @@ export function maskMarkdownForScan(text, options = {}) {
     ]);
     ranges = mergeMarkdownCodeRanges([
       ...ranges,
-      ...findHtmlCommentRanges(normalized, ignoredOpenerRanges, fencedRanges),
+      ...findHtmlCommentRanges(
+        normalized,
+        ignoredOpenerRanges,
+        fencedRanges,
+        htmlBlockRanges,
+      ),
     ]);
   }
   return maskMarkdownCodeRegionsPreservingPositions(normalized, ranges);

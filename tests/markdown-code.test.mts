@@ -1690,3 +1690,21 @@ test('findHtmlCommentRanges still masks a list-continuation opener indented with
     { start: 8, end: body.length },
   ]);
 });
+
+test("findHtmlCommentRanges does not let a raw HTML block's own list-marker-shaped content leak an inherited indent past it (Copilot review round 6, PR #3413)", () => {
+  // A raw/generic HTML block's own content (here, "<div>" followed by a
+  // "- example" line) is never parsed as Markdown -- "- example" is
+  // literal text, not a real list item -- but without freezing the
+  // list-content-indent tracker across it too (the same reason it
+  // already freezes across a fenced range), it could still spuriously
+  // adopt contentIndent 2. The blank line after "- example" ends the
+  // HTML block per CommonMark, so a later top-level line at column 5 (2
+  // inherited + 3 extra) must NOT be read as a list continuation. `gh
+  // api markdown` confirms this exact body does not swallow the rest of
+  // the document: the "<!--" line renders as its own top-level indented
+  // code block, unrelated to any list, and "After" renders as its own
+  // paragraph.
+  const body =
+    '<div>\n- example\n\n     <!-- trigger\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
