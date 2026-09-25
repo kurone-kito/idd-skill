@@ -74,7 +74,7 @@
   "scripts": {
     "prepare": "husky",
     "lint": "pnpm run lint:minimum",
-    "lint:minimum": "node scripts/audit-docs.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
+    "lint:minimum": "node scripts/audit-docs.mjs --check && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
     "lint:fix": "biome check --write --error-on-warnings && dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
     "lint:precommit": "biome check --error-on-warnings && dprint check \"**/*.md\" && markdownlint-cli2 \"**/*.md\"",
     "typecheck": "tsc -p tsconfig.json",
