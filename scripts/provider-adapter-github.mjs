@@ -406,6 +406,13 @@ function fetchChangeRequestBranchAndChecks(deps, owner, repo, number) {
  * first let `[validCheckRun, null]` look like a trusted singleton even
  * though a second, unidentifiable check-run could be hiding behind the
  * `null`.
+ *
+ * kurone-kito/idd-skill#3256: `event` (the check suite's
+ * `workflowRun.event`) follows the identical same-suite ambiguity rule as
+ * `workflowPath` above -- a suite with more than one matching check-run
+ * reports `event: null` for every one of them too, never the suite's real
+ * triggering event for any of them, for the same forged-check-run reason
+ * `workflowPath` already documents.
  */
 function checkRunWorkflowPathsFromSuiteNodes(suiteNodes) {
   const out = [];
@@ -421,6 +428,8 @@ function checkRunWorkflowPathsFromSuiteNodes(suiteNodes) {
     if (!suite) continue;
     const path = suite.workflowRun?.file?.path;
     const workflowPath = path == null ? null : String(path);
+    const event = suite.workflowRun?.event;
+    const workflowEvent = event == null ? null : String(event);
     const checkRunNodes = suite.checkRuns?.nodes;
     if (!Array.isArray(checkRunNodes)) continue;
     // kurone-kito/idd-skill#2926 (round 3 -- Copilot review, PR #2930):
@@ -430,11 +439,15 @@ function checkRunWorkflowPathsFromSuiteNodes(suiteNodes) {
     // `[validCheckRun, null]` must be treated exactly like two live
     // check-runs (unresolved), never silently trusted as a singleton.
     const suiteWorkflowPath = checkRunNodes.length > 1 ? null : workflowPath;
+    // kurone-kito/idd-skill#3256: same ambiguity rule as `suiteWorkflowPath`
+    // -- see this function's own doc comment.
+    const suiteWorkflowEvent = checkRunNodes.length > 1 ? null : workflowEvent;
     const liveCheckRuns = checkRunNodes.filter((checkRun) => !!checkRun);
     for (const checkRun of liveCheckRuns) {
       out.push({
         detailsUrl: String(checkRun.detailsUrl ?? ''),
         workflowPath: suiteWorkflowPath,
+        event: suiteWorkflowEvent,
       });
     }
   }
@@ -467,7 +480,7 @@ function fetchCheckRunWorkflowPathsPage(
       ... on Commit {
         checkSuites(first:100, after:$after){
           nodes{
-            workflowRun{ file{ path } }
+            workflowRun{ file{ path } event }
             checkRuns(first:50, filterBy:{checkName:$name}){
               nodes{ detailsUrl }
             }

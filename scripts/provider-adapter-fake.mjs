@@ -436,7 +436,11 @@ export function createFakeProviderAdapter(fixture) {
             ? fixture.workflowRuns?.[`${pathsOwner}/${pathsRepo}/${runId}`]
             : undefined;
           const workflowPath = runValue?.path ? String(runValue.path) : null;
-          return { detailsUrl, workflowPath };
+          // kurone-kito/idd-skill#3256: mirrors `workflowPath` above -- the
+          // real REST `actions/runs/{id}` payload this fixture models
+          // already carries `event` alongside `path`.
+          const workflowEvent = runValue?.event ? String(runValue.event) : null;
+          return { detailsUrl, workflowPath, event: workflowEvent };
         });
     },
     getWorkflowRunJobs(jobsOwner, jobsRepo, runId) {

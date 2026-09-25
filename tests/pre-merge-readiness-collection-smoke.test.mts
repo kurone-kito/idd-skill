@@ -1602,7 +1602,14 @@ function runSelfWaiverCollection(
     // `detailsUrl`-parsing outcome).
     checkRunWorkflowPaths?: Record<
       string,
-      { detailsUrl: string; workflowPath: string | null }[]
+      // kurone-kito/idd-skill#3256: `event` added alongside `workflowPath`
+      // -- see `ProviderCheckRunWorkflowPath`'s own doc comment
+      // (provider-port.mts).
+      {
+        detailsUrl: string;
+        workflowPath: string | null;
+        event: string | null;
+      }[]
     >;
   },
   configOverrides: Record<string, unknown> = {},
@@ -1776,6 +1783,12 @@ test('collectPreMergeReadiness against a fake provider: #2919 workflowPath enric
       },
       'o/r/500': {
         path: '.github/workflows/idd-advisory-convergence.yml',
+        // kurone-kito/idd-skill#3256: populated so the PRIMARY
+        // required-check gate's own `listCheckRunWorkflowPaths`
+        // resolution (independent of this test's self-waiver-marker
+        // concern) resolves cleanly rather than failing this check name
+        // closed before workflowPath enrichment ever runs.
+        event: 'pull_request_target',
       },
     },
   });
@@ -1823,6 +1836,15 @@ test('collectPreMergeReadiness against a fake provider: #2919 a checker check-ru
       },
       'o/r/500': {
         path: '.github/workflows/some-other-workflow.yml',
+        // kurone-kito/idd-skill#3256: populated so the decoy resolves its
+        // real (different) path cleanly rather than the whole check name
+        // failing closed on a missing `event` before that resolution
+        // (and this test's own display-name-collision exclusion) ever
+        // runs -- an unresolved workflowPath is PERMISSIVE for the
+        // self-waiver candidate filter (see
+        // `selfConvergenceProducerCandidates` in protocol-helpers.mts),
+        // which would wrongly readmit this decoy instead of excluding it.
+        event: 'pull_request_target',
       },
     },
   });
@@ -1870,7 +1892,14 @@ test('collectPreMergeReadiness against a fake provider: #2919 a legitimate large
   });
   const workflowRuns: Record<string, unknown> = {};
   for (let i = 0; i < RUN_COUNT; i++) {
-    workflowRuns[`o/r/${runId(i)}`] = { path: REAL_PATH };
+    // kurone-kito/idd-skill#3256: `event` populated so this run-id
+    // resolution test's own outcome is unaffected by the separate
+    // triggering-event gate -- every rerun here is a genuine
+    // `pull_request_target` instance of the same real file.
+    workflowRuns[`o/r/${runId(i)}`] = {
+      path: REAL_PATH,
+      event: 'pull_request_target',
+    };
   }
   const report = runSelfWaiverCollection({
     changedFiles: {},
@@ -1932,8 +1961,11 @@ test('collectPreMergeReadiness against a fake provider: #2919 a decoy workflow f
       },
     ],
     workflowRuns: {
-      'o/r/80001': { path: REAL_PATH },
-      'o/r/80002': { path: DECOY_PATH },
+      // kurone-kito/idd-skill#3256: `event` populated on both so this
+      // #2919 decoy-file test's own outcome is unaffected by the separate
+      // triggering-event gate.
+      'o/r/80001': { path: REAL_PATH, event: 'pull_request_target' },
+      'o/r/80002': { path: DECOY_PATH, event: 'pull_request_target' },
     },
   });
   const ciReport = report.ci as {
@@ -2221,8 +2253,22 @@ test('collectPreMergeReadiness against a fake provider: #2926 a forged check-run
     checkRunWorkflowPaths: {
       [`o/r/${SELF_WAIVER_PR_HEAD_SHA}/${DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR}`]:
         [
-          { detailsUrl: genuineDetailsUrl, workflowPath: REAL_PATH },
-          { detailsUrl: forgedDetailsUrl, workflowPath: ATTACKER_PATH },
+          // kurone-kito/idd-skill#3256: `event` populated on both so this
+          // #2926 forgery-defense test keeps its pre-#3256 outcome -- an
+          // unresolved event would otherwise fail the whole check name
+          // closed BEFORE the workflowPath-based group split below ever
+          // runs, masking the genuine FAILURE this test exists to keep
+          // visible.
+          {
+            detailsUrl: genuineDetailsUrl,
+            workflowPath: REAL_PATH,
+            event: 'pull_request_target',
+          },
+          {
+            detailsUrl: forgedDetailsUrl,
+            workflowPath: ATTACKER_PATH,
+            event: 'pull_request_target',
+          },
         ],
     },
   });
@@ -2274,8 +2320,20 @@ test('collectPreMergeReadiness against a fake provider: #2926 a forged check-run
           // Two genuinely distinct check-run nodes (GraphQL still returns
           // one node per check-run, regardless of a shared `detailsUrl`
           // string) -- an ambiguous, unresolvable-to-one-instance join.
-          { detailsUrl: sharedDetailsUrl, workflowPath: REAL_PATH },
-          { detailsUrl: sharedDetailsUrl, workflowPath: REAL_PATH },
+          // kurone-kito/idd-skill#3256: `event` populated on both -- this
+          // test's identity-unresolved outcome must come from the
+          // duplicate-`detailsUrl` guard alone, not incidentally from a
+          // missing `event`.
+          {
+            detailsUrl: sharedDetailsUrl,
+            workflowPath: REAL_PATH,
+            event: 'pull_request_target',
+          },
+          {
+            detailsUrl: sharedDetailsUrl,
+            workflowPath: REAL_PATH,
+            event: 'pull_request_target',
+          },
         ],
     },
   });
@@ -2293,6 +2351,421 @@ test('collectPreMergeReadiness against a fake provider: #2926 a forged check-run
   assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
     DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// kurone-kito/idd-skill#3256 (#2764 Phase 2): the required
+// `idd-advisory-convergence` check no longer trusts a passing instance
+// triggered by anything other than `pull_request_target` -- a
+// same-repository PR can still reintroduce a `pull_request` trigger to its
+// own copy of the workflow file, so a pass from THAT instance must never
+// satisfy the check even though its producer identity (workflowPath)
+// resolves perfectly cleanly.
+// ---------------------------------------------------------------------------
+
+test('collectPreMergeReadiness against a fake provider: #3256 the only passing idd-advisory-convergence instance comes from a pull_request-triggered run, so the required check does not report success', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91001/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91001': { path: REAL_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected a pull_request-only pass to never satisfy the check, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+  const blockers = report.blockers as { gate: string; detail: string }[];
+  assert.ok(
+    blockers.some(
+      (blocker) =>
+        blocker.gate === 'ci' &&
+        /no `pull_request_target`-triggered pass/.test(blocker.detail),
+    ),
+    `expected a "ci" blocker naming the non-target-event cause, got: ${JSON.stringify(blockers)}`,
+  );
+});
+
+test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_target-triggered pass satisfies the required check', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91002/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91002': { path: REAL_PATH, event: 'pull_request_target' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected a genuine pull_request_target pass to satisfy the check, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
+// kurone-kito/idd-skill#3256 (round 5 -- live Copilot review finding, PR
+// #3425, rejected with primary-source evidence): a workflow_call-invoked
+// instance of idd-advisory-convergence.yml resolves checkSuite.workflowRun
+// to the CALLING run -- its own event and its own file path -- never a
+// literal "workflow_call" event or the called file's own path. Confirmed
+// live against this repository's own pnpm-boundary-node22-floor.yml
+// invoking pnpm-boundary.yml via `uses:`: that check-run's own
+// checkSuite.workflowRun reported
+// {event: "pull_request", file: {path: ".../pnpm-boundary-node22-floor.yml"}},
+// never a "workflow_call" event or pnpm-boundary.yml's own path. So a
+// pull_request_target-triggered caller of idd-advisory-convergence.yml
+// resolves event: 'pull_request_target' and this gate correctly accepts
+// it, even though the resolved workflowPath here is an adopter's own
+// wrapper file, not idd-advisory-convergence.yml itself -- workflowPath
+// is purely a grouping key for this gate (and for #2919's own dedup), not
+// an equality check against a specific expected path.
+test('collectPreMergeReadiness against a fake provider: #3256 a workflow_call-invoked instance resolves to its caller run, so a pull_request_target caller satisfies the check', () => {
+  const CALLER_PATH = '.github/workflows/adopter-wrapper.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91012/job/1',
+      },
+    ],
+    workflowRuns: {
+      // Mirrors the real pnpm-boundary-node22-floor.yml -> pnpm-boundary.yml
+      // shape: the resolved path is the CALLER's own file, and the event
+      // is the caller's own triggering event -- never "workflow_call".
+      'o/r/91012': { path: CALLER_PATH, event: 'pull_request_target' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected a pull_request_target-triggered workflow_call caller to satisfy the check, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
+// kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding, PR
+// #3425, High): an OLDER pull_request_target pass followed by a NEWER
+// pull_request pass from the SAME real workflow file. classifyCiChecks
+// dedupes the two same-producer instances down to the NEWER one before
+// ever classifying pass/fail, so the older qualifying pass never actually
+// backs the reported verdict -- an earlier revision of the gating logic
+// found the older instance and stayed permissive, letting the
+// dedup-selected NEWER, non-qualifying pass silently satisfy the check.
+test('collectPreMergeReadiness against a fake provider: #3256 an older pull_request_target pass followed by a newer, dedup-selected pull_request pass from the SAME file never satisfies the check', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91008/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        // Later than the pull_request_target pass -- a PR that
+        // reintroduced the pull_request trigger pushed again afterward,
+        // and that later run also happened to pass.
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91009/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91008': { path: REAL_PATH, event: 'pull_request_target' },
+      'o/r/91009': { path: REAL_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected the dedup-selected NEWER, non-qualifying pass to never satisfy the check despite the older qualifying pass, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
+// kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding, PR
+// #3425, Medium): a genuinely qualifying pull_request_target pass from the
+// REAL checker file must never be invalidated by an UNRELATED,
+// same-display-name decoy workflow file's own non-qualifying pass -- the
+// two are separate producers (#2919's own motivating scenario), and
+// classifyCiChecks already treats two independent, both-passing producers
+// as an all-passing rollup regardless of the decoy's own event. An earlier
+// revision of the fix for the round-1 finding above flagged the whole
+// check name whenever ANY group's own selected representative was
+// non-qualifying, which wrongly caught this decoy case too.
+test('collectPreMergeReadiness against a fake provider: #3256 an unrelated decoy workflow file pass never invalidates a genuinely qualifying pull_request_target pass from the real file', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const DECOY_PATH = '.github/workflows/some-other-workflow.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91010/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91011/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91010': { path: REAL_PATH, event: 'pull_request_target' },
+      // A completely different file, triggered by pull_request -- not the
+      // same-file reintroduced-trigger scenario above.
+      'o/r/91011': { path: DECOY_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'success',
+    `expected the unrelated decoy's own non-qualifying pass to never invalidate the real file's qualifying pull_request_target pass, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
+test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_target pass alongside a same-named, same-file pull_request FAILURE still fails when the FAILURE is dedup-selected as latest', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91003/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        // Later than the pull_request_target pass -- a PR that reintroduced
+        // the pull_request trigger pushed a fixup that still failed.
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91004/job/1',
+      },
+    ],
+    workflowRuns: {
+      // Same real file for both -- the documented "legitimate same-file
+      // case": groupChecksByProducer still dedupes them together.
+      'o/r/91003': { path: REAL_PATH, event: 'pull_request_target' },
+      'o/r/91004': { path: REAL_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'failed',
+    `expected the later same-file FAILURE to win the dedup and surface directly, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  // The non-target-event downgrade never fires here: `status` is already
+  // 'failed' before either downgrade could narrow it, matching the
+  // "an instance from any other event can still block" half of the
+  // contract.
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
+});
+
+test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_target pass alongside a same-named, same-file pull_request FAILURE surfaces the discarded FAILURE as evidence when the pass is dedup-selected as latest', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91005/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        // Later than the pull_request FAILURE -- the genuine
+        // pull_request_target instance's own retry succeeded afterward.
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91006/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91005': { path: REAL_PATH, event: 'pull_request' },
+      'o/r/91006': { path: REAL_PATH, event: 'pull_request_target' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    discardedNonPassingRequiredChecks: { discardedState: string }[];
+  };
+  // This tool's own `ci.status` reads 'success' here (the dedup-selected
+  // latest instance IS a genuine pull_request_target pass, so the
+  // non-target-event downgrade never fires) -- the discarded FAILURE
+  // sibling is still surfaced as evidence (the pre-existing #1745
+  // mechanism this issue leaves unchanged, not something #3256 closes),
+  // and on a real Ruleset-protected branch GitHub's own required-check
+  // gate independently blocks on that same-named FAILURE regardless of
+  // what this tool reports (see this issue's own Background).
+  assert.equal(ciReport.status, 'success');
+  assert.equal(ciReport.requiredChecksPassing, true);
+  assert.equal(ciReport.discardedNonPassingRequiredChecks.length, 1);
+  assert.equal(
+    ciReport.discardedNonPassingRequiredChecks[0]?.discardedState,
+    'FAILURE',
+  );
+  // `report.ready` is `false` here, but only because this minimal
+  // fixture never satisfies the UNRELATED review-currency/development-
+  // branch-target/closing-set gates -- not because anything in this
+  // file's own `ci`-gate evidence blocks it. On a branch WITHOUT a
+  // Rulesets-level same-named-instance requirement, a fixture that DID
+  // satisfy every other gate would report `ready: true` despite the
+  // discarded FAILURE above -- the documented #1745 residual this test
+  // does not attempt to close (out of #3256's own scope; #1745's own
+  // mergeStateStatus/discardedNonPassingRequiredChecks blocker at
+  // computePreMergeReadinessBlockers only fires when the live
+  // `mergeStateStatus` itself already reads `BLOCKED`, which this
+  // fixture's default `CLEAN` value does not exercise).
+  assert.equal(report.ready, false);
+  assert.ok(
+    !(report.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'ci',
+    ),
+    `expected no "ci" blocker for this scenario, got: ${JSON.stringify(report.blockers)}`,
+  );
+});
+
+test('collectPreMergeReadiness against a fake provider: #3256 an unresolvable triggering event makes the whole check name identity-unresolved, never a permissive pass', () => {
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91007/job/1',
+      },
+    ],
+    workflowRuns: {
+      // path resolves cleanly, but no `event` field at all -- distinct
+      // from the non-target-event case above, where the event resolves to
+      // a real, disqualifying value.
+      'o/r/91007': {
+        path: '.github/workflows/idd-advisory-convergence.yml',
+      },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    identityUnresolvedRequiredCheckNames: string[];
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected an unresolvable event to downgrade via the existing identity-unresolved path, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.identityUnresolvedRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
 });
 
 test('collectPreMergeReadiness against a fake provider: touchesSelfReferentialAllowlist false (this PR never touches the checker allowlist) suppresses the blocker even for an otherwise-verified expired marker -- closes the decisive round-15 forgery/DoS finding', () => {

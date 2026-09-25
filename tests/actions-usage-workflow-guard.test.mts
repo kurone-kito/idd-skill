@@ -116,15 +116,23 @@ test('required-check workflows keep an unfiltered pull_request trigger and their
   for (const { file, jobId } of REQUIRED_CHECKS) {
     const text = readWorkflow(file);
     const onBlock = extractOnBlock(text);
+    // kurone-kito/idd-skill#3256 (#2764 Phase 2): idd-advisory-convergence.yml
+    // dropped its transitional pull_request trigger and now fires only on
+    // pull_request_target -- the identical path-filter concern below still
+    // applies to that trigger, just under a different key.
+    const pullRequestFamilyKey =
+      file === 'idd-advisory-convergence.yml'
+        ? 'pull_request_target'
+        : 'pull_request';
     assert.match(
       onBlock,
-      /pull_request:/,
-      `${file}: must trigger on pull_request`,
+      new RegExp(`${pullRequestFamilyKey}:`),
+      `${file}: must trigger on ${pullRequestFamilyKey}`,
     );
     assert.doesNotMatch(
       onBlock,
       /\bpaths(-ignore)?:/,
-      `${file}: pull_request trigger must not gain a path filter -- a path-filtered required check never reports for an out-of-filter change`,
+      `${file}: ${pullRequestFamilyKey} trigger must not gain a path filter -- a path-filtered required check never reports for an out-of-filter change`,
     );
     assert.match(
       text,
@@ -145,15 +153,30 @@ test('required-check workflows keep an unfiltered pull_request trigger and their
   }
 });
 
-/** Every workflow file that fires on `pull_request` -- excluding the
- * PR-comment-triggered advisory-convergence companion, which is
- * pull_request_review_comment-only and already asserted non-cancelling by
- * tests/advisory-convergence-comment-workflow.test.mts. */
+/** Every workflow file that fires on `pull_request`, PLUS
+ * `idd-advisory-convergence.yml` by name (kurone-kito/idd-skill#3256:
+ * moved to a `pull_request_target`-only trigger in #2764 Phase 2, but it
+ * still re-runs on every push to an open PR -- `synchronize` is one of its
+ * declared activity types -- exactly the "a superseded push does not also
+ * pay for a stale run" concern this test guards, so it stays in scope even
+ * though it no longer matches the generic `pull_request:` scan below) --
+ * excluding the PR-comment-triggered advisory-convergence companion, which
+ * is pull_request_review_comment-only and already asserted non-cancelling
+ * by tests/advisory-convergence-comment-workflow.test.mts. Deliberately
+ * NOT a generic `pull_request_target:` scan: `post-merge-cleanup.yml`
+ * (`types: [closed]`) and `strip-untrusted-labels.yml` (`types: [labeled]`)
+ * also declare `pull_request_target` but never re-run per push, so
+ * widening the scan to match the trigger key alone would sweep in two
+ * workflows this concern never applied to and that genuinely lack
+ * concurrency cancellation. */
 function pullRequestTriggeredWorkflowFiles(): string[] {
   const dir = new URL(`../.github/${WORKFLOWS_DIR}/`, import.meta.url);
   return readdirSync(dir)
     .filter((name) => name.endsWith('.yml'))
     .filter((name) => {
+      if (name === 'idd-advisory-convergence.yml') {
+        return true;
+      }
       const onBlock = extractOnBlock(readWorkflow(name));
       return /^ {2}pull_request:/m.test(onBlock);
     });
