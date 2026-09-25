@@ -46,6 +46,7 @@ import {
 } from './policy-helpers.mjs';
 import {
   attachReviewThreadCommentEditHistories,
+  buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
   CHECK_PASS_EQUIVALENT_STATES,
   classifyPrLoopMembership,
@@ -862,16 +863,21 @@ export function collectPreMergeReadiness(
     branchProtection,
   );
   const collaboratorTrustEnabled = readCollaboratorTrustEnabled(iddConfig);
-  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+  // kurone-kito/idd-skill#3250: the shared composition -- see
+  // `buildEffectiveTrustedMarkerLogins`'s own doc comment for why the
+  // collaborator-marker-trust discovery itself stays file-local
+  // (`resolveTrustedCollaboratorMarkerLogins`, loop-safety wrapped) while
+  // only the final combine step is shared.
+  const trustedMarkerLogins = buildEffectiveTrustedMarkerLogins({
     viewerLogin,
-    ...configuredTrustedActors,
-    ...(collaboratorTrustEnabled
+    configuredTrustedActors,
+    collaboratorMarkerLogins: collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimComments,
         ])
-      : []),
-  ]);
+      : [],
+  });
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
   // evaluated when claimless AND (the PR actually has closing references
   // OR the field itself could not be read) -- the common claimless case
@@ -1142,6 +1148,8 @@ export function collectPreMergeReadiness(
   const externalCheckWaiverMaxValidity =
     readExternalCheckWaiverMaxValidity(iddConfig);
   const externalCheckWaiverMode = readExternalCheckWaiverMode(iddConfig);
+  const externalCheckWaiverAuthorityPolicy =
+    readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
@@ -1557,6 +1565,8 @@ export function collectPreMergeReadiness(
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       externalCheckWaiverMode,
+      externalCheckWaiverAuthorityPolicy,
+      resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
       staleAgeMs,
       forcedHandoffEnabled,
@@ -2278,6 +2288,16 @@ function readExternalCheckWaiverMaxValidity(iddConfig) {
 // fail-closed guard.
 function readExternalCheckWaiverMode(iddConfig) {
   return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers.mode;
+}
+// kurone-kito/idd-skill#3250: configured external-check waiver authority
+// policy (`ciGate.externalCheckWaivers.authorityPolicy`), threaded to the
+// consume-side authority check. `normalizePolicyConfig` already defaults
+// this to `owners-and-maintainers-only`, so an absent config resolves to
+// the same fail-closed default `summarizeExternalCheckWaivers` itself
+// falls back to.
+function readExternalCheckWaiverAuthorityPolicy(iddConfig) {
+  return normalizePolicyConfig(iddConfig).ciGate.externalCheckWaivers
+    .authorityPolicy;
 }
 // #2353 (Codex review on PR #2370, second follow-up): a declaration's own
 // `startedAt` is generated before the `--declare --apply` interactive

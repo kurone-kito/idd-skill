@@ -616,7 +616,7 @@ in this preamble, since the fallback differs per helper.
   `collaboratorTrustEnabled`. Config-listed actors therefore widen
   trust explicitly while collaborator-permission trust stays opt-in
   (the `IDD_TRUST_COLLABORATOR_MARKERS` environment variable or the
-  `trustCollaboratorMarkers` config field)
+  `markerTrust.allowCollaboratorMarkers` config field)
 - `scripts/sweep-authoring-markers.mjs` (#2935) for the fetch-driven
   hide-on-supersede sweep the issue-authoring contract's Stage 2 release
   flow depends on: given one or more `--issue` targets, it fetches each
@@ -1264,22 +1264,31 @@ The adopted helper boundaries are intentionally narrow:
   unreplied comments, reviewer states, advisory state, CI, claim
   validation, and `waiverEvidence` (parsed external-check waiver comments
   classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
-  `unauthorized`, `malformed`, `notConfigured`, `modeDisabled`, or
-  `edited` — `notConfigured` for a valid waiver naming a check the
-  policy never declared waivable in `ciGate.externalChecks.waivable`,
-  `modeDisabled` (`#2046`) for an otherwise-valid, configured-waivable
-  waiver while `ciGate.externalCheckWaivers.mode` is not
-  `maintainer-authorized` (schema default: `disabled`) — mirroring
-  `advisory-convergence.mjs`'s own mode guard, so a `waivable` list left
-  over from a prior `maintainer-authorized` configuration can never make
-  this gate report a check covered on its own; `edited` (`#3246`) for a
-  marker-shaped waiver comment whose GraphQL `lastEditedAt` is a
-  parseable timestamp (`editState: 'edited'`) or could not be resolved
-  (`editState: 'unknown'`) — checked before every other classification,
-  so a body-edited waiver never reaches `valid` regardless of author,
-  HEAD, claim, or expiry; only a `valid` waiver for a configured-waivable
-  check is reported with `coveredByWaiver: true` and treated as passing
-  by the CI gate)
+  `unauthorized`, `insufficientAuthority`, `malformed`, `notConfigured`,
+  `modeDisabled`, or `edited` — `notConfigured` for a valid waiver naming
+  a check the policy never declared waivable in
+  `ciGate.externalChecks.waivable`, `modeDisabled` (`#2046`) for an
+  otherwise-valid, configured-waivable waiver while
+  `ciGate.externalCheckWaivers.mode` is not `maintainer-authorized`
+  (schema default: `disabled`) — mirroring `advisory-convergence.mjs`'s
+  own mode guard, so a `waivable` list left over from a prior
+  `maintainer-authorized` configuration can never make this gate report a
+  check covered on its own; `insufficientAuthority` (`#3250`) for a
+  waiver whose author IS a trusted marker actor but whose live
+  collaborator-permission outcome does not satisfy the configured
+  `ciGate.externalCheckWaivers.authorityPolicy` — for example a
+  Write-only collaborator admitted to the trusted set only via
+  `markerTrust.allowCollaboratorMarkers`, under the default
+  `owners-and-maintainers-only` policy; never populated for the `#2657`
+  self-referential-bootstrap-auto marker, whose trust comes from
+  run-id/event-type/HEAD verification, not a collaborator role; `edited`
+  (`#3246`) for a marker-shaped waiver comment whose GraphQL
+  `lastEditedAt` is a parseable timestamp (`editState: 'edited'`) or
+  could not be resolved (`editState: 'unknown'`) — checked before every
+  other classification, so a body-edited waiver never reaches `valid`
+  regardless of author, HEAD, claim, or expiry; only a `valid` waiver for
+  a configured-waivable check is reported with `coveredByWaiver: true`
+  and treated as passing by the CI gate)
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
