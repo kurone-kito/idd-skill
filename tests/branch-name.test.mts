@@ -29,6 +29,10 @@ function runCliExpectFailure(args: string[]): {
     execFileSync(process.execPath, [CLI_PATH, ...args], {
       encoding: 'utf8',
       timeout: 60_000,
+      // #3434: suppress the duplicate raw-stderr relay execFileSync
+      // performs when no `stdio` override is given -- the thrown
+      // error's `.stderr` below is unaffected.
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     throw new Error('expected the CLI to exit non-zero, but it succeeded');
   } catch (error) {

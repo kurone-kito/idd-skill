@@ -40,7 +40,13 @@ test('assertEntrySignal({}) exits 1 with a stderr line naming process.version an
           '-e',
           `import(${JSON.stringify(guardModuleUrl)}).then(({ assertEntrySignal }) => { assertEntrySignal({}); });`,
         ],
-        { encoding: 'utf8', timeout: 30_000 },
+        {
+          encoding: 'utf8',
+          timeout: 30_000,
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     },
     (error: unknown) => {

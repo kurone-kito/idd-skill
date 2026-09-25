@@ -478,7 +478,14 @@ test('CLI: idd-critique-report.mjs --check exits non-zero on drift', () => {
     execFileSync(
       process.execPath,
       [CLI_PATH, '--snapshot', snapshotPath, '--docs', docsPath, '--check'],
-      { encoding: 'utf8', timeout: 60_000 },
+      {
+        encoding: 'utf8',
+        timeout: 60_000,
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given, matching the
+        // sibling test below.
+        stdio: ['ignore', 'ignore', 'ignore'],
+      },
     ),
   );
 });

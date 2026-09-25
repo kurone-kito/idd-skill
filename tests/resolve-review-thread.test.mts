@@ -696,7 +696,14 @@ test('--apply rejects a non-conforming --body before any gh call (compiled CLI)'
         '--body',
         '**Fixed** — cleaned up the stray import',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
@@ -724,7 +731,14 @@ test('--claimless rejects --claim-issue before any gh call (compiled CLI, #2616)
         '--claim-issue',
         '2005',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
@@ -752,7 +766,14 @@ test('--claimless rejects --claim-id before any gh call (compiled CLI, #2616)', 
         '--claim-id',
         'deadbeef',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
@@ -785,7 +806,14 @@ test('--claimless rejects a malformed --claim-issue value too (compiled CLI, #26
         '--claim-issue',
         'nope',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
@@ -818,7 +846,14 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, PATH: '' } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     throw new Error('expected the CLI to exit non-zero');
   } catch (error) {
@@ -862,7 +897,13 @@ process.exit(1);
         'r',
         '--claimless',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     throw new Error('expected the CLI to exit non-zero');
   } catch (error) {

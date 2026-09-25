@@ -1951,6 +1951,9 @@ process.exit(1);
             cwd: REPO_ROOT,
             encoding: 'utf8',
             env: { ...process.env },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         ),
       /failed to load policy from .*bad-policy\.json/,
@@ -2547,6 +2550,9 @@ process.exit(1);
             cwd: REPO_ROOT,
             encoding: 'utf8',
             env: { ...process.env },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         ),
       /--all-roadmaps cannot be combined with --issue/,
@@ -2579,6 +2585,9 @@ process.exit(1);
             cwd: REPO_ROOT,
             encoding: 'utf8',
             env: { ...process.env },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         ),
       /missing required --issue/,

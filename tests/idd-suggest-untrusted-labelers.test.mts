@@ -270,6 +270,11 @@ function runStubbedCli(
         encoding: 'utf8',
         env: { ...process.env },
         timeout: 60_000,
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given -- the captured
+        // `error.stderr` callers inspect (e.g. the rate-limit test below)
+        // is unaffected.
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
   } finally {
