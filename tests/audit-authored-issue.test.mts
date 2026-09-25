@@ -1357,6 +1357,16 @@ test('dependency-line-grammar fails on a non-positive issue number (E2 review, C
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
 });
 
+test('dependency-line-grammar fails on a hidden HTML-comment mention immediately following a valid declaration on the same line (E10 review, Copilot: masked comment content reads as pure separator whitespace)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12 <!-- Depends on #13 -->',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {

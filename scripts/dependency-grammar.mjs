@@ -77,6 +77,7 @@ export function consumeDependencyReferenceList(segment, options = {}) {
   const numbers = [];
   const unresolvable = [];
   let remaining = segment;
+  let consumedTokenEnd = 0;
   while (remaining) {
     const urlMatch = remaining.match(URL_TOKEN_RE);
     const qualifiedMatch = !urlMatch && remaining.match(QUALIFIED_TOKEN_RE);
@@ -113,13 +114,14 @@ export function consumeDependencyReferenceList(segment, options = {}) {
       }
     }
     remaining = remaining.slice(match[0].length);
+    consumedTokenEnd = segment.length - remaining.length;
     const separatorMatch = remaining.match(SEPARATOR_RE);
     if (!separatorMatch) {
       break;
     }
     remaining = remaining.slice(separatorMatch[0].length);
   }
-  return { numbers, unresolvable, remaining };
+  return { numbers, unresolvable, remaining, consumedTokenEnd };
 }
 /**
  * #2441: GitHub line-wraps a long, comma-separated "Blocked by"/"Depends
@@ -283,7 +285,22 @@ export function matchDependencyKeywordLine(
   if (numbers.length === 0 && unresolvable.length === 0) {
     return undefined;
   }
-  return { numbers, unresolvable, remaining: lineResult.remaining };
+  // Deliberately NOT `lineResult.remaining` (#3285 E10 review, Copilot):
+  // that field is empty whenever a trailing separator (`\s+`) was
+  // stripped with nothing left to consume after it -- including when
+  // the "whitespace" was actually MASKED content (a code span, or an
+  // HTML comment masked by a caller like `checkDependencyLineGrammar`)
+  // that only reads as blank in this already-masked `match[1]`. Slicing
+  // from `consumedTokenEnd` instead recovers that swallowed tail, so a
+  // hidden mention immediately after a valid reference on the same line
+  // (`Blocked by #12 <!-- Depends on #13 -->`) still shows up here for
+  // the caller to re-scan, rather than silently reading as "nothing left
+  // on this line."
+  return {
+    numbers,
+    unresolvable,
+    remaining: match[1].slice(lineResult.consumedTokenEnd),
+  };
 }
 /**
  * Extract every `keyword` (`Blocked by` / `Depends on`) dependency

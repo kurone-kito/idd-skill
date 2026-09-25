@@ -178,6 +178,7 @@ test('consumeDependencyReferenceList stops at the first non-token, non-separator
     numbers: [10],
     unresolvable: [],
     remaining: '(see other/repo#20)',
+    consumedTokenEnd: 3,
   });
 });
 
@@ -191,6 +192,7 @@ test('consumeDependencyReferenceList reports a qualified token unresolvable when
       },
     ],
     remaining: '',
+    consumedTokenEnd: 24,
   });
 });
 
@@ -200,7 +202,7 @@ test('consumeDependencyReferenceList resolves a full GitHub issue URL for the cu
       'https://github.com/kurone-kito/idd-skill/issues/42',
       { currentRepo: CURRENT_REPO },
     ),
-    { numbers: [42], unresolvable: [], remaining: '' },
+    { numbers: [42], unresolvable: [], remaining: '', consumedTokenEnd: 50 },
   );
 });
 

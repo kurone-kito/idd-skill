@@ -58,6 +58,26 @@ export interface DependencyReferenceListResult {
   /** Whatever text was not consumed as part of the contiguous reference
    * list -- empty when the whole input was refs and separators. */
   remaining: string;
+  /**
+   * The offset within `segment` immediately after the LAST successfully
+   * matched token, before any trailing separator was stripped -- `0`
+   * when no token matched at all. Unlike `remaining`, this never
+   * silently swallows trailing separator whitespace that turned out to
+   * have nothing real following it: once a trailing separator (e.g. a
+   * run of `\s+`) is stripped with no further token to consume, that
+   * whitespace is gone from `remaining` too, even though `segment` may
+   * still carry real content past it that the trailing-separator match
+   * merely looked like it could ignore -- most notably MASKED content
+   * (a code-masked-to-spaces region, or an HTML comment masked the same
+   * way by a caller like {@link matchDependencyKeywordLine}) that reads
+   * as pure whitespace in this masked segment but corresponds to real,
+   * unmasked text in the caller's own original view. Recover the
+   * swallowed tail with `segment.slice(consumedTokenEnd)`; a caller
+   * that needs to know "is there anything real after the parsed
+   * reference list" should use this field, not `remaining`, when its
+   * own input may itself be a masked view of something else (#3285).
+   */
+  consumedTokenEnd: number;
 }
 
 export interface DependencyGrammarOptions {
@@ -116,6 +136,7 @@ export function consumeDependencyReferenceList(
   const numbers: number[] = [];
   const unresolvable: DependencyGrammarUnresolvedToken[] = [];
   let remaining = segment;
+  let consumedTokenEnd = 0;
   while (remaining) {
     const urlMatch = remaining.match(URL_TOKEN_RE);
     const qualifiedMatch = !urlMatch && remaining.match(QUALIFIED_TOKEN_RE);
@@ -152,13 +173,14 @@ export function consumeDependencyReferenceList(
       }
     }
     remaining = remaining.slice(match[0].length);
+    consumedTokenEnd = segment.length - remaining.length;
     const separatorMatch = remaining.match(SEPARATOR_RE);
     if (!separatorMatch) {
       break;
     }
     remaining = remaining.slice(separatorMatch[0].length);
   }
-  return { numbers, unresolvable, remaining };
+  return { numbers, unresolvable, remaining, consumedTokenEnd };
 }
 
 /**
@@ -269,19 +291,26 @@ export interface DependencyKeywordLineMatch {
   numbers: number[];
   unresolvable: DependencyGrammarUnresolvedToken[];
   /**
-   * The same-line text left over after the accepted reference list
-   * stopped consuming -- e.g. `". Depends on #13"` for a line reading
-   * `"Blocked by #12. Depends on #13"`, or `""` when the reference list
-   * consumed the rest of the line outright. This grammar recognizes at
-   * most ONE dependency declaration per line, so `remaining` is never
-   * itself re-parsed as a second declaration here; it is only the
-   * left-over text so a caller like `checkDependencyLineGrammar`
-   * (`idd-skill#3285` review, Copilot) can still scan it for an
-   * independent, second keyword-plus-reference mention instead of
-   * treating the whole line as fully validated. Always the *same-line*
-   * unconsumed tail, even when a continuation sweep (below) pulled in
-   * numbers from later lines -- those later lines are a different index
-   * in `lines` and get their own `remaining` when matched directly.
+   * The same-line text left over after the accepted reference list's
+   * LAST real token -- e.g. `". Depends on #13"` for a line reading
+   * `"Blocked by #12. Depends on #13"`, or `""` when the last token ends
+   * the line outright. Derived from
+   * {@link DependencyReferenceListResult.consumedTokenEnd}, not
+   * {@link DependencyReferenceListResult.remaining}: the latter can read
+   * as fully empty even when real (possibly masked-to-blank) content
+   * followed the last token, whenever a trailing separator swallowed it
+   * with nothing left to parse after -- see that field's own doc
+   * comment. This grammar recognizes at most ONE dependency declaration
+   * per line, so `remaining` is never itself re-parsed as a second
+   * declaration here; it is only the left-over text so a caller like
+   * `checkDependencyLineGrammar` (`idd-skill#3285` review, Copilot) can
+   * still scan it for an independent, second keyword-plus-reference
+   * mention -- including one hidden inside a masked HTML comment right
+   * after the first, valid reference -- instead of treating the whole
+   * line as fully validated. Always the *same-line* unconsumed tail,
+   * even when a continuation sweep (below) pulled in numbers from later
+   * lines -- those later lines are a different index in `lines` and get
+   * their own `remaining` when matched directly.
    */
   remaining: string;
 }
@@ -353,7 +382,22 @@ export function matchDependencyKeywordLine(
   if (numbers.length === 0 && unresolvable.length === 0) {
     return undefined;
   }
-  return { numbers, unresolvable, remaining: lineResult.remaining };
+  // Deliberately NOT `lineResult.remaining` (#3285 E10 review, Copilot):
+  // that field is empty whenever a trailing separator (`\s+`) was
+  // stripped with nothing left to consume after it -- including when
+  // the "whitespace" was actually MASKED content (a code span, or an
+  // HTML comment masked by a caller like `checkDependencyLineGrammar`)
+  // that only reads as blank in this already-masked `match[1]`. Slicing
+  // from `consumedTokenEnd` instead recovers that swallowed tail, so a
+  // hidden mention immediately after a valid reference on the same line
+  // (`Blocked by #12 <!-- Depends on #13 -->`) still shows up here for
+  // the caller to re-scan, rather than silently reading as "nothing left
+  // on this line."
+  return {
+    numbers,
+    unresolvable,
+    remaining: match[1].slice(lineResult.consumedTokenEnd),
+  };
 }
 
 /**
