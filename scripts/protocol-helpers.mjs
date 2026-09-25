@@ -57,6 +57,7 @@ import {
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mjs';
@@ -262,6 +263,199 @@ export function isTrustEvidenceComment(comment, isTrustedAuthor) {
     isTrustedAuthor(authorLogin) &&
     classifyCommentEditState(comment) === 'unedited'
   );
+}
+/**
+ * kurone-kito/idd-skill#3328: the single shared definition of "does this PR
+ * run outside the IDD claim loop" -- replaces the pre-existing divergent
+ * `pre-merge-readiness.mts` (`--claimless` #2017) and
+ * `resolve-review-thread.mts` (`isClaimlessEligible` #2616) definitions,
+ * both of which now delegate here. Pure and network-free: every input is
+ * already-fetched data, so a caller collects the closing-issue claim state
+ * and PR comments once and reuses this function for every downstream
+ * decision.
+ *
+ * Evaluated top-to-bottom, first match wins (mirrors the Groom-hearing
+ * ruling recorded on the issue):
+ *
+ * 1. `closingIssueNumbers === null` (closing references unreadable) ->
+ *    `'in-loop'`, fail closed -- mirrors the
+ *    [fail-closed default](../../.github/instructions/idd-overview-core.instructions.md#fail-closed-default).
+ * 2. `closingIssueNumbers` is empty -> `'out-of-loop-claimless'` (#2017,
+ *    unchanged: a PR with nothing to claim against was never IDD-claimed).
+ * 3. `closingIssueClaimState` is `'present'` or `'unknown'` -> `'in-loop'`
+ *    -- an active (or unresolvable) claim always wins over a marker; a
+ *    marker only ever matters once every closing issue is confirmed to
+ *    have no active claim.
+ * 4. `prComments` contains a comment that parses via
+ *    {@link parseOutOfLoopMarker}, whose `prNumber` equals `prNumber`, and
+ *    that passes {@link isTrustEvidenceComment} (trusted author AND
+ *    unedited) -> `'out-of-loop-authorized'`. Trust is decided by the
+ *    comment's GitHub author login (via `isTrustedAuthor`), never the
+ *    marker's own embedded `{agent-id}` text.
+ * 5. Otherwise -> `'in-loop'` (no active claim and no valid marker: still
+ *    ordinary claimed-loop territory, just presently unclaimed).
+ */
+export function classifyPrLoopMembership({
+  prNumber,
+  closingIssueNumbers,
+  closingIssueClaimState,
+  prComments,
+  trustedMarkerLogins,
+}) {
+  if (closingIssueNumbers === null) {
+    return {
+      membership: 'in-loop',
+      reason: 'closing issue references are unreadable (fail closed)',
+    };
+  }
+  if (closingIssueNumbers.length === 0) {
+    return {
+      membership: 'out-of-loop-claimless',
+      reason: 'no closing issue references (#2017)',
+    };
+  }
+  if (
+    closingIssueClaimState === 'present' ||
+    closingIssueClaimState === 'unknown'
+  ) {
+    return {
+      membership: 'in-loop',
+      reason: `a closing issue's active claim state is ${closingIssueClaimState}`,
+    };
+  }
+  const normalizedTrustedLogins = new Set(
+    normalizeTrustedMarkerLogins(trustedMarkerLogins),
+  );
+  const isTrustedAuthor = (login) =>
+    normalizedTrustedLogins.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  for (const comment of prComments ?? []) {
+    const marker = parseOutOfLoopMarker(
+      String(comment?.body ?? ''),
+      String(comment?.createdAt ?? comment?.created_at ?? ''),
+    );
+    if (
+      marker &&
+      marker.prNumber === prNumber &&
+      isTrustEvidenceComment(comment, isTrustedAuthor)
+    ) {
+      return {
+        membership: 'out-of-loop-authorized',
+        reason: `valid out-of-loop marker (reason:${marker.reason}) from ${marker.agentId}`,
+      };
+    }
+  }
+  return {
+    membership: 'in-loop',
+    reason:
+      'no closing issue has an active claim, and no valid out-of-loop marker was found',
+  };
+}
+/**
+ * kurone-kito/idd-skill#3328: same-repo positive-integer issue numbers
+ * extracted from a raw `closingIssuesReferences` passthrough, applying the
+ * identical repository-matching rules `computeClosingSetEvidence`
+ * (`supersession-detection.mts`) uses internally for its own
+ * `sameRepoNumbers` set. Shared by both `--claimless` consumers
+ * (`pre-merge-readiness.mts`'s `classifyPrLoopMembership` input and its
+ * `expectedClosingIssues` closing-set fix, `resolve-review-thread.mts`'s
+ * `isClaimlessEligible`) so neither re-derives its own copy. Deliberately
+ * best-effort rather than fail-closed the way `computeClosingSetEvidence`
+ * itself is: a malformed or unusable entry is simply skipped here, never
+ * aborting the whole extraction, because `computeClosingSetEvidence`'s OWN
+ * malformed-entry checks already fail the real merge gate closed to
+ * `'unavailable'` regardless of what this function returns for that same
+ * input -- this extraction only ever feeds a *candidate* expected/input
+ * set, never a gate's own pass/fail decision.
+ */
+export function extractSameRepoClosingIssueNumbers(
+  closingIssuesReferences,
+  owner,
+  repo,
+) {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return [];
+  }
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  const numbers = [];
+  for (const entry of closingIssuesReferences) {
+    const record = entry !== null && typeof entry === 'object' ? entry : null;
+    const rawNumber = record && 'number' in record ? record.number : entry;
+    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const repository = record?.repository;
+    if (repository !== null && repository !== undefined) {
+      if (typeof repository !== 'object') {
+        continue;
+      }
+      const repoRecord = repository;
+      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
+      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
+      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
+        continue;
+      }
+    }
+    numbers.push(number);
+  }
+  return numbers;
+}
+/**
+ * kurone-kito/idd-skill#3328 (C1 critique pass, live-reproduced against
+ * both `--claimless` consumers, then further tightened per Copilot review
+ * on PR #3421): derive `classifyPrLoopMembership`'s own
+ * `closingIssueNumbers` input from a raw `closingIssuesReferences`
+ * passthrough, distinguishing three cases that must NOT collapse into
+ * each other:
+ *
+ * 1. **Genuinely no closing references** (a real, empty array) ->
+ *    `[]`, the unchanged `#2017` claimless case.
+ * 2. **The field itself is unreadable** (not an array at all -- a
+ *    malformed provider response, or a value this function was never
+ *    meant to see) -> `null`.
+ * 3. **Every entry resolves to a same-repo issue number** -> those
+ *    numbers.
+ *
+ * Any entry that does NOT resolve to a same-repo number -- cross-repo,
+ * or otherwise unparseable by
+ * {@link extractSameRepoClosingIssueNumbers} -- makes the WHOLE result
+ * `null`, even when other entries in the same array did resolve. Before
+ * #3328, both consumers refused `--claimless` outright whenever the raw
+ * `closingIssuesReferences` was non-empty, regardless of repo; a
+ * same-repo-only filter that silently drops an unresolved entry and
+ * returns the resolved subset would let the classifier -- and each
+ * consumer's own claim-state check -- run against an INCOMPLETE closing
+ * set, never checking the dropped entry's own claim state at all.
+ * `resolve-review-thread.mts` has no later closing-set gate to catch
+ * that gap the way `pre-merge-readiness.mts`'s own gate does, so this
+ * function fails the WHOLE result closed instead of accepting a partial
+ * one. `null` reproduces the pre-#3328 refusal either way: the
+ * classifier's own `null` row fails closed to `'in-loop'`.
+ */
+export function resolveClosingIssueNumbersForClassifier(
+  closingIssuesReferences,
+  owner,
+  repo,
+) {
+  if (!Array.isArray(closingIssuesReferences)) {
+    return null;
+  }
+  if (closingIssuesReferences.length === 0) {
+    return [];
+  }
+  const sameRepoNumbers = extractSameRepoClosingIssueNumbers(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  return sameRepoNumbers.length === closingIssuesReferences.length
+    ? sameRepoNumbers
+    : null;
 }
 export function summarizeExternalCheckWaivers(
   comments,

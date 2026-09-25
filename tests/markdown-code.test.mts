@@ -5,6 +5,7 @@ import {
   blankFencedCodeBlocks,
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findHtmlCommentRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -1475,4 +1476,264 @@ test('mergeMarkdownCodeRanges coalesces overlapping and touching ranges, sorted 
       { start: 10, end: 15 },
     ],
   );
+});
+
+test('maskMarkdownForScan excludes an inline-code-quoted "<!--" from htmlComments masking even when inlineCode: "keep" (#3282)', () => {
+  // #2711/PR #2735 round-2 case, now exercised at the entry-point level:
+  // findHtmlCommentRanges's own ignoredOpenerRanges must exclude a `<!--`
+  // sitting inside an inline code span regardless of whether inline code
+  // itself is masked in the final output -- otherwise a quoted `` `<!--` ``
+  // example is wrongly read as a real, unterminated HTML comment opener
+  // and masks through EOF.
+  const body = 'see `<!--` then real text\nmore';
+  assert.equal(
+    maskMarkdownForScan(body, {
+      inlineCode: 'keep',
+      htmlComments: 'mask',
+      htmlBlocks: 'mask',
+    }),
+    body,
+  );
+});
+
+test('findHtmlCommentRanges does not mask a mid-line unterminated "<!--" inside a Markdown link title (#3282 Copilot review, PR #3413, gap-2767-09)', () => {
+  // GitHub renders this exact shape (confirmed via `gh api markdown`) with
+  // the link title's own "<!--" kept as literal text and the following
+  // "Maintainer decision" line as an ordinary, visible paragraph -- a
+  // mid-line "<!--" is neither a valid inline raw-HTML comment (that
+  // grammar requires a matching "-->") nor a CommonMark HTML-block type-2
+  // opener (which requires the "<!--" to be the first non-whitespace
+  // content of its own line). Before this fix, an unterminated opener
+  // masked through end-of-text regardless of position, swallowing the
+  // decision line.
+  const body =
+    'See [draft notes](https://example.com/doc "<!-- still drafting") for background.\n\nMaintainer decision (#100, 2026-09-01): adopt option A.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a genuine line-start unterminated "<!--" through end-of-text', () => {
+  // The CommonMark HTML-block type-2 case this file's doc comments
+  // describe (#2662/#2711): an issue-template author's own hidden
+  // scaffolding comment, opened at the very start of a line with no
+  // closing "-->" anywhere later, still extends through EOF exactly as
+  // before -- this fix narrows the unterminated case to non-line-start
+  // openers only, it does not remove the line-start behavior.
+  const body =
+    '<!-- guidance for authors\n\nMaintainer decision: adopt option A.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 0, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a genuine line-start unterminated "<!--" indented up to 3 spaces', () => {
+  const body = '   <!-- guidance for authors\nmore text\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 3, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" indented 4+ spaces (an indented code block, not an HTML block opener)', () => {
+  const body = '    <!-- guidance for authors\nmore text\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a mid-line "<!--" when it is properly terminated with "-->"', () => {
+  const body = 'before <!-- real comment --> after';
+  assert.deepEqual(findHtmlCommentRanges(body), [{ start: 7, end: 28 }]);
+});
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" nested inside a blockquote container (#3282 Copilot review round 2, PR #3413)', () => {
+  // `gh api markdown` confirms "> <!-- x\n\nAfter" renders as an empty
+  // blockquote -- the comment swallows the rest of the document exactly
+  // like a bare line-start opener. Round 1 of this fix only checked the
+  // raw physical line's own leading spaces, so a blockquote's own ">"
+  // prefix wrongly defeated the block-opener check and left this case
+  // unmasked.
+  const body = '> <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" opening a list item', () => {
+  // "- <!-- x\n\nAfter" renders as an empty list item (confirmed via
+  // `gh api markdown`) -- the list marker's own required spacing does
+  // not defeat the block-opener check.
+  const body = '- <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks a line-start unterminated "<!--" opening a list item inside a blockquote', () => {
+  const body = '> - <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 4, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a mid-line unterminated "<!--" inside a link title even when the link sits inside a list item', () => {
+  // Confirms the container-aware opener check does not overcorrect: a
+  // "<!--" that is not the first thing after the list marker's own
+  // spacing (here, `See [x](url "<!--` follows real prose) stays
+  // ordinary prose, matching `gh api markdown`'s rendering of this exact
+  // body (the link title renders literally, and the following sentence
+  // renders as its own paragraph).
+  const body = '- See [x](url "<!-- t")\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a list-marker opener padded with up to 4 columns of spacing', () => {
+  // CommonMark's list-item rule bounds a marker's own required padding to
+  // 1-4 columns; `gh api markdown` confirms "-    <!-- x" (4 spaces)
+  // still swallows the rest of the document, same as 1 space.
+  const body = '-    <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" padded 5+ columns after a list marker (CodeRabbit review, PR #3413)', () => {
+  // Five or more columns of padding after a list marker is not "the
+  // marker's own required spacing" per CommonMark -- it starts an
+  // indented code block nested inside the list item instead. `gh api
+  // markdown` confirms "-     <!-- x" (5 spaces) renders as a literal
+  // `<pre><code>` block inside the `<li>`, with later content rendering
+  // as its own paragraph OUTSIDE the list -- not swallowed. Before this
+  // fix, reusing the list-item regex's unbounded "[ \\t]+" padding group
+  // wrongly treated any run length as valid marker spacing.
+  const body = '-     <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a list-marker opener padded with a single tab', () => {
+  // A tab right after a 1-column marker expands to fill columns 2-4 (the
+  // usual 4-column tab-stop rule), landing within the valid 1-4 column
+  // range -- `gh api markdown` confirms "-\t<!-- x" still swallows the
+  // rest of the document.
+  const body = '-\t<!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 2, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" on a list-item continuation line indented to the inherited content column (Copilot review round 3, PR #3413)', () => {
+  // "-    item" opens a list item whose content column is 5 (marker "-"
+  // plus its own 4-column padding); a following line with no marker of
+  // its own, indented to exactly that column, is still a valid
+  // block-opener position within the list item's content zone. `gh api
+  // markdown` confirms "-    item\n     <!-- x\n\nAfter" swallows the
+  // rest of the document -- neither the literal "<!--" text nor the
+  // "After" paragraph render. Before this fix, the position check only
+  // examined the physical line in isolation and had no inherited-indent
+  // awareness, so this continuation opener was wrongly left unmasked.
+  const body = '-    item\n     <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 15, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges does not mask a "<!--" over-indented 4+ columns past the inherited list-content indent', () => {
+  // 9 columns of indentation (content column 5 plus 4 more) is beyond
+  // the "at most 3 extra columns" a continuation opener allows -- `gh
+  // api markdown` confirms this renders the "<!--" as literal text
+  // inside the list item's own paragraph, with "After" rendering as its
+  // own separate paragraph outside the list (not swallowed).
+  const body =
+    '-    item\n         <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks an under-indented line that exits the list item as a fresh top-level opener', () => {
+  // 2 columns of indentation is below the list item's own content
+  // column (5), so this line no longer continues that item's content
+  // zone -- but 2 columns is still within the ordinary top-level "at
+  // most 3 leading spaces" rule, so it opens a fresh, unrelated
+  // top-level HTML block instead. `gh api markdown` confirms this still
+  // swallows the rest of the document (no literal "<!--" text and no
+  // "After" paragraph render).
+  const body = '-    item\n  <!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 12, end: body.length },
+  ]);
+});
+
+test("findHtmlCommentRanges does not let a fenced example's own list-marker-shaped content leak an inherited indent past the fence (Copilot review round 4, PR #3413)", () => {
+  // A fenced example's own "- x" line is literal demonstration text, not
+  // a real list item -- but without freezing the list-content-indent
+  // tracker across the fence, it could still spuriously adopt
+  // contentIndent 2, and if the closing fence delimiter happens to be
+  // indented to that same column (2), the tracker's own indentation-drop
+  // reset (a strict "<", not "<=") never fires to clear it, leaking the
+  // spurious indent to a later top-level line at column 5 (2 inherited +
+  // 3 extra). `gh api markdown` confirms this exact body does NOT
+  // swallow the rest of the document -- the "<!--" line renders as its
+  // own top-level indented code block, unrelated to any list, and
+  // "After" renders as its own paragraph.
+  const body =
+    '```\n- x\n  ```\n     <!-- trigger\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks a list-continuation opener indented with a tab (Copilot review round 5, PR #3413)', () => {
+  // "- item" opens a list item with content column 2; a following line
+  // indented with a single tab (expanding to column 4 via the usual
+  // tab-stop rule) reaches that column plus 2 extra columns, still
+  // within the "at most 3 extra columns" a continuation opener allows.
+  // `gh api markdown` confirms "- item\n\t<!-- x\n\nAfter" swallows the
+  // rest of the document. Before this fix, the continuation check
+  // rejected any non-space character (including a tab) outright, even
+  // though indentationColumns -- and the tracker's own contentIndent --
+  // are already tab-aware.
+  const body = '- item\n\t<!-- x\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 8, end: body.length },
+  ]);
+});
+
+test("findHtmlCommentRanges does not let a raw HTML block's own list-marker-shaped content leak an inherited indent past it (Copilot review round 6, PR #3413)", () => {
+  // A raw/generic HTML block's own content (here, "<div>" followed by a
+  // "- example" line) is never parsed as Markdown -- "- example" is
+  // literal text, not a real list item -- but without freezing the
+  // list-content-indent tracker across it too (the same reason it
+  // already freezes across a fenced range), it could still spuriously
+  // adopt contentIndent 2. The blank line after "- example" ends the
+  // HTML block per CommonMark, so a later top-level line at column 5 (2
+  // inherited + 3 extra) must NOT be read as a list continuation. `gh
+  // api markdown` confirms this exact body does not swallow the rest of
+  // the document: the "<!--" line renders as its own top-level indented
+  // code block, unrelated to any list, and "After" renders as its own
+  // paragraph.
+  const body =
+    '<div>\n- example\n\n     <!-- trigger\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), []);
+});
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" sitting anywhere inside an already-open raw HTML block (Copilot review round 7, PR #3413)', () => {
+  // "<div><!-- trigger" -- the "<!--" is not itself at a fresh
+  // block-start position (it follows "<div>" mid-line), but it is
+  // already inside the "<div>" block's own extent, and raw HTML block
+  // content is never reparsed once open. `gh api markdown` confirms
+  // this swallows the rest of the document (renders as an empty
+  // "<div></div>"). The position-only opener check alone can never
+  // recognize this shape, since the "<!--" here opens nothing of its
+  // own -- it is unrelated content already covered by the "<div>"
+  // block findHtmlBlockRanges itself already detects.
+  const body = '<div><!-- trigger\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
+});
+
+test('findHtmlCommentRanges still masks an unterminated "<!--" inside an open raw HTML block even across a blank line', () => {
+  // Confirms the existing "extend to end-of-text" simplification for an
+  // unterminated comment (established since the first #3282 fix, and
+  // already verified past a blockquote's own blank line) also holds
+  // for this new shape: `gh api markdown` confirms
+  // "<div><!-- trigger\n\nAfter" still renders as an empty "<div></div>",
+  // not stopping at the blank line.
+  const body = '<div><!-- trigger\n\nAfter, Maintainer decision here.\n';
+  assert.deepEqual(findHtmlCommentRanges(body), [
+    { start: 5, end: body.length },
+  ]);
 });

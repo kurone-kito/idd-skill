@@ -19,7 +19,10 @@ import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { loadPolicyConfig } from './idd-config.mts';
-import { findMarkdownCodeRanges } from './markdown-code.mts';
+import {
+  findMarkdownCodeRanges,
+  maskMarkdownForScan,
+} from './markdown-code.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   DEFAULT_STALE_AGE_MS,
@@ -318,6 +321,16 @@ export interface CandidateFileEntry {
  * exact-title matching so a sibling heading like "Candidate files
  * considered but rejected" does not count) stays one source of truth
  * instead of a second regex to keep in sync.
+ *
+ * Both callers (#3282) pass the LINES OF A MASKED COPY of the body
+ * (fences, indented code, HTML comments, and raw HTML blocks masked;
+ * inline code kept, since GitHub renders none of the former as real
+ * heading/Setext structure but does render inline code's own text) --
+ * never the raw body's own lines -- so a fake `## Candidate files`
+ * heading or Setext underline quoted inside any of those constructs
+ * cannot open or close a section a real reader would never see as one.
+ * This function itself has no opinion on masked vs. raw; it just scans
+ * whatever `lines` it is given.
  */
 function findCandidateFilesSectionBounds(
   lines: readonly string[],
@@ -421,7 +434,12 @@ function findCandidateFilesSectionBounds(
  */
 export function hasCandidateFilesHeading(body: unknown): boolean {
   const text = typeof body === 'string' ? body : '';
-  return findCandidateFilesSectionBounds(text.split(/\r?\n/)) !== null;
+  const maskedLines = maskMarkdownForScan(text, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
+  return findCandidateFilesSectionBounds(maskedLines) !== null;
 }
 
 /**
@@ -448,18 +466,37 @@ export function hasCandidateFilesHeading(body: unknown): boolean {
  * block-before-inline parsing order already makes that input impossible:
  * an ATX heading (or Setext-eligible content line) inside an open span
  * closes it as literal text before the span can extend across the
- * heading, so there is no fake heading for a masking pass to hide.)
+ * heading, so there is no fake heading for a masking pass to hide. This
+ * remains true after #3282: inline code stays unmasked below, only
+ * fences/indented code/HTML comments/HTML blocks are masked, none of
+ * which this round-9 argument concerned.)
+ *
+ * #3282: both the section heading/Setext boundary AND the path extraction
+ * below read the SAME masked copy (fences, indented code, HTML comments,
+ * and raw HTML blocks masked; inline code kept, since the backtick-path
+ * extraction below needs it readable) -- not the raw body -- so a
+ * fenced/indented/commented/HTML-block example of the child template's
+ * own `## Candidate files` heading cannot be mistaken for the real
+ * section, AND a fence's own triple-backtick delimiters (now blanked to
+ * spaces) cannot pair up with each other or with a later genuine
+ * backtick-quoted path's own delimiters and corrupt the naive
+ * backtick-pair regex below. Masking preserves length and line count, so
+ * this never loses or shifts a real, unmasked (inline-code-quoted) path.
  */
 export function parseCandidateFileEntries(body: unknown): CandidateFileEntry[] {
   const text = typeof body === 'string' ? body : '';
-  const lines = text.split(/\r?\n/);
-  const bounds = findCandidateFilesSectionBounds(lines);
+  const maskedLines = maskMarkdownForScan(text, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
+  const bounds = findCandidateFilesSectionBounds(maskedLines);
   if (bounds === null) {
     return [];
   }
   const { start, end } = bounds;
 
-  const section = lines.slice(start, end);
+  const section = maskedLines.slice(start, end);
   const sectionText = section.join('\n');
   const entries: CandidateFileEntry[] = [];
 

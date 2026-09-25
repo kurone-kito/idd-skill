@@ -486,8 +486,8 @@ function buildReachableLeafCounter(
  * edge / depth counts, closed descendants split by classification, and the
  * traversal diagnostics) and asserts no open / unresolved / inaccessible /
  * nested-roadmap descendant remains. Only called when the roadmap is ready,
- * so every descendant is closed -- some as completed, others (listed
- * separately) as not planned or duplicate (#3326).
+ * so every descendant is closed -- some possibly as completed, others (if
+ * any, listed separately) as not planned or duplicate (#3326).
  */
 export function buildRoadmapCompletionAuditBody(
   report: RoadmapGraphReport,
