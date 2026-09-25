@@ -463,3 +463,77 @@ test('buildTrustedMarkerLogins leaves comment authors untouched when collaborato
     }
   }
 });
+
+test('runHandoff release keyword posts unclaimed-by for the displaced claim', async () => {
+  const responses = ['497', 'release', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-release',
+        };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, true);
+  assert.equal(result.successorIds, undefined);
+  assert.equal(postedBodies.length, 1);
+  assert.match(
+    postedBodies[0],
+    /^<!-- unclaimed-by: github-copilot-cli-old claim-497-test /,
+  );
+  assert.equal(postedBodies[0].includes('forced-handoff:'), false);
+  assert.ok(output.includes('release -- no successor'));
+  assert.ok(output.includes('Claim released:'));
+});
+
+test('runHandoff refuses release when the actor is not authorized', async () => {
+  const responses = ['497', 'release', 'y'];
+  let callIndex = 0;
+  let posted = false;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          isAuthorizedForcedHandoff: () => false,
+          prompt: async () => responses[callIndex++],
+          postComment: async () => {
+            posted = true;
+            return { html_url: 'https://example.invalid/should-not-post' };
+          },
+        }),
+      ),
+    /not authorized/,
+  );
+  assert.equal(posted, false);
+});
+
+test('runHandoff refuses release when forced-handoff mode is not human-gated', async () => {
+  let posted = false;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          mode: 'disabled',
+          prompt: async () => 'release',
+          postComment: async () => {
+            posted = true;
+            return { html_url: 'https://example.invalid/should-not-post' };
+          },
+        }),
+      ),
+    /human-gated/,
+  );
+  assert.equal(posted, false);
+});

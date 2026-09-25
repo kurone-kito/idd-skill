@@ -20,6 +20,7 @@ import {
   safeGhText,
 } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
+import { renderUnclaimedByMarker } from './marker-helpers.mts';
 import {
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
@@ -85,6 +86,9 @@ type ForceHandoffPlanOptions = NonNullable<Parameters<typeof planHandoff>[2]>;
 
 export const SAME_SUCCESSOR_WARNING =
   'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
+
+/** Operator keyword that releases the claim instead of transferring it. */
+export const RELEASE_SUCCESSOR_KEYWORD = 'release';
 
 /** Result returned by {@link runHandoff}. */
 interface RunHandoffResult {
@@ -225,9 +229,71 @@ export async function runHandoff(
   }
 
   const rawSuccessorAgentId = await ask(
-    `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`]: `,
+    `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`, or \`${RELEASE_SUCCESSOR_KEYWORD}\` for no successor]: `,
   );
   const enteredAgentId = rawSuccessorAgentId.trim();
+  if (enteredAgentId.toLowerCase() === RELEASE_SUCCESSOR_KEYWORD) {
+    if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
+      throw new Error(
+        "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
+      );
+    }
+    if (!isAuthorizedForcedHandoff(forcedBy)) {
+      throw new Error(
+        `forced-by actor ${forcedBy} is not authorized to release this claim`,
+      );
+    }
+    const releaseBody = renderUnclaimedByMarker({
+      agentId: plan.activeClaim.agentId,
+      claimId: plan.activeClaim.claimId,
+      timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    });
+    const releaseLines = [
+      '',
+      `Forced-handoff plan for issue #${issueNumber}:`,
+      `  Context:   ${plan.contextScope}`,
+      `  Branch:    ${plan.branch}`,
+      `  Old claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+      '  Action:    release -- no successor',
+      '',
+      'Marker preview:',
+      releaseBody,
+      '',
+    ];
+    write(`${releaseLines.join('\n')}\n`);
+    const releaseConfirm = await ask('Confirm forced handoff? [y/N] ');
+    ask.close?.();
+    if (releaseConfirm.trim().toLowerCase() !== 'y') {
+      write('Aborted. No changes made.\n');
+      return { posted: false };
+    }
+    const releaseResult = postComment
+      ? await postComment(issueNumber, releaseBody)
+      : (ghJson([
+          'api',
+          `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+          '--method',
+          'POST',
+          '-f',
+          `body=${releaseBody}`,
+        ]) as PostedCommentPayload);
+    const releaseUrl = String(
+      releaseResult.html_url ?? releaseResult.url ?? '',
+    );
+    write(
+      [
+        '',
+        `Claim released: ${releaseUrl}`,
+        `  Released claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+        '',
+      ].join('\n'),
+    );
+    return {
+      posted: true,
+      commentUrl: releaseUrl,
+      contextScope: plan.contextScope,
+    };
+  }
   if (enteredAgentId) {
     planOptions = { ...planOptions, newAgentId: enteredAgentId };
     plan = planHandoff(issueComments, linkedPrs, planOptions);
