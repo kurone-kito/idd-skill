@@ -365,9 +365,10 @@ function fetchPrComments({ owner, repo, prNumber }) {
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
     return parsePaginatedGhNdjson(payload);
-  } catch {
+  } catch (error) {
     throw new Error(
       `could not read pull request #${prNumber} comments to resolve local validation evidence`,
+      { cause: error },
     );
   }
 }

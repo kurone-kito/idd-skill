@@ -1929,11 +1929,13 @@ function ghGraphql(
       handleGraphqlFailure(
         `GraphQL request failed: ${formatGraphqlErrors(response.errors)}; ${formatGraphqlContext(query, variables)}`,
         options,
+        error,
       );
     }
     handleGraphqlFailure(
       `gh api graphql failed: ${stderr || e.message}; ${formatGraphqlContext(query, variables)}`,
       options,
+      error,
     );
   }
 }
@@ -1941,11 +1943,18 @@ function ghGraphql(
 function handleGraphqlFailure(
   message: string,
   options: GraphqlCallOptions,
+  error?: unknown,
 ): never {
   if (options.throwOnError) {
-    throw new Error(message);
+    throw new Error(
+      message,
+      error === undefined ? undefined : { cause: error },
+    );
   }
-  fail(message);
+  // A bare message (PR missing from a successful payload, and the other
+  // domain failures below) stays kind usage. A gh failure keeps the
+  // tagged error so the envelope is transport/not-found, not usage.
+  fail(message, error);
 }
 
 function parseJsonOrNull(value: string): unknown {

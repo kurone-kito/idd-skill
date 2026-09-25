@@ -478,9 +478,10 @@ function fetchPrComments({
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
     return parsePaginatedGhNdjson(payload) as CommentLike[];
-  } catch {
+  } catch (error) {
     throw new Error(
       `could not read pull request #${prNumber} comments to resolve local validation evidence`,
+      { cause: error },
     );
   }
 }
