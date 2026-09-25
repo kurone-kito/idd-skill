@@ -21,6 +21,7 @@ import { resolveHelperActiveClaim } from '../src/scripts/forced-handoff-marker.m
 import {
   digestExternalCheckWaiverMarkerBody,
   operationalMarkerPrefix,
+  renderOutOfLoopMarker,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
@@ -995,6 +996,78 @@ test('planExternalCheckWaiver: --auto-bootstrap falls back to a claimless (none)
   assert.equal(parsed?.agentId, 'github-actions[bot]');
   assert.equal(parsed?.reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
   assert.equal(parsed?.runId, '123456789');
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap none fallback blocks a closing PR with no out-of-loop marker', () => {
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.issueCandidates = [
+    {
+      number: 667,
+      url: 'https://github.com/kurone-kito/idd-skill/issues/667',
+      activeClaim: null,
+    },
+  ];
+  input.pr = {
+    ...input.pr,
+    closingIssuesReferences: [{ number: 667 }],
+  };
+  input.trustedMarkerLogins = ['kurone-kito'];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join('\n'),
+    /no valid out-of-loop marker was found/,
+  );
+});
+
+test('planExternalCheckWaiver: --auto-bootstrap none fallback allows a closing PR with a trusted out-of-loop marker', () => {
+  const input = buildAutoBootstrapInput();
+  input.actor = 'github-actions[bot]';
+  input.issueCandidates = [
+    {
+      number: 667,
+      url: 'https://github.com/kurone-kito/idd-skill/issues/667',
+      activeClaim: null,
+    },
+  ];
+  input.pr = {
+    ...input.pr,
+    closingIssuesReferences: [{ number: 667 }],
+  };
+  input.trustedMarkerLogins = ['kurone-kito'];
+  input.prComments = [
+    {
+      body: renderOutOfLoopMarker({
+        agentId: 'github-actions[bot]',
+        prNumber: input.pr.number,
+        reason: 'bootstrap',
+        at: '2026-08-31T03:00:00Z',
+      }),
+      author: { login: 'kurone-kito' },
+      createdAt: '2026-08-31T03:00:01Z',
+      lastEditedAt: null,
+    },
+  ];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-08-31T03:13:24Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(
+    report.blockingReasons.some((reason) =>
+      reason.includes('out-of-loop marker'),
+    ),
+    false,
+  );
+  assert.equal(report.canApply, true);
+  assert.match(report.body, / none /);
 });
 
 test('planExternalCheckWaiver: --auto-bootstrap still blocks on an empty actor when no linked issue resolves (Codex review, PR #2895)', () => {

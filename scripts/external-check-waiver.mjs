@@ -29,8 +29,10 @@ import {
 } from './policy-helpers.mjs';
 import {
   buildEffectiveTrustedMarkerLogins,
+  classifyPrLoopMembership,
   composeGateTrustedMarkerLogins,
   digestExternalCheckWaiverMarkerBody,
+  extractSameRepoClosingIssueNumbers,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
@@ -217,6 +219,24 @@ export function planExternalCheckWaiver(input, options = {}) {
     }
   }
   if (claimless || autoBootstrapImplicitClaimless) {
+    // Explicit --claimless and the auto-bootstrap zero-candidate fallback
+    // share one membership check: a PR that closes an issue is still in
+    // the IDD loop until a trusted out-of-loop marker says otherwise.
+    const [owner, name] = String(input?.repository ?? '').split('/');
+    const membership = classifyPrLoopMembership({
+      prNumber: Number(pr.number ?? 0),
+      closingIssueNumbers: extractSameRepoClosingIssueNumbers(
+        pr.closingIssuesReferences,
+        owner ?? '',
+        name ?? '',
+      ),
+      closingIssueClaimState: 'none',
+      prComments: input?.prComments ?? [],
+      trustedMarkerLogins: input?.trustedMarkerLogins ?? [],
+    });
+    if (membership.membership === 'in-loop') {
+      blockingReasons.push(membership.reason);
+    }
     // The normal path's agentId comes from the resolved claim, independent
     // of `actor`; a claimless binding (explicit --claimless, or the implicit
     // auto-bootstrap fallback above) has no claim to fall back on, so an
