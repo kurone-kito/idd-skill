@@ -64,7 +64,19 @@ In this phase, the agent:
 
 The critique pass is agent-neutral: use a subagent or rubber-duck
 reviewer when available, otherwise run an explicit self-critique
-locally. Clarification must be bounded; use the repository-local
+locally. When that reviewer is a subagent, prefer a
+non-context-inheriting mechanism whenever the tool offers one, and
+apply the same preference to any other no-mutation verification or
+research dispatch. A context-inheriting mechanism, such as Claude
+Code's `fork` subagent type, is a fallback only. A prose-only
+restriction in the dispatch prompt does not reliably stop that
+delegate from completing the calling session's broader task. Observed
+2026-09-17, when a research-only verification subagent published a
+roadmap and 4 child issues, and a read-only verification subagent
+published another roadmap and 4 child issues and rewrote a personal
+gist; and 2026-09-24/25, when a read-only fact-check subagent
+published two drafted issues. Clarification must be bounded; use the
+repository-local
 `issueAuthoring.maxClarificationRounds` value when available,
 otherwise default to 3 rounds. If safe drafting is still impossible
 after that, stop and report the remaining blockers instead of looping
