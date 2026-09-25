@@ -4824,15 +4824,13 @@ export function resolveTrustedMarkerActors({
  * `gh`-call loop-safety wrappers) -- and passes the result in here rather
  * than this function reaching for a port/comments itself.
  *
- * Adds no implicit repository-owner entry. This differs deliberately from
- * `external-check-waiver.mts`'s `buildTrustedMarkerLogins` (the
- * AUTHORING-side self-authorization check, a different consumer with
- * different semantics: it decides whether the CURRENT actor may post a
- * waiver at all, and always trusts the owner for that decision). A gate
- * consuming an ALREADY-POSTED waiver must not extend that same leniency:
- * an owner who authors waivers must be explicitly listed in
- * `trustedMarkerActors`, exactly as the gates already required before this
- * change.
+ * Adds no implicit repository-owner entry. An owner who authors these
+ * markers must be explicitly listed in `trustedMarkerActors`, exactly as
+ * the gates already required before kurone-kito/idd-skill#3250. #3251
+ * moved the remaining consumers (`resolveLinkedIssueCandidates`,
+ * `local-validation-evidence` resolve mode, and
+ * `provider-outage-declaration` `list-advanced`) onto this same
+ * composition via {@link composeGateTrustedMarkerLogins}.
  */
 export function buildEffectiveTrustedMarkerLogins({
   viewerLogin,
@@ -4844,6 +4842,34 @@ export function buildEffectiveTrustedMarkerLogins({
     ...configuredTrustedActors,
     ...collaboratorMarkerLogins,
   ]);
+}
+/**
+ * kurone-kito/idd-skill#3251: the flag/env/config ladder plus
+ * {@link buildEffectiveTrustedMarkerLogins}, so a helper's trusted set
+ * for a given viewer, flag, env, config, and collaborator-login list
+ * equals the set `pre-merge-readiness` builds for those same inputs.
+ * Adds no implicit repository owner. Callers still resolve collaborator
+ * logins themselves (and pass `[]` when collaborator-marker trust is
+ * off) and still load `config` from a trusted ref, never the local
+ * worktree.
+ */
+export function composeGateTrustedMarkerLogins({
+  viewerLogin,
+  flagValue = '',
+  envValue = '',
+  config = null,
+  collaboratorMarkerLogins = [],
+}) {
+  const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
+    flagValue,
+    envValue,
+    config,
+  });
+  return buildEffectiveTrustedMarkerLogins({
+    viewerLogin,
+    configuredTrustedActors,
+    collaboratorMarkerLogins,
+  });
 }
 function trustedMarkerActorTokens(value) {
   return Array.isArray(value) ? value : String(value ?? '').split(',');

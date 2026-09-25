@@ -21,9 +21,9 @@
 
 import { readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mts';
 import {
   type AuthorityEvidence,
-  buildTrustedMarkerLogins,
   normalizeAuthorityEvidence,
   resolveActorLogin,
   resolveCollaboratorAuthority,
@@ -42,6 +42,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   resolveTrustedActors,
   runMinimize,
@@ -49,8 +50,10 @@ import {
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
+  resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
 import {
+  composeGateTrustedMarkerLogins,
   type ParsedLocalValidationEvidence,
   parseLocalValidationEvidenceComment,
   parsePaginatedGhNdjson,
@@ -132,6 +135,32 @@ function coversAll(covers: string[], requiredCheckNames: string[]): boolean {
  * (protocol-helpers.mts), which has no reference to this field at all, so
  * no required-check blocker can ever be removed by this resolution.
  */
+/**
+ * Trusted logins for `idd-local-validation-evidence` markers. Same
+ * composition the merge gate uses. No implicit repository owner.
+ */
+export function trustedLoginsForLocalValidationEvidence({
+  viewerLogin,
+  config,
+  flagValue = '',
+  envValue = '',
+  collaboratorMarkerLogins = [],
+}: {
+  viewerLogin: string;
+  config: { trustedMarkerActors?: unknown } | null;
+  flagValue?: string | string[];
+  envValue?: string | string[];
+  collaboratorMarkerLogins?: readonly unknown[];
+}): string[] {
+  return composeGateTrustedMarkerLogins({
+    viewerLogin,
+    flagValue,
+    envValue,
+    config,
+    collaboratorMarkerLogins,
+  });
+}
+
 export function resolveLocalValidationEvidence(input: {
   comments: CommentLike[] | null | undefined;
   prHeadSha: string;
@@ -700,6 +729,10 @@ export async function runLocalValidationEvidence(
     now?: Date;
     comments?: CommentLike[];
     trustedMarkerLogins?: string[];
+    viewerLogin?: string;
+    /** Trusted-ref config. Omit to load it from the PR base ref. */
+    trustConfig?: { trustedMarkerActors?: unknown } | null;
+    baseRefName?: string;
     postComment?: typeof postComment;
   } = {},
 ): Promise<{ exitCode: number; result?: unknown }> {
@@ -729,18 +762,45 @@ export async function runLocalValidationEvidence(
     fetchPrComments({ owner, repo: name, prNumber: args.prNumber });
 
   if (args.mode === 'resolve') {
-    const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
+    const viewerLogin = (
+      options.viewerLogin ??
+      String(safeGhText(['api', 'user', '--jq', '.login']))
+    )
       .trim()
       .toLowerCase();
-    const trustedMarkerLogins = options.trustedMarkerLogins ?? [
-      ...buildTrustedMarkerLogins({
-        owner,
-        repo: name,
-        rawConfig,
+    const baseRefName =
+      options.baseRefName ??
+      String(
+        safeGhText([
+          'pr',
+          'view',
+          String(args.prNumber),
+          '--repo',
+          `${owner}/${name}`,
+          '--json',
+          'baseRefName',
+          '--jq',
+          '.baseRefName',
+        ]),
+      ).trim();
+    const trustConfig =
+      options.trustConfig !== undefined
+        ? options.trustConfig
+        : loadTrustedActorConfig({ owner, repo: name, baseRefName });
+    const trustedMarkerLogins =
+      options.trustedMarkerLogins ??
+      trustedLoginsForLocalValidationEvidence({
         viewerLogin,
-        issueComments: comments,
-      }),
-    ];
+        config: trustConfig,
+        flagValue: args.trustedMarkerLogins,
+        envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+        collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
+          trustConfig,
+          process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+        )
+          ? resolveTrustedCollaboratorMarkerLogins(owner, name, comments)
+          : [],
+      });
     const targetIssue =
       args.targetIssue || policy.providerOutage.declarationTarget;
     const declarationComments = targetIssue

@@ -32,7 +32,11 @@
 // residual up knowingly.
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  readGithubRepoDefaultBranch,
+} from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   inspectCritiqueLoopDelegateLayer,
@@ -172,6 +176,40 @@ export function loadTrustedIddConfig(
       `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
     );
   }
+}
+/**
+ * kurone-kito/idd-skill#3251: choose the ref a gate trusted-actor list
+ * reads `.github/idd/config.json` from. A PR-scoped caller passes the
+ * PR base ref; a repository-scoped caller passes `''` and this falls
+ * back to the live default branch. Never a local worktree path.
+ */
+export function selectTrustedConfigRef(baseRefName, liveDefaultBranch) {
+  const ref =
+    String(baseRefName ?? '').trim() || String(liveDefaultBranch ?? '').trim();
+  if (!ref) {
+    throw new Error(
+      'cannot resolve a trusted ref for .github/idd/config.json: no base ref was supplied and the repository live default branch could not be determined',
+    );
+  }
+  return ref;
+}
+/**
+ * Load `.github/idd/config.json` for the shared gate trusted-actor
+ * builder. `baseRefName` is the PR base ref for a PR-scoped read and
+ * `''` for a repository-scoped read (the live default branch).
+ */
+export function loadTrustedActorConfig({
+  owner,
+  repo,
+  baseRefName = '',
+  readDefaultBranch = readGithubRepoDefaultBranch,
+  fetchEncodedConfig,
+}) {
+  const ref = selectTrustedConfigRef(
+    baseRefName,
+    String(baseRefName ?? '').trim() ? null : readDefaultBranch(owner, repo),
+  );
+  return loadTrustedIddConfig(owner, repo, ref, fetchEncodedConfig);
 }
 /**
  * Read and parse a policy config file for the nine `--policy`/`--config`

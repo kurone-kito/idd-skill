@@ -1103,6 +1103,11 @@ below.
   bounded.
 - Distribute as an opt-in policy key with default `off`; a repository
   opts in per its own review-cost profile.
+- A follow-up filed by either trigger carries the
+  `review-fix-loop-cutoff` defer-source marker. The issue-authoring
+  skill's Stage 2 narrow auto-release exception releases that hold
+  immediately, so the deferred issue does not wait for a human
+  release request.
 
 ### review-ack worked example
 
