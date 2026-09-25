@@ -146,7 +146,8 @@ candidate at the same second, then race the same-second tie-break;
 the pre-scan moves the resolution earlier in the pipeline so most
 sessions never touch the same issue.
 
-**Own-orphaned-claim near miss (#3322).** Observed 2026-09-23/24 in a
+**Own-orphaned-claim near miss (kurone-kito/idd-skill#3322).**
+Observed 2026-09-23/24 in a
 public adopter run (`kurone-kito/vpm`, field-feedback gist round 40): a
 session's own Discover pass read its own orphaned claim's `claimed-by`
 comment as a non-stale foreign claim and moved on to the next
@@ -162,7 +163,8 @@ against Discover's **own current cwd** — the primary worktree, since
 Discover has no per-issue implementation worktree of its own yet —
 never an explicit different worktree's path, so it needs no exception
 to the existing `--read-tokens` scope contract (`claim-lock.mts`'s own
-"Scope of the ownership proof" header comment, #2879 review, Codex P1;
+"Scope of the ownership proof" header comment,
+kurone-kito/idd-skill#2879 review, Codex P1;
 `docs/idd-helper-scripts.md`'s matching note). A fresh `A5` claim
 always records its token into the primary worktree's admin directory
 before any sibling worktree exists, so this check reaches the same
@@ -188,11 +190,12 @@ ineligible and Step 1.5 keeps scanning, so a foreign shared-primary
 hit does not block every later candidate. Discover stops only when
 Resume actually takes the claim.
 
-This finding is upstream of `#3273` (Resume Step 1 not threading an
-already-known claim-id through to `resume-claim-routing.mjs`) and
-`#3274` (operator recovery for a stale/released claim whose local
-worktree is still occupied). `#3273`'s gap means the route above still
-depends on Resume's written-table fallback — left for `#3273` to
+This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
+not threading an already-known claim-id through to
+`resume-claim-routing.mjs`) and kurone-kito/idd-skill#3274 (operator
+recovery for a stale/released claim whose local worktree is still
+occupied). kurone-kito/idd-skill#3273's gap means the route above still
+depends on Resume's written-table fallback — left for that issue to
 close, not duplicated here.
 
 ### A4 Step 2 — Rationale: concurrent-selection desync
