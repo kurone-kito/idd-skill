@@ -12718,7 +12718,16 @@ const THREAD_COMMENT_HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
  * append-only check below only ever compares a longer string's PREFIX
  * against a shorter one, so incidental blank-line noise from a stripped
  * comment lands inside the compared or the appended region either way,
- * never silently dropped from the comparison. */
+ * never silently dropped from the comparison.
+ *
+ * Not an HTML/output sanitizer (CodeQL's `js/incomplete-sanitization`
+ * flags this shape generically): the result is compared with `===` /
+ * `String.prototype.startsWith` inside {@link isVisibleTextAppendOnly}
+ * below and never rendered, concatenated into markup, or otherwise
+ * reaches an HTML/DOM sink, so an unclosed `<!--` surviving a single
+ * pass (the query's generic concern) carries no injection risk here --
+ * it only ever changes which internal dating branch a GraphQL-fetched
+ * bot comment's revision history takes. */
 function stripHtmlCommentsForVisibleText(body: string): string {
   return String(body ?? '').replace(THREAD_COMMENT_HTML_COMMENT_RE, '');
 }
