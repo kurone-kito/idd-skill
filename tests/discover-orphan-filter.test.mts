@@ -2167,6 +2167,9 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
             cwd: REPO_ROOT,
             encoding: 'utf8',
             env: { ...process.env },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         ),
       /failed to load policy from .*bad-policy\.json/,
@@ -2195,6 +2198,9 @@ test('CLI path fails when the default-path config exists but is malformed (not s
             cwd: tempRoot,
             encoding: 'utf8',
             env: { ...process.env },
+            // #3434: suppress the duplicate raw-stderr relay execFileSync
+            // performs when no `stdio` override is given.
+            stdio: ['ignore', 'pipe', 'pipe'],
           },
         ),
       /failed to load policy from .*config\.json/,

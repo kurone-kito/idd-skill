@@ -1430,6 +1430,9 @@ test('--expected-head-sha fails closed (no post) when the live snapshot HEAD has
           cwd: REPO_ROOT,
           encoding: 'utf8',
           env: { ...process.env },
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
     } catch (error) {
@@ -1455,6 +1458,10 @@ function runCliExpectingFailure(argv: string[]): string {
       cwd: REPO_ROOT,
       encoding: 'utf8',
       env: { ...process.env, PATH: '' },
+      // #3434: suppress the duplicate raw-stderr relay execFileSync
+      // performs when no `stdio` override is given -- the `failure.stderr`
+      // this helper returns below is unaffected.
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
@@ -1612,6 +1619,9 @@ test('--from-pr fails closed with a targeted error when gh pr view returns a non
         cwd: REPO_ROOT,
         encoding: 'utf8',
         env: { ...process.env },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
   } catch (error) {
@@ -4056,7 +4066,14 @@ test('authoring-owner CLI refuses to post when an explicit --body-sha256 does no
           supersedes: 'none',
           'body-sha256': wrongDigest,
         }),
-        { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env },
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     } catch (error) {
       const failure = error as { status?: number; stderr?: string };
@@ -4097,7 +4114,14 @@ test('authoring-owner CLI refuses an explicit empty --body-sha256 instead of sil
           supersedes: 'none',
           'body-sha256': '',
         }),
-        { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env },
+          // #3434: suppress the duplicate raw-stderr relay execFileSync
+          // performs when no `stdio` override is given.
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
       );
     } catch (error) {
       const failure = error as { status?: number; stderr?: string };
@@ -4869,7 +4893,13 @@ test('authoring-publication-intent --apply refuses a --actor that does not match
         }),
         '--apply',
       ],
-      { encoding: 'utf8', env: { ...process.env } },
+      {
+        encoding: 'utf8',
+        env: { ...process.env },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     throw new Error('expected the CLI to exit non-zero');
   } catch (error) {
@@ -4951,7 +4981,13 @@ process.exit(1);
         }),
         '--apply',
       ],
-      { encoding: 'utf8', env: { ...process.env } },
+      {
+        encoding: 'utf8',
+        env: { ...process.env },
+        // #3434: suppress the duplicate raw-stderr relay execFileSync
+        // performs when no `stdio` override is given.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     throw new Error('expected the CLI to exit non-zero');
   } catch (error) {
