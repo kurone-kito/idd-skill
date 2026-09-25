@@ -32,6 +32,7 @@ import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   advisoryWaitFamilyMarkerStart,
   buildAdvisoryWaitSummary,
+  classifyCommentEditState,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
   findLastCopilotReviewCommit,
@@ -52,6 +53,11 @@ function toIssueCommentPayload(comment) {
     body: comment.body,
     created_at: comment.createdAt,
     user: { login: comment.authorLogin },
+    // #3249: carried through to the `CommentLike`-compatible shape
+    // `resolveProviderOutageDeclaration` reads -- never derived from
+    // `updatedAt`/`updated_at`. `undefined` unless the caller opted into
+    // `includeEditState`.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 // #2554 (Copilot review, PR #2564 round 4): resolve whether a
@@ -77,8 +83,12 @@ function resolveOutageDeclarationActiveForConvergenceSelector({
     const policy = normalizePolicyConfig(iddConfig);
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return false;
+    // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+    // reject a body-edited declaration marker. Safe inside this function's
+    // existing fail-closed try/catch: a GraphQL failure here degrades to
+    // `false` (declaration not active), never a crash.
     const declarationComments = port
-      .listWorkItemComments(targetIssue)
+      .listWorkItemComments(targetIssue, { includeEditState: true })
       .map(toIssueCommentPayload);
     const authorityOf = (actorLogin) =>
       normalizeAuthorityEvidence(
@@ -185,6 +195,13 @@ export function buildCopilotRecoverySummary(
         .toLowerCase();
       if (!trustedLogins.has(login)) {
         continue; // untrusted
+      }
+      // #3249: an edited (or edit-state-unresolved) `advisory-wait-recovery:`
+      // marker must never count toward the recovery cycle or contribute a
+      // clock anchor -- both budget consumption and anchoring are supposed
+      // to come from trustworthy, unaltered server-created_at evidence.
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        continue; // edited or edit-state-unresolved
       }
       const marker = parseAdvisoryRecoveryComment(
         String(comment?.body ?? ''),
@@ -495,7 +512,15 @@ function main() {
     .getChangeRequestRequestedReviewerLogins(args.prNumber)
     .map((login) => ({ login }));
   const timelineEvents = port.getWorkItemTimeline(args.prNumber);
-  const comments = port.listWorkItemComments(args.prNumber);
+  // #3249: `includeEditState` resolves each comment's GraphQL `lastEditedAt`
+  // -- needed so `summarizeAdvisoryWaitMarkers` and
+  // `buildCopilotRecoverySummary` below (fed via `normalizeComment`) can
+  // reject a body-edited `advisory-wait:` / `advisory-wait-recovery:`
+  // marker. A GraphQL failure now throws where this call previously could
+  // not; see this issue's PR description for that tradeoff.
+  const comments = port.listWorkItemComments(args.prNumber, {
+    includeEditState: true,
+  });
   const collaboratorTrustEnabled = isTruthy(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
@@ -680,6 +705,10 @@ function normalizeComment(comment) {
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    // #3249: carried through so `summarizeAdvisoryWaitMarkers` and
+    // `buildCopilotRecoverySummary` can require `unedited` -- passthrough
+    // only, `undefined` unless the caller opted into `includeEditState`.
+    lastEditedAt: comment.lastEditedAt,
   };
 }
 function resolveTrustedCollaboratorMarkerLogins(port, comments) {

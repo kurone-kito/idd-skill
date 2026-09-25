@@ -3809,6 +3809,7 @@ function terminalRecoveryComments() {
         attempt: 1,
       }),
       createdAt: RECOVERY_ANCHOR_1,
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
@@ -3820,6 +3821,7 @@ function terminalRecoveryComments() {
         attempt: 2,
       }),
       createdAt: RECOVERY_ANCHOR_2,
+      lastEditedAt: null,
     },
   ];
 }
