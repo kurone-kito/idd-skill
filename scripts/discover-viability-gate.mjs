@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
@@ -399,90 +400,6 @@ export function evaluateA4Viability(issue, structuralEvidence) {
     criteria,
   };
 }
-// CommonMark inline code spans open and close on a run of backticks of the
-// SAME length (a multi-backtick delimiter, e.g. ``` `` ```, lets literal
-// single backticks appear inside), not on individual-backtick parity -- a
-// run of a different length while a span is open is literal content, not a
-// closer (#2738 Codex review round 2, PR #2757). A FENCED code block is
-// different: its opening run needs only LEADING whitespace on its line
-// (trailing content is a valid info string, e.g. ```ts -- Copilot/Codex
-// review round 5, PR #2757) and has length >= 3, and CommonMark lets the
-// closing fence be LONGER than the opener, not just equal (a fence opened
-// with ``` and closed with ```` is still a valid, closed block -- Codex
-// review round 3, PR #2757); an exact-length-only rule leaves such a block
-// wrongly "open" for the rest of the corpus. A CLOSING fence, unlike the
-// opener, allows no info string: it needs both leading AND trailing
-// whitespace only. An inline run of 3+ backticks (e.g. all on one line,
-// with non-whitespace before it) still requires an exact-length closer.
-// Finally, a run with NO valid closer anywhere in the corpus (a stray
-// unmatched backtick, e.g. "contains a stray `. Production access is
-// required" -- Codex review round 4, PR #2757) never forms a code span at
-// all per CommonMark and must not be treated as an opener -- it is
-// ordinary literal text, and scanning continues past it looking for the
-// next potential opener. A fresh regex literal per call (rather than a
-// shared module-level one) sidesteps both the CLI-entry TDZ ordering rule
-// this file's helpers must follow (see the flag-spec comment below) and
-// any `lastIndex` state leaking across calls.
-function hasOnlyLeadingWhitespace(corpus, runStart) {
-  let before = runStart - 1;
-  while (before >= 0 && (corpus[before] === ' ' || corpus[before] === '\t')) {
-    before--;
-  }
-  return before < 0 || corpus[before] === '\n';
-}
-function hasOnlyTrailingWhitespace(corpus, runEnd) {
-  let after = runEnd;
-  while (
-    after < corpus.length &&
-    (corpus[after] === ' ' || corpus[after] === '\t')
-  ) {
-    after++;
-  }
-  return after >= corpus.length || corpus[after] === '\n';
-}
-function closesRun(candidate, open) {
-  return open.isFenceOpenerCandidate
-    ? candidate.length >= open.length && candidate.isFenceCloserCandidate
-    : candidate.length === open.length;
-}
-function isInsideCodeSpan(corpus, index) {
-  const runPattern = /`+/g;
-  const runs = [];
-  let match = runPattern.exec(corpus);
-  while (match !== null) {
-    const runIndex = match.index;
-    const runEnd = runIndex + match[0].length;
-    const leadingOk = hasOnlyLeadingWhitespace(corpus, runIndex);
-    runs.push({
-      index: runIndex,
-      end: runEnd,
-      length: match[0].length,
-      isFenceOpenerCandidate: match[0].length >= 3 && leadingOk,
-      isFenceCloserCandidate:
-        match[0].length >= 3 &&
-        leadingOk &&
-        hasOnlyTrailingWhitespace(corpus, runEnd),
-    });
-    match = runPattern.exec(corpus);
-  }
-  let open = null;
-  for (const run of runs) {
-    if (run.index >= index) {
-      break;
-    }
-    if (open === null) {
-      const hasCloser = runs.some(
-        (candidate) => candidate.index > run.index && closesRun(candidate, run),
-      );
-      if (hasCloser) {
-        open = run;
-      }
-    } else if (closesRun(run, open)) {
-      open = null;
-    }
-  }
-  return open !== null;
-}
 function isGovernedByAvoidanceCue(corpus, matchIndex) {
   const windowStart = Math.max(0, matchIndex - AVOIDANCE_CUE_WINDOW);
   const window = corpus.slice(windowStart, matchIndex);
@@ -530,17 +447,17 @@ function isFollowedByPreparatoryState(corpus, matchEnd) {
 }
 /**
  * Finds the first BROAD_SCOPE_PATTERN occurrence that survives every
- * exclusion check (#2417, #2446): a match inside a code span, governed by
- * an avoidance cue, followed by a content noun, or followed by a
- * preparatory-state clause does not describe this issue's own diff
- * footprint and is skipped.
+ * exclusion check (#2417, #2446): a match inside a masked code/HTML-comment
+ * region (#3282; `corpus` is already masked by the caller, so a match
+ * there cannot occur at all), governed by an avoidance cue, followed by a
+ * content noun, or followed by a preparatory-state clause does not
+ * describe this issue's own diff footprint and is skipped.
  */
 function findUnexcludedBroadScopeMatch(corpus) {
   for (const match of corpus.matchAll(BROAD_SCOPE_PATTERN)) {
     const index = match.index;
     const end = index + match[0].length;
     if (
-      isInsideCodeSpan(corpus, index) ||
       isGovernedByAvoidanceCue(corpus, index) ||
       isFollowedByContentNoun(corpus, end) ||
       isFollowedByPreparatoryState(corpus, end)
@@ -552,7 +469,18 @@ function findUnexcludedBroadScopeMatch(corpus) {
   return null;
 }
 export function evaluateLimitedScope(issue, structuralEvidence) {
-  const corpus = `${issue.title}\n${issue.body}`;
+  // #3282: masked via the shared maskMarkdownForScan entry point (inline
+  // code + HTML comments masked; raw HTML blocks stay unmasked, since
+  // GitHub renders their text as real content) instead of the former
+  // backtick-only isInsideCodeSpan per-occurrence exclusion, which knew
+  // neither tilde fences, indented code, nor HTML comments, and whose
+  // fence-closer detection accepted only a bare `\n` after the closing
+  // run (never recognizing a CRLF-terminated close). Masking also
+  // normalizes `\r\n` to `\n` unconditionally, so this corpus no longer
+  // disagrees with evaluateAutonomousCompletion's own CRLF handling.
+  const corpus = maskMarkdownForScan(`${issue.title}\n${issue.body}`, {
+    htmlComments: 'mask',
+  });
   // Test the broad-scope signal first: a broad/A4-fail cue must fail the
   // gate even when a narrow cue is also present (e.g. "single module change
   // that redesigns a public interface"). Returning narrow-pass first would
@@ -588,7 +516,11 @@ export function evaluateLimitedScope(issue, structuralEvidence) {
   };
 }
 export function evaluateClearVerification(issue) {
-  const corpus = `${issue.title}\n${issue.body}`;
+  // #3282: CRLF-normalized only, matching the other two evaluate*
+  // functions' corpus, but deliberately NOT masked through
+  // maskMarkdownForScan -- a verification command legitimately lives
+  // inside a code block, which this criterion must keep reading.
+  const corpus = `${issue.title}\n${issue.body}`.replace(/\r\n/g, '\n');
   if (OBJECTIVE_VERIFICATION_PATTERN.test(corpus)) {
     return {
       pass: true,
@@ -746,20 +678,30 @@ function isWithinResolvedDecisionSpan(spans, index) {
 }
 /**
  * Finds the first EXTERNAL_COORDINATION_PATTERN occurrence that survives
- * every exclusion check (#2738): a match inside a code span, governed by a
- * negation cue, inside a quoted/cited example, described as an
- * already-completed investigation, naming a generic pattern rather than an
- * asserted requirement, or opening a genuine resolved-decision line (#2763)
- * does not describe this issue's own remaining completion blocker and is
- * skipped.
+ * every exclusion check (#2738): a match inside a masked code/HTML-comment
+ * region (#3282; `corpus` is already masked by the caller, so a match
+ * there cannot occur at all), governed by a negation cue, inside a
+ * quoted/cited example, described as an already-completed investigation,
+ * naming a generic pattern rather than an asserted requirement, or opening
+ * a genuine resolved-decision line (#2763) does not describe this issue's
+ * own remaining completion blocker and is skipped.
+ *
+ * `rawCorpus` -- the CRLF-normalized but NOT code/HTML-comment-masked
+ * corpus `corpus` was built from -- is passed to
+ * {@link findInlineResolvedDecisionSpans} separately (#3282 review):
+ * that function masks its own input internally, so handing it the
+ * already-masked `corpus` would double-mask it, and a masked inline code
+ * span's replacement spaces can read as a fresh top-level indented code
+ * block to a second masking pass (the exact #3399 CodeRabbit shape).
+ * `maskMarkdownForScan` preserves length and line structure, so spans
+ * computed against `rawCorpus` apply to `corpus` at the same offsets.
  */
-function findUnexcludedExternalCoordinationMatch(corpus) {
-  const resolvedDecisionSpans = findInlineResolvedDecisionSpans(corpus);
+function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
+  const resolvedDecisionSpans = findInlineResolvedDecisionSpans(rawCorpus);
   for (const match of corpus.matchAll(EXTERNAL_COORDINATION_PATTERN)) {
     const index = match.index;
     const end = index + match[0].length;
     if (
-      isInsideCodeSpan(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
       isDescribedByPastInvestigation(corpus, index, end) ||
@@ -786,8 +728,16 @@ export function evaluateAutonomousCompletion(issue, structuralEvidence) {
   // internally -- without it, a CRLF issue body would drift the two
   // functions' coordinate spaces apart by one byte per CRLF line, the same
   // #2531-class risk `resolved-decision.mts` itself defends against.
-  const corpus = `${issue.title}\n\n${issue.body}`.replace(/\r\n/g, '\n');
-  const match = findUnexcludedExternalCoordinationMatch(corpus);
+  const rawCorpus = `${issue.title}\n\n${issue.body}`.replace(/\r\n/g, '\n');
+  // #3282: masked via the shared maskMarkdownForScan entry point (inline
+  // code + HTML comments masked; raw HTML blocks stay unmasked), replacing
+  // the former backtick-only isInsideCodeSpan per-occurrence exclusion --
+  // see evaluateLimitedScope's identical rationale above. rawCorpus is
+  // already CRLF-normalized, so maskMarkdownForScan's own normalization
+  // step is a no-op here and the two corpora share the same length/line
+  // structure (position-preserving masking).
+  const corpus = maskMarkdownForScan(rawCorpus, { htmlComments: 'mask' });
+  const match = findUnexcludedExternalCoordinationMatch(corpus, rawCorpus);
   if (match !== null) {
     // #2767: same demotion contract as evaluateLimitedScope above.
     if (hasAllStructuralSignals(structuralEvidence)) {

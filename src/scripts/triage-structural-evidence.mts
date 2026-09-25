@@ -29,13 +29,9 @@ import { isAbsolute, relative, resolve } from 'node:path';
 
 import { parseCandidateFileEntries } from './discover-shared-file-overlap.mts';
 import {
-  findFencedCodeRanges,
-  findHtmlBlockRanges,
-  findIndentedCodeRanges,
   findMarkdownCodeRanges,
-  maskMarkdownCodeRegionsPreservingPositions,
+  maskMarkdownForScan,
 } from './markdown-code.mts';
-import { findHtmlCommentRanges } from './resolved-decision.mts';
 
 /** The three structural signals. All three must hold for a demotion. */
 export interface StructuralEvidence {
@@ -580,16 +576,19 @@ export function findAcceptanceCriteriaHeadings(
  * construct that can hide content from Markdown rendering; further
  * masking gaps found after this round are hardening, not a fix to this
  * mechanism's own materially-addressed root cause.
+ *
+ * Delegates to the shared `maskMarkdownForScan` entry point (#3282) with
+ * this exact composition -- the same one `discover-shared-file-overlap.mts`'s
+ * Candidate-files section scanner now uses -- instead of hand-composing
+ * the four range finders, so the two section scanners cannot drift apart
+ * again.
  */
 function maskOpaqueMarkdown(body: string): string {
-  const fencedRanges = findFencedCodeRanges(body);
-  const codeRanges = findMarkdownCodeRanges(body);
-  return maskMarkdownCodeRegionsPreservingPositions(body, [
-    ...fencedRanges,
-    ...findIndentedCodeRanges(body, fencedRanges),
-    ...findHtmlCommentRanges(body, codeRanges),
-    ...findHtmlBlockRanges(body, fencedRanges),
-  ]);
+  return maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
 }
 
 /** Extract the given heading match's own section offsets (heading itself
@@ -726,15 +725,22 @@ function candidatePathVariants(rawPath: string): string[] {
  * genuine inline code spans before heading/Setext-boundary detection here
  * would guard against an input that GitHub's own renderer does not
  * actually produce -- see that doc comment for the verified rationale.
+ *
+ * Passes the raw `body` straight through (#3282 review): earlier
+ * revisions pre-masked it with `maskOpaqueMarkdown` before calling
+ * `parseCandidateFileEntries`, but that function now masks fences/
+ * indented code/HTML comments/HTML blocks internally for its own
+ * heading-boundary detection (#3282), so the extra pre-mask here was
+ * redundant -- and, now that a second masking pass is a known correctness
+ * hazard elsewhere in this codebase (#3399 CodeRabbit review), no longer
+ * worth keeping even as a harmless-in-practice no-op.
  */
 export function candidateFilesExistOnDisk(
   body: string,
   existsAt: (path: string) => boolean,
   repoRoot: string = process.cwd(),
 ): boolean {
-  const entries = parseCandidateFileEntries(
-    maskOpaqueMarkdown(String(body ?? '')),
-  );
+  const entries = parseCandidateFileEntries(String(body ?? ''));
   return entries.some((entry) =>
     candidatePathVariants(entry.raw).some((variant) => {
       const resolved = resolveRepoPath(repoRoot, variant);
