@@ -838,21 +838,39 @@ export function computeRerunPlan(
   // review, #1434) are reported distinctly below rather than conflated,
   // so the notice never claims a budget is "already used" when it was
   // actually just never confirmed.
-  const allHeldReasons = new Set(
-    [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
-      .filter(
-        ([checkRunId, decision]) =>
-          decision.action === 'hold' &&
-          !liveCoverageRecoveryHeldCheckRunIds.has(checkRunId),
-      )
-      .map(([, decision]) => decision.reason),
+  const withheldEntries = [
+    ...eligibleDecisions.entries(),
+    ...refreshDecisions.entries(),
+  ].filter(
+    ([checkRunId, decision]) =>
+      decision.action === 'hold' &&
+      !liveCoverageRecoveryHeldCheckRunIds.has(checkRunId),
   );
+  const allHeldReasons = new Set(
+    withheldEntries.map(([, decision]) => decision.reason),
+  );
+  // #3472: a budget-held live-coverage recovery with no already-passing
+  // sibling stays out of every plan (including liveCoverageRecoveryPlan),
+  // so the hold notice is the only agent-facing signal. When every
+  // withheld instance is that unpromoted recovery, name
+  // `--refresh-latest --apply` instead of stopping on a maintainer
+  // decision. Any other withheld instance, and a `"hold"` policy, keep
+  // the maintainer sentence. Default `--apply` still executes only
+  // `plan` / `recoveryRefreshPlan` / `liveCoverageRecoveryPlan`.
+  const everyWithheldIsUnpromotedLiveCoverage =
+    withheldEntries.length > 0 &&
+    withheldEntries.every(([checkRunId]) => {
+      const instance = instances.find((item) => item.checkRunId === checkRunId);
+      return instance?.isLiveCoverageRecovery === true;
+    });
   const rerunPolicyHoldNotice =
     totalHeldCount === 0
       ? ''
       : rerunPolicy === 'hold'
         ? `ciWait.rerunPolicy is "hold": ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
-        : `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
+        : everyWithheldIsUnpromotedLiveCoverage
+          ? `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- every withheld instance is an unpromoted live-coverage recovery. Rerun with: node scripts/rerun-advisory-convergence.mjs --pr ${input.prNumber} --refresh-latest --apply`
+          : `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
 
   const budgetHeldCheckRunIds = new Set(
     [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
