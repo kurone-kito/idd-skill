@@ -396,6 +396,28 @@ test('dispositionNamesAdvisoryBot requires an exact login match, not a substring
   );
 });
 
+test('dispositionNamesAdvisoryBot handles the Oxford-comma three-plus-bot form -- #3466 (Copilot review, PR #3470, "previously missed")', () => {
+  // The comma-then-"and" separator must collapse to a plain comma before
+  // splitting, or the third bot's segment reads as "and C[bot]" and its
+  // leading-token extraction sees "and" instead of the real login.
+  const body =
+    '**Rejected** — chatgpt-codex-connector[bot], coderabbitai[bot], and ' +
+    'some-other-bot[bot] did not review HEAD abc1234 (rate limited); ' +
+    'this is not a completed review';
+  assert.equal(
+    dispositionNamesAdvisoryBot(body, 'chatgpt-codex-connector[bot]'),
+    true,
+  );
+  assert.equal(dispositionNamesAdvisoryBot(body, 'coderabbitai[bot]'), true);
+  assert.equal(dispositionNamesAdvisoryBot(body, 'some-other-bot[bot]'), true);
+  // A lookalike of the LAST bot in the Oxford-comma list must still fail --
+  // confirms the fix doesn't just make the last segment match anything.
+  assert.equal(
+    dispositionNamesAdvisoryBot(body, 'some-other-bot-fork[bot]'),
+    false,
+  );
+});
+
 test('dispositionNamesAdvisoryBot still matches a login followed by a human-readable parenthetical product name', () => {
   // A hand-authored disposition may append a readable product-name aside
   // after the login for clarity ("coderabbitai[bot] (CodeRabbit)"). The

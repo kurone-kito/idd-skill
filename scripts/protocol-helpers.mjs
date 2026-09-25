@@ -1864,6 +1864,9 @@ function restCommentId(comment) {
   if (typeof rawId === 'number' && Number.isFinite(rawId)) {
     return String(rawId);
   }
+  // Defensive, not currently exercised by any known caller: a REST id
+  // that already arrived pre-stringified (e.g. round-tripped through
+  // JSON) rather than as a `number` or a GraphQL node id.
   if (typeof rawId === 'string' && /^\d+$/.test(rawId)) {
     return rawId;
   }
@@ -3927,6 +3930,15 @@ const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
 // once, joined by `and` and/or a comma (`"A[bot] and B[bot]"`,
 // `"A[bot], B[bot], and C[bot]"`) -- this must keep splitting that shape
 // apart rather than treating it as one opaque string.
+//
+// #3466 (Copilot review, PR #3470): the Oxford-comma three-plus-bot form
+// (`"A[bot], B[bot], and C[bot]"`) needs its trailing `, and ` collapsed to
+// a plain `, ` FIRST -- splitting directly on the alternation below would
+// otherwise stop the comma-separator match right after the comma (its
+// trailing `\s*` only consumes the single space before "and"), leaving
+// "and C[bot]" as one segment and making the leading-token extraction see
+// "and" instead of "C[bot]".
+const DISPOSITION_LOGIN_SPAN_OXFORD_AND_RE = /,\s+and\s+/gi;
 const DISPOSITION_LOGIN_SPAN_SPLIT_RE = /\s*,\s*|\s+and\s+/i;
 // A GitHub login itself never contains whitespace or `(` -- so the LEADING
 // run of non-space, non-`(` characters in a (post-split) span segment is
@@ -3959,6 +3971,7 @@ export function dispositionNamesAdvisoryBot(
   // (tolerating a trailing human-readable parenthetical, as above), and
   // require an exact match after the same `[bot]`-suffix normalization.
   return span
+    .replace(DISPOSITION_LOGIN_SPAN_OXFORD_AND_RE, ', ')
     .split(DISPOSITION_LOGIN_SPAN_SPLIT_RE)
     .some(
       (part) =>

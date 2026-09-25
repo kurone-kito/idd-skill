@@ -11655,6 +11655,81 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(resolvedOlder, null);
     assert.equal(resolvedNewer, null);
   });
+
+  // #3466 (fifth Copilot review, PR #3470): a disposition bound to a PRESENT
+  // comment that is a normal Codex comment, not a usage-limit notice, must
+  // never resolve an unrelated, actually-undispositioned notice. This was a
+  // real gap under the order-based fallback (an unrecognized source id fell
+  // through to reassignment); dropping that fallback entirely
+  // (`resolvedCodexUsageLimitNotices` no longer has a pass 2) already closes
+  // it structurally -- this test pins that as a regression guard.
+  test('#3466: a disposition bound to a present non-notice comment does not resolve an unrelated notice', () => {
+    const olderNotice = {
+      ...codexNotice,
+      id: 401,
+      createdAt: '2026-09-25T15:00:00Z',
+    };
+    const normalCodexComment = {
+      id: 402,
+      createdAt: '2026-09-25T15:10:00Z',
+      body: 'Reviewed the diff; looks fine overall.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const dispositionForNormalComment = {
+      id: 403,
+      createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-402)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [
+      olderNotice,
+      normalCodexComment,
+      dispositionForNormalComment,
+    ];
+
+    const resolvedOlder = classifyRegularBotComment(olderNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(resolvedOlder, null);
+  });
+
+  // `restCommentId`'s GraphQL-shaped path: `audit-pr-cleanup.mts`'s real
+  // callers fetch comments over GraphQL, whose `id` is a node id
+  // (`IC_kwDO...`), never a REST-numeric id or numeric string -- every
+  // other fixture above uses a plain-number `id` and so never exercises
+  // this branch. The REST id is instead recovered from the comment's own
+  // `url`, which always ends in `#issuecomment-{REST id}` regardless.
+  test('#3466: resolves a notice via restCommentId extracted from a GraphQL-shaped url, not a numeric id', () => {
+    const graphqlNotice = {
+      id: 'IC_kwDOexample5001',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/3470#issuecomment-5001',
+      createdAt: '2026-09-25T15:00:00Z',
+      body: 'You have reached your Codex usage limits for code reviews.',
+      author: { login: 'chatgpt-codex-connector[bot]' },
+    };
+    const graphqlDisposition = {
+      id: 'IC_kwDOexample5002',
+      createdAt: '2026-09-25T15:10:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-5001)',
+      author: { login: 'kurone-kito' },
+    };
+    const comments = [graphqlNotice, graphqlDisposition];
+
+    const result = classifyRegularBotComment(graphqlNotice, comments, [], {
+      isDispositionAuthor,
+      includeCodexUsageLimitNotice: true,
+    });
+
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
 }
 
 // #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
