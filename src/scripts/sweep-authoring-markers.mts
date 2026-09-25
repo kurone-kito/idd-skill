@@ -66,6 +66,13 @@
 
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
 import { ghTextUnbounded } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type { AuthoringMarkerFamily } from './marker-helpers.mts';
 import {
@@ -912,36 +919,44 @@ other issues in the same invocation.`,
 }
 
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('sweep-authoring-markers', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   let args: SweepCliArgs;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`error: ${(error as Error).message}`);
-    process.exit(2);
+    const message = (error as Error).message;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, ...classifyHelperError(error) };
   }
 
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
 
   if (!ALLOWED_CLASSIFIERS.has(args.classifier)) {
-    console.error(
-      `error: --classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`,
-    );
-    process.exit(2);
+    const message = `--classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   if (!ALLOWED_FORMATS.has(args.format)) {
-    console.error(
-      `error: --format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`,
-    );
-    process.exit(2);
+    const message = `--format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   if (args.issueTokens.length === 0) {
-    console.error('error: --issue must be supplied at least once');
-    process.exit(2);
+    const message = '--issue must be supplied at least once';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   const config = loadIddConfig();
@@ -952,10 +967,10 @@ if (import.meta.main) {
       config,
     });
   if (trustedActors.length === 0) {
-    console.error(
-      'error: no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json.',
-    );
-    process.exit(2);
+    const message =
+      'no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json.';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   // Only resolve the current repository when at least one --issue token
@@ -973,10 +988,10 @@ if (import.meta.main) {
   const defaultRepo = args.repo || currentRepo?.repo || '';
   const markerPrefix = normalizeMarkerPrefix(args.markerPrefix, config);
   if (markerPrefix.length === 0) {
-    console.error(
-      'error: no marker prefix resolved. Pass --marker-prefix <prefix>, or set the top-level markerPrefix field in .github/idd/config.json -- this command never guesses a prefix (see the issue-authoring contract\'s "prefix-first" rule).',
-    );
-    process.exit(2);
+    const message =
+      'no marker prefix resolved. Pass --marker-prefix <prefix>, or set the top-level markerPrefix field in .github/idd/config.json -- this command never guesses a prefix (see the issue-authoring contract\'s "prefix-first" rule).';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   let issues: SweepIssueTarget[];
@@ -985,8 +1000,9 @@ if (import.meta.main) {
       parseIssueTargetToken(token, defaultOwner, defaultRepo),
     );
   } catch (error) {
-    console.error(`error: ${(error as Error).message}`);
-    process.exit(2);
+    const message = (error as Error).message;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   const report = runAuthoringMarkerSweep({
@@ -1005,5 +1021,5 @@ if (import.meta.main) {
     console.log(JSON.stringify(report, null, 2));
   }
 
-  process.exit(computeSweepExitCode(report));
+  return computeSweepExitCode(report);
 }

@@ -193,6 +193,7 @@ const COVERED_HELPERS = [
   'discover-viability-gate',
   'disposition-non-review-notices',
   'external-check-waiver',
+  'force-handoff',
   'forced-handoff-marker',
   'helper-runtime-manifest',
   'idd-critique-delegate',

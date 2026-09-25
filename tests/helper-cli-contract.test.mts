@@ -211,7 +211,7 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: the first, discover/claim, and review/merge batches are marked migrated', () => {
+test('helper-cli-contract fixture: the first, discover/claim, review/merge, and marker/handoff batches are marked migrated', () => {
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
@@ -237,10 +237,15 @@ test('helper-cli-contract fixture: the first, discover/claim, and review/merge b
     'idd-disposition-non-review-notices.mjs',
     'idd-emit-marker.mjs',
     'idd-external-check-waiver.mjs',
+    'idd-force-handoff.mjs',
+    'idd-forced-handoff-marker.mjs',
+    'idd-live-status-digest.mjs',
     'idd-local-validation-evidence.mjs',
     'idd-merge-execute.mjs',
     'idd-merged-pr-feedback-sweep.mjs',
+    'idd-minimize-superseded-markers.mjs',
     'idd-phase-id-resolver.mjs',
+    'idd-post-idd-marker.mjs',
     'idd-pre-merge-readiness.mjs',
     'idd-rerun-advisory-convergence.mjs',
     'idd-resolve-review-thread.mjs',
@@ -254,6 +259,7 @@ test('helper-cli-contract fixture: the first, discover/claim, and review/merge b
     'idd-stalled-session-quiet-check.mjs',
     'idd-suitability-close-execute.mjs',
     'idd-suitability-triage.mjs',
+    'idd-sweep-authoring-markers.mjs',
   ]);
 });
 

@@ -66,7 +66,6 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
-import { NON_TTY_ERROR } from './force-handoff.mjs';
 import { safeGhText } from './gh-exec.mjs';
 import {
   buildCommandCatalog,
@@ -1686,12 +1685,6 @@ export function checkPlaceholderResidue(targetRoot, scope) {
  * full 50-helper sweep took in the issue's own reproduction, so only a
  * genuine hang trips it, not ordinary process-startup variance. */
 const HELPER_LOAD_TIMEOUT_MS = 15_000;
-/** `HELPER_COMMANDS` id of the one cataloged helper that is an
- * interactive-only wizard: it rejects non-TTY stdin with its exported
- * `NON_TTY_ERROR` before parsing any argument (including `--help`), in the
- * source repository too, so its expected "loaded successfully" outcome is
- * exit 1 with that message on stderr, never exit 0 with stdout. */
-const FORCE_HANDOFF_HELPER_ID = 'force-handoff';
 /**
  * Whether `targetRoot`/`entryPath`'s REALPATH (symlinks resolved) still
  * resolves inside `targetRoot`'s own realpath. `fileExists`'s `lstatSync`
@@ -1803,10 +1796,13 @@ export function checkHelperLoad(targetRoot, profile) {
     }
     probed.push(command.entryPath);
     const probe = spawnHelperHelp(targetRoot, command.entryPath);
-    const loaded =
-      command.id === FORCE_HANDOFF_HELPER_ID
-        ? probe.status === 1 && probe.stderr.includes(NON_TTY_ERROR)
-        : probe.status === 0 && probe.stdout.trim() !== '';
+    // #3346: force-handoff.mjs previously rejected non-TTY stdin with its
+    // NON_TTY_ERROR before parsing any argument (including --help), so its
+    // own "loaded successfully" outcome used to need a special case here
+    // (exit 1 with that message on stderr, never exit 0 with stdout). It
+    // now parses --help before the TTY check (a --help-only flag spec, see
+    // force-handoff.mts), so it loads like every other cataloged helper.
+    const loaded = probe.status === 0 && probe.stdout.trim() !== '';
     if (!loaded) {
       failed.push({
         id: command.id,

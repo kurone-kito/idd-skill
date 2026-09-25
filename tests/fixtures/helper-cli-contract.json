@@ -284,16 +284,46 @@
       }
     },
     "idd-force-handoff.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "internal"
+        }
+      }
     },
     "idd-forced-handoff-marker.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-helper-bundle-manifest.mjs": {
       "migrated": false
     },
     "idd-live-status-digest.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
     },
     "idd-local-validation-evidence.mjs": {
       "migrated": true,
@@ -335,7 +365,17 @@
       }
     },
     "idd-minimize-superseded-markers.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
     },
     "idd-onboard.mjs": {
       "migrated": false
@@ -354,7 +394,17 @@
       }
     },
     "idd-post-idd-marker.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     },
     "idd-pre-merge-readiness.mjs": {
       "migrated": true,
@@ -538,7 +588,17 @@
       }
     },
     "idd-sweep-authoring-markers.mjs": {
-      "migrated": false
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
     }
   },
   "extraScenarios": {

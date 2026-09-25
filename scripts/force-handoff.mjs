@@ -5,6 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -17,6 +18,12 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { renderUnclaimedByMarker } from './marker-helpers.mjs';
 import {
@@ -264,11 +271,49 @@ export async function runHandoff(options = {}) {
     contextScope: plan.contextScope,
   };
 }
-export function main() {
-  runHandoff().catch((err) => {
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `help:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --help spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// #3346: this tool previously read no CLI flags at all -- any argv (known
+// or not) was silently ignored and the interactive TTY flow ran regardless.
+// Adding a minimal --help-only parse here is a genuine (narrow) behavior
+// addition, not a pure plumbing change: it lets an unrecognized flag report
+// a proper "unknown argument" usage error instead of being swallowed, and
+// gives `idd-force-handoff --help` a non-interactive exit instead of
+// launching the wizard. Zero-argument invocation -- the only documented
+// usage -- stays byte-identical.
+const FORCE_HANDOFF_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h' },
+};
+function printUsage() {
+  process.stdout.write(`Usage: node scripts/force-handoff.mjs
+
+Interactive, TTY-only operator facade for a forced handoff: prompts for
+issue/PR context, successor agent-id/claim-id, and confirmation, then posts
+the same marker forced-handoff-marker.mjs would render non-interactively.
+Takes no flags of its own; run it with no arguments in an interactive
+terminal.
+
+Options:
+  --help, -h   show this message
+`);
+}
+export async function main() {
+  const { help } = parseCliArgs(process.argv.slice(2), FORCE_HANDOFF_FLAG_SPEC);
+  if (help) {
+    printUsage();
+    return 0;
+  }
+  try {
+    await runHandoff();
+    return 0;
+  } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
-    process.exit(1);
-  });
+    const classified = classifyHelperError(err);
+    return { exitCode: 1, ...classified };
+  }
 }
 function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();
@@ -370,5 +415,11 @@ function splitCsv(value) {
     .filter(Boolean);
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('force-handoff', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

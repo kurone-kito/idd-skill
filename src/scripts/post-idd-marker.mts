@@ -22,6 +22,14 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   isTrustedAuthor,
@@ -1695,13 +1703,21 @@ export function hideSupersededPostTimeMarkers(
 }
 
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('post-idd-marker', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   let args: CliArgs;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`${(error as Error).message}\n`);
-    process.exit(1);
-    throw error;
+    const message = (error as Error).message;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
   // #1833: populated only by the `--from-pr` snapshot-derivation branch
   // below; carried into both the dry-run and `--apply` result envelopes.
@@ -1709,13 +1725,12 @@ if (import.meta.main) {
 
   if (args.help) {
     process.stdout.write(USAGE);
-    process.exit(0);
+    return 0;
   }
   if (!MARKER_TYPES.includes(args.type as MarkerType)) {
-    process.stderr.write(
-      `--type is required and must be one of: ${MARKER_TYPES.join(', ')}\n`,
-    );
-    process.exit(1);
+    const message = `--type is required and must be one of: ${MARKER_TYPES.join(', ')}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
   // --expected-head-sha only guards the --from-pr --type watermark
   // derivation below; in manual mode the caller already supplies --head-sha
@@ -1724,20 +1739,19 @@ if (import.meta.main) {
   // E1 Step 1/Step 2 pinning concept, so reject the combination the same way
   // rather than silently ignoring it.
   if (args.expectedHeadSha && args.fromPr === null) {
-    process.stderr.write(
-      '--expected-head-sha is only valid together with --from-pr\n',
-    );
-    process.exit(1);
+    const message = '--expected-head-sha is only valid together with --from-pr';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
   if (
     args.expectedHeadSha &&
     args.fromPr !== null &&
     args.type !== 'watermark'
   ) {
-    process.stderr.write(
-      '--expected-head-sha is only valid together with --from-pr --type watermark\n',
-    );
-    process.exit(1);
+    const message =
+      '--expected-head-sha is only valid together with --from-pr --type watermark';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
 
   // `--from-pr <n>` derivation mode: default the post target to PR <n>,
@@ -1756,10 +1770,9 @@ if (import.meta.main) {
   // for them would be needless extra network work.
   if (args.fromPr !== null) {
     if (!FROM_PR_MARKER_TYPES.includes(args.type as FromPrMarkerType)) {
-      process.stderr.write(
-        `--from-pr is only valid for --type ${FROM_PR_MARKER_TYPES.join(', ')}\n`,
-      );
-      process.exit(1);
+      const message = `--from-pr is only valid for --type ${FROM_PR_MARKER_TYPES.join(', ')}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     const isWatermark = args.type === 'watermark';
     // --from-pr always posts the marker to PR <n>. `--target` is
@@ -1767,31 +1780,29 @@ if (import.meta.main) {
     // endpoint), but an `issue`-targeted PR-derived marker is incoherent, so
     // fail closed on an explicit non-pr target rather than recording it.
     if (args.target && args.target !== 'pr') {
-      process.stderr.write(
-        `--from-pr always targets the PR; remove --target ${args.target}\n`,
-      );
-      process.exit(1);
+      const message = `--from-pr always targets the PR; remove --target ${args.target}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     args.target = 'pr';
     if (args.number === null) {
       args.number = args.fromPr;
     } else if (args.number !== args.fromPr) {
-      process.stderr.write(
-        'in --from-pr mode the positional number must be omitted or equal --from-pr\n',
-      );
-      process.exit(1);
+      const message =
+        'in --from-pr mode the positional number must be omitted or equal --from-pr';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     const derivedFlags = isWatermark
       ? ['head-sha', 'max-activity-at', 'total-item-count', 'ci-completed-at']
       : ['head-sha'];
     const conflicting = derivedFlags.filter((flag) => flag in args.fields);
     if (conflicting.length > 0) {
-      process.stderr.write(
-        `--from-pr derives ${derivedFlags.join(' / ')} from the live ${isWatermark ? 'snapshot' : 'PR'}; do not also pass: ${conflicting
-          .map((flag) => `--${flag}`)
-          .join(', ')}\n`,
-      );
-      process.exit(1);
+      const message = `--from-pr derives ${derivedFlags.join(' / ')} from the live ${isWatermark ? 'snapshot' : 'PR'}; do not also pass: ${conflicting
+        .map((flag) => `--${flag}`)
+        .join(', ')}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     // Resolve owner/repo inside the try: in --from-pr mode they are read
     // eagerly (the derivation needs them and the dry-run branch returns
@@ -1820,10 +1831,9 @@ if (import.meta.main) {
         );
       }
     } catch (error) {
-      process.stderr.write(
-        `failed to derive ${isWatermark ? 'watermark fields' : 'head-sha'} from PR ${args.fromPr}: ${(error as Error).message}\n`,
-      );
-      process.exit(1);
+      const message = `failed to derive ${isWatermark ? 'watermark fields' : 'head-sha'} from PR ${args.fromPr}: ${(error as Error).message}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, ...classifyHelperError(error), message };
     }
     // Fail closed (this repository's fail-closed default) when the branch
     // moved between E1 Step 1 (which stored {head-SHA} and must not re-read
@@ -1839,22 +1849,21 @@ if (import.meta.main) {
       args.expectedHeadSha &&
       liveHeadSha.toLowerCase() !== args.expectedHeadSha.toLowerCase()
     ) {
-      process.stderr.write(
-        `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.\n`,
-      );
-      process.exit(1);
+      const message = `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'gate', message };
     }
   }
 
   if (!TARGET_KINDS.includes(args.target as TargetKind)) {
-    process.stderr.write(
-      `--target is required and must be one of: ${TARGET_KINDS.join(', ')}\n`,
-    );
-    process.exit(1);
+    const message = `--target is required and must be one of: ${TARGET_KINDS.join(', ')}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
   if (args.number === null) {
-    process.stderr.write('a positional issue/PR <number> is required\n');
-    process.exit(1);
+    const message = 'a positional issue/PR <number> is required';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
 
   // #3328: the marker is only ever valid on the PR it names, so `pr:` is
@@ -1863,8 +1872,9 @@ if (import.meta.main) {
   // actual posting destination.
   if (args.type === 'out-of-loop') {
     if (args.target !== 'pr') {
-      process.stderr.write('--type out-of-loop requires --target pr\n');
-      process.exit(1);
+      const message = '--type out-of-loop requires --target pr';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     args.fields.pr = String(args.number);
   }
@@ -1969,10 +1979,9 @@ if (import.meta.main) {
     if (markerTarget) {
       markerTargetRef = parseIssueReference(markerTarget);
       if (!markerTargetRef) {
-        process.stderr.write(
-          `invalid --marker-target value (expected <owner>/<repo>#<number>): ${markerTarget}\n`,
-        );
-        process.exit(1);
+        const message = `invalid --marker-target value (expected <owner>/<repo>#<number>): ${markerTarget}`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'usage', message };
       }
     }
     const anchor = args.fields.anchor;
@@ -1980,10 +1989,9 @@ if (import.meta.main) {
     if (anchor) {
       anchorRef = parseIssueReference(anchor);
       if (!anchorRef) {
-        process.stderr.write(
-          `invalid --anchor value (expected <owner>/<repo>#<number>): ${anchor}\n`,
-        );
-        process.exit(1);
+        const message = `invalid --anchor value (expected <owner>/<repo>#<number>): ${anchor}`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'usage', message };
       }
     }
     // #2931 (C1 review finding): reject a --mode/--body-sha256/
@@ -1995,7 +2003,7 @@ if (import.meta.main) {
     const couplingError = validateAuthoringOwnerModeDigestCoupling(args.fields);
     if (couplingError) {
       process.stderr.write(`${couplingError}\n`);
-      process.exit(1);
+      return { exitCode: 1, kind: 'usage', message: couplingError };
     }
     // #2931 (Codex review on PR #2937): the same append-only-comment
     // reasoning applies to --supersedes -- contract.md's mode table also
@@ -2007,7 +2015,7 @@ if (import.meta.main) {
     );
     if (supersedesError) {
       process.stderr.write(`${supersedesError}\n`);
-      process.exit(1);
+      return { exitCode: 1, kind: 'usage', message: supersedesError };
     }
     // #2931 (Codex review on PR #2937): release-guard / release-complete
     // are "valid only on the set anchor" (contract.md), and "the anchor's
@@ -2029,10 +2037,9 @@ if (import.meta.main) {
         markerTargetRef.number,
       )
     ) {
-      process.stderr.write(
-        `--mode ${args.fields.mode} is valid only on the set anchor, so --anchor ${anchor} must name the same issue as --marker-target ${markerTarget}\n`,
-      );
-      process.exit(1);
+      const message = `--mode ${args.fields.mode} is valid only on the set anchor, so --anchor ${anchor} must name the same issue as --marker-target ${markerTarget}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
   }
 
@@ -2051,18 +2058,16 @@ if (import.meta.main) {
     if (journal) {
       journalRef = parseIssueReference(journal);
       if (!journalRef) {
-        process.stderr.write(
-          `invalid --journal value (expected <owner>/<repo>#<number>): ${journal}\n`,
-        );
-        process.exit(1);
+        const message = `invalid --journal value (expected <owner>/<repo>#<number>): ${journal}`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'usage', message };
       }
     }
     const issue = args.fields.issue;
     if (issue && issue !== 'none' && !parseIssueReference(issue)) {
-      process.stderr.write(
-        `invalid --issue value (expected <owner>/<repo>#<number> or none): ${issue}\n`,
-      );
-      process.exit(1);
+      const message = `invalid --issue value (expected <owner>/<repo>#<number> or none): ${issue}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
     // #2931 (Codex review on PR #2937): issue=none is only ever valid at
     // state=pending (contract.md; mirrored by audit-authored-issue.mts's
@@ -2073,7 +2078,7 @@ if (import.meta.main) {
       validateAuthoringPublicationIntentStateIssueCoupling(args.fields);
     if (stateIssueError) {
       process.stderr.write(`${stateIssueError}\n`);
-      process.exit(1);
+      return { exitCode: 1, kind: 'usage', message: stateIssueError };
     }
   }
 
@@ -2105,10 +2110,9 @@ if (import.meta.main) {
       args.owner = args.owner || currentRepo?.owner || '';
       args.repo = args.repo || currentRepo?.repo || '';
     } catch (error) {
-      process.stderr.write(
-        `failed to resolve the current repository for --type ${args.type} (pass --owner/--repo explicitly): ${(error as Error).message}\n`,
-      );
-      process.exit(1);
+      const message = `failed to resolve the current repository for --type ${args.type} (pass --owner/--repo explicitly): ${(error as Error).message}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, ...classifyHelperError(error), message };
     }
   }
 
@@ -2131,20 +2135,18 @@ if (import.meta.main) {
     markerTargetRef &&
     !isPostingDestination(markerTargetRef, args.owner, args.repo, args.number)
   ) {
-    process.stderr.write(
-      `--marker-target ${args.fields['marker-target']} does not match the posting destination ${args.owner}/${args.repo}#${args.number}\n`,
-    );
-    process.exit(1);
+    const message = `--marker-target ${args.fields['marker-target']} does not match the posting destination ${args.owner}/${args.repo}#${args.number}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
   if (
     authoringDestinationKnowable &&
     journalRef &&
     !isPostingDestination(journalRef, args.owner, args.repo, args.number)
   ) {
-    process.stderr.write(
-      `--journal ${args.fields.journal} does not match the posting destination ${args.owner}/${args.repo}#${args.number}\n`,
-    );
-    process.exit(1);
+    const message = `--journal ${args.fields.journal} does not match the posting destination ${args.owner}/${args.repo}#${args.number}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
 
   // #2931 (Codex review on PR #2937): contract.md requires "actor to equal
@@ -2173,20 +2175,19 @@ if (import.meta.main) {
     ).resolveViewerLoginSafe();
     const actor = args.fields.actor;
     if (actor && viewerLoginUnavailable) {
-      process.stderr.write(
-        'cannot verify --actor: the authenticated GitHub login could not be resolved (gh api user failed or returned empty); refusing to post an unverified actor into a permanent append-only record -- fix gh auth and retry\n',
-      );
-      process.exit(1);
+      const message =
+        'cannot verify --actor: the authenticated GitHub login could not be resolved (gh api user failed or returned empty); refusing to post an unverified actor into a permanent append-only record -- fix gh auth and retry';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'transport', message };
     }
     if (
       actor &&
       viewerLogin &&
       actor.toLowerCase() !== viewerLogin.toLowerCase()
     ) {
-      process.stderr.write(
-        `--actor ${actor} does not match the authenticated user ${viewerLogin} actually making this POST\n`,
-      );
-      process.exit(1);
+      const message = `--actor ${actor} does not match the authenticated user ${viewerLogin} actually making this POST`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
     }
   }
 
@@ -2226,8 +2227,8 @@ if (import.meta.main) {
   ) {
     try {
       if (!markerTargetRef) {
-        throw new Error(
-          '--marker-target is required for --type authoring-owner',
+        throw markCliUsageError(
+          new Error('--marker-target is required for --type authoring-owner'),
         );
       }
       const item = createGithubProviderAdapter(
@@ -2258,8 +2259,9 @@ if (import.meta.main) {
       }
       args.fields['body-sha256'] = computedBodySha256;
     } catch (error) {
-      process.stderr.write(`${(error as Error).message}\n`);
-      process.exit(1);
+      const message = (error as Error).message;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, ...classifyHelperError(error), message };
     }
   }
 
@@ -2277,9 +2279,9 @@ if (import.meta.main) {
     }
     body = buildMarkerBody(args.type, args.fields);
   } catch (error) {
-    process.stderr.write(`${(error as Error).message}\n`);
-    process.exit(1);
-    throw error;
+    const message = (error as Error).message;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, ...classifyHelperError(error), message };
   }
 
   // #2931 (Codex review on PR #2937, round 6): a terminal, structural
@@ -2314,10 +2316,9 @@ if (import.meta.main) {
     matchCanonicalAuthoringMarkerFamily(body, args.fields['marker-prefix']) !==
       args.type
   ) {
-    process.stderr.write(
-      `refusing to post: the rendered ${args.type} body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical -- one or more field values (for example a literal ';', a newline, or an HTML comment terminator) would break the marker's own field-delimiter grammar, leaving a posted record that replay and the hide-on-supersede sweep could never recognize\n`,
-    );
-    process.exit(1);
+    const message = `refusing to post: the rendered ${args.type} body does not round-trip through matchCanonicalAuthoringMarkerFamily as canonical -- one or more field values (for example a literal ';', a newline, or an HTML comment terminator) would break the marker's own field-delimiter grammar, leaving a posted record that replay and the hide-on-supersede sweep could never recognize`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
 
   const number = args.number;
@@ -2331,7 +2332,7 @@ if (import.meta.main) {
       ...(warnings.length > 0 ? { warnings } : {}),
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    process.exit(0);
+    return 0;
   }
 
   const applyCurrentRepo =
@@ -2362,5 +2363,5 @@ if (import.meta.main) {
     ...(warnings.length > 0 ? { warnings } : {}),
   };
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  process.exit(0);
+  return 0;
 }

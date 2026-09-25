@@ -18,6 +18,12 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
@@ -138,16 +144,22 @@ export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     printUsage();
-    return;
+    return 0;
   }
   if (!args.issueNumber) {
-    throw new Error('missing required --issue <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --issue <number> argument'),
+    );
   }
   if (!args.forcedBy) {
-    throw new Error('missing required --forced-by <actor> argument');
+    throw markCliUsageError(
+      new Error('missing required --forced-by <actor> argument'),
+    );
   }
   if (!args.reason) {
-    throw new Error('missing required --reason <text> argument');
+    throw markCliUsageError(
+      new Error('missing required --reason <text> argument'),
+    );
   }
   if (args.plan) {
     const repoRef =
@@ -250,13 +262,17 @@ export function main(argv = process.argv.slice(2)) {
         2,
       ),
     );
-    return;
+    return 0;
   }
   if (!args.newAgentId) {
-    throw new Error('missing required --new-agent-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-agent-id <id> argument'),
+    );
   }
   if (!args.newClaimId) {
-    throw new Error('missing required --new-claim-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-claim-id <id> argument'),
+    );
   }
   const repoRef =
     args.repo ??
@@ -389,6 +405,7 @@ export function main(argv = process.argv.slice(2)) {
   } else {
     console.log(commentBody);
   }
+  return 0;
 }
 export function resolveHelperActiveClaim(
   issueComments,
@@ -618,5 +635,9 @@ Environment:
 `);
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('forced-handoff-marker', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }

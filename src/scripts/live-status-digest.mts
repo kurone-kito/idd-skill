@@ -20,6 +20,14 @@ import {
   ghApiJson,
   ghText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type {
@@ -181,13 +189,17 @@ let cachedConfiguredTrustedMarkerAuthors: Set<string> | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('live-status-digest', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or
 // process.exit.
-function main(): void {
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
@@ -232,7 +244,7 @@ function main(): void {
   try {
     repository = combineOwnerRepoFlags(args) ?? detectRepository();
   } catch (error) {
-    fail((error as Error).message);
+    fail((error as Error).message, error);
   }
   const [owner, repo] = parseRepository(repository);
   const targetType = args.issue ? 'issue' : 'pr';
@@ -255,7 +267,13 @@ function main(): void {
       targetType,
       targetNumber,
     });
-    return;
+    // runDuplicateDigestRepair (via writeRepairReportAndStop) signals a
+    // recovery-hold outcome by setting process.exitCode directly rather
+    // than returning a value -- read it back here instead of hardcoding 0,
+    // or a recovery-hold's exit 1 would be silently overwritten by
+    // runHelperCli's own handleOutcome (#3346 regression, caught by
+    // tests/live-status-digest.test.mts's "duplicate repair" CLI tests).
+    return typeof process.exitCode === 'number' ? process.exitCode : 0;
   }
   // `expectedLinkedPrs` is a pure, local computation, so building it
   // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
@@ -304,7 +322,7 @@ function main(): void {
       isTrustedAuthor: isTrustedDigestAuthor,
     });
   } catch (error) {
-    fail((error as Error).message);
+    fail((error as Error).message, error);
   }
   const report: LiveStatusDigestReport = {
     repository: `${owner}/${repo}`,
@@ -325,7 +343,7 @@ function main(): void {
 
   if (planned.action === 'duplicate') {
     writeReport(report, args.format);
-    process.exit(1);
+    return 1;
   }
 
   if (args.apply) {
@@ -364,14 +382,14 @@ function main(): void {
           updateIssueComment(owner, repo, commentId, body),
       });
     } catch (error) {
-      fail((error as Error).message);
+      fail((error as Error).message, error);
     }
 
     planned = outcome.planned;
     updateReportFromPlan(report, planned, args.includeBody);
     if (outcome.outcome === 'duplicate') {
       writeReport(report, args.format);
-      process.exit(1);
+      return 1;
     }
     if (outcome.outcome === 'created' || outcome.outcome === 'updated') {
       report.applied = true;
@@ -381,6 +399,7 @@ function main(): void {
   }
 
   writeReport(report, args.format);
+  return 0;
 }
 
 interface DuplicateDigestRepairInput {
@@ -502,9 +521,12 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
   });
   const repairReport = report.repair;
   if (!repairReport) {
-    fail(
-      'internal error: duplicate repair report is missing its repair section',
-    );
+    // Not a usage error -- an internal invariant violation, so pass a
+    // plain (untagged) Error to fail() so it classifies `internal`
+    // instead of defaulting to `usage`.
+    const message =
+      'internal error: duplicate repair report is missing its repair section';
+    fail(message, new Error(message));
   }
 
   if (plan.action !== 'ready') {
@@ -1752,13 +1774,17 @@ function ghJson(commandArgs: string[]): unknown {
       errors?: unknown;
     } | null;
     if (response?.message || response?.errors) {
-      fail(`gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`);
+      fail(
+        `gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`,
+        error,
+      );
     }
     if (response) {
       return response;
     }
     fail(
       `gh ${commandArgs.join(' ')} failed: ${stderr || (error as Error).message}`,
+      error,
     );
   }
 }
@@ -1834,7 +1860,7 @@ function parseArgs(argv: string[]): LiveStatusDigestArgs {
   try {
     parsed = parseCliArgs(argv, LIVE_STATUS_DIGEST_FLAG_SPEC);
   } catch (error) {
-    fail((error as Error).message);
+    fail((error as Error).message, error);
   }
   const { values, help } = parsed;
 
@@ -1988,7 +2014,21 @@ Environment:
 `);
 }
 
-function fail(message: string): never {
+function fail(message: string, error?: unknown): never {
   console.error(`error: ${message}`);
+  // #3346: keep exit 2 for every fail() path. process.exit never returns to
+  // runHelperCli, so classify and write the envelope here -- copies
+  // audit-pr-cleanup.mts's established fail(message, error?) pattern. A
+  // bare message is a usage/argument error; a passed error keeps its real
+  // kind (a gh failure stays transport, not usage).
+  if (isHelperErrorEnvelopeEnabled()) {
+    const classified =
+      error === undefined
+        ? { kind: 'usage' as const, message, httpStatus: null }
+        : classifyHelperError(error);
+    process.stderr.write(
+      `${JSON.stringify(buildHelperErrorEnvelope('live-status-digest', 2, classified))}\n`,
+    );
+  }
   process.exit(2);
 }
