@@ -454,6 +454,44 @@ test('acquire/check: a nonexistent or non-git --worktree path fails loudly rathe
   assert.throws(() => acquireClaimLock(missing, 'agent-a', 'claim-a', false));
 });
 
+/**
+ * Run `body` with `process.stderr.write` captured; return the joined
+ * output. Mirrors the same local helper already duplicated in
+ * `tests/gh-exec.test.mts` / `tests/discover-roadmap-graph.test.mts` /
+ * `tests/idd-doctor.test.mts` / `tests/suitability-triage.test.mts`
+ * (swallow-only, no forwarding to the real stream) rather than
+ * introducing a fifth, differently-shaped variant.
+ */
+function captureStderr(body: () => void): string {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    body();
+  } finally {
+    process.stderr.write = original;
+  }
+  return chunks.join('');
+}
+
+test('acquire/check against a nonexistent --worktree path does not leak the underlying `git rev-parse` failure to the real stderr stream (#3434)', () => {
+  const missing = join(
+    tmpdir(),
+    `idd-claim-lock-missing-stderr-${process.pid}`,
+  );
+  const captured = captureStderr(() => {
+    assert.throws(() => checkClaimLock(missing));
+  });
+  assert.equal(
+    captured,
+    '',
+    `expected no real-stderr write from the underlying git failure, got: ${captured}`,
+  );
+});
+
 test('acquire: N concurrent forced-takeovers never corrupt the lock — every writer reports acquired and the final body is exactly one well-formed winner', async () => {
   // This is a statistical health check, not a proof of atomicity: with a
   // small JSON payload, even a non-atomic `writeFileSync` (no `wx`) rarely
