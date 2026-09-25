@@ -106,7 +106,7 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
       commit_id: 'abc123',
     }),
     {
-      author: { login: 'reviewer-user' },
+      author: { login: 'reviewer-user', type: null },
       state: 'APPROVED',
       commitId: 'abc123',
       submittedAt: '2026-07-31T12:00:00Z',
@@ -143,6 +143,16 @@ test('normalizeReview maps REST review fields, deriving createdAt from submitted
     }).body,
     'Copilot encountered an error and was unable to review this pull ' +
       'request. You can try again by re-requesting a review.',
+  );
+  // #3262: REST `user.type` must survive normalization. The pre-merge
+  // summary feeds these objects to `findLastCopilotReviewCommit`, which
+  // fail-closes a bare login against a `[bot]`-suffixed configured login
+  // when `author.type` is missing.
+  assert.equal(
+    normalizeReview({
+      user: { login: 'coderabbitai', type: 'Bot' },
+    }).author.type,
+    'Bot',
   );
 });
 

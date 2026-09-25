@@ -116,6 +116,10 @@ import { computeClosingSetEvidence } from './supersession-detection.mts';
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
   login?: string | null;
+  /** REST `user.type` ("Bot"/"User"/...). Preserved by
+   * {@link normalizeReview} so `findLastCopilotReviewCommit` can apply
+   * the #3262 suffix match. GraphQL `__typename` is a different field. */
+  type?: string | null;
 }
 
 /** Issue comment payload fields consumed by this helper. */
@@ -2223,7 +2227,13 @@ export function normalizeClaimComment(comment: IssueCommentPayload) {
  */
 export function normalizeReview(review: ReviewPayload) {
   return {
-    author: { login: review.user?.login ?? '' },
+    author: {
+      login: review.user?.login ?? '',
+      // #3262: `findLastCopilotReviewCommit` reads `author.type` for the
+      // bare-login vs `[bot]`-suffix match. Dropping it here made a
+      // configured `[bot]` login fail closed on this REST path.
+      type: review.user?.type ?? null,
+    },
     state: review.state ?? '',
     commitId: review.commit_id ?? '',
     submittedAt: review.submitted_at ?? '',
