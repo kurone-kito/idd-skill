@@ -262,11 +262,17 @@ export interface AuditOptions {
   expectedAuthoringBucket?: AuthoringBucketMarkerValue;
   /**
    * The repository the drafted body belongs to, as `owner/repo` (matching
-   * the `GITHUB_REPOSITORY` env var's own format). Used only by the
-   * advisory `prose-dependency` check to tell a local issue/PR reference
-   * from a cross-repo one: the encodings it recommends (`Blocked by #N` /
+   * the `GITHUB_REPOSITORY` env var's own format). Used by the advisory
+   * `prose-dependency` check to tell a local issue/PR reference from a
+   * cross-repo one: the encodings it recommends (`Blocked by #N` /
    * `Depends on #N`) are inherently local, so a cross-repo reference would
-   * otherwise get the same, actively-wrong advice.
+   * otherwise get the same, actively-wrong advice. Also used by the
+   * hard-failing `dependency-line-grammar` check (#3285 final review
+   * round, Copilot): unlike `prose-dependency`, a cross-repository token
+   * there only fails the line when `currentRepo` is explicitly supplied
+   * and does not match -- omitting this option changes which qualified
+   * dependency lines fail publication, not just which ones get flagged as
+   * advisory.
    *
    * The two reference forms this option affects default in **opposite**
    * directions when it is omitted:

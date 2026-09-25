@@ -669,9 +669,14 @@ that context a qualified reference is treated as unverifiable rather
 than malformed (mirroring how the `roadmap-tracks-parse` check below
 already treats an unverifiable qualified reference elsewhere in this
 same file). A real `<!-- <marker-prefix>-blocked-by: ... -->` roadmap
-marker is never mistaken for a near-miss: nothing that looks like an
-issue reference follows the marker's own roadmap-id value, so the
-required-trailing-reference test simply does not match.
+marker is never mistaken for a near-miss, even when its own value
+happens to look like an issue reference (e.g.
+`<!-- idd-skill-blocked-by: #12 -->` — the extractor behind this
+marker accepts any non-whitespace value, with no format restriction):
+the check masks every well-formed marker of this shape out of its
+near-miss scan before running it, using the same pattern the marker's
+own extractor matches against, so the marker's value is never read as
+the required trailing reference in the first place.
 
 For the `orphan` and `child` shapes, it also runs the same A4 viability
 and A4.5 suitability evaluators the IDD discover phase runs later, at
