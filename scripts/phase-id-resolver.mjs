@@ -18,6 +18,12 @@
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
@@ -92,7 +98,13 @@ const PHASE_ID_RESOLVER_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  // #3343: call runCli() directly when the envelope is disabled -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('phase-id-resolver', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 export function resolvePhaseId(input, options = {}) {
   const resolver = createPhaseIdResolver(options);
@@ -244,7 +256,7 @@ function runCli() {
     process.exit(0);
   }
   if (!args.phaseId) {
-    throw new Error('--phase-id is required');
+    throw markCliUsageError(new Error('--phase-id is required'));
   }
   const resolver = createPhaseIdResolver();
   const result = resolver.resolve(args.phaseId);
@@ -257,6 +269,7 @@ function runCli() {
     legacyAliasMap: args.verbose ? resolver.legacyAliasMap : undefined,
   };
   process.stdout.write(`${JSON.stringify(compactObject(output), null, 2)}\n`);
+  return 0;
 }
 function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, PHASE_ID_RESOLVER_FLAG_SPEC);

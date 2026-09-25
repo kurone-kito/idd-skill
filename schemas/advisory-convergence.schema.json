@@ -116,7 +116,7 @@
         "suppressedCount": {
           "type": "integer",
           "minimum": 0,
-          "description": "Count parsed from a `Suppressed comments (N)` heading in the latest review's body (read only when matchesHead is true; 0 otherwise), 0 when no such section is present -- kurone-kito/idd-skill#1880. GitHub Copilot can fold a finding into this collapsed body section instead of posting it as a comment, which itemCount (comments.totalCount) never reflects."
+          "description": "Count of thread-less findings parsed from the latest review's body (read only when matchesHead is true; 0 otherwise), 0 when no recognized section is present -- kurone-kito/idd-skill#1880. The three recognized sources are the current ccr-overview-v2 shape's `Previously missed (N)` section, the legacy overview's `### Suppressed comments (N)` heading, and the original August `<summary>Suppressed comments (N)</summary>` form. GitHub Copilot can fold a finding into one of these body sections instead of posting it as a comment, which itemCount (comments.totalCount) never reflects."
         },
         "bodyShape": {
           "type": ["string", "null"],

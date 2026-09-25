@@ -161,35 +161,43 @@ non-zero (each only ever `return`s `0` or throws), but the
 future helper relying on that would silently exit `0` on its own
 `gate` verdict otherwise.
 
-**Known residual limitation (two async-bodied helpers).**
-`discover-readiness-check.mjs` and `discover-viability-gate.mjs` had
+**Known residual limitation (async helpers whose CLI body was inline
+top-level await).** `discover-readiness-check.mjs`,
+`discover-viability-gate.mjs`, and `discover-roadmap-graph.mjs` had
 their CLI body as literal top-level-await code directly inside
-`if (import.meta.main)` before this migration, not a separate
-function; migrating them onto `runHelperCli` required extracting that
-body into a callable `async function main()` so `runHelperCli` (when
-the envelope is enabled) can invoke it and inspect its returned/thrown
+`if (import.meta.main)` before migration, not a separate function;
+migrating them onto `runHelperCli` required extracting that body into
+a callable `async function main()` so `runHelperCli` (when the
+envelope is enabled) can invoke it and inspect its returned/thrown
 outcome. That extraction, independent of `runHelperCli`'s own added
-frame above, itself adds one `at main (...)` frame to these two
-helpers' raw uncaught-crash text relative to their true pre-migration
-output -- unlike `runHelperCli`'s own frame, this one cannot be
-avoided by a call-site pattern change, since `main` must be an
-invokable function for the enabled path to work at all.
+frame above, itself adds one `at main (...)` frame to these helpers'
+raw uncaught-crash text relative to their true pre-migration output
+-- unlike `runHelperCli`'s own frame, this one cannot be avoided by a
+call-site pattern change, since `main` must be an invokable function
+for the enabled path to work at all. `discover-roadmap-graph.mjs`
+joined this residual in the discover/claim batch (#3343); the first
+two were already in that shape from the first batch.
 
-The other four migrated helpers carry no such residual frame, for two
-different reasons depending on the helper: `ci-wait-state.mjs`,
-`resume-claim-routing.mjs`, and `authoring-owner-provenance.mjs`
-already had `main`/`runCli` as a separate, pre-existing function
-before this track, so extracting nothing new means adding nothing
-new. `pre-merge-readiness.mjs` is different: its `main()` is _also_
-newly extracted by this same migration (its CLI body was inline
-before this track too), but its own `try`/`catch` (see the function's
-own code comment) never lets any exception escape uncaught in the
-first place -- there is no raw crash text for an extraction-added
-frame to appear in at all, regardless of whether `main` is a separate
-function or inline code. This is a narrower, more fragile invariant
-than the other three helpers' genuine pre-existing-function history:
-it would stop holding if a future edit ever let some error class
-propagate out of that `try`/`catch` uncaught.
+The other migrated helpers carry no such residual frame.
+`ci-wait-state.mjs`, `resume-claim-routing.mjs`, and
+`authoring-owner-provenance.mjs` already had `main`/`runCli` as a
+separate, pre-existing function before the first batch, so extracting
+nothing new means adding nothing new. `pre-merge-readiness.mjs` is
+different: its `main()` is _also_ newly extracted by that migration
+(its CLI body was inline before that track too), but its own
+`try`/`catch` (see the function's own code comment) never lets any
+exception escape uncaught in the first place -- there is no raw crash
+text for an extraction-added frame to appear in at all, regardless of
+whether `main` is a separate function or inline code. This is a
+narrower, more fragile invariant than the other three helpers'
+genuine pre-existing-function history: it would stop holding if a
+future edit ever let some error class propagate out of that
+`try`/`catch` uncaught. The discover/claim batch is the same split:
+its sync helpers, plus `discover-orphan-filter.mjs` and
+`clone-lock.mjs`, already had `runCli`. `idd-roadmap-audit-execute.mjs`,
+`suitability-close-execute.mjs`, and `audit-authored-issue.mjs` catch
+every CLI failure before it becomes raw crash text, so an extracted
+`main` adds no visible frame.
 
 ### Shape
 
@@ -247,12 +255,14 @@ call-site pattern described above.
 
 ### Migrated helpers (first batch)
 
-The six helpers below were the first batch migrated onto
-`runHelperCli`. For all six, `exitCode` is `0` on success (including
-`--help`, which exits `0` before `runHelperCli` ever sees an outcome)
-and `1` on any failure; none of the six currently returns a non-zero
-exit code as its own verdict, so none of them produces `kind: "gate"`
-today.
+The helpers in the tables below are migrated onto `runHelperCli`;
+every other packaged command is unaffected by the variable (it still
+crashes with a raw, unshaped stack trace on failure, exactly as
+before these tracks). For the six first-batch helpers, `exitCode` is
+`0` on success (including `--help`, which exits `0` before
+`runHelperCli` ever sees an outcome) and `1` on any failure; none of
+the six currently returns a non-zero exit code as its own verdict, so
+none of them produces `kind: "gate"` today.
 
 | Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
 | -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
@@ -292,6 +302,44 @@ default run rather than a usage error.
 | `merged-pr-feedback-sweep.mjs`       | an unknown flag (exit `1`)                                                                                                | a `gh` failure resolving the repository            | —                                              | an unexpected exception |
 | `external-check-waiver.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving waiver state              | the waiver verdict is not applicable           | an unexpected exception |
 | `local-validation-evidence.mjs`      | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving evidence                  | the evidence verdict is not applicable         | an unexpected exception |
+
+### Migrated helpers (discover and claim batch)
+
+Issue #3343 moves the 16 discover and claim helpers onto the same
+runner. Argument errors are `usage`. A `gh` failure is `not-found` or
+`transport` the same way as the first batch. A returned non-zero exit
+code is `gate`: `claim-lock.mjs` keeps exit `2` for an `--acquire`
+lock collision and for a `--backfill-tokens` result that is not
+`backfilled`; `clone-lock.mjs` keeps exit `3` for an `--exec` acquire
+timeout and passes a wrapped command's own non-zero status through as
+`gate` too; `suitability-close-execute.mjs` keeps exit `1` when the
+verdict is not ready (or, under `--apply`, not closed);
+`idd-roadmap-audit-execute.mjs` keeps the helper's own non-zero
+verdict exit code; `audit-authored-issue.mjs` keeps exit `1` for a
+completed audit that did not pass and exit `2` for argument errors
+(`usage`, still printed as `error: <message>` with no stack). The
+other eleven return `0` on success and throw on failure, so they do
+not produce `gate` today. `discover-orphan-filter.mjs` with no
+arguments reaches `gh repo view` and is `transport`, not `usage`.
+
+| Helper                             | `usage`                                                                     | `gate`                                                                         |
+| ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                       |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                     |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                     |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                     |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision or a non-`backfilled` `--backfill-tokens` |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status        |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                     |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                     |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                     |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`          |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                    |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                    |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                     |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                     |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a

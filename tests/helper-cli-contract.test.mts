@@ -211,7 +211,7 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: the first batch and the review/merge batch are marked migrated', () => {
+test('helper-cli-contract fixture: the first, discover/claim, and review/merge batches are marked migrated', () => {
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
@@ -219,25 +219,41 @@ test('helper-cli-contract fixture: the first batch and the review/merge batch ar
     'idd-advisory-comment-debounce.mjs',
     'idd-advisory-convergence.mjs',
     'idd-advisory-wait-state.mjs',
+    'idd-audit-authored-issue.mjs',
     'idd-audit-pr-cleanup.mjs',
     'idd-authoring-owner-provenance.mjs',
     'idd-branch-conflict-state.mjs',
+    'idd-branch-name.mjs',
     'idd-ci-wait-policy.mjs',
     'idd-ci-wait-state.mjs',
+    'idd-claim-approval-gate.mjs',
+    'idd-claim-lock.mjs',
+    'idd-clone-lock.mjs',
+    'idd-discover-orphan-filter.mjs',
     'idd-discover-readiness-check.mjs',
+    'idd-discover-roadmap-graph.mjs',
+    'idd-discover-shared-file-overlap.mjs',
     'idd-discover-viability-gate.mjs',
     'idd-disposition-non-review-notices.mjs',
+    'idd-emit-marker.mjs',
     'idd-external-check-waiver.mjs',
     'idd-local-validation-evidence.mjs',
     'idd-merge-execute.mjs',
     'idd-merged-pr-feedback-sweep.mjs',
+    'idd-phase-id-resolver.mjs',
     'idd-pre-merge-readiness.mjs',
     'idd-rerun-advisory-convergence.mjs',
     'idd-resolve-review-thread.mjs',
     'idd-resume-claim-routing.mjs',
+    'idd-resume-route-selection.mjs',
     'idd-review-activity-snapshot.mjs',
     'idd-review-comment-origin.mjs',
     'idd-review-disposition-verify.mjs',
+    'idd-roadmap-audit-execute.mjs',
+    'idd-select-desynced-index.mjs',
+    'idd-stalled-session-quiet-check.mjs',
+    'idd-suitability-close-execute.mjs',
+    'idd-suitability-triage.mjs',
   ]);
 });
 

@@ -28,7 +28,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
-
 /**
  * Tag a thrown `gh`-invocation error with a non-enumerable `ghCommand:
  * true` property so `helper-cli-runner.mts`'s `classifyHelperError`
@@ -51,7 +50,7 @@ import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
  * error already carries the tag, or is not an object at all (a rejection
  * reason that is not an `Error`, defensively).
  */
-function tagGhCommandError(error) {
+export function tagGhCommandError(error) {
   if (
     error &&
     typeof error === 'object' &&
@@ -64,6 +63,32 @@ function tagGhCommandError(error) {
     });
   }
   return error;
+}
+/**
+ * Rebuild the historical `gh command failed: <stderr>` error a helper
+ * throws for compatibility, without dropping the original stderr stream.
+ *
+ * `deriveGhHttpStatus` recognizes a bare `gh: HTTP NNN` line only when
+ * that line starts the scanned text. A message that merely prefixes the
+ * same text (`gh command failed: gh: HTTP 404`) does not match, so a real
+ * 404 is classified as `transport` with `httpStatus: null`. Copying the
+ * original stderr onto the new error, non-enumerable, lets the classifier
+ * read that line. Node's uncaught crash text still prints only `.message`,
+ * so the unset-envelope output stays the compatibility sentence (Copilot
+ * review, PR #3442).
+ */
+export function wrapGhCompatibilityError(error) {
+  const rawStderr = error?.stderr;
+  const stderr = String(rawStderr ?? '').trim();
+  const wrapped = new Error(`gh command failed: ${stderr}`);
+  if (rawStderr != null && String(rawStderr).length > 0) {
+    Object.defineProperty(wrapped, 'stderr', {
+      value: rawStderr,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return tagGhCommandError(wrapped);
 }
 /**
  * Default `execFileSync`/`execFile` timeout (ms) applied when a caller

@@ -144,6 +144,54 @@ candidate at the same second, then race the same-second tie-break;
 the pre-scan moves the resolution earlier in the pipeline so most
 sessions never touch the same issue.
 
+**Own-orphaned-claim near miss (#3322).** Observed 2026-09-23/24 in a
+public adopter run (`kurone-kito/vpm`, field-feedback gist round 40): a
+session's own Discover pass read its own orphaned claim's `claimed-by`
+comment as a non-stale foreign claim and moved on to the next
+candidate, per the pre-scan rule above, exactly as the rule is
+designed to behave for two genuinely different sessions. Only a
+follow-up review of the transcript caught it; a manual
+`claim-lock.mjs --read-tokens` check found a recorded token matching
+the "foreign" claim-id, prompting the operator to resume it correctly
+by hand.
+
+The fix checks `idd-claim.instructions.md`'s `--read-tokens` form
+against Discover's **own current cwd** — the primary worktree, since
+Discover has no per-issue implementation worktree of its own yet —
+never an explicit different worktree's path, so it needs no exception
+to the existing `--read-tokens` scope contract (`claim-lock.mts`'s own
+"Scope of the ownership proof" header comment, #2879 review, Codex P1;
+`docs/idd-helper-scripts.md`'s matching note). A fresh `A5` claim
+always records its token into the primary worktree's admin directory
+before any sibling worktree exists, so this check reaches the same
+recovery evidence the original incident found by hand, without probing
+a worktree Discover isn't running from. That same header comment is
+also explicit that a hit is corroborating bootstrap evidence only, not
+sole proof of current-session ownership by itself — under this
+repository's heavy-concurrency dogfooding, a different, still-live
+sibling session's own A5 claim can leave an indistinguishable record
+at that same shared path. Step 1.5's check therefore does **not**
+conclude ownership from `present: true` and adopt the recorded pair
+outright; it only stops Step 1.5 from silently discarding the
+candidate as an ordinary foreign claim, and routes it to
+`idd-resume.instructions.md` instead. Resume Step 0 sends a
+non-owned active claim with no forced-handoff evidence to
+`idd-resume-stall.instructions.md` before Step 1, so this route
+does not finish ownership by itself. A refusal there is not a
+terminal end of Discover: the candidate stays ineligible and
+Step 1.5 keeps scanning.
+
+This finding is upstream of the related `#3273` (Resume Step 1 not
+threading an already-known claim-id through to
+`resume-claim-routing.mjs`) and `#3274` (operator recovery for a
+stale/released claim whose local worktree is still occupied): a
+session with zero memory of its own claim, encountered during
+Discover's candidate filtering, before Resume is ever entered at all.
+`#3273`'s own gap is that Resume Step 0 stalls before Step 1
+unless the session already holds a verified claim-id. Passing the
+probe's claim-id through that entry stays in `#3273`, not this
+change.
+
 ### A4 Step 2 — Rationale: concurrent-selection desync
 
 A4 Step 1.5 (active-claim pre-scan) and A5(e) (collision detection plus
