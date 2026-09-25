@@ -26,6 +26,16 @@ const CORPUS_PATH = join(
   'corpus.json',
 );
 
+/**
+ * `pr: null` marks a synthetic/template fixture with no re-fetchable
+ * real source -- currently only `coderabbit-already-reviewed-ack-template`
+ * (#3146, pre-approved on the grandfather list regardless, per a
+ * documented search that found no verbatim real sample). It still runs
+ * through the label-correctness test below, but is excluded from the
+ * evidence-bar sample/distinct-PR counts entirely, so it can never
+ * substitute for real evidence on a non-grandfathered classifier
+ * (Copilot review, PR #3433).
+ */
 interface CorpusEntrySource {
   pr: number | null;
   reviewId: number | null;
@@ -148,16 +158,23 @@ test('every registered wording classifier has at least 3 real positive samples f
       if (!isPositiveLabel(label)) {
         continue;
       }
-      const prMarker =
-        entry.source.pr === null
-          ? `no-pr:${entry.id}`
-          : `pr:${entry.source.pr}`;
+      // A fixture with no real PR (e.g. a grandfathered template with no
+      // re-fetchable source) contributes neither a sample nor a
+      // distinct-PR count -- it has no real provenance to count as
+      // evidence for the 3-sample/2-PR bar, even though it still gets
+      // exercised for label correctness by the test above. Without this
+      // exclusion, a future classifier could combine two real PR samples
+      // with one synthetic/no-provenance fixture and wrongly clear the
+      // bar (Copilot review, PR #3433).
+      if (entry.source.pr === null) {
+        continue;
+      }
       const set = samplesByClassifier.get(classifierId) ?? new Set<string>();
       // One entry per (classifierId, entry.id) pair for the sample count,
-      // and prMarker feeds the SEPARATE distinct-PR count below via the
-      // same set's own PR-prefixed members -- see the split below.
+      // and the pr-prefixed member feeds the SEPARATE distinct-PR count
+      // below -- see the split below.
       set.add(`sample:${entry.id}`);
-      set.add(prMarker);
+      set.add(`pr:${entry.source.pr}`);
       samplesByClassifier.set(classifierId, set);
     }
   }
@@ -258,4 +275,25 @@ test('the corpus holds the acceptance-criteria-required PR #3196 in-progress-rev
   // notice either -- an in-progress review is neither settled nor declined.
   assert.equal(entry.expectedLabels['advisory-non-review-notice'], false);
   assert.equal(entry.expectedLabels['advisory-terminal-notice'], false);
+});
+
+test('the corpus holds the issue-required PR #1884 August <summary>Suppressed comments (N)</summary> entry', () => {
+  // This issue's own Proposed Change #1 names PR #1884 specifically for
+  // the August form (Copilot review, PR #3433: an earlier revision
+  // silently substituted a different real PR for this required sample
+  // instead of asserting the one the issue actually names).
+  const corpus = loadCorpus();
+  const entry = corpus.find((e) => e.id === 'copilot-legacy-august-1884');
+  assert.ok(entry, 'missing the PR #1884 review 4861131961 entry');
+  assert.equal(entry.source.pr, 1884);
+  assert.equal(entry.source.reviewId, 4861131961);
+  const label = entry.expectedLabels['copilot-review-body'] as {
+    shape: string;
+    suppressedCount: number;
+  };
+  assert.equal(label.shape, 'overview-legacy');
+  assert.ok(
+    label.suppressedCount > 0,
+    'PR #1884 review 4861131961 must have a non-zero suppressedCount',
+  );
 });

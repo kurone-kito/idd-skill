@@ -349,6 +349,25 @@
     }
   },
   {
+    "id": "copilot-legacy-august-1884",
+    "botLogin": "copilot-pull-request-reviewer[bot]",
+    "source": {
+      "pr": 1884,
+      "reviewId": 4861131961,
+      "commentId": null,
+      "editedAt": null
+    },
+    "surface": "review body",
+    "body": "## Pull request overview\n\nCopilot reviewed 10 out of 10 changed files in this pull request and generated no new comments.\n\n\n\n\n<details>\n<summary>Suppressed comments (2)</summary>\n\n**docs/idd-helper-scripts.md:1834**\n* This incident reference hardcodes \"merged 2026-08-05\", but the merge date is not stable (and may not match the eventual merge timestamp). Prefer referencing the observed PR/commit instead (e.g., the reproduced SHA) without asserting a merge date.\n```\nstays `0` while a real finding still exists. Observed incident: PR\nkurone-kito/idd-skill#1875, merged 2026-08-05 (a Copilot review on that\nPR had `comments.totalCount: 0` with a body still containing an\nunaddressed `Suppressed comments (1)` finding).\n```\n**idd-template/docs/idd-helper-scripts.md:1834**\n* This incident reference hardcodes \"merged 2026-08-05\", but the merge date is not stable (and may not match the eventual merge timestamp). Prefer referencing the observed PR/commit instead (e.g., the reproduced SHA) without asserting a merge date.\n```\nstays `0` while a real finding still exists. Observed incident: PR\nkurone-kito/idd-skill#1875, merged 2026-08-05 (a Copilot review on that\nPR had `comments.totalCount: 0` with a body still containing an\nunaddressed `Suppressed comments (1)` finding).\n```\n</details>\n\n",
+    "note": "This issue's own Proposed Change #1 names PR #1884 specifically for the August <summary>Suppressed comments (N)</summary> form; this review carries that exact tag pair (Suppressed comments (2)) alongside the legacy Pull request overview header. Kept alongside copilot-legacy-august-1875 (a different, also-real PR whose review has the same underlying shape) rather than substituting one for the other (Copilot review, PR #3433).",
+    "expectedLabels": {
+      "copilot-review-body": {
+        "shape": "overview-legacy",
+        "suppressedCount": 2
+      }
+    }
+  },
+  {
     "id": "copilot-legacy-clean-3108",
     "botLogin": "copilot-pull-request-reviewer[bot]",
     "source": {
