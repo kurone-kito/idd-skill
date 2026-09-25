@@ -33,6 +33,14 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import {
   inspectDevelopmentBranch,
@@ -461,10 +469,14 @@ export function collectPreMergeReadiness(
     process.exit(0);
   }
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --pr <number> argument'),
+    );
   }
   if (!args.claimless && !args.claimIssueNumber) {
-    throw new Error('missing required --claim-issue <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --claim-issue <number> argument'),
+    );
   }
 
   const currentRepo =
@@ -1882,15 +1894,46 @@ export function renderCliUsageError(error: unknown): {
 
 // CLI: emit the readiness report as JSON when invoked directly.
 if (import.meta.main) {
+  // #3342: call main() directly when the envelope is disabled, for the
+  // same uniform pattern every migrated helper's own trigger uses -- see
+  // applyHelperCliOutcomeWhenDisabled's own doc comment. Moot in
+  // practice for this file specifically: main()'s own try/catch below
+  // never lets an exception escape uncaught, so there is no raw crash
+  // text for the runHelperCli-added-frame concern to affect here.
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('pre-merge-readiness', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+// #3342: this file already had a top-level catch that renders its own
+// `{"error": ...}` stdout JSON and exits 1 on any failure -- unlike the
+// other five migrated helpers, which have no existing catch and let
+// `runHelperCli` classify a thrown error itself. Classifying the SAME
+// error here (via `classifyHelperError`) and reporting it as an outcome
+// object keeps that exact existing rendering unchanged while still
+// giving `runHelperCli` a real `kind` (e.g. `transport` for a `gh: HTTP
+// 503` failure, the #2806 ambiguity this whole issue exists to remove)
+// instead of the generic `gate` it would otherwise assign to any
+// returned non-zero exit code.
+function main(): HelperCliResult {
   try {
     process.stdout.write(
       `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
     );
+    return 0;
   } catch (error) {
     process.stdout.write(
       `${JSON.stringify(renderCliUsageError(error), null, 2)}\n`,
     );
-    process.exitCode = 1;
+    const classified = classifyHelperError(error);
+    return {
+      exitCode: 1,
+      kind: classified.kind,
+      message: classified.message,
+      httpStatus: classified.httpStatus,
+    };
   }
 }
 
@@ -1967,7 +2010,7 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
       return null;
     }
     if (!/^[1-9]\d*$/.test(token)) {
-      throw new Error(`invalid ${flagName} value: ${token}`);
+      throw markCliUsageError(new Error(`invalid ${flagName} value: ${token}`));
     }
     return Number(token);
   };
@@ -2012,10 +2055,14 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
 
   const claimless = Boolean(values.claimless);
   if (claimless && values['claim-issue'] !== undefined) {
-    throw new Error('--claimless cannot be combined with --claim-issue');
+    throw markCliUsageError(
+      new Error('--claimless cannot be combined with --claim-issue'),
+    );
   }
   if (claimless && claimId) {
-    throw new Error('--claimless cannot be combined with --claim-id');
+    throw markCliUsageError(
+      new Error('--claimless cannot be combined with --claim-id'),
+    );
   }
 
   // #3298: --closing-issues declares the deliberate multi-issue closing set
@@ -2027,13 +2074,15 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
   let closingIssueNumbers: number[] | null = null;
   if (closingIssuesToken !== undefined) {
     if (claimless) {
-      throw new Error('--closing-issues cannot be combined with --claimless');
+      throw markCliUsageError(
+        new Error('--closing-issues cannot be combined with --claimless'),
+      );
     }
     closingIssueNumbers = closingIssuesToken.split(',').map((token) => {
       const trimmed = token.trim();
       if (!/^[1-9]\d*$/.test(trimmed)) {
-        throw new Error(
-          `invalid --closing-issues value: ${closingIssuesToken}`,
+        throw markCliUsageError(
+          new Error(`invalid --closing-issues value: ${closingIssuesToken}`),
         );
       }
       return Number(trimmed);
@@ -2046,8 +2095,10 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
       claimIssueNumber !== null &&
       !closingIssueNumbers.includes(claimIssueNumber)
     ) {
-      throw new Error(
-        `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+      throw markCliUsageError(
+        new Error(
+          `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
+        ),
       );
     }
   }
