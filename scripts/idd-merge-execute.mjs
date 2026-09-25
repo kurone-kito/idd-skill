@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
@@ -411,7 +412,9 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       verdict.ready = false;
     }
     verdict.mergeResult = revalidation.failure;
-    return { verdict, exitCode: 1 };
+    return revalidation.cause === undefined
+      ? { verdict, exitCode: 1 }
+      : { verdict, exitCode: 1, cause: revalidation.cause };
   }
   const revalidated = revalidation.report;
   // Always a merge commit — never squash/rebase. Bind to the validated head.
@@ -444,7 +447,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates);
     if (!eligibleByMergeEvidence) {
       verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeError };
     }
     let fallbackMode;
     try {
@@ -464,11 +467,11 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       );
     } catch (policyError) {
       verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${ghErrorText(policyError) || 'unknown error'}; no merge`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: policyError };
     }
     if (fallbackMode === 'hold-and-report') {
       verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeError };
     }
     // #1521 (Codex review on PR #1537): re-validate a SECOND time,
     // immediately before the --admin call, rather than trusting the
@@ -494,7 +497,9 @@ export function runMergeExecute(argv, deps = defaultDeps) {
         verdict.ready = false;
       }
       verdict.mergeResult = `admin-fallback aborted: ${adminRevalidation.failure}`;
-      return { verdict, exitCode: 1 };
+      return adminRevalidation.cause === undefined
+        ? { verdict, exitCode: 1 }
+        : { verdict, exitCode: 1, cause: adminRevalidation.cause };
     }
     const adminReviewerStates = asRecord(
       adminRevalidation.report.reviewerStates,
@@ -509,7 +514,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       mergeState = deps.fetchMergeState(args.prNumber, args.repoRef);
     } catch (mergeStateError) {
       verdict.mergeResult = `admin-fallback aborted: live merge state unreadable: ${ghErrorText(mergeStateError) || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: mergeStateError };
     }
     if (
       !isSafeSoloCodeownerAdminMergeState(
@@ -538,7 +543,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       return { verdict, exitCode: 0 };
     } catch (adminMergeError) {
       verdict.mergeResult = `admin-fallback merge also failed: ${ghErrorText(adminMergeError) || 'unknown error'}`;
-      return { verdict, exitCode: 1 };
+      return { verdict, exitCode: 1, cause: adminMergeError };
     }
   }
 }
@@ -566,6 +571,7 @@ function revalidateImmediatelyBeforeMerge(
     return {
       ok: false,
       failure: `head re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+      cause: error,
     };
   }
   if (liveHeadSha !== prHeadSha) {
@@ -581,6 +587,7 @@ function revalidateImmediatelyBeforeMerge(
     return {
       ok: false,
       failure: `readiness re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+      cause: error,
     };
   }
   if (String(report.prHeadSha ?? '') !== prHeadSha) {
@@ -835,7 +842,7 @@ if (import.meta.main) {
   }
 }
 function main() {
-  const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
+  const { verdict, exitCode, cause } = runMergeExecute(process.argv.slice(2));
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running
     // --apply interactively should actually notice it, not just find it
@@ -845,5 +852,16 @@ function main() {
     );
   }
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  if (exitCode !== 0 && cause !== undefined) {
+    const classified = classifyHelperError(cause);
+    if (classified.kind === 'transport' || classified.kind === 'not-found') {
+      return {
+        exitCode,
+        kind: classified.kind,
+        message: classified.message,
+        httpStatus: classified.httpStatus,
+      };
+    }
+  }
   return exitCode;
 }
