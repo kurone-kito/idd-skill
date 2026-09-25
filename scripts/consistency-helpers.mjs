@@ -3,6 +3,7 @@
 // The scripts/consistency-helpers.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import { githubHeadingSlug } from './markdown-link-audit.mjs';
 import { parseProjectCommandRows } from './policy-helpers.mjs';
 
@@ -1825,14 +1826,20 @@ function stripHeadingInlineMarkup(text) {
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
 }
-// Locates `heading`'s GitHub slug in `text` (reusing the exported
-// `githubHeadingSlug`, with the same fence-aware ATX scan and
-// duplicate-suffix counting `extractHeadingSlugs` applies) and returns the
-// text from that heading's own line to the next heading of the same or
-// shallower level (exclusive), or to end-of-file when none follows. A
-// separate walk from `extractHeadingSlugs` is required here (not a call to
-// it) because that function reports slugs only, never the line position a
-// section boundary needs.
+// Locates `heading`'s GitHub slug in `text` and returns the text from that
+// heading's own line to the next heading of the same or shallower level
+// (exclusive), or to end-of-file when none follows. Heading *detection*
+// reuses the shared #3281 masking entry point ({@link maskMarkdownForScan},
+// the same `{ inlineCode: 'keep' }` options `extractHeadingSlugs` uses in
+// markdown-link-audit.mts) so a heading-shaped line inside a fenced (backtick
+// or tilde) or indented code block is never mistaken for a real section
+// boundary -- a separate walk from `extractHeadingSlugs` is still required
+// here (not a call to it) because that function reports slugs only, never
+// the line position a section boundary needs. The section *body* returned
+// below is sliced from the original, unmasked `lines` (masking preserves
+// line count/positions but blanks fenced/indented content), since a lite
+// gate's own `contains`/`pattern` may need to match literal text inside a
+// fenced example the section contains.
 //
 // `heading` is always plain ATX text (never a slug that already carries
 // a duplicate suffix, like `Gate-1`), so it can only ever describe the
@@ -1849,20 +1856,14 @@ function stripHeadingInlineMarkup(text) {
 // entry's heading needs to be unique within its file.
 function extractHeadingSection(text, heading) {
   const expectedSlug = githubHeadingSlug(stripHeadingInlineMarkup(heading));
-  const lines = text.split(/\r?\n/);
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const maskedLines = maskMarkdownForScan(text, { inlineCode: 'keep' }).split(
+    '\n',
+  );
   const counts = new Map();
-  let inFence = false;
   const headings = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      continue;
-    }
-    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+  for (let index = 0; index < maskedLines.length; index += 1) {
+    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(maskedLines[index]);
     if (!match) {
       continue;
     }

@@ -227,6 +227,31 @@ test('fails closed on a heading that repeats in its own file (#3310 review)', ()
   assert.match(violations[0], /matches more than one heading/);
 });
 
+test('ignores a heading-shaped line inside a tilde-fenced example (#3428 review)', () => {
+  const files = {
+    ...FILES,
+    'tilde-fence.instructions.md': [
+      '# Doc',
+      '',
+      '~~~markdown',
+      '## The Gate',
+      '~~~',
+      '',
+      '## The Gate',
+      '',
+      'Real occurrence: confirm the closing set matches exactly.',
+      '',
+    ].join('\n'),
+  };
+  const entry = baseEntry();
+  (entry.standard as Record<string, unknown>).file =
+    'tilde-fence.instructions.md';
+  assert.deepEqual(
+    collectLiteGateParityViolations([entry], fakeReader(files)),
+    [],
+  );
+});
+
 test('fails when a location carries both contains and pattern', () => {
   const entry = baseEntry();
   (entry.standard as Record<string, unknown>).pattern = 'closing set';
