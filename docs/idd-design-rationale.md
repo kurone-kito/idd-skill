@@ -179,18 +179,11 @@ GitHub-authoritative claim-state rules — not a local file alone — make
 the actual ownership call. Resume's own Step 1 table already treats an
 active non-stale claim from another session as "STOP — not inheritable
 even if agent-id matches," and only continues with the same
-`{claim-id}` once independently verified as this session's own; a
-genuinely foreign, still-live claim with no forced-handoff evidence
-still lands on one of those existing STOP/quiet-window routes,
-unchanged from today. Until `#3273` closes its own gap, Resume's
-mechanized path does not yet consume this session's on-disk record
-either, so a genuine same-machine recovery surfaces as a reported stop
-rather than a silent auto-resume — a strict improvement over today's
-silent skip regardless, since a human or a later pass can now act on
-it instead of it vanishing from view. This keeps the original pre-scan
-mitigation intact for the two-different-sessions case it exists for,
-while replacing today's silent skip with a real, GitHub-authoritative
-investigation for the same-machine-recovery case.
+`{claim-id}` once independently verified as this session's own. That
+refusal is not a terminal end of Discover: the candidate stays
+ineligible and Step 1.5 keeps scanning, so a foreign shared-primary
+hit does not block every later candidate. Discover stops only when
+Resume actually takes the claim.
 
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to

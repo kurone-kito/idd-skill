@@ -566,8 +566,8 @@ ascending issue-number order:
   `idd-claim.instructions.md`'s `--read-tokens` (or helper-free
   fallback) with `--worktree`=own cwd and that `--claim-id`:
   `present: true` (not malformed) routes to
-  `idd-resume.instructions.md` and stops, and any other result
-  is **ineligible**. Also **ineligible** when a stale or released
+  `idd-resume.instructions.md`. A refusal continues the scan;
+  other results are **ineligible**. Also **ineligible** when a stale or released
   claim's same-clone worktree probe finds a live match or is
   unreadable without verified owner resume or authorized handoff
   (#3141). Otherwise it **remains eligible**.
