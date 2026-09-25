@@ -23,6 +23,7 @@ import { parseCliArgs } from './cli-args.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
   inspectHelperRuntimeConfig,
@@ -3234,9 +3235,10 @@ export function containsWorkshopReference(content: unknown): boolean {
   if (typeof content !== 'string' || content.length === 0) {
     return false;
   }
-  // Strip fenced code blocks (``` and ~~~) before scanning so demo
-  // Markdown inside code samples does not count as a real link.
-  const stripped = stripFencedCodeBlocks(content);
+  // Mask fenced/indented code blocks and inline code spans (via the
+  // shared #3281 entry point) before scanning so demo Markdown inside a
+  // code sample never counts as a real link.
+  const stripped = maskMarkdownForScan(content);
   // Accept any double-quoted, single-quoted, or no-title destination
   // form per CommonMark inline-link grammar.
   const linkPattern =
@@ -3251,21 +3253,6 @@ export function containsWorkshopReference(content: unknown): boolean {
     }
   }
   return false;
-}
-
-function stripFencedCodeBlocks(content: string): string {
-  const lines = String(content).split(/\r?\n/);
-  const out: string[] = [];
-  let inFence = false;
-  for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    out.push(line);
-  }
-  return out.join('\n');
 }
 
 function matchesWorkshopPath(target: string): boolean {
@@ -3338,203 +3325,17 @@ export function backLinkPatternFor(repoSlug: unknown): RegExp {
 
 export function stripMarkdownNonText(content: unknown): string {
   if (typeof content !== 'string') return '';
-  let s = content;
-  // Order matters: strip code regions FIRST so a literal `<!--`
-  // inside a code span cannot trigger the HTML-comment strip
-  // across unrelated content. After code regions are gone, HTML
-  // comments are guaranteed to be real comments.
-  s = stripFencesPreservingLines(s);
-  s = stripIndentedCodeBlocksPreservingLines(s);
-  // Inline code spans (single or multi-backtick).
-  s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, '');
-  // Now strip HTML comments. Loop to a fixed point so nested
-  // payloads like `<!--<!-- x --> -->` fully collapse rather than
-  // leaving `<!--` fragments after a single pass — satisfies
-  // CodeQL's incomplete-multi-character sanitization rule.
-  let prev: string;
-  do {
-    prev = s;
-    s = s.replace(/<!--[\s\S]*?-->/g, '');
-  } while (s !== prev);
-  return s;
-}
-
-// Per CommonMark §4.5: an opening fence may have up to 3 leading
-// spaces; the opening backtick fence info string MUST NOT contain
-// backticks (the tilde fence info string may contain anything); a
-// closing fence must use the same fence character, have a length
-// at least the opening length, and may have a different indent
-// (still <= 3 spaces) and trailing whitespace only.
-function stripFencesPreservingLines(content: string): string {
-  const lines = String(content).split(/\r?\n/);
-  const out: string[] = [];
-  let fence: { char: string; length: number } | null = null;
-  for (const line of lines) {
-    const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-    if (m) {
-      const indent = m[1].length;
-      const marker = m[2];
-      const after = m[3];
-      const isCloseShape = /^\s*$/.test(after);
-      const fenceChar = marker[0];
-      const fenceLen = marker.length;
-      if (fence === null) {
-        // Backtick-fence info strings cannot contain backticks. A
-        // line like ```` ``` invalid ` info ```` is not a real
-        // fence opener, so treat it as plain content.
-        if (fenceChar === '`' && after.includes('`')) {
-          out.push(line);
-          continue;
-        }
-        fence = { char: fenceChar, length: fenceLen };
-        out.push('');
-        continue;
-      }
-      if (
-        fenceChar === fence.char &&
-        fenceLen >= fence.length &&
-        isCloseShape &&
-        indent <= 3
-      ) {
-        fence = null;
-        out.push('');
-        continue;
-      }
-    }
-    out.push(fence === null ? line : '');
-  }
-  return out.join('\n');
-}
-
-// CommonMark §4.4 indented code blocks: content indented at least 4
-// columns beyond the enclosing context (the top level, or an open list
-// item's content column), preceded by a blank line. The stripper below
-// tracks open list levels by content column (supporting `-`/`*`/`+` and
-// ordered `\d+[.)]` markers), so list continuation and nested list items
-// are preserved, while a deeper indent — even a list-marker-looking line
-// — is treated as a nested indented code block and blanked. See
-// stripIndentedCodeBlocksPreservingLines.
-/** Leading-indent width of a line in columns (space = 1, tab = 4). */
-function leadingIndentColumns(line: string): number {
-  let columns = 0;
-  for (const ch of line) {
-    if (ch === ' ') {
-      columns += 1;
-    } else if (ch === '\t') {
-      columns += 4;
-    } else {
-      break;
-    }
-  }
-  return columns;
-}
-
-function stripIndentedCodeBlocksPreservingLines(content: string): string {
-  const lines = String(content).split(/\r?\n/);
-  const out: string[] = [];
-  let prevBlank = true;
-  let inBlock = false;
-  // The minimum indent (in columns) of the open indented code block, set
-  // at its opener. A line indented below this leaves the block.
-  let codeBaseIndent = 4;
-  // Content-indent columns of the currently open list levels, outermost
-  // first (a stack, so ending an inner list returns to the outer level
-  // instead of losing its context). Under the innermost open list, content
-  // indented up to `top + 3` is list continuation / nested-list items,
-  // while content indented `>= top + 4` is an indented code block nested
-  // inside the item (CommonMark allows code blocks within a list item).
-  // With no list open the threshold is the top-level 4 columns, so a
-  // top-level `>=4`-column indent is still a code block even when it looks
-  // like a list marker.
-  const listContentIndents: number[] = [];
-  const innermostListIndent = () =>
-    listContentIndents.length > 0
-      ? listContentIndents[listContentIndents.length - 1]
-      : null;
-  // Drop list levels whose content column is deeper than `indent`, so a
-  // dedent re-exposes the enclosing list (or no list).
-  const popDeeperThan = (indent: number) => {
-    while (
-      listContentIndents.length > 0 &&
-      indent < listContentIndents[listContentIndents.length - 1]
-    ) {
-      listContentIndents.pop();
-    }
-  };
-  for (const line of lines) {
-    if (/^\s*$/.test(line)) {
-      // A blank line ends neither an open indented code block nor an open
-      // list: per CommonMark §4.4 a code block is one or more indented
-      // chunks separated by blank lines, and loose lists are blank-line
-      // separated too. Both states survive the blank; they only end at a
-      // later non-indented, non-blank line (or a dedent).
-      out.push(line);
-      prevBlank = true;
-      continue;
-    }
-    const indent = leadingIndentColumns(line);
-    // CommonMark §5.2: ordered-list markers may use either `.` or `)`
-    // after the digit. The match is the full marker prefix (leading
-    // whitespace + marker + trailing whitespace); its column width gives
-    // the list item's content column, computed tab-aware where the item
-    // is kept below.
-    const listMarker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line);
-
-    if (inBlock) {
-      if (indent >= codeBaseIndent) {
-        // Continuation of the open code block (even across blank lines).
-        // A list cannot start inside it, so a list-marker-looking line
-        // here stays code and is blanked.
-        out.push('');
-        prevBlank = false;
-        continue;
-      }
-      // Indented below the code block base; it ends. Reprocess this line.
-      inBlock = false;
-    }
-
-    const codeThreshold = (innermostListIndent() ?? 0) + 4;
-    if (prevBlank && indent >= codeThreshold) {
-      // Indented code block opener — at the top level (no list) or nested
-      // inside the current list item. A list marker at this depth is code,
-      // not a list, so this branch precedes the list-marker handling.
-      out.push('');
-      inBlock = true;
-      codeBaseIndent = codeThreshold;
-      prevBlank = false;
-      continue;
-    }
-
-    if (listMarker && indent < codeThreshold) {
-      // A list item (top-level or nested, but shallower than a code block
-      // per the threshold above — a marker at code depth that was not
-      // opened as a code block is paragraph continuation, handled below,
-      // and must not open a list level). Close any deeper sibling levels,
-      // then record this item's content column as the new innermost list.
-      // The content column is the full prefix width in columns (tab = 4),
-      // consistent with leadingIndentColumns, so a tab after the marker is
-      // not miscounted as a single column.
-      out.push(line);
-      let prefixWidth = 0;
-      for (const ch of listMarker[0]) {
-        prefixWidth += ch === '\t' ? 4 : 1;
-      }
-      const contentColumn = prefixWidth;
-      popDeeperThan(indent);
-      listContentIndents.push(contentColumn);
-      prevBlank = false;
-      continue;
-    }
-
-    // A non-code, non-list line: close any list levels whose content
-    // column is deeper than this line's indent. A line that drops below
-    // every level closes the list entirely; a line still within an outer
-    // level keeps that level open.
-    out.push(line);
-    popDeeperThan(indent);
-    prevBlank = false;
-  }
-  return out.join('\n');
+  // Mask fenced/indented code blocks, inline code spans, and HTML
+  // comments via the shared #3281 entry point, which already orders
+  // code regions before comments so a literal `<!--` inside a code
+  // span cannot trigger the comment mask across unrelated content,
+  // and masks (rather than deletes) each region so nested comment
+  // payloads like `<!--<!-- x --> -->` can never rejoin into a new
+  // token the way a single deletion pass could.
+  return maskMarkdownForScan(content, {
+    inlineCode: 'mask',
+    htmlComments: 'mask',
+  });
 }
 
 export function containsExampleRepoBackLink(

@@ -248,6 +248,46 @@ function isMarkdownBlockStart(content) {
     MARKDOWN_THEMATIC_BREAK_PATTERN.test(content)
   );
 }
+/**
+ * True when `content` (already container-prefix-stripped, per
+ * {@link parseContainerLine}) LOOKS LIKE a paragraph-interrupting block
+ * start: {@link isMarkdownBlockStart}'s own coverage (headings,
+ * list-item markers, thematic breaks) plus an HTML block opener (a
+ * generic block-level tag, `<!--`, a processing instruction,
+ * `<!DOCTYPE`, `<![CDATA[`, or a raw-text element), a lone custom HTML
+ * tag, or a valid fence opener -- shared so a caller does not need its
+ * own partial copy of this shape test.
+ *
+ * Not context-complete: some of its sub-checks are only CONDITIONALLY
+ * paragraph-interrupting per CommonMark, and this function has no
+ * paragraph-openness context to resolve them (C1 critique round 2,
+ * kurone-kito/idd-skill#3283). A lone custom HTML tag (the
+ * {@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN} branch, CommonMark
+ * type 7) can NEVER interrupt a paragraph, and a bare `=`-run or short
+ * 1-2-dash run ({@link MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN}, folded
+ * into {@link isMarkdownBlockStart} here) only ends one when a
+ * genuinely open, non-lazy paragraph already precedes it -- see
+ * {@link findHtmlBlockRanges}'s own `noOpenParagraph`-gated handling of
+ * both for a context-complete example. `findIndentedCodeRanges`
+ * (round 5, same issue) does not use this predicate at all for its own
+ * list-content-indent tracking -- a stack of open levels replaces the
+ * laziness heuristic entirely there, since a flat pattern-matching
+ * predicate like this one kept having a *different* CommonMark
+ * paragraph-interruption exception someone had not yet enumerated
+ * (rounds 1-4 each found one).
+ *
+ * `fencedLine` is the caller's own {@link parseFencedLine} result,
+ * since the `activeListContentIndent` it threads through differs per
+ * call site.
+ */
+function isLazinessInterruptingBlockStart(content, fencedLine) {
+  return (
+    isMarkdownBlockStart(content) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+    MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(content) ||
+    (fencedLine !== null && isValidFenceOpener(fencedLine))
+  );
+}
 /** True when `content` opens with an HTML closing-tag slash (`</tag>`). */
 function isHtmlClosingSyntax(content) {
   return /^ {0,3}<\//u.test(content);
@@ -824,11 +864,10 @@ function findMarkdownBlockBoundary(text, start, end) {
         ? openingListContentIndent
         : null;
     const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
-    const isBlockStart =
-      isMarkdownBlockStart(parsed.content) ||
-      MARKDOWN_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN.test(parsed.content) ||
-      (fencedLine !== null && isValidFenceOpener(fencedLine));
+    const isBlockStart = isLazinessInterruptingBlockStart(
+      parsed.content,
+      fencedLine,
+    );
     // A de-indented line that would otherwise end the list item's content
     // zone still lazily continues an in-progress ordinary paragraph --
     // CommonMark laziness -- unless the opening line is itself inside a
@@ -1894,8 +1933,27 @@ export function findIndentedCodeRanges(text, fencedRanges) {
   let previousLineBlank = true;
   let previousLineBlockBoundary = true;
   let previousContainerDepth = 0;
-  let activeListContentIndent = null;
-  let activeListContainerDepth = null;
+  // Stack of open list levels' content indent + container depth, outermost
+  // first -- mirrors the deleted idd-doctor.mts bespoke
+  // stripIndentedCodeBlocksPreservingLines's own listContentIndents stack /
+  // popDeeperThan (kurone-kito/idd-skill#3283, round 5 -- C1 critique rounds
+  // 1-4 each patched a different gap in a "does the preceding/current line
+  // look like an open paragraph to lazily continue" heuristic built on top
+  // of a single scalar, and each patch left another gap: CommonMark's real
+  // laziness answer needs full block-parser context -- "is a *paragraph*
+  // genuinely open" -- that a single forward line-scan cannot reconstruct
+  // from indentation and line shape alone. The stack sidesteps the
+  // heuristic entirely: an under-indented dedent pops only the levels
+  // deeper than the current line's own indent, keeping any outer level the
+  // line still structurally satisfies, rather than collapsing to "no list
+  // open" on ANY under-indent (what a single scalar -- and every guard
+  // layered on top of it -- did). This is provably no worse than a scalar
+  // reset by construction: the scalar's "clear everything" is exactly the
+  // stack's own most extreme case, reached when the current line's indent
+  // is shallower than every open level, so the stack can only keep a level
+  // open where CommonMark's container-continuation rule (not a laziness
+  // guess) says it should.
+  const listStack = [];
   let activeListBlankLines = 0;
   let lineStart = 0;
   let fencedRangeIndex = 0;
@@ -1921,47 +1979,84 @@ export function findIndentedCodeRanges(text, fencedRanges) {
       continue;
     }
     const parsed = parseContainerLine(rawLine);
-    const listItem = parseListItemMatch(parsed.content);
+    let listItem = parseListItemMatch(parsed.content);
+    let relativeListContentIndent = null;
     const isBlank = parsed.content.trim() === '';
-    if (
-      activeListContentIndent !== null &&
-      parsed.containerDepth !== activeListContainerDepth
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
+    const openTop =
+      listStack.length > 0 ? listStack[listStack.length - 1] : null;
+    if (openTop !== null && parsed.containerDepth !== openTop.containerDepth) {
+      listStack.length = 0;
       activeListBlankLines = 0;
     }
-    if (
-      !isBlank &&
-      listItem === null &&
-      activeListContentIndent !== null &&
-      indentationColumns(parsed.content) < activeListContentIndent
-    ) {
-      activeListContentIndent = null;
-      activeListContainerDepth = null;
-      activeListBlankLines = 0;
+    if (!isBlank && listItem === null) {
+      // A non-list-item, non-blank line closes (pops) every open level
+      // deeper than its own indent, but leaves any shallower level open --
+      // that outer level's own content zone still structurally contains
+      // this line.
+      const indent = indentationColumns(parsed.content);
+      while (
+        listStack.length > 0 &&
+        indent < listStack[listStack.length - 1].contentIndent
+      ) {
+        listStack.pop();
+      }
+      // parseListItemMatch's own LIST_ITEM_PATTERN caps a recognized
+      // marker's own leading indent at 0-3 ABSOLUTE columns -- correct
+      // for a marker at the top level, but not relative to an
+      // already-open container. A marker genuinely nested two-plus
+      // list levels deep (absolute indent >= 4 once an enclosing
+      // level's own content column is already >= 4 -- e.g. a
+      // two-digit ordered marker like `10.`) was therefore never
+      // recognized here even though CommonMark treats it as a real,
+      // further-nested list item (Copilot review, PR #3424). Retry
+      // recognition relative to the still-open level's own content
+      // indent (after the pop above), mirroring parseFencedLine's own
+      // activeListContentIndent-relative stripping for the identical
+      // "marker directly after another list's own content indent"
+      // shape -- the same 0-3-relative-column rule then correctly
+      // still rejects a marker indented too deep even to open a
+      // further-nested item (that stays indented code).
+      const stillOpenTop =
+        listStack.length > 0 ? listStack[listStack.length - 1] : null;
+      if (stillOpenTop !== null) {
+        const relativeContent = stripLeadingIndentColumns(
+          parsed.content,
+          stillOpenTop.contentIndent,
+        );
+        const relativeListItem = parseListItemMatch(relativeContent);
+        const relativeContentIndent =
+          relativeListItem === null
+            ? null
+            : parseListItemContainer(relativeContent);
+        if (relativeListItem !== null && relativeContentIndent !== null) {
+          listItem = relativeListItem;
+          relativeListContentIndent =
+            stillOpenTop.contentIndent + relativeContentIndent;
+        }
+      }
     }
+    const activeTop =
+      listStack.length > 0 ? listStack[listStack.length - 1] : null;
     const isNonInterruptingListItem =
       listItem !== null &&
       !previousLineBlank &&
       !previousLineBlockBoundary &&
       parsed.containerDepth === previousContainerDepth &&
-      activeListContentIndent === null &&
+      listStack.length === 0 &&
       (listItem.content.trim() === '' ||
         (/^\d{1,9}[.)]$/u.test(listItem.marker) &&
           !/^1[.)]$/u.test(listItem.marker)));
     const listContentIndent = isNonInterruptingListItem
       ? null
-      : parsed.listContentIndent;
+      : (relativeListContentIndent ?? parsed.listContentIndent);
     const isIndented =
       indentationColumns(parsed.content) >=
-      (activeListContentIndent === null ? 4 : activeListContentIndent + 4);
-    if (rangeStart === null && activeListContentIndent !== null) {
+      (activeTop === null ? 4 : activeTop.contentIndent + 4);
+    if (rangeStart === null && listStack.length > 0) {
       if (isBlank) {
         activeListBlankLines += 1;
         if (activeListBlankLines >= 2) {
-          activeListContentIndent = null;
-          activeListContainerDepth = null;
+          listStack.length = 0;
         }
       } else {
         activeListBlankLines = 0;
@@ -1989,13 +2084,32 @@ export function findIndentedCodeRanges(text, fencedRanges) {
     previousLineBlockBoundary =
       MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN.test(parsed.content) ||
       (() => {
-        const fencedLine = parseFencedLine(rawLine, activeListContentIndent);
+        const fencedLine = parseFencedLine(
+          rawLine,
+          listStack.length > 0
+            ? listStack[listStack.length - 1].contentIndent
+            : null,
+        );
         return fencedLine !== null && isValidFenceOpener(fencedLine);
       })();
     previousContainerDepth = parsed.containerDepth;
     if (rangeStart === null && listContentIndent !== null) {
-      activeListContentIndent = listContentIndent;
-      activeListContainerDepth = parsed.containerDepth;
+      // A fresh list-item marker pops any sibling-or-deeper level at or
+      // below its own indent (the same popDeeperThan the dedent branch
+      // above applies, using the marker's own leading indent rather than
+      // the dedent case's already-established indentationColumns value)
+      // before pushing its own content indent as the new innermost level.
+      const markerIndent = indentationColumns(parsed.content);
+      while (
+        listStack.length > 0 &&
+        markerIndent < listStack[listStack.length - 1].contentIndent
+      ) {
+        listStack.pop();
+      }
+      listStack.push({
+        contentIndent: listContentIndent,
+        containerDepth: parsed.containerDepth,
+      });
       activeListBlankLines = 0;
     }
     if (line.next === lineStart) {
@@ -2467,13 +2581,15 @@ export function maskMarkdownForScan(text, options = {}) {
   ]);
   // Mirrors findMarkdownCodeRanges's own gap-scan, reusing the structural
   // ranges already computed above instead of recomputing them via a
-  // second findFencedCodeRanges call. Computed unconditionally (#3282
-  // review): a `<!--` sitting inside an inline code span must be
-  // excluded from findHtmlCommentRanges's own opener detection below
-  // regardless of whether inline code itself ends up masked in the final
-  // output -- otherwise a quoted `` `<!--` `` example (#2711/PR #2735's
-  // own round-2 case) is wrongly read as a real, unterminated HTML
-  // comment opener whenever `inlineCode: 'keep'` is combined with
+  // second findFencedCodeRanges call. Computed unconditionally --
+  // independently converged on by both PR #3424 (kurone-kito/idd-skill
+  // #3283) and PR #3413 (#3282), each via their own Copilot review: a
+  // `<!--` sitting inside an inline code span must be excluded from
+  // findHtmlCommentRanges's own opener detection below regardless of
+  // whether inline code itself ends up masked in the final output --
+  // otherwise a quoted `` `<!--` `` example (#2711/PR #2735's own
+  // round-2 case) is wrongly read as a real, unterminated HTML comment
+  // opener whenever `inlineCode: 'keep'` is combined with
   // `htmlComments: 'mask'`.
   const inlineRanges = [];
   let cursor = 0;
