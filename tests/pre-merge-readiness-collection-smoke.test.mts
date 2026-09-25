@@ -2440,6 +2440,62 @@ test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_tar
   assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, []);
 });
 
+// kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding, PR
+// #3425, High): an OLDER pull_request_target pass followed by a NEWER
+// pull_request pass from the SAME real workflow file. classifyCiChecks
+// dedupes the two same-producer instances down to the NEWER one before
+// ever classifying pass/fail, so the older qualifying pass never actually
+// backs the reported verdict -- an earlier revision of the gating logic
+// found the older instance and stayed permissive, letting the
+// dedup-selected NEWER, non-qualifying pass silently satisfy the check.
+test('collectPreMergeReadiness against a fake provider: #3256 an older pull_request_target pass followed by a newer, dedup-selected pull_request pass from the SAME file never satisfies the check', () => {
+  const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
+  const report = runSelfWaiverCollection({
+    changedFiles: {},
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        completedAt: '2026-08-01T00:00:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91008/job/1',
+      },
+      {
+        __typename: 'CheckRun',
+        name: DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        // Later than the pull_request_target pass -- a PR that
+        // reintroduced the pull_request trigger pushed again afterward,
+        // and that later run also happened to pass.
+        completedAt: '2026-08-01T00:05:00Z',
+        workflowName: 'IDD advisory-convergence gate',
+        detailsUrl: 'https://github.com/o/r/actions/runs/91009/job/1',
+      },
+    ],
+    workflowRuns: {
+      'o/r/91008': { path: REAL_PATH, event: 'pull_request_target' },
+      'o/r/91009': { path: REAL_PATH, event: 'pull_request' },
+    },
+  });
+  const ciReport = report.ci as {
+    status: string;
+    requiredChecksPassing: boolean;
+    nonTargetEventRequiredCheckNames: string[];
+  };
+  assert.equal(
+    ciReport.status,
+    'unknown',
+    `expected the dedup-selected NEWER, non-qualifying pass to never satisfy the check despite the older qualifying pass, got: ${JSON.stringify(ciReport)}`,
+  );
+  assert.equal(ciReport.requiredChecksPassing, false);
+  assert.deepEqual(ciReport.nonTargetEventRequiredCheckNames, [
+    DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  ]);
+});
+
 test('collectPreMergeReadiness against a fake provider: #3256 a pull_request_target pass alongside a same-named, same-file pull_request FAILURE still fails when the FAILURE is dedup-selected as latest', () => {
   const REAL_PATH = '.github/workflows/idd-advisory-convergence.yml';
   const report = runSelfWaiverCollection({

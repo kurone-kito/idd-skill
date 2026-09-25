@@ -58,6 +58,7 @@ import {
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
   selectCodeownersText,
+  selectLatestCheckInstance,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -680,10 +681,22 @@ export function collectPreMergeReadiness(
   // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
   // the primary required-check gate -- see the doc comment above.
   let advisoryConvergenceIdentityUnresolved = false;
-  // kurone-kito/idd-skill#3256: true when at least one live
-  // `idd-advisory-convergence` instance has a pass-equivalent state but
-  // NONE of the pass-equivalent instances was triggered by
-  // `pull_request_target` -- reported to `buildPreMergeReadinessSummary`
+  // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review finding,
+  // PR #3425): true when at least one same-producer
+  // `(type, workflowName, workflowPath)` group among the live
+  // `idd-advisory-convergence` instances has a pass-equivalent
+  // DEDUP-SELECTED representative (the same `selectLatestCheckInstance`
+  // tie-break `classifyCiChecks` itself applies -- see the resolution
+  // loop below) that was NOT triggered by `pull_request_target`.
+  // Deliberately keyed on the SELECTED representative per group, never
+  // "does any instance anywhere qualify": a same-file group can carry an
+  // older, qualifying `pull_request_target` pass alongside a newer,
+  // non-qualifying `pull_request` pass (a PR that reintroduced that
+  // trigger and pushed again) -- `classifyCiChecks` dedupes the group
+  // down to the NEWER instance before ever classifying pass/fail, so the
+  // older pass never actually backs the reported `success`; checking
+  // "any instance qualifies" would wrongly stay permissive in exactly
+  // that case. Reported to `buildPreMergeReadinessSummary`
   // (`advisoryConvergenceNonTargetEventOnly` option) so it can downgrade
   // the primary required-check gate the same way
   // `advisoryConvergenceIdentityUnresolved` does, but as a DISTINCT cause
@@ -693,19 +706,11 @@ export function collectPreMergeReadiness(
   // for every live instance -- an unresolved event already routes through
   // `advisoryConvergenceIdentityUnresolved` instead (see the resolution
   // loop's own `!event` guard), so this flag and that one are mutually
-  // exclusive in practice. Stays `false` (no downgrade) whenever no
-  // pass-equivalent instance exists at all: `classifyCiChecks` already
-  // correctly reports `failed`/`pending` for that case with no help
-  // needed here, and firing this flag regardless would spuriously
-  // downgrade an already-correct `failed`/`pending` verdict to the less
-  // informative `unknown` (accepted edge, mirrored in
-  // `summarizeRequiredChecks`'s own downgrade, which only ever narrows an
-  // already-`'success'` status). Also stays `false` whenever a
-  // `pull_request_target` instance's own pass exists alongside a
-  // DIFFERENT, non-qualifying pass-equivalent sibling (e.g. both a
-  // `pull_request` and a `pull_request_target` instance happen to pass) --
-  // "at least one qualifying pass exists" is what this check requires,
-  // never "every instance's event qualifies".
+  // exclusive in practice. A group whose selected representative is
+  // genuinely FAILING (not pass-equivalent) never sets this flag for that
+  // group -- `classifyCiChecks` already reports `failed` for it with no
+  // help needed here, matching `summarizeRequiredChecks`'s own downgrade
+  // precedent of only ever narrowing an already-`'success'` status.
   let advisoryConvergenceNonTargetEventOnly = false;
   if (advisoryConvergenceCheckEntries.length > 0) {
     const runIdsByIndex = new Map<number, string>();
@@ -850,27 +855,67 @@ export function collectPreMergeReadiness(
                   ? check
                   : { ...check, workflowPath: path };
               });
-              // kurone-kito/idd-skill#3256: every advisory-convergence entry
-              // now has a cleanly-resolved `event` in `eventsByIndex` (the
-              // loop above would already have set
+              // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review
+              // finding, PR #3425): every advisory-convergence entry now has
+              // a cleanly-resolved `event` in `eventsByIndex` (the loop
+              // above would already have set
               // `advisoryConvergenceIdentityUnresolved` and broken out
-              // otherwise) -- compute whether at least one pass-equivalent
-              // live instance exists and, if so, whether any of THOSE
-              // pass-equivalent instances was triggered by
-              // `pull_request_target`. See the flag's own doc comment below
-              // for the full rationale and the accepted edge cases.
-              advisoryConvergenceNonTargetEventOnly =
-                advisoryConvergenceCheckEntries.some(({ index }) =>
-                  CHECK_PASS_EQUIVALENT_STATES.has(
-                    String(checks[index]?.state ?? '').toUpperCase(),
-                  ),
-                ) &&
-                !advisoryConvergenceCheckEntries.some(
-                  ({ index }) =>
-                    CHECK_PASS_EQUIVALENT_STATES.has(
-                      String(checks[index]?.state ?? '').toUpperCase(),
-                    ) && eventsByIndex.get(index) === 'pull_request_target',
+              // otherwise). An earlier revision checked "does ANY
+              // pass-equivalent live instance have a qualifying event"
+              // across the whole check name -- wrong, because
+              // `classifyCiChecks` (via `groupChecksByProducer` +
+              // `selectLatestCheckInstance`) dedupes same-producer
+              // `(type, workflowName, workflowPath)` instances down to
+              // ONE representative BEFORE ever classifying pass/fail, and
+              // an older qualifying pass can coexist with a newer,
+              // dedup-SELECTED non-qualifying pass from the very same real
+              // workflow file (a PR that reintroduces `pull_request` and
+              // pushes a later, still-green run there) -- the earlier
+              // check found the older instance and stayed permissive while
+              // the newer, actually-representative instance was the one
+              // `ci.status` would report `success` from. Mirror the SAME
+              // producer grouping and latest-selection `classifyCiChecks`
+              // itself uses: group by `(type, workflowName, workflowPath)`
+              // (name is already constant across every entry here), pick
+              // each group's own `selectLatestCheckInstance` (the identical
+              // tie-break protocol-helpers.mts exports for this exact
+              // purpose), and flag only when a group's own SELECTED
+              // representative is pass-equivalent yet not
+              // `pull_request_target`-triggered -- exactly the instance
+              // that would otherwise let this check name read `success`.
+              const advisoryConvergenceProducerGroups = new Map<
+                string,
+                { state: string; completedAt: string | null; event: string }[]
+              >();
+              for (const { index } of advisoryConvergenceCheckEntries) {
+                const check = checks[index];
+                const type = check?.type ? String(check.type).trim() : '';
+                const workflowName = check?.workflowName
+                  ? String(check.workflowName).trim()
+                  : '';
+                const path = pathsByIndex.get(index) ?? '';
+                const key = `${type}\0${workflowName}\0${path}`;
+                const entry = {
+                  state: String(check?.state ?? '').toUpperCase(),
+                  completedAt: check?.completedAt ?? null,
+                  event: eventsByIndex.get(index) ?? '',
+                };
+                const group = advisoryConvergenceProducerGroups.get(key);
+                if (group) {
+                  group.push(entry);
+                } else {
+                  advisoryConvergenceProducerGroups.set(key, [entry]);
+                }
+              }
+              advisoryConvergenceNonTargetEventOnly = [
+                ...advisoryConvergenceProducerGroups.values(),
+              ].some((group) => {
+                const selected = selectLatestCheckInstance(group);
+                return (
+                  CHECK_PASS_EQUIVALENT_STATES.has(selected.state) &&
+                  selected.event !== 'pull_request_target'
                 );
+              });
             }
           }
         }
