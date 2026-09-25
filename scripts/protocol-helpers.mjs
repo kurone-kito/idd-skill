@@ -1833,22 +1833,23 @@ export function countUncoveredCodeRabbitEmbeddedFindings(
 // it never resolves on its own. It becomes a minimization candidate only
 // once a LATER trusted IDD disposition is paired to THIS exact notice.
 //
-// #3466 Copilot review (PR #3470): a bare "does any qualifying disposition
-// exist after me" check is not one-to-one -- two Codex usage-limit notices
-// sharing a single later trusted disposition would both independently see
-// it and both resolve, letting F4 minimize an undispositioned notice too.
-// Pairing must be genuinely 1:1. Greedily match every notice for this bot
-// (oldest first) to the earliest still-unconsumed matching disposition that
-// postdates it -- the same greedy-interval-matching shape as the #1018
-// carry-forward elsewhere in this file (credit the oldest N notices when
-// only N matching dispositions exist), refined to also respect each pair's
-// own chronological order rather than a bare count cap: a disposition that
-// predates every remaining notice can never validly cover any of them, so it
-// is discarded rather than counted.
-// The canonical machine-generated non-review-notice disposition
-// (`disposition-non-review-notices.mts`'s `buildDispositionBody`) always
-// names its own source notice's REST comment id in a trailing
-// `(source: #issuecomment-{id})` suffix.
+// #3466 review history (PR #3470) tried three progressively stricter
+// order-based pairing schemes here -- a bare "any qualifying disposition
+// exists after me" check, a count cap mirroring the #1018 carry-forward,
+// then a greedy chronological match -- and each one drew a new, genuine
+// correctness finding from a fresh review round (order-based reassignment
+// can always misattribute a disposition to an unrelated notice it never
+// named). Per this project's own E10 round-count heuristic ("after several
+// consecutive rounds each finding something new in the same area... prefer
+// removing or substantially simplifying the fragile mechanism"), this now
+// binds a notice to a disposition ONLY via the disposition's own explicit,
+// unambiguous `(source: #issuecomment-{id})` reference -- never by order,
+// count, or any other guess. This is not a narrowing of the accepted
+// contract: the issue's own acceptance criteria requires a disposition
+// that "attributes that same comment", and both the production
+// `buildDispositionBody` template and this repository's own E6 instruction
+// ALWAYS include that exact reference -- there is no documented,
+// real-world disposition shape this simplification stops recognizing.
 const DISPOSITION_SOURCE_ISSUECOMMENT_RE = /\(source:\s*#issuecomment-(\d+)\)/;
 const ISSUECOMMENT_URL_ID_RE = /#issuecomment-(\d+)/;
 /** The REST (numeric) comment id for `comment`, however this caller's
@@ -1879,109 +1880,54 @@ function resolvedCodexUsageLimitNotices(
   targetBotLogin,
   isDispositionAuthor,
 ) {
-  const byTime = (items) =>
-    items
-      .map((candidate, inputIndex) => ({
-        candidate,
-        inputIndex,
-        time: Date.parse(candidate.createdAt ?? ''),
-      }))
-      .filter((entry) => Number.isFinite(entry.time))
-      .sort((left, right) =>
-        left.time !== right.time
-          ? left.time - right.time
-          : left.inputIndex - right.inputIndex,
-      );
-  const notices = byTime(
-    comments.filter(
-      (candidate) =>
-        advisoryBotIdentityToken(candidate.author?.login ?? '') ===
-          'chatgpt-codex-connector' &&
-        isCodexUsageLimitNotice(candidate.body ?? ''),
-    ),
-  );
-  const dispositions = byTime(
-    comments.filter((candidate) => {
-      const author = String(candidate.author?.login ?? '')
-        .trim()
-        .toLowerCase();
-      return (
-        isDispositionAuthor(author) &&
-        isNonReviewNoticeDisposition({ body: candidate.body }) &&
-        dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
-      );
-    }),
-  );
-  const resolved = new Set();
-  const consumedDispositions = new Set();
-  // Pass 1 -- exact source-comment-id binding (Copilot review, PR #3470):
-  // the canonical machine-generated disposition already names its own
-  // notice explicitly, so an exact, unambiguous binding must win over any
-  // order-based guess -- a disposition naming notice B can never be
-  // misattributed to an older notice A merely for being older. Still
-  // requires every other safety check the `dispositions` filter above
-  // already applied (trusted author, canonical template, correct bot
-  // attribution) plus chronological validity (the disposition must
-  // postdate the notice it names).
-  //
-  // A disposition whose source id resolves to a PRESENT notice is claimed
-  // by that notice's identity regardless of whether the chronological
-  // check passes (second Copilot review, PR #3470): a binding that names a
-  // real notice but predates it is internally inconsistent -- not a
-  // genuine disposition of anything -- so it must be discarded outright
-  // rather than left in the fallback pool, where order-based pass 2 could
-  // otherwise reassign it to a completely different, unrelated (older)
-  // notice its own declared content never named. Only a source id that
-  // resolves to no present notice (unknown, or absent entirely) leaves the
-  // disposition eligible for pass 2.
   const noticeByRestId = new Map();
-  for (const notice of notices) {
-    const restId = restCommentId(notice.candidate);
+  for (const candidate of comments) {
+    if (
+      advisoryBotIdentityToken(candidate.author?.login ?? '') !==
+        'chatgpt-codex-connector' ||
+      !isCodexUsageLimitNotice(candidate.body ?? '')
+    ) {
+      continue;
+    }
+    const restId = restCommentId(candidate);
     if (restId) {
-      noticeByRestId.set(restId, notice);
+      noticeByRestId.set(restId, candidate);
     }
   }
-  dispositions.forEach((disposition, index) => {
-    const sourceId = dispositionSourceCommentId(disposition.candidate.body);
+  const resolved = new Set();
+  for (const candidate of comments) {
+    const author = String(candidate.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (
+      !isDispositionAuthor(author) ||
+      !isNonReviewNoticeDisposition({ body: candidate.body }) ||
+      !dispositionNamesAdvisoryBot(candidate.body ?? '', targetBotLogin)
+    ) {
+      continue;
+    }
+    const sourceId = dispositionSourceCommentId(candidate.body);
     if (!sourceId) {
-      return;
+      continue;
     }
     const notice = noticeByRestId.get(sourceId);
     if (!notice) {
-      return;
-    }
-    consumedDispositions.add(index);
-    if (disposition.time > notice.time) {
-      resolved.add(notice.candidate);
-    }
-  });
-  // Pass 2 -- greedy oldest-first fallback, for every notice pass 1 left
-  // unresolved, using only dispositions pass 1 did not already consume (a
-  // hand-typed or legacy disposition with no parseable source id, or a
-  // notice this caller's `CommentLike` shape can't derive a REST id for).
-  // Mirrors the #1018 carry-forward's own count-capped convention (credit
-  // the oldest remaining notice when only one matching disposition
-  // remains), refined to also respect each pair's own chronological order:
-  // a disposition that predates every remaining notice can never validly
-  // cover any of them, so it is discarded rather than counted.
-  let dispositionIndex = 0;
-  for (const notice of notices) {
-    if (resolved.has(notice.candidate)) {
       continue;
     }
-    while (
-      dispositionIndex < dispositions.length &&
-      (consumedDispositions.has(dispositionIndex) ||
-        !(dispositions[dispositionIndex].time > notice.time))
+    const noticeTime = Date.parse(notice.createdAt ?? '');
+    const dispositionTime = Date.parse(candidate.createdAt ?? '');
+    if (
+      !Number.isFinite(noticeTime) ||
+      !Number.isFinite(dispositionTime) ||
+      !(dispositionTime > noticeTime)
     ) {
-      dispositionIndex += 1;
+      // A binding that names a real, present notice but predates it is
+      // internally inconsistent -- nothing can genuinely disposition a
+      // comment that has not been posted yet -- so it is discarded rather
+      // than resolving anything.
+      continue;
     }
-    if (dispositionIndex >= dispositions.length) {
-      break;
-    }
-    resolved.add(notice.candidate);
-    consumedDispositions.add(dispositionIndex);
-    dispositionIndex += 1;
+    resolved.add(notice);
   }
   return resolved;
 }

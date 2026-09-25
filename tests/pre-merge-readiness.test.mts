@@ -11443,13 +11443,17 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(result, null);
   });
 
-  // #3466 (Copilot review, PR #3470): a bare "does any qualifying
-  // disposition exist after me" check is not one-to-one -- two notices
-  // sharing a single later disposition must not BOTH resolve. Only the
-  // oldest notice may resolve, mirroring the #1018 carry-forward's own
-  // count-capped convention (credit the oldest N notices when only N
-  // matching dispositions exist).
-  test('#3466: two Codex notices sharing one later disposition resolve only the oldest', () => {
+  // #3466 review history (PR #3470): three progressively stricter
+  // order-based pairing schemes (bare "any qualifying disposition after
+  // me", a count cap, then greedy chronological matching) each drew a new
+  // correctness finding from a fresh review round -- order-based
+  // reassignment can always misattribute a disposition to a notice it
+  // never named. The final design drops order-based pairing entirely:
+  // a disposition with no source id matching either PRESENT notice
+  // resolves NEITHER, even though it postdates both and even though only
+  // one disposition is "available" -- there is no fallback left to
+  // reassign it to the older (or any) notice.
+  test('#3466: a disposition matching neither present notice by source id resolves neither', () => {
     const firstNotice = {
       ...codexNotice,
       id: 1001,
@@ -11460,12 +11464,14 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
       id: 1002,
       createdAt: '2026-09-25T15:10:00Z',
     };
-    const singleDisposition = {
+    // Inherits dispositionReply's `(source: #issuecomment-5835065252)`
+    // suffix, which names neither 1001 nor 1002.
+    const unrelatedDisposition = {
       ...dispositionReply,
       id: 1003,
       createdAt: '2026-09-25T15:20:00Z',
     };
-    const comments = [firstNotice, secondNotice, singleDisposition];
+    const comments = [firstNotice, secondNotice, unrelatedDisposition];
 
     const resolvedFirst = classifyRegularBotComment(firstNotice, comments, [], {
       isDispositionAuthor,
@@ -11481,13 +11487,13 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
       },
     );
 
-    assert.equal(resolvedFirst?.classifier, 'RESOLVED');
+    assert.equal(resolvedFirst, null);
     assert.equal(resolvedSecond, null);
   });
 
-  // Complement: once a SECOND matching disposition exists, both notices may
-  // resolve -- the cap is on count, not identity.
-  test('#3466: two Codex notices each resolve once two matching dispositions exist', () => {
+  // Complement: each notice with its OWN correctly source-bound disposition
+  // resolves independently -- binding is per-comment-id, not order or count.
+  test('#3466: two Codex notices each resolve via their own correctly-bound disposition', () => {
     const firstNotice = {
       ...codexNotice,
       id: 2001,
@@ -11499,14 +11505,22 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
       createdAt: '2026-09-25T15:10:00Z',
     };
     const firstDisposition = {
-      ...dispositionReply,
       id: 2003,
       createdAt: '2026-09-25T15:05:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-2001)',
+      author: { login: 'kurone-kito' },
     };
     const secondDisposition = {
-      ...dispositionReply,
       id: 2004,
       createdAt: '2026-09-25T15:20:00Z',
+      body:
+        '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD ' +
+        'abc1234 (usage limits); this is not a completed review ' +
+        '(source: #issuecomment-2002)',
+      author: { login: 'kurone-kito' },
     };
     const comments = [
       firstNotice,
@@ -11533,12 +11547,10 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(resolvedSecond?.classifier, 'RESOLVED');
   });
 
-  // #3466 (CodeRabbit CLI review): a bare count cap (ignoring each pair's
-  // own chronological order) can over-count. A stray disposition dated
-  // BEFORE every remaining notice can never validly cover any of them and
-  // must not inflate the resolvable count -- greedy matching discards it
-  // instead of crediting it toward a later notice.
-  test('#3466: a disposition predating every notice cannot cover a later notice', () => {
+  // A disposition with no source id matching the present notice, whether
+  // or not it happens to postdate it, never resolves it -- exact binding
+  // only, no order-based fallback exists to reassign a stray disposition.
+  test('#3466: a disposition matching no present notice by source id cannot cover it', () => {
     const strayDisposition = {
       ...dispositionReply,
       id: 3001,
