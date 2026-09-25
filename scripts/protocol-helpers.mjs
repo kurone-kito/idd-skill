@@ -1134,10 +1134,9 @@ const CODERABBIT_SKIP_REVIEW_MARKER_RE = new RegExp(
 // genuine walkthrough at the outer-wrapper level. Unlike
 // `CODERABBIT_SKIP_REVIEW_MARKER`, this marker deliberately does NOT
 // exclude a comment from `isReviewSummaryComment` -- it mirrors Codex's
-// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`
-// in disposition-non-review-notices.mts): the comment is still
-// summary-shaped, but a separate completeness gate
-// (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
+// own in-progress "Running" state (`isCodexReviewSummaryCompleteForHeadSha`,
+// below): the comment is still summary-shaped, but a separate completeness
+// gate (`isCodeRabbitReviewInProgressSummary`, below) decides settlement/
 // auto-accept eligibility. Single-sourced so the settlement classifier,
 // `buildDispositionPlan`'s completeness gate, and
 // `classifyRegularBotComment`'s RESOLVED guard all recognize
@@ -1190,11 +1189,10 @@ export const CODEX_SUMMARY_MARKER =
 // review-summary comment instead of only CodeRabbit's (#2695). Recognizing
 // the marker does NOT by itself mean the review is complete -- Codex's
 // summary can also appear while its own status table still reads "Running"
-// for the current HEAD; `disposition-non-review-notices.mts`'s
-// `isCodexReviewSummaryCompleteForHeadSha` gates the actual auto-accept on
-// that separately. Single-sourced here so adding a future bot's summary
-// marker means adding one map entry, not touching the recognizer function
-// itself.
+// for the current HEAD; `isCodexReviewSummaryCompleteForHeadSha` (below)
+// gates the actual auto-accept / settlement on that separately.
+// Single-sourced here so adding a future bot's summary marker means adding
+// one map entry, not touching the recognizer function itself.
 const REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY = new Map([
   ['coderabbitai', CODERABBIT_SUMMARY_MARKER],
   ['chatgpt-codex-connector', CODEX_SUMMARY_MARKER],
@@ -1231,6 +1229,119 @@ export function isCodeRabbitAlreadyReviewedAcknowledgement(body) {
   return CODERABBIT_ALREADY_REVIEWED_ACK_RE.test(
     String(body ?? '').trimStart(),
   );
+}
+// #3261: identity-pinned "genuinely complete" recognizer for CodeRabbit's
+// OWN summary marker specifically -- unlike `isReviewSummaryComment` (which
+// matches ANY configured bot's marker by design, since every existing call
+// site already filters comments by author login before calling it), this is
+// used to decide SETTLEMENT for one specific configured identity
+// (`computeSecondaryAdvisoryReviewSettlement`, below), so it must not credit
+// a `coderabbitai`-authored comment as complete merely because its body
+// happens to start with a different bot's byte-identical marker text. Excludes
+// the same three non-complete shapes the settlement classifier already
+// distinguishes: the skip-review notice, the paused-review notice (both also
+// classified as terminal declines elsewhere), and the #3260 in-progress
+// revision (a genuine walkthrough that has not finished processing new
+// commits yet). Mirrors the existing `token === 'coderabbitai'` gate already
+// used for the in-progress check.
+export function isCodeRabbitCompletedReviewSummary(body) {
+  const text = String(body ?? '').trimStart();
+  return (
+    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
+    !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text) &&
+    !CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(text) &&
+    !isCodeRabbitReviewInProgressSummary(text)
+  );
+}
+// #2695 (Codex review, P1): chatgpt-codex-connector[bot] edits its own
+// review-status comment IN PLACE across its whole lifecycle -- including
+// while its own table still reads "Running" for the current HEAD.
+// Auto-accepting it at that point (before Codex has posted its actual
+// findings as their own review threads) would let the disposition-evidence
+// gate treat the review as settled ahead of findings that arrive later --
+// "a false positive is a false merge", the same hazard the CodeRabbit
+// per-HEAD re-disposition above guards against. #3260 corrects this
+// comment's prior claim that "CodeRabbit's own summary marker has no
+// analogous in-progress state": CodeRabbit edits its OWN summary comment in
+// place too, nesting a "review in progress by coderabbit.ai" marker next to
+// the previous review's content while it processes new commits (live
+// evidence: kurone-kito/idd-skill#3260, PR #3196 comment `5789875341`).
+// `disposition-non-review-notices.mts`'s `buildDispositionPlan` own
+// summary-walkthrough loop gates on that state via
+// `isCodeRabbitReviewInProgressSummary` before this function ever runs --
+// this table-parsing gate itself still applies to Codex only, because
+// Codex's own in-progress signal is this status table, not a
+// CodeRabbit-shaped marker. Parses the comment's own status table (columns
+// identified by header text, so a reordered or renamed non-Status/Commit
+// column does not break it) and requires the row for the current HEAD's
+// (possibly-abbreviated) commit to read "Completed" (case-insensitively,
+// tolerating the emoji/bold markup Codex wraps it in); any other outcome --
+// Running, no matching row, or an unparseable table -- is treated as
+// not-yet-complete so the caller must not disposition it (or, per #3261,
+// treat it as a settled secondary-bot review) yet.
+//
+// #3261: moved here from `disposition-non-review-notices.mts` so
+// `computeSecondaryAdvisoryReviewSettlement` (below) can use it directly
+// without an import cycle (that file already imports from this one); it is
+// re-exported unchanged from `disposition-non-review-notices.mts` so its
+// two existing call sites there, and every external import, keep working.
+export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
+  const fullHeadSha = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (!fullHeadSha) {
+    return false;
+  }
+  const rows = String(body ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'))
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split('|')
+        .map((cell) => cell.trim()),
+    );
+  if (rows.length === 0) {
+    return false;
+  }
+  const header = rows[0].map((cell) => cell.toLowerCase());
+  const statusColumn = header.findIndex((cell) => cell.includes('status'));
+  const commitColumn = header.findIndex((cell) => cell.includes('commit'));
+  if (statusColumn === -1 || commitColumn === -1) {
+    return false;
+  }
+  // Last matching row wins in case the table ever lists a commit more than
+  // once, mirroring the "current state" semantics of an in-place edit.
+  let latestStatus = null;
+  for (const row of rows.slice(1)) {
+    const commitCell = (row[commitColumn] ?? '')
+      .replace(/`/g, '')
+      .trim()
+      .toLowerCase();
+    if (!commitCell || !fullHeadSha.startsWith(commitCell)) {
+      continue;
+    }
+    latestStatus = row[statusColumn] ?? '';
+  }
+  // Copilot review (PR #3422, two rounds): a bare `/completed/i` substring
+  // test accepts a hypothetical "Not Completed" / "Uncompleted" status
+  // cell (both contain the substring "completed"). An unanchored
+  // `/\*\*\s*completed\s*\*\*/i.test()` first-round fix was still not
+  // enough: `.test()` searches anywhere in the string, so a malformed cell
+  // like "**Not **Completed**" (a separately bolded "Completed" segment
+  // embedded after other bolded text) would still match. Extract ONLY the
+  // first Markdown-bolded segment -- the actual status word every observed
+  // real cell wraps in bold (`**Completed**`, `**Running**`), with
+  // whatever follows (Codex's real fixture trails a `<relative-time>` HTML
+  // span in the same cell) left out of the comparison -- and require THAT
+  // extracted segment, trimmed, to equal "completed" exactly. Fail-closed
+  // for any other shape, including no bold markup at all.
+  if (latestStatus === null) {
+    return false;
+  }
+  const boldStatusWord = /\*\*(.+?)\*\*/.exec(latestStatus)?.[1] ?? '';
+  return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
@@ -3117,9 +3228,8 @@ export const EDITED_AFTER_DISPOSITION_HINT =
 // lifecycle, so this can match while its status table still reads "Running"
 // for the current HEAD -- callers that decide whether to AUTO-ACCEPT (as
 // opposed to merely classifying a comment as needing some disposition) must
-// gate on completion separately, as
-// `disposition-non-review-notices.mts`'s `isCodexReviewSummaryCompleteForHeadSha`
-// does.
+// gate on completion separately, as `isCodexReviewSummaryCompleteForHeadSha`
+// (above) does.
 // #2161: a comment that also nests CODERABBIT_SKIP_REVIEW_MARKER carries no
 // review content despite starting with the CodeRabbit summary marker, so it
 // is excluded here too -- never a summary walkthrough, always a non-review
@@ -3254,13 +3364,32 @@ export function dispositionNamesAdvisoryBot(
 //   `declined: true` here, not the ambiguous/pending case.)
 // - Neither `settled` nor `declined` -- still pending: no comment from the
 //   bot at or after `headCommittedAt` at all, an unparseable
-//   `headCommittedAt`/unconfigured `secondaryBotLogin`, or (#3260) the
-//   LATEST matching comment is CodeRabbit's own in-progress revision
+//   `headCommittedAt`/unconfigured `secondaryBotLogin`, (#3260) the LATEST
+//   matching comment is CodeRabbit's own in-progress revision
 //   (`isCodeRabbitReviewInProgressSummary`) -- CodeRabbit edits its summary
 //   comment in place when it starts reviewing new commits, so the outer
 //   `summarize by coderabbit.ai` wrapper alone cannot tell an in-progress
 //   revision apart from a genuine completed walkthrough; #2335's original
-//   full-window protection is unchanged for this case.
+//   full-window protection is unchanged for this case -- or (#3261) the
+//   LATEST matching comment is a NON-TERMINAL, non-notice body that simply
+//   is not a RECOGNIZED COMPLETED shape for this identity: a CodeRabbit
+//   reply that is not a summary walkthrough at all (e.g. a bare
+//   review-trigger acknowledgement), a Codex review-status comment whose
+//   own table still reads "Running" for this HEAD (the settlement
+//   classifier had no matching exclusion for this before #3261, even
+//   though #2695 already excludes it from AUTO-ACCEPT in
+//   `disposition-non-review-notices.mts`), or any other non-terminal
+//   comment at all from a secondary-bot identity this file has no
+//   completion recognizer for -- only `coderabbitai` and
+//   `chatgpt-codex-connector` have one. This is "non-terminal" specifically
+//   because a TERMINAL notice (rate-limit/skip/paused,
+//   `isTerminalAdvisoryNonReviewNotice` above) is checked first,
+//   identity-agnostically, before any of this dispatch runs -- an
+//   unrecognized identity's terminal notice still correctly reports
+//   `declined: true`, not pending. Fail-closed by design (Background of
+//   #3261): an unrecognized identity or shape costs its siblings the full
+//   quiet window rather than the short settled buffer, which is safer than
+//   crediting a review this classifier cannot actually verify is finished.
 //
 // Only the single latest matching comment is examined -- a notice posted
 // BEFORE a later genuine comment (rate-limited, then recovered) reports
@@ -3297,9 +3426,18 @@ export function dispositionNamesAdvisoryBot(
 // (`headObservedAt`: the earliest check-suite `createdAt` for the current
 // HEAD) here, not the committer-supplied `committedDate` -- see
 // `buildPreMergeReadinessSummary`'s own call site below.
+//
+// #3261: `headSha` is the current PR HEAD's own commit SHA (as opposed to
+// `headCommittedAt`'s timestamp role above), needed only for the Codex
+// completion check (`isCodexReviewSummaryCompleteForHeadSha` matches a
+// specific commit, not a point in time). Optional because every existing
+// direct caller in this file's own test suite predates it and only
+// exercises the `coderabbitai` identity, which never reads it; a missing
+// or empty value simply fails the Codex branch closed (pending), never
+// throws.
 export function computeSecondaryAdvisoryReviewSettlement(
   comments,
-  { secondaryBotLogin, headCommittedAt },
+  { secondaryBotLogin, headCommittedAt, headSha },
 ) {
   const token = advisoryBotIdentityToken(secondaryBotLogin);
   const headAt = String(headCommittedAt ?? '');
@@ -3355,7 +3493,41 @@ export function computeSecondaryAdvisoryReviewSettlement(
     // to `secondaryBotLogin`'s own comments, not necessarily CodeRabbit's.
     return { settled: false, settledAt: null, declined: false };
   }
-  return { settled: true, settledAt: latest.at, declined: false };
+  // #3261: fail-closed dispatch -- settlement requires a RECOGNIZED
+  // COMPLETED shape for THIS identity, not merely "not a known notice".
+  // Only two identities have any completion recognizer at all; every other
+  // identity always reports pending (see the function's own doc comment
+  // above).
+  if (token === 'coderabbitai') {
+    if (isCodeRabbitCompletedReviewSummary(latest.body)) {
+      return { settled: true, settledAt: latest.at, declined: false };
+    }
+    return { settled: false, settledAt: null, declined: false };
+  }
+  if (token === 'chatgpt-codex-connector') {
+    // Copilot review (PR #3422): `isCodexReviewSummaryCompleteForHeadSha`
+    // is a pure table parser with no identity check of its own -- it
+    // requires only Status/Commit columns and a Completed row, so calling
+    // it directly on ANY comment body would credit an ordinary
+    // Codex-authored comment that merely happens to embed a
+    // matching-shaped Markdown table. Pin to the identity's own
+    // `CODEX_SUMMARY_MARKER` first, the same way the `coderabbitai` branch
+    // above is pinned to `CODERABBIT_SUMMARY_MARKER` via
+    // `isCodeRabbitCompletedReviewSummary`.
+    const fullHeadSha = String(headSha ?? '').trim();
+    if (
+      fullHeadSha &&
+      String(latest.body ?? '')
+        .trimStart()
+        .startsWith(CODEX_SUMMARY_MARKER) &&
+      isCodexReviewSummaryCompleteForHeadSha(latest.body, fullHeadSha)
+    ) {
+      return { settled: true, settledAt: latest.at, declined: false };
+    }
+    return { settled: false, settledAt: null, declined: false };
+  }
+  // No recognized completion shape exists for this identity at all.
+  return { settled: false, settledAt: null, declined: false };
 }
 // #3186: folds each configured secondary advisory bot login's own
 // independent {@link computeSecondaryAdvisoryReviewSettlement} classification
@@ -3381,9 +3553,14 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // kurone-kito/idd-skill#3253: same parameter-name-kept-value-changed note as
 // `computeSecondaryAdvisoryReviewSettlement` above -- `headCommittedAt` here
 // is fed the GitHub-observed anchor by every live caller.
+//
+// #3261: `headSha` is passed straight through to every per-login
+// `computeSecondaryAdvisoryReviewSettlement` call -- see that function's own
+// doc comment for its role. Every login shares the same current PR HEAD, so
+// one value covers the whole fold.
 export function foldSecondaryAdvisoryReviewSettlements(
   comments,
-  { secondaryBotLogins, headCommittedAt },
+  { secondaryBotLogins, headCommittedAt, headSha },
 ) {
   if (secondaryBotLogins.length === 0) {
     return { settledAt: null, declined: false };
@@ -3392,6 +3569,7 @@ export function foldSecondaryAdvisoryReviewSettlements(
     computeSecondaryAdvisoryReviewSettlement(comments, {
       secondaryBotLogin,
       headCommittedAt,
+      headSha,
     }),
   );
   if (settlements.some((entry) => !entry.settled && !entry.declined)) {
@@ -8107,6 +8285,8 @@ export function buildPreMergeReadinessSummary(
     {
       secondaryBotLogins,
       headCommittedAt: options.advisoryConvergenceHeadObservedAt,
+      // #3261: needed for the Codex identity's Completed-at-HEAD check.
+      headSha: prHeadSha,
     },
   );
   // #2335: stateless secondary-quiet-window gate, anchored on the same
