@@ -10446,25 +10446,28 @@ function resolveThreadCommentRevisionDatingOutcome(comment, authorLogin) {
   if (typeof totalCount !== 'number' || totalCount !== edits.length) {
     return { kind: 'unverifiable' };
   }
+  // Copilot review, PR #3430: every revision's `editedAt` must be a
+  // parseable timestamp BEFORE sorting/classifying, not only checked
+  // opportunistically inside the loop below when a transition happens to
+  // be classified non-cosmetic. A malformed/null `editedAt` on a
+  // revision whose transition happens to LOOK cosmetic (same body,
+  // editor, marker as its predecessor) would otherwise never be
+  // rejected at all, and could also corrupt the chronological sort
+  // order used to evaluate every other transition -- fail closed here
+  // instead of trusting a partially-malformed history.
+  if (edits.some((edit) => !isValidIsoTimestamp(edit?.editedAt ?? ''))) {
+    return { kind: 'unverifiable' };
+  }
   // Connection order is newest-edit-first by convention
   // (`ProviderPort.getReviewThreadCommentUserContentEdits`'s own doc
   // comment), but a caller (a hand-built test fixture, in particular)
   // must never be trusted to preserve that order -- sort explicitly by
-  // `editedAt` ascending (oldest/creation revision first).
-  const chronological = [...edits].sort((left, right) => {
-    const leftAt = Date.parse(String(left?.editedAt ?? ''));
-    const rightAt = Date.parse(String(right?.editedAt ?? ''));
-    if (Number.isNaN(leftAt) && Number.isNaN(rightAt)) {
-      return 0;
-    }
-    if (Number.isNaN(leftAt)) {
-      return 1;
-    }
-    if (Number.isNaN(rightAt)) {
-      return -1;
-    }
-    return leftAt - rightAt;
-  });
+  // `editedAt` ascending (oldest/creation revision first). Every
+  // `editedAt` is already confirmed parseable above.
+  const chronological = [...edits].sort(
+    (left, right) =>
+      Date.parse(String(left.editedAt)) - Date.parse(String(right.editedAt)),
+  );
   let prevBody = null;
   let lastNonCosmeticAt = null;
   for (const edit of chronological) {
@@ -10475,18 +10478,22 @@ function resolveThreadCommentRevisionDatingOutcome(comment, authorLogin) {
       return { kind: 'unverifiable' };
     }
     if (prevBody !== null) {
-      const editorLogin = String(edit.editorLogin ?? '')
-        .trim()
-        .toLowerCase();
+      // Copilot review, PR #3430: normalize through the same
+      // `[bot]`-suffix-tolerant identity token every other
+      // advisory-bot-login comparison in this file already uses
+      // (`isConfiguredAdvisoryBotLogin` above) -- a raw lowercase
+      // comparison would silently reject every otherwise-valid
+      // cosmetic revision if GraphQL ever returns `editor.login` and
+      // `author.login` in different spellings for the same bot
+      // identity.
+      const editorToken = advisoryBotIdentityToken(edit.editorLogin);
       const cosmetic =
-        editorLogin !== '' &&
-        editorLogin === authorLogin &&
+        editorToken !== '' &&
+        editorToken === advisoryBotIdentityToken(authorLogin) &&
         isVisibleTextAppendOnly(prevBody, edit.diff) &&
         isOnlyAllowlistedMarkerCommentDiff(prevBody, edit.diff);
       if (!cosmetic) {
-        if (!isValidIsoTimestamp(edit.editedAt ?? '')) {
-          return { kind: 'unverifiable' };
-        }
+        // `edit.editedAt` was already confirmed parseable above.
         lastNonCosmeticAt = String(edit.editedAt);
       }
     }

@@ -4594,6 +4594,147 @@ test('#3269 negative: an allowlisted append on a comment by an author who is not
   );
 });
 
+test('#3269 negative: a malformed editedAt on a cosmetic-looking revision is unverifiable, not silently all-cosmetic (Copilot review, PR #3430)', () => {
+  // The malformed revision is chronologically OLDEST (Date.parse fails,
+  // so it is not what sorts it there -- it is simply the first-authored
+  // one) and its body/editor/marker exactly match the middle revision's,
+  // so a cosmetic check that never validates `editedAt` on a
+  // cosmetic-classified transition would let this whole history resolve
+  // to 'all-cosmetic' (dated by createdAt) despite one revision's own
+  // timestamp being garbage.
+  const findingText = '**Potential issue**: needs a null check.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:57:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+    {
+      // Malformed/garbage editedAt -- textually identical to the
+      // revision above, so a check that only fires inside the
+      // non-cosmetic branch would never catch this.
+      editedAt: 'not-a-real-timestamp',
+      diff: coderabbitFindingBody(
+        findingText,
+        'comment',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-malformed-edited-at',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T08:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T06:00:00Z',
+          updatedAt: '2026-09-20T06:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    false,
+  );
+});
+
+test('#3269 positive: a `[bot]`-suffixed editor login still verifies as cosmetic against a suffixless comment author (Copilot review, PR #3430)', () => {
+  // Real GraphQL data always returns the bare login (no `[bot]` suffix)
+  // for both `author.login` and `editor.login` on the same Bot actor
+  // (verified empirically against kurone-kito/idd-skill PR #3160/#3154/
+  // #3196 while authoring this issue), but the editor/author comparison
+  // must still tolerate a spelling mismatch the same way every other
+  // advisory-bot-identity comparison in this file already does
+  // (`isConfiguredAdvisoryBotLogin`) -- this synthesizes the case where
+  // one side happens to carry the suffix.
+  const findingText = '**Potential issue**: needs a null check.';
+  const edits = [
+    {
+      editedAt: '2026-09-20T08:00:00Z',
+      diff: coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 28c18a9',
+      ),
+      editorLogin: 'coderabbitai[bot]',
+      deletedAt: null,
+    },
+    {
+      editedAt: '2026-09-20T05:37:59Z',
+      diff: coderabbitFindingBody(findingText, 'comment'),
+      editorLogin: 'coderabbitai[bot]',
+      deletedAt: null,
+    },
+  ];
+  const thread = {
+    id: 'thread-suffix-mismatch',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'c1',
+          // Suffixless author login, matching real GraphQL review-thread
+          // data -- the editor entries above deliberately carry the
+          // `[bot]` suffix to exercise the normalization.
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:37:59Z',
+          updatedAt: '2026-09-20T12:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: edits[0].diff,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T07:00:00Z',
+          updatedAt: '2026-09-20T07:00:00Z',
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+  assert.equal(
+    hasFreshDisposition(thread, {
+      isDispositionAuthor: (login) => login === 'kurone-kito',
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    true,
+  );
+});
+
 test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
