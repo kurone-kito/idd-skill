@@ -1045,7 +1045,7 @@ function main(): HelperCliResult {
       (args.claimIssue ?? 0) <= 0 ||
       !args.claimId)
   ) {
-    process.stderr.write(
+    writeStderrSync(
       '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation\n',
     );
     exitClassified(
@@ -1174,7 +1174,7 @@ function main(): HelperCliResult {
     );
 
   if (!revalidateClaim()) {
-    process.stderr.write(
+    writeStderrSync(
       `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}\n`,
     );
     exitClassified(

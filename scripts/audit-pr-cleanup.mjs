@@ -1074,10 +1074,10 @@ function fetchRemainingThreadComments(threadId, firstPage, options) {
       options,
     );
     if (result.errors?.length) {
-      handleGraphqlFailure(
-        `GraphQL thread-comment continuation failed: ${formatGraphqlErrors(result.errors)}; thread=${threadId}`,
-        options,
-      );
+      const message = `GraphQL thread-comment continuation failed: ${formatGraphqlErrors(result.errors)}; thread=${threadId}`;
+      // A 200 body that still carries GraphQL errors is not a CLI argument
+      // mistake. Pass an error so fail() does not classify it as usage.
+      handleGraphqlFailure(message, options, new Error(message));
     }
     const nextComments = result.data?.node?.comments;
     if (!nextComments) {
@@ -1102,10 +1102,10 @@ function fetchConnection(query, baseVariables, pickConnection, options = {}) {
     }
     const result = ghGraphql(query, variables, options);
     if (result.errors?.length) {
-      handleGraphqlFailure(
-        `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`,
-        options,
-      );
+      const message = `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`;
+      // Same as the thread-comment continuation: a GraphQL errors array is
+      // not a usage error.
+      handleGraphqlFailure(message, options, new Error(message));
     }
     if (!result.data) {
       handleGraphqlFailure(

@@ -344,7 +344,9 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
  * PR-comment read failure -- fails closed to "not eligible" (`false`),
  * per the fail-closed default
  * (`idd-overview-core.instructions.md#fail-closed-default`), rather than
- * letting a partial read manufacture a false accept.
+ * letting a partial read manufacture a false accept. A tagged `gh`
+ * transport or not-found error is rethrown so the CLI envelope keeps
+ * that kind.
  */
 export function isClaimlessEligible(
   port: ProviderPort,
@@ -426,7 +428,13 @@ export function isClaimlessEligible(
       trustedMarkerLogins: trustedLogins,
     });
     return result.membership !== 'in-loop';
-  } catch {
+  } catch (error) {
+    const classified = classifyHelperError(error);
+    // A gh failure is not an eligibility verdict. Rethrow so the CLI can
+    // keep transport/not-found. Every other failure still fails closed.
+    if (classified.kind === 'transport' || classified.kind === 'not-found') {
+      throw error;
+    }
     return false;
   }
 }
@@ -595,7 +603,7 @@ function main(): HelperCliResult {
   // here instead of silently falling through to the claimless path
   // (Codex review on this PR).
   if (args.claimless && (args.claimIssue !== null || args.claimId)) {
-    process.stderr.write(
+    writeStderrSync(
       '--claimless cannot be combined with --claim-issue or --claim-id\n',
     );
     exitClassified(
@@ -609,7 +617,7 @@ function main(): HelperCliResult {
   // --claimless opts out of it. Missing inputs must abort before any
   // read or write rather than silently bypassing the gate.
   if (args.apply && !args.body) {
-    process.stderr.write('--apply requires --body\n');
+    writeStderrSync('--apply requires --body\n');
     exitClassified(1, 'usage', '--apply requires --body');
   }
   if (
@@ -619,7 +627,7 @@ function main(): HelperCliResult {
       (args.claimIssue ?? 0) <= 0 ||
       !args.claimId)
   ) {
-    process.stderr.write(
+    writeStderrSync(
       '--apply requires the --claim-issue / --claim-id pair for the mandatory claim revalidation, or --claimless\n',
     );
     exitClassified(
@@ -635,7 +643,7 @@ function main(): HelperCliResult {
   // not separately gate the "Rejection confirmed by maintainer" form on
   // the thread's pre-mutation resolution state.
   if (args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
-    process.stderr.write(
+    writeStderrSync(
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
     );
     exitClassified(
@@ -670,22 +678,30 @@ function main(): HelperCliResult {
   // #2616: fast fail-closed preview for both dry-run and --apply -- the
   // per-mutation re-check below (inside assertClaim) is the one that
   // actually gates the apply-mode mutations.
-  if (
-    args.claimless &&
-    !isClaimlessEligible(port, pr, {
-      owner,
-      repo,
-      trustedMarkerLogins: args.trustedMarkerLogins,
-    })
-  ) {
-    process.stderr.write(
-      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead\n',
-    );
-    exitClassified(
-      1,
-      'gate',
-      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
-    );
+  if (args.claimless) {
+    const claimlessMessage =
+      '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead';
+    try {
+      if (
+        !isClaimlessEligible(port, pr, {
+          owner,
+          repo,
+          trustedMarkerLogins: args.trustedMarkerLogins,
+        })
+      ) {
+        writeStderrSync(`${claimlessMessage}\n`);
+        exitClassified(1, 'gate', claimlessMessage);
+      }
+    } catch (error) {
+      const classified = classifyHelperError(error);
+      writeStderrSync(`${claimlessMessage}\n`);
+      exitClassified(
+        1,
+        classified.kind,
+        classified.message,
+        classified.httpStatus,
+      );
+    }
   }
 
   const match = findThreadForComment(
@@ -855,13 +871,19 @@ function main(): HelperCliResult {
       report.replyId = postedReplyId;
     }
     const classified = classifyHelperError(error);
-    report.error = (error as Error).message;
+    const message = (error as Error).message;
+    // Deliberate ownership denials are a completed gate. A tagged gh
+    // failure keeps transport/not-found.
+    const kind =
+      classified.kind === 'transport' || classified.kind === 'not-found'
+        ? classified.kind
+        : message.startsWith('claim revalidation failed:') ||
+            message.startsWith('claim/PR mismatch:') ||
+            message.startsWith('--claimless requires a PR')
+          ? 'gate'
+          : classified.kind;
+    report.error = message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    exitClassified(
-      1,
-      classified.kind,
-      classified.message,
-      classified.httpStatus,
-    );
+    exitClassified(1, kind, classified.message, classified.httpStatus);
   }
 }
