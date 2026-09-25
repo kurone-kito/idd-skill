@@ -153,7 +153,6 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
-  resolveActiveClaim,
   resolveAdvisoryBotLogins,
   resolveClosingIssueNumbersForClassifier,
   resolvePrFirstCommitAt,
@@ -3960,6 +3959,21 @@ export function collectFromGitHub(
     explicitIssueNumber: args.claimIssueNumber,
     prComments: comments,
     trustedMarkerLogins,
+    collaboratorTrustEnabled,
+    claimValidation: {
+      forcedHandoffEnabled,
+      isAuthorizedForcedHandoff: (forcedBy: string) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          repo,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          forcedHandoffPermissionCache,
+        ),
+      expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
+      prFirstCommitAt,
+      staleAgeMs,
+    },
   });
 
   const changedFilePaths =
@@ -4109,7 +4123,11 @@ function fetchClaimEventCandidates(
  * kurone-kito/idd-skill#3330: membership for a `none` waiver, from evidence
  * `collectFromGitHub` already loaded. An explicit `--claim-issue` that does
  * not cover every closing reference is re-fetched so a claim on an
- * unlisted closing issue still fails closed to in-loop.
+ * unlisted closing issue still fails closed to in-loop. That refetch folds
+ * collaborator-marker trust over the new streams before claim resolution,
+ * and claim presence uses the same `summarizeClaimValidation` options as
+ * the verdict (forced handoff, linkage, stale age), not the thin
+ * `resolveActiveClaim` overload.
  */
 function classifyCollectedLoopMembership({
   port,
@@ -4121,6 +4139,8 @@ function classifyCollectedLoopMembership({
   explicitIssueNumber,
   prComments,
   trustedMarkerLogins,
+  collaboratorTrustEnabled,
+  claimValidation,
 }: {
   port: ProviderPort;
   prNumber: number;
@@ -4131,6 +4151,14 @@ function classifyCollectedLoopMembership({
   explicitIssueNumber: number | null;
   prComments: IssueCommentPayload[];
   trustedMarkerLogins: string[];
+  collaboratorTrustEnabled: boolean;
+  claimValidation: {
+    forcedHandoffEnabled: boolean;
+    isAuthorizedForcedHandoff: (forcedBy: string) => boolean;
+    expectedLinkedPrs: string[];
+    prFirstCommitAt: string | null;
+    staleAgeMs: number;
+  };
 }): PrLoopMembership {
   const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
     closingIssuesReferences,
@@ -4138,6 +4166,7 @@ function classifyCollectedLoopMembership({
     repo,
   );
   let closingIssueClaimState: 'present' | 'none' | 'unknown' = 'none';
+  let effectiveTrusted = trustedMarkerLogins;
   if (closingIssueNumbers && closingIssueNumbers.length > 0) {
     const explicitCovers =
       explicitIssueNumber === null ||
@@ -4146,14 +4175,23 @@ function classifyCollectedLoopMembership({
     const streams = explicitCovers
       ? claimCandidates
       : fetchClaimEventCandidates(port, null, closingIssuesReferences);
-    const isTrusted = (login: string): boolean =>
-      trustedMarkerLogins.includes(
-        String(login ?? '')
-          .trim()
-          .toLowerCase(),
-      );
-    closingIssueClaimState = streams.some((stream) =>
-      Boolean(resolveActiveClaim(stream, isTrusted)),
+    if (!explicitCovers && collaboratorTrustEnabled) {
+      const discovered = resolveTrustedCollaboratorMarkerLogins(
+        port,
+        streams.flat(),
+      ).map((login) => login.trim().toLowerCase());
+      effectiveTrusted = [...new Set([...trustedMarkerLogins, ...discovered])];
+    }
+    closingIssueClaimState = streams.some(
+      (stream) =>
+        summarizeClaimValidation(stream, {
+          trustedMarkerLogins: effectiveTrusted,
+          forcedHandoffEnabled: claimValidation.forcedHandoffEnabled,
+          isAuthorizedForcedHandoff: claimValidation.isAuthorizedForcedHandoff,
+          expectedLinkedPrs: claimValidation.expectedLinkedPrs,
+          prFirstCommitAt: claimValidation.prFirstCommitAt,
+          staleAgeMs: claimValidation.staleAgeMs,
+        }).activeClaimPresent,
     )
       ? 'present'
       : 'none';
@@ -4163,7 +4201,7 @@ function classifyCollectedLoopMembership({
     closingIssueNumbers,
     closingIssueClaimState,
     prComments,
-    trustedMarkerLogins,
+    trustedMarkerLogins: effectiveTrusted,
   }).membership;
 }
 
