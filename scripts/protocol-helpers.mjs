@@ -1318,15 +1318,24 @@ export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
     }
     latestStatus = row[statusColumn] ?? '';
   }
-  // Copilot review (PR #3422): a bare `/completed/i` substring test accepts
-  // a hypothetical "Not Completed" / "Uncompleted" status cell, since both
-  // contain the substring "completed" -- now more consequential than
-  // before the #3261 move, since this return value directly gates
-  // settlement (not just a disposition-plan skip reason). Every observed
-  // real status cell wraps the status word in Markdown bold
-  // (`**Completed**`, `**Running**`), so anchor to that exact bolded word
-  // instead of a loose substring match -- fail-closed for any other shape.
-  return latestStatus !== null && /\*\*\s*completed\s*\*\*/i.test(latestStatus);
+  // Copilot review (PR #3422, two rounds): a bare `/completed/i` substring
+  // test accepts a hypothetical "Not Completed" / "Uncompleted" status
+  // cell (both contain the substring "completed"). An unanchored
+  // `/\*\*\s*completed\s*\*\*/i.test()` first-round fix was still not
+  // enough: `.test()` searches anywhere in the string, so a malformed cell
+  // like "**Not **Completed**" (a separately bolded "Completed" segment
+  // embedded after other bolded text) would still match. Extract ONLY the
+  // first Markdown-bolded segment -- the actual status word every observed
+  // real cell wraps in bold (`**Completed**`, `**Running**`), with
+  // whatever follows (Codex's real fixture trails a `<relative-time>` HTML
+  // span in the same cell) left out of the comparison -- and require THAT
+  // extracted segment, trimmed, to equal "completed" exactly. Fail-closed
+  // for any other shape, including no bold markup at all.
+  if (latestStatus === null) {
+    return false;
+  }
+  const boldStatusWord = /\*\*(.+?)\*\*/.exec(latestStatus)?.[1] ?? '';
+  return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
