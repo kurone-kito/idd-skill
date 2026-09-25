@@ -21,7 +21,6 @@ import { resolveHelperActiveClaim } from '../src/scripts/forced-handoff-marker.m
 import {
   digestExternalCheckWaiverMarkerBody,
   operationalMarkerPrefix,
-  renderOutOfLoopMarker,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
@@ -411,6 +410,7 @@ test('planExternalCheckWaiver: claimless renders a none-claim-id waiver without 
   input.claimless = true;
   // A genuinely claimless PR (e.g. Dependabot) has no linked issue at all.
   input.issueCandidates = [];
+  input.loopMembership = 'out-of-loop-claimless';
 
   const report = planExternalCheckWaiver(input, {
     now: new Date('2026-05-17T06:00:00Z'),
@@ -446,6 +446,7 @@ test('planExternalCheckWaiver: claimless with an empty actor blocks with a reaso
   const input = buildBaseInput();
   input.claimless = true;
   input.issueCandidates = [];
+  input.loopMembership = 'out-of-loop-claimless';
   input.actor = '';
 
   const report = planExternalCheckWaiver(input, {
@@ -456,6 +457,160 @@ test('planExternalCheckWaiver: claimless with an empty actor blocks with a reaso
   assert.equal(report.canApply, false);
   assert.match(report.blockingReasons.join('\n'), /actor is empty/);
   assert.equal(report.body, '');
+});
+
+const IN_LOOP_MEMBERSHIP_REASON =
+  'no closing issue has an active claim, and no valid out-of-loop marker was found';
+
+test('planExternalCheckWaiver: claimless refuses an in-loop PR that closes an issue and has no active claim (kurone-kito/idd-skill#3330)', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  input.issueCandidates = [
+    { number: 3330, url: input.issueCandidates[0].url, activeClaim: null },
+  ];
+  input.loopMembership = 'in-loop';
+  input.loopMembershipReason = IN_LOOP_MEMBERSHIP_REASON;
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.equal(report.mode, 'dry-run');
+  assert.match(report.blockingReasons.join('\n'), /membership: in-loop/);
+  assert.match(
+    report.blockingReasons.join('\n'),
+    /no valid out-of-loop marker was found/,
+  );
+  assert.match(report.blockingReasons.join('\n'), /--issue \/ --claim-id/);
+});
+
+test('planExternalCheckWaiver: claimless accepts the same PR when a trusted out-of-loop marker classifies it (kurone-kito/idd-skill#3330)', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  input.issueCandidates = [
+    { number: 3330, url: input.issueCandidates[0].url, activeClaim: null },
+  ];
+  input.loopMembership = 'out-of-loop-authorized';
+  input.loopMembershipReason =
+    'valid out-of-loop marker (reason:bootstrap) from cursor-b8ae06cc';
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.match(report.body, /idd-external-check-waiver: kurone-kito none /);
+});
+
+test('planExternalCheckWaiver: an omitted membership verdict fails closed for a none binding (kurone-kito/idd-skill#3330)', () => {
+  const input = buildBaseInput();
+  input.claimless = true;
+  input.issueCandidates = [];
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, false);
+  assert.match(
+    report.blockingReasons.join('\n'),
+    /loop membership was not classified/,
+  );
+});
+
+test('runExternalCheckWaiver dry-run classifies a none binding before apply (kurone-kito/idd-skill#3330)', async () => {
+  const pr = {
+    number: 3330,
+    state: 'OPEN',
+    url: 'https://github.com/kurone-kito/idd-skill/pull/3330',
+    headRefName: 'issue/3330-fix-external-check-waiver-bind-none',
+    headRefOid: 'a'.repeat(40),
+    statusCheckRollup: [
+      {
+        __typename: 'CheckRun',
+        name: 'idd-advisory-convergence',
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+      },
+    ],
+    closingIssuesReferences: [{ number: 3330 }],
+  };
+  const shared = {
+    actor: 'kurone-kito',
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    pr,
+    issueCandidates: [
+      {
+        number: 3330,
+        url: 'https://github.com/kurone-kito/idd-skill/issues/3330',
+        activeClaim: null,
+      },
+    ],
+    headCommittedAt: '2026-05-17T00:00:00Z',
+    headObservedAt: '2026-05-17T00:00:00Z',
+    now: new Date('2026-05-17T06:00:00Z'),
+    isTTY: false,
+  };
+  const args = {
+    ...parseArgs([
+      '--pr',
+      '3330',
+      '--check',
+      'idd-advisory-convergence',
+      '--reason',
+      'released claim',
+      '--expires-in',
+      'PT8H',
+      '--claimless',
+      '--allow-closed-precondition',
+    ]),
+    repo: 'kurone-kito/idd-skill',
+  };
+  const inLoop = await runExternalCheckWaiver({
+    ...shared,
+    args,
+    prComments: [],
+  });
+  assert.equal(inLoop.exitCode, 0);
+  assert.equal(inLoop.report?.canApply, false);
+  assert.match(
+    inLoop.report?.blockingReasons.join('\n') ?? '',
+    /no valid out-of-loop marker was found/,
+  );
+
+  const authorized = await runExternalCheckWaiver({
+    ...shared,
+    args,
+    prComments: [
+      {
+        body: '<!-- idd-out-of-loop: cursor-test pr:3330 reason:bootstrap at:2026-05-17T00:00:00Z -->',
+        created_at: '2026-05-17T01:00:00Z',
+        author: { login: 'kurone-kito' },
+        lastEditedAt: null,
+      },
+    ],
+  });
+  assert.equal(authorized.report?.canApply, true);
+  assert.match(
+    authorized.report?.body ?? '',
+    /idd-external-check-waiver: kurone-kito none /,
+  );
+
+  const claimless = await runExternalCheckWaiver({
+    ...shared,
+    args,
+    pr: { ...pr, closingIssuesReferences: [] },
+    issueCandidates: [],
+  });
+  assert.equal(claimless.report?.canApply, true);
+  assert.match(
+    claimless.report?.body ?? '',
+    /idd-external-check-waiver: kurone-kito none /,
+  );
 });
 
 test('planExternalCheckWaiver fails closed for unauthorized write-only actors', () => {
@@ -979,6 +1134,7 @@ test('planExternalCheckWaiver: --auto-bootstrap falls back to a claimless (none)
   // empty actor used by the authority-skip tests above.
   const input = buildAutoBootstrapInput();
   input.issueCandidates = [];
+  input.loopMembership = 'out-of-loop-claimless';
   input.actor = 'github-actions[bot]';
 
   const report = planExternalCheckWaiver(input, {
@@ -996,78 +1152,6 @@ test('planExternalCheckWaiver: --auto-bootstrap falls back to a claimless (none)
   assert.equal(parsed?.agentId, 'github-actions[bot]');
   assert.equal(parsed?.reason, SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON);
   assert.equal(parsed?.runId, '123456789');
-});
-
-test('planExternalCheckWaiver: --auto-bootstrap none fallback blocks a closing PR with no out-of-loop marker', () => {
-  const input = buildAutoBootstrapInput();
-  input.actor = 'github-actions[bot]';
-  input.issueCandidates = [
-    {
-      number: 667,
-      url: 'https://github.com/kurone-kito/idd-skill/issues/667',
-      activeClaim: null,
-    },
-  ];
-  input.pr = {
-    ...input.pr,
-    closingIssuesReferences: [{ number: 667 }],
-  };
-  input.trustedMarkerLogins = ['kurone-kito'];
-
-  const report = planExternalCheckWaiver(input, {
-    now: new Date('2026-08-31T03:13:24Z'),
-    repoOwner: 'kurone-kito',
-  });
-
-  assert.equal(report.canApply, false);
-  assert.match(
-    report.blockingReasons.join('\n'),
-    /no valid out-of-loop marker was found/,
-  );
-});
-
-test('planExternalCheckWaiver: --auto-bootstrap none fallback allows a closing PR with a trusted out-of-loop marker', () => {
-  const input = buildAutoBootstrapInput();
-  input.actor = 'github-actions[bot]';
-  input.issueCandidates = [
-    {
-      number: 667,
-      url: 'https://github.com/kurone-kito/idd-skill/issues/667',
-      activeClaim: null,
-    },
-  ];
-  input.pr = {
-    ...input.pr,
-    closingIssuesReferences: [{ number: 667 }],
-  };
-  input.trustedMarkerLogins = ['kurone-kito'];
-  input.prComments = [
-    {
-      body: renderOutOfLoopMarker({
-        agentId: 'github-actions[bot]',
-        prNumber: input.pr.number,
-        reason: 'bootstrap',
-        at: '2026-08-31T03:00:00Z',
-      }),
-      author: { login: 'kurone-kito' },
-      createdAt: '2026-08-31T03:00:01Z',
-      lastEditedAt: null,
-    },
-  ];
-
-  const report = planExternalCheckWaiver(input, {
-    now: new Date('2026-08-31T03:13:24Z'),
-    repoOwner: 'kurone-kito',
-  });
-
-  assert.equal(
-    report.blockingReasons.some((reason) =>
-      reason.includes('out-of-loop marker'),
-    ),
-    false,
-  );
-  assert.equal(report.canApply, true);
-  assert.match(report.body, / none /);
 });
 
 test('planExternalCheckWaiver: --auto-bootstrap still blocks on an empty actor when no linked issue resolves (Codex review, PR #2895)', () => {

@@ -1269,6 +1269,9 @@ test('claimless waiver: a maintainer-posted none-claim-id waiver flips a stale-p
     baseInputs({
       reviews: [], // still pending -- the primary bot never reviewed
       claimEvents: [], // no IDD claim at all
+      // kurone-kito/idd-skill#3330: empty claim events are also an in-loop
+      // released claim. This fixture is a PR with no closing references.
+      loopMembership: 'out-of-loop-claimless',
       comments: [
         {
           author: { login: TRUSTED },

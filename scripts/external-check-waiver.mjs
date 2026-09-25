@@ -32,11 +32,11 @@ import {
   classifyPrLoopMembership,
   composeGateTrustedMarkerLogins,
   digestExternalCheckWaiverMarkerBody,
-  extractSameRepoClosingIssueNumbers,
   parseExternalCheckWaiverComment,
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
+  resolveClosingIssueNumbersForClassifier,
   resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
@@ -219,24 +219,6 @@ export function planExternalCheckWaiver(input, options = {}) {
     }
   }
   if (claimless || autoBootstrapImplicitClaimless) {
-    // Explicit --claimless and the auto-bootstrap zero-candidate fallback
-    // share one membership check: a PR that closes an issue is still in
-    // the IDD loop until a trusted out-of-loop marker says otherwise.
-    const [owner, name] = String(input?.repository ?? '').split('/');
-    const membership = classifyPrLoopMembership({
-      prNumber: Number(pr.number ?? 0),
-      closingIssueNumbers: extractSameRepoClosingIssueNumbers(
-        pr.closingIssuesReferences,
-        owner ?? '',
-        name ?? '',
-      ),
-      closingIssueClaimState: 'none',
-      prComments: input?.prComments ?? [],
-      trustedMarkerLogins: input?.trustedMarkerLogins ?? [],
-    });
-    if (membership.membership === 'in-loop') {
-      blockingReasons.push(membership.reason);
-    }
     // The normal path's agentId comes from the resolved claim, independent
     // of `actor`; a claimless binding (explicit --claimless, or the implicit
     // auto-bootstrap fallback above) has no claim to fall back on, so an
@@ -248,6 +230,23 @@ export function planExternalCheckWaiver(input, options = {}) {
     // function (e.g. tests) that construct the autoBootstrap input by hand.
     if (!actor) {
       blockingReasons.push('actor is empty');
+    }
+    // kurone-kito/idd-skill#3330: a none binding is only for an
+    // out-of-loop PR. A missing verdict fails closed to in-loop.
+    const membership = input?.loopMembership;
+    const outOfLoop =
+      membership === 'out-of-loop-claimless' ||
+      membership === 'out-of-loop-authorized';
+    if (!outOfLoop) {
+      const verdict = membership ?? 'in-loop';
+      const quoted =
+        typeof input?.loopMembershipReason === 'string' &&
+        input.loopMembershipReason.trim()
+          ? input.loopMembershipReason.trim()
+          : 'loop membership was not classified (fail closed)';
+      blockingReasons.push(
+        `a none-claim waiver requires an out-of-loop PR (membership: ${verdict}; ${quoted}); bind the waiver to the active claim (--issue / --claim-id)`,
+      );
     }
   } else if (!linkedIssue.ok) {
     blockingReasons.push(linkedIssue.reason);
@@ -558,6 +557,60 @@ export function resolveActorLogin(optionsActor, argsActor, viewerLogin) {
       .find(Boolean) ?? ''
   ).toLowerCase();
 }
+function closingIssueHasActiveClaim(issueCandidates) {
+  return issueCandidates.some(
+    (candidate) =>
+      Boolean(candidate.activeClaim) ||
+      candidate.unfilteredActiveClaimPresent === true,
+  );
+}
+/**
+ * kurone-kito/idd-skill#3330: PR comments are required only when a none
+ * binding could still be `out-of-loop-authorized`. Empty or unreadable
+ * closing references, and a closing issue that already has an active
+ * claim, are decided without that fetch.
+ */
+function noneBindingNeedsPrComments(
+  closingIssuesReferences,
+  issueCandidates,
+  owner,
+  repo,
+) {
+  const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  return (
+    Array.isArray(closingIssueNumbers) &&
+    closingIssueNumbers.length > 0 &&
+    !closingIssueHasActiveClaim(issueCandidates)
+  );
+}
+function classifyNoneBindingMembership({
+  prNumber,
+  owner,
+  repo,
+  closingIssuesReferences,
+  issueCandidates,
+  prComments,
+  trustedMarkerLogins,
+}) {
+  const closingIssueClaimState = closingIssueHasActiveClaim(issueCandidates)
+    ? 'present'
+    : 'none';
+  return classifyPrLoopMembership({
+    prNumber,
+    closingIssueNumbers: resolveClosingIssueNumbersForClassifier(
+      closingIssuesReferences,
+      owner,
+      repo,
+    ),
+    closingIssueClaimState,
+    prComments,
+    trustedMarkerLogins,
+  });
+}
 export async function runExternalCheckWaiver(options = {}) {
   const args = options.args ?? parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -767,6 +820,60 @@ export async function runExternalCheckWaiver(options = {}) {
     // in this marker family already uses.
     return new Date(expiryMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   };
+  // kurone-kito/idd-skill#3330: classify before the planner, including
+  // dry-run. A none binding is possible for `--claimless`, and for
+  // `--auto-bootstrap` only when zero linked-issue candidates resolve.
+  const linkedForMembership = selectLinkedIssueCandidate(issueCandidates, {
+    issueNumber: args.issueNumber,
+    expectedClaimId: args.claimId,
+    headRefName: String(pr.headRefName ?? '').trim(),
+    enforceBranchMatch: !args.autoBootstrap,
+  });
+  const noneBindingPossible =
+    args.claimless ||
+    (args.autoBootstrap &&
+      !linkedForMembership.ok &&
+      linkedForMembership.candidateCount === 0);
+  let loopMembership;
+  let loopMembershipReason;
+  if (noneBindingPossible) {
+    const needsPrComments = noneBindingNeedsPrComments(
+      pr.closingIssuesReferences,
+      issueCandidates,
+      owner,
+      name,
+    );
+    const prComments = needsPrComments
+      ? typeof options.prComments === 'function'
+        ? options.prComments()
+        : (options.prComments ??
+          fetchPrComments({ owner, repo: name, prNumber: args.prNumber }))
+      : [];
+    const classified = classifyNoneBindingMembership({
+      prNumber: args.prNumber,
+      owner,
+      repo: name,
+      closingIssuesReferences: pr.closingIssuesReferences,
+      issueCandidates,
+      prComments,
+      trustedMarkerLogins: trustedLoginsForLinkedIssueClaims({
+        viewerLogin: args.autoBootstrap ? '' : actor,
+        config:
+          rawConfig !== null && typeof rawConfig === 'object'
+            ? rawConfig
+            : null,
+        envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+        collaboratorMarkerLogins: resolveCollaboratorMarkerTrust(
+          rawConfig,
+          process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+        )
+          ? resolveTrustedCollaboratorMarkerLogins(owner, name, prComments)
+          : [],
+      }),
+    });
+    loopMembership = classified.membership;
+    loopMembershipReason = classified.reason;
+  }
   const report = planExternalCheckWaiver(
     {
       mode: args.apply ? 'apply' : 'dry-run',
@@ -790,6 +897,8 @@ export async function runExternalCheckWaiver(options = {}) {
           }),
       repoOwner: owner,
       claimless: args.claimless,
+      loopMembership,
+      loopMembershipReason,
       headCommittedAt: resolvedHeadCommittedAt,
       headObservedAt: resolvedHeadObservedAt,
       allowClosedPrecondition: args.allowClosedPrecondition,
@@ -1048,6 +1157,10 @@ export async function runExternalCheckWaiver(options = {}) {
           // would make that reconcile permanently blind to concurrent
           // automatic posts, defeating its own stated purpose.
           allowSelfReferentialBootstrapAuto: args.autoBootstrap,
+          // kurone-kito/idd-skill#3330: reuse of a none-bound marker must
+          // use the same membership the planner just classified. Omitted
+          // fails closed and would append a duplicate.
+          loopMembership,
         })
       : null;
   // The marker this invocation would post defines the binding a reusable
@@ -1703,6 +1816,7 @@ function resolveLinkedIssueCandidates({
         number: issue.number,
         url: issue.url,
         activeClaim: null,
+        unfilteredActiveClaimPresent: true,
       });
       continue;
     }
@@ -1715,6 +1829,7 @@ function resolveLinkedIssueCandidates({
         number: issue.number,
         url: issue.url,
         activeClaim: null,
+        unfilteredActiveClaimPresent: true,
       });
       continue;
     }
