@@ -55,6 +55,7 @@ function declarationComment(overrides: {
   expiresAt?: string;
   createdAt?: string;
   authorLogin?: string;
+  lastEditedAt?: string | null;
 }): CommentLike {
   const body = renderProviderOutageDeclarationComment({
     actor: overrides.actor ?? 'kurone-kito',
@@ -69,6 +70,10 @@ function declarationComment(overrides: {
     author: {
       login: overrides.authorLogin ?? overrides.actor ?? 'kurone-kito',
     },
+    // #3249: minimized shape by default (genuinely unedited); pass
+    // `lastEditedAt` to build an edited-comment fixture instead.
+    last_edited_at:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -214,6 +219,50 @@ test('resolveProviderOutageDeclaration: active case', () => {
   assert.equal(result.declaration?.service, 'idd-advisory-convergence');
 });
 
+// #3249: an edited (or edit-state-unresolved) declaration must not relieve
+// the gate, even from an otherwise-authorized actor whose declaration is
+// otherwise fully valid.
+test('resolveProviderOutageDeclaration: an edited declaration does not relieve the gate', () => {
+  const result = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments: [
+      declarationComment({
+        startedAt: '2026-09-01T05:00:00Z',
+        expiresAt: '2026-09-02T05:00:00Z',
+        lastEditedAt: '2026-09-01T05:30:00Z',
+      }),
+    ],
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: NOW,
+  });
+  assert.equal(result.active, false);
+  assert.equal(result.edited.length, 1);
+  assert.match(result.reason, /edited after posting/);
+});
+
+test('resolveProviderOutageDeclaration: an edit-state-unresolved declaration does not relieve the gate either', () => {
+  const result = resolveProviderOutageDeclaration({
+    declarationTargetConfigured: true,
+    comments: [
+      {
+        ...declarationComment({
+          startedAt: '2026-09-01T05:00:00Z',
+          expiresAt: '2026-09-02T05:00:00Z',
+        }),
+        last_edited_at: undefined,
+      },
+    ],
+    service: 'idd-advisory-convergence',
+    policy: basePolicy,
+    authorityOf: authorizedActor,
+    now: NOW,
+  });
+  assert.equal(result.active, false);
+  assert.equal(result.edited.length, 1);
+});
+
 test('resolveProviderOutageDeclaration: expired case', () => {
   const result = resolveProviderOutageDeclaration({
     declarationTargetConfigured: true,
@@ -356,6 +405,7 @@ test('resolveProviderOutageDeclaration: an unparseable createdAt never withholds
         }),
         created_at: undefined,
         author: { login: 'kurone-kito' },
+        last_edited_at: null,
       },
     ],
     service: 'idd-advisory-convergence',
@@ -557,6 +607,7 @@ test('listProviderOutageAdvancements: lists HEAD-pinned entries, one per push ev
       }),
       created_at: '2026-09-01T05:01:00Z',
       author: { login: 'kurone-kito' },
+      last_edited_at: null,
     },
     {
       body: renderProviderOutageAdvancedComment({
@@ -567,6 +618,7 @@ test('listProviderOutageAdvancements: lists HEAD-pinned entries, one per push ev
       }),
       created_at: '2026-09-01T05:10:00Z',
       author: { login: 'kurone-kito' },
+      last_edited_at: null,
     },
   ];
   const list = listProviderOutageAdvancements(comments, {
@@ -600,6 +652,54 @@ test('listProviderOutageAdvancements: excludes an entry from an untrusted author
     trustedMarkerLogins: ['kurone-kito'],
   });
   assert.equal(list.length, 0);
+});
+
+// #3249: an edited (or edit-state-unresolved) advancement marker must never
+// be trusted either, even from a trusted login.
+test('listProviderOutageAdvancements: excludes an edited or edit-state-unresolved entry, minimized shape still honored', () => {
+  const sha = 'd'.repeat(40);
+  const edited: CommentLike = {
+    body: renderProviderOutageAdvancedComment({
+      actor: 'kurone-kito',
+      prNumber: 2345,
+      headSha: sha,
+      declaredAt: '2026-09-01T05:00:00Z',
+    }),
+    created_at: '2026-09-01T05:01:00Z',
+    author: { login: 'kurone-kito' },
+    last_edited_at: '2026-09-01T05:30:00Z',
+  };
+  assert.equal(
+    listProviderOutageAdvancements([edited], {
+      trustedMarkerLogins: ['kurone-kito'],
+    }).length,
+    0,
+  );
+
+  const unknownEditState: CommentLike = {
+    body: renderProviderOutageAdvancedComment({
+      actor: 'kurone-kito',
+      prNumber: 2345,
+      headSha: sha,
+      declaredAt: '2026-09-01T05:00:00Z',
+    }),
+    created_at: '2026-09-01T05:01:00Z',
+    author: { login: 'kurone-kito' },
+  };
+  assert.equal(
+    listProviderOutageAdvancements([unknownEditState], {
+      trustedMarkerLogins: ['kurone-kito'],
+    }).length,
+    0,
+  );
+
+  const unedited: CommentLike = { ...edited, last_edited_at: null };
+  assert.equal(
+    listProviderOutageAdvancements([unedited], {
+      trustedMarkerLogins: ['kurone-kito'],
+    }).length,
+    1,
+  );
 });
 
 // --- CLI arg parsing ---
