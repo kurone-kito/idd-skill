@@ -10,6 +10,7 @@ import {
   isCurrentSessionWorktreeOwner,
   resolveCurrentSessionClaimEvidence,
 } from './discover-roadmap-graph.mjs';
+import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import {
@@ -64,7 +65,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
-  runCli();
+  runHelperCli('resume-claim-routing', runCli);
 }
 /**
  * Build the `isForcedHandoffEnabled` gate used by the resume CLI.
@@ -493,7 +494,9 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -649,6 +652,7 @@ function runCli() {
       : {}),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 function resolveClaimState(events, staleAgeMs, options = {}) {
   const isForcedHandoffEnabled =
@@ -984,7 +988,9 @@ function parseArgs(argv) {
   // silently degrading to JSON.
   const format = values.format;
   if (format !== 'json') {
-    throw new Error(`--format must be json (got "${format}")`);
+    throw markCliUsageError(
+      new Error(`--format must be json (got "${format}")`),
+    );
   }
   return {
     // Both --issue and --stale-age-ms are kept as lenient Number.parseInt

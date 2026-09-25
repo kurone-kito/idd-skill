@@ -12,6 +12,8 @@ import {
   isCurrentSessionWorktreeOwner,
   resolveCurrentSessionClaimEvidence,
 } from './discover-roadmap-graph.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import { markCliUsageError, runHelperCli } from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranch,
@@ -196,7 +198,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  runCli();
+  runHelperCli('resume-claim-routing', runCli);
 }
 
 /**
@@ -654,14 +656,16 @@ export function evaluateFreshClaimGate(
   };
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0) {
-    throw new Error('--issue is required and must be a positive integer');
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
   }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
@@ -821,6 +825,7 @@ function runCli(): void {
       : {}),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  return 0;
 }
 
 function resolveClaimState(
@@ -1218,7 +1223,9 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
   // silently degrading to JSON.
   const format = values.format as string;
   if (format !== 'json') {
-    throw new Error(`--format must be json (got "${format}")`);
+    throw markCliUsageError(
+      new Error(`--format must be json (got "${format}")`),
+    );
   }
   return {
     // Both --issue and --stale-age-ms are kept as lenient Number.parseInt

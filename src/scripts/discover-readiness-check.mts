@@ -17,6 +17,8 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { extractDependencyReferences } from './dependency-grammar.mts';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import { markCliUsageError, runHelperCli } from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
@@ -268,14 +270,25 @@ const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
+  runHelperCli('discover-readiness-check', main);
+}
+
+// The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,
+// #3342) so importing this module (for unit tests) does not parse
+// process.argv, fail, or make a `gh` call. Returns 0 (success) or throws
+// -- with the opt-in JSON error envelope unset, this is byte-identical to
+// the pre-migration top-level-await block.
+async function main(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.swarmFloor === null && args.issueNumbers.length === 0) {
-    throw new Error(
-      'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+    throw markCliUsageError(
+      new Error(
+        'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+      ),
     );
   }
 
@@ -346,6 +359,7 @@ if (import.meta.main) {
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
+  return 0;
 }
 
 export async function evaluateDiscoverReadiness(
@@ -775,7 +789,7 @@ export function parseSwarmFloorArg(value: string): number {
   const raw = String(value ?? '').trim();
   const floor = Number.parseInt(raw, 10);
   if (!/^\d+$/.test(raw) || floor < 1 || floor > 5) {
-    throw new Error('--swarm-floor requires an integer 1-5');
+    throw markCliUsageError(new Error('--swarm-floor requires an integer 1-5'));
   }
   return floor;
 }

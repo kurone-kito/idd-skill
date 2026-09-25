@@ -7,6 +7,7 @@
 import { existsSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
+import { markCliUsageError, runHelperCli } from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
@@ -248,14 +249,24 @@ const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
+  runHelperCli('discover-viability-gate', main);
+}
+// The CLI body. Guarded behind `import.meta.main` (via `runHelperCli`,
+// #3342) so importing this module (for unit tests) does not parse
+// process.argv, fail, or make a `gh` call. Returns 0 (success) or throws
+// -- with the opt-in JSON error envelope unset, this is byte-identical to
+// the pre-migration top-level-await block.
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
   if (args.issueNumbers.length === 0) {
-    throw new Error(
-      'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+    throw markCliUsageError(
+      new Error(
+        'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
+      ),
     );
   }
   const currentRepo =
@@ -283,6 +294,7 @@ if (import.meta.main) {
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
+  return 0;
 }
 export async function evaluateDiscoverViability(issueNumbers, options = {}) {
   const { loadIssue, computeStructuralEvidence } = options;
