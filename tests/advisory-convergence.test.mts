@@ -108,6 +108,17 @@ function baseOptions(
     waiverMode: 'disabled',
     waiverMaxValidity: 'PT24H',
     waiverCheckSelector: 'idd-advisory-convergence',
+    // kurone-kito/idd-skill#3250: the consume-time authority check always
+    // runs (resolving an empty policy to the schema default
+    // `owners-and-maintainers-only`); every waiver fixture in this test
+    // file is authored by TRUSTED, so an authorized resolver keeps these
+    // tests exercising the SAME dimensions they did before this check
+    // existed. A test that specifically exercises the new bucket overrides
+    // this via `overrides`.
+    resolveWaiverAuthority: () => ({
+      outcome: 'found' as const,
+      roleName: 'admin',
+    }),
     ...overrides,
   };
 }
@@ -1022,6 +1033,46 @@ test('deadline-passed-with-waiver: an edited idd-advisory-convergence waiver doe
       headCommittedAt: OLD,
       waiverMode: 'maintainer-authorized',
       waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('deadline-passed-with-waiver: a Write-only collaborator waiver does not count toward validCount under the default owners-and-maintainers-only policy (kurone-kito/idd-skill#3250)', () => {
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Copilot review API outage, maintainer verified the diff manually',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [], // still pending -- the primary bot never reviewed
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: waiverBody,
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      waiverAuthorityPolicy: 'owners-and-maintainers-only',
+      // TRUSTED is only admitted to the trusted-marker-actor set here (via
+      // this file's own trustedMarkerLogins fixture), not proven to hold
+      // Maintain/Admin -- the authority check now evaluates that live
+      // collaborator-permission outcome independently.
+      resolveWaiverAuthority: () => ({ outcome: 'found', roleName: 'write' }),
     }),
   );
   assert.equal(verdict.waiver.validCount, 0);

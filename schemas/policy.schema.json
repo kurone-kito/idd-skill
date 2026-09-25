@@ -288,7 +288,7 @@
       "properties": {
         "allowCollaboratorMarkers": {
           "type": "boolean",
-          "description": "Whether operational markers authored by Write/Maintain/Admin collaborators, not only the configured trusted actors, are trusted for claim and review state transitions. Legacy alias cluster: this canonical nested key wins over `markerTrustAllowCollaboratorMarkers`, then `allowCollaboratorMarkers`. Optional; defaults to the more conservative state."
+          "description": "Whether operational markers authored by Write/Maintain/Admin collaborators, not only the configured trusted actors, are trusted for claim and review state transitions. kurone-kito/idd-skill#3250: collaborator trust admits marker AUTHORS -- it never by itself grants external-check waiver AUTHORITY, which the gates evaluate separately against the configured `ciGate.externalCheckWaivers.authorityPolicy` at consume time. Legacy alias cluster: this canonical nested key wins over `markerTrustAllowCollaboratorMarkers`, then `allowCollaboratorMarkers`. Optional; defaults to the more conservative state."
         }
       },
       "description": "Canonical nested-camelCase container for marker-trust settings (`allowCollaboratorMarkers`). Optional; wins over the flat alias forms whenever it carries a valid value."

@@ -1441,6 +1441,7 @@ const preMergeReadinessFixture = {
     wrongHead: [],
     wrongClaim: [],
     unauthorized: [],
+    insufficientAuthority: [],
     malformed: [],
     notConfigured: [],
     modeDisabled: [],

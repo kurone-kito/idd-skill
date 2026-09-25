@@ -135,6 +135,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  buildEffectiveTrustedMarkerLogins,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -1567,6 +1568,15 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       // silently reopen this call's own mode gate. Matches the
       // auto-waiver call below, which already passes this explicitly.
       mode: waiverMode,
+      // kurone-kito/idd-skill#3250: NOT threaded into the auto-waiver call
+      // below -- every marker it can validate carries the #2657
+      // self-referential-bootstrap-auto reason token, which the check
+      // exempts by construction, so wiring it there would only add a
+      // pointless permission lookup.
+      authorityPolicy: String(
+        options.waiverAuthorityPolicy ?? 'owners-and-maintainers-only',
+      ),
+      resolveAuthority: options.resolveWaiverAuthority,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -2512,16 +2522,20 @@ export function collectFromGitHub(
   // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any
   // claim/forced-handoff parsing -- an untrusted-author's marker never
   // even reaches the authorization check.
-  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+  // kurone-kito/idd-skill#3250: the shared composition -- see
+  // `buildEffectiveTrustedMarkerLogins`'s own doc comment for why the
+  // collaborator-marker-trust discovery itself stays file-local
+  // (loop-safety wrapped) while only the final combine step is shared.
+  const trustedMarkerLogins = buildEffectiveTrustedMarkerLogins({
     viewerLogin,
-    ...configuredTrustedActors,
-    ...(collaboratorTrustEnabled
+    configuredTrustedActors,
+    collaboratorMarkerLogins: collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimCandidates.flat(),
         ])
-      : []),
-  ]);
+      : [],
+  });
   // #1810: delegates to `resolveClaimEvidence` (below `hasTrustedClaimMarker-
   // History`'s definition) instead of calling `pickResolvingClaimEvents` /
   // `classifyClaimCandidateAmbiguity` / `hasTrustedClaimMarkerHistory`
@@ -3025,6 +3039,11 @@ export function collectFromGitHub(
         policy?.ciGate?.externalCheckWaivers?.maxValidity ?? 'PT24H',
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waiverAuthorityPolicy: String(
+        policy?.ciGate?.externalCheckWaivers?.authorityPolicy ??
+          'owners-and-maintainers-only',
+      ),
+      resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
       helperRuntimeProfile,

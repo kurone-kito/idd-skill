@@ -1436,6 +1436,144 @@ test('runExternalCheckWaiver posts nothing when it reuses an existing waiver (#2
   assert.match(String(report?.commentUrl), /issuecomment-100$/);
 });
 
+test('runExternalCheckWaiver: the reuse scan classifies a Write-only collaborator waiver the same way the gate does -- never reused, even though it is otherwise fully valid (kurone-kito/idd-skill#3250)', async () => {
+  let postCalls = 0;
+  let resolverCalledForWriteCollaborator = false;
+  const comments = [
+    {
+      id: 100,
+      html_url:
+        'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-100',
+      created_at: '2026-08-30T22:05:01Z',
+      user: { login: 'write-collaborator' },
+      body: renderExternalCheckWaiverComment({
+        actor: 'write-collaborator',
+        agentId: 'claude-6043e89f',
+        claimId: 'claim-20260830T222316Z-2328',
+        headSha: REUSE_HEAD_SHA,
+        checkSelector: 'idd-advisory-convergence',
+        reason: 'rate limit',
+        expiresAt: '2026-08-31T10:00:00Z',
+      }),
+      lastEditedAt: null,
+    },
+  ];
+
+  // kurone-kito/idd-skill#3250: the fixture author `write-collaborator` is
+  // NOT in this repo's own `.github/idd/config.json` `trustedMarkerActors`
+  // (only `kurone-kito` is), so without this env override the marker would
+  // already be excluded by the pre-existing `unauthorized` trusted-set
+  // check -- BEFORE ever reaching the new authority check this test exists
+  // to exercise -- and the assertions below would pass for the wrong
+  // reason (`resolveWaiverAuthority` never even called). This override
+  // (the same `IDD_TRUSTED_MARKER_ACTORS` mechanism
+  // `discover-roadmap-graph.test.mts` already uses) admits the fixture
+  // author to the trusted set the same way `markerTrust.allowCollaboratorMarkers`
+  // collaborator trust would at the gate, so the authority check is the
+  // thing that actually excludes it here.
+  const previousTrustedMarkerActors = process.env.IDD_TRUSTED_MARKER_ACTORS;
+  process.env.IDD_TRUSTED_MARKER_ACTORS = 'write-collaborator';
+
+  let report: Awaited<ReturnType<typeof runExternalCheckWaiver>>['report'];
+  try {
+    ({ report } = await runExternalCheckWaiver({
+      args: {
+        ...parseArgs([
+          '--pr',
+          '2325',
+          '--check',
+          'idd-advisory-convergence',
+          '--reason',
+          'rate limit',
+          '--expires-in',
+          'PT8H',
+          '--apply',
+          '--yes',
+          '--allow-closed-precondition',
+        ]),
+        repo: 'kurone-kito/idd-skill',
+        issueNumber: 2328,
+      },
+      actor: 'kurone-kito',
+      authority: { known: true, permission: 'admin', roleName: 'admin' },
+      pr: {
+        number: 2325,
+        state: 'OPEN',
+        url: 'https://github.com/kurone-kito/idd-skill/pull/2325',
+        headRefName: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+        headRefOid: REUSE_HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'CheckRun',
+            name: 'idd-advisory-convergence',
+            status: 'COMPLETED',
+            conclusion: 'FAILURE',
+          },
+        ],
+      },
+      issueCandidates: [
+        {
+          number: 2328,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/2328',
+          activeClaim: {
+            agentId: 'claude-6043e89f',
+            claimId: 'claim-20260830T222316Z-2328',
+            supersedes: 'none',
+            branch: 'issue/2328-fix-external-check-waiver-refuse-waiver',
+            createdAt: '2026-08-30T22:23:26Z',
+          },
+        },
+      ],
+      prComments: comments,
+      headCommittedAt: '2026-08-30T18:13:24Z',
+      now: new Date('2026-08-30T22:30:00Z'),
+      isTTY: false,
+      // Deterministic classification: the existing marker's author
+      // (write-collaborator) holds only Write permission, so the reuse
+      // scan must not treat it as reusable, even though it is otherwise a
+      // fully-valid marker for this HEAD/claim/selector. `resolverCalled-
+      // ForWriteCollaborator` proves this callback is actually reached for
+      // that login -- without the `IDD_TRUSTED_MARKER_ACTORS` override
+      // above, it would not be, and this test would pass for the wrong
+      // reason (the pre-existing `unauthorized` classification, not the
+      // new authority check).
+      resolveWaiverAuthority: (login: string) => {
+        if (login === 'write-collaborator') {
+          resolverCalledForWriteCollaborator = true;
+          return { outcome: 'found', roleName: 'write' };
+        }
+        return { outcome: 'found', roleName: 'admin' };
+      },
+      postComment: () => {
+        postCalls += 1;
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/pull/2325#issuecomment-999',
+        };
+      },
+    }));
+  } finally {
+    if (previousTrustedMarkerActors === undefined) {
+      delete process.env.IDD_TRUSTED_MARKER_ACTORS;
+    } else {
+      process.env.IDD_TRUSTED_MARKER_ACTORS = previousTrustedMarkerActors;
+    }
+  }
+
+  assert.equal(
+    resolverCalledForWriteCollaborator,
+    true,
+    'the authority check must actually be reached for the trusted-set-admitted write-collaborator marker',
+  );
+  assert.equal(
+    postCalls,
+    1,
+    'a Write-only collaborator marker must never be treated as reusable',
+  );
+  assert.equal(report?.applied, true);
+  assert.equal(report?.reusedWaiver, undefined);
+});
+
 test('runExternalCheckWaiver never reuses an existing waiver whose comment was body-edited (kurone-kito/idd-skill#3246)', async () => {
   let postCalls = 0;
   const comments = [
@@ -1668,6 +1806,53 @@ test('the deadline reader rejects a schema-invalid advisoryWait section (#2328 r
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runExternalCheckWaiver throws under --apply --actor when the authenticated-user lookup returns an empty login, instead of silently trusting --actor unverified (kurone-kito/idd-skill#3250)', async () => {
+  const stubGhScript = `
+const args = process.argv.slice(2);
+function out(text) { process.stdout.write(text); process.exit(0); }
+if (args[0] === 'api' && args[1] === 'user') out('');
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+  const restore = stubExecutable('gh', stubGhScript);
+  let postCalls = 0;
+  try {
+    await assert.rejects(
+      runExternalCheckWaiver({
+        args: {
+          ...parseArgs([
+            '--pr',
+            '2325',
+            '--check',
+            'idd-advisory-convergence',
+            '--reason',
+            'rate limit',
+            '--expires-in',
+            'PT8H',
+            '--actor',
+            'someone-else',
+            '--apply',
+            '--yes',
+            '--allow-closed-precondition',
+          ]),
+          repo: 'kurone-kito/idd-skill',
+          issueNumber: 2328,
+        },
+        // Deliberately no `options.actor` override -- this test exercises
+        // the real `gh api user` resolution path the stub above controls.
+        postComment: () => {
+          postCalls += 1;
+          return { html_url: 'should-not-be-reached' };
+        },
+      }),
+      /authenticated user/,
+    );
+    assert.equal(postCalls, 0, 'must throw before ever posting');
+  } finally {
+    restore();
   }
 });
 

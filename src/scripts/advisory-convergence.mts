@@ -140,8 +140,12 @@ import {
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
-import type { PrCommitPayload } from './protocol-helpers.mts';
+import type {
+  ExternalCheckWaiverAuthorityLookup,
+  PrCommitPayload,
+} from './protocol-helpers.mts';
 import {
+  buildEffectiveTrustedMarkerLogins,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -1118,6 +1122,24 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  // kurone-kito/idd-skill#3250: `ciGate.externalCheckWaivers.authorityPolicy`,
+  // threaded to the consume-side authority check on the PRIMARY (non-auto)
+  // waiver evidence call only -- the auto-waiver evidence call below stays
+  // untouched, since every marker it can ever validate is exempt from this
+  // check by construction (the #2657 self-referential-bootstrap-auto reason
+  // token). Omitted by direct/unit callers resolves to the check's own
+  // schema default (`owners-and-maintainers-only`) -- unlike `waiverMode`
+  // above, there is no "off" state at this layer either;
+  // `collectFromGitHub` always sources the real policy value.
+  waiverAuthorityPolicy?: string;
+  // kurone-kito/idd-skill#3250: resolves one waiver author's live
+  // collaborator-permission outcome for the authority check above. No
+  // default: omitting it while a marker reaches the check fails that
+  // marker closed to `insufficientAuthority`; `collectFromGitHub` always
+  // supplies `(login) => port.getCollaboratorPermission(login)`.
+  resolveWaiverAuthority?: (
+    authorLogin: string,
+  ) => ExternalCheckWaiverAuthorityLookup | null;
   /** kurone-kito/idd-skill#2657: the current repository's `owner/repo`
    * full name, e.g. `kurone-kito/idd-skill`. Used only to verify a
    * candidate `self-referential-bootstrap-auto` waiver's `run-id:`
@@ -2268,6 +2290,15 @@ export function computeAdvisoryConvergenceVerdict(
       // silently reopen this call's own mode gate. Matches the
       // auto-waiver call below, which already passes this explicitly.
       mode: waiverMode,
+      // kurone-kito/idd-skill#3250: NOT threaded into the auto-waiver call
+      // below -- every marker it can validate carries the #2657
+      // self-referential-bootstrap-auto reason token, which the check
+      // exempts by construction, so wiring it there would only add a
+      // pointless permission lookup.
+      authorityPolicy: String(
+        options.waiverAuthorityPolicy ?? 'owners-and-maintainers-only',
+      ),
+      resolveAuthority: options.resolveWaiverAuthority,
     });
     // Even when the configured list makes SOME check waivable, only count a
     // waiver whose own marker selector is THIS gate's selector -- a valid
@@ -3333,16 +3364,20 @@ export function collectFromGitHub(
   // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any
   // claim/forced-handoff parsing -- an untrusted-author's marker never
   // even reaches the authorization check.
-  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+  // kurone-kito/idd-skill#3250: the shared composition -- see
+  // `buildEffectiveTrustedMarkerLogins`'s own doc comment for why the
+  // collaborator-marker-trust discovery itself stays file-local
+  // (loop-safety wrapped) while only the final combine step is shared.
+  const trustedMarkerLogins = buildEffectiveTrustedMarkerLogins({
     viewerLogin,
-    ...configuredTrustedActors,
-    ...(collaboratorTrustEnabled
+    configuredTrustedActors,
+    collaboratorMarkerLogins: collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(port, [
           ...comments,
           ...claimCandidates.flat(),
         ])
-      : []),
-  ]);
+      : [],
+  });
 
   // #1810: delegates to `resolveClaimEvidence` (below `hasTrustedClaimMarker-
   // History`'s definition) instead of calling `pickResolvingClaimEvents` /
@@ -3888,6 +3923,14 @@ export function collectFromGitHub(
         policy?.ciGate?.externalCheckWaivers?.maxValidity ?? 'PT24H',
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waiverAuthorityPolicy: String(
+        policy?.ciGate?.externalCheckWaivers?.authorityPolicy ??
+          'owners-and-maintainers-only',
+      ),
+      resolveWaiverAuthority: (
+        login: string,
+      ): ExternalCheckWaiverAuthorityLookup =>
+        port.getCollaboratorPermission(login),
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
       helperRuntimeProfile,

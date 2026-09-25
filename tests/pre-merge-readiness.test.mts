@@ -5283,6 +5283,18 @@ function makeWaiverComment(fields: Record<string, string>) {
   return `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${enc(checkSelector)} reason:${enc(reason)} expires:${expiresAt} -->\n\n_${agentId}: external check waiver for IDD F phase on \`${checkSelector}\`_`;
 }
 
+// kurone-kito/idd-skill#3250: the consume-time authority check always runs
+// (resolving an empty `authorityPolicy` to the schema default
+// `owners-and-maintainers-only`), so a test whose own point is a DIFFERENT
+// classification dimension (head/claim/expiry/selector/mode) needs an
+// authorized resolver spread in to keep reaching `valid` the way it did
+// before this check existed. Every fixture author below is 'kurone-kito'
+// or 'owner'; this resolver ignores the login and always reports admin.
+const ADMIN_AUTHORITY = {
+  authorityPolicy: 'owners-and-maintainers-only',
+  resolveAuthority: () => ({ outcome: 'found' as const, roleName: 'admin' }),
+};
+
 test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence', () => {
   const result = summarizeExternalCheckWaivers([], {
     prHeadSha: 'a'.repeat(40),
@@ -5296,6 +5308,7 @@ test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence',
     wrongHead: [],
     wrongClaim: [],
     unauthorized: [],
+    insufficientAuthority: [],
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
@@ -5313,6 +5326,7 @@ test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', ()
     lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['kurone-kito'],
@@ -5383,6 +5397,7 @@ test('summarizeExternalCheckWaivers: a waiver with lastEditedAt null (never edit
     lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['kurone-kito'],
@@ -5429,6 +5444,7 @@ test('summarizeExternalCheckWaivers: excludes a self-referential-bootstrap-auto 
     wrongHead: [],
     wrongClaim: [],
     unauthorized: [],
+    insufficientAuthority: [],
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
@@ -5486,6 +5502,7 @@ test('summarizeExternalCheckWaivers: an odd-cased marker is still recognized', (
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -5607,6 +5624,188 @@ test('summarizeExternalCheckWaivers: malformed waiver comment goes to malformed 
     now: '2026-05-17T00:00:00Z',
   });
   assert.equal(result.malformed.length, 1);
+});
+
+// --- kurone-kito/idd-skill#3250: consume-time authority check --------------
+
+test('summarizeExternalCheckWaivers: a trusted-set-listed Write-only collaborator lands in insufficientAuthority, not valid, and never covers a required check (default owners-and-maintainers-only policy)', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'write-collaborator' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    // Admitted to the trusted set only via collaborator-marker trust
+    // (mirrors `pre-merge-readiness.mts`'s own trustedMarkerLogins
+    // composition when `markerTrust.allowCollaboratorMarkers` is on).
+    trustedMarkerLogins: ['write-collaborator'],
+    now: '2026-05-17T00:00:00Z',
+    waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    mode: 'maintainer-authorized',
+    authorityPolicy: 'owners-and-maintainers-only',
+    resolveAuthority: () => ({ outcome: 'found', roleName: 'write' }),
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.insufficientAuthority.length, 1);
+  assert.equal(
+    result.insufficientAuthority[0].authorLogin,
+    'write-collaborator',
+  );
+  assert.equal(result.insufficientAuthority[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.insufficientAuthority[0].authority, 'write');
+
+  const requiredChecks = summarizeRequiredChecks(
+    [
+      {
+        name: 'CodeRabbit',
+        state: 'FAILURE',
+        completedAt: '2026-05-17T00:05:00Z',
+      },
+    ],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    {
+      waivers: result,
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(requiredChecks.checks[0].coveredByWaiver, undefined);
+});
+
+test('summarizeExternalCheckWaivers: the same Write-only fixture is valid under authorityPolicy all-write-permission-actors', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'write-collaborator' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['write-collaborator'],
+    now: '2026-05-17T00:00:00Z',
+    waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    mode: 'maintainer-authorized',
+    authorityPolicy: 'all-write-permission-actors',
+    resolveAuthority: () => ({ outcome: 'found', roleName: 'write' }),
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.insufficientAuthority.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: a permission-lookup error lands in insufficientAuthority with authority "unknown"', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+    waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    mode: 'maintainer-authorized',
+    authorityPolicy: 'owners-and-maintainers-only',
+    resolveAuthority: () => ({ outcome: 'error' }),
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.insufficientAuthority.length, 1);
+  assert.equal(result.insufficientAuthority[0].authority, 'unknown');
+});
+
+test('summarizeExternalCheckWaivers: no resolveAuthority supplied at all (authorityPolicy still resolves to the schema default) fails every waiver closed to insufficientAuthority with authority "unknown"', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+    waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    mode: 'maintainer-authorized',
+  });
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.insufficientAuthority.length, 1);
+  assert.equal(result.insufficientAuthority[0].authority, 'unknown');
+});
+
+test('summarizeExternalCheckWaivers: a maintain collaborator, an admin collaborator, and a repository owner listed in trustedMarkerActors all stay valid under the default policy', () => {
+  const head = 'a'.repeat(40);
+  const cases: { login: string; roleName: string }[] = [
+    { login: 'maintain-collaborator', roleName: 'maintain' },
+    { login: 'admin-collaborator', roleName: 'admin' },
+    { login: 'kurone-kito', roleName: 'admin' }, // repository owner
+  ];
+  for (const { login, roleName } of cases) {
+    const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+    const comment = {
+      body,
+      author: { login },
+      createdAt: '2026-05-17T00:00:00Z',
+      lastEditedAt: null,
+    };
+    const result = summarizeExternalCheckWaivers([comment], {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: [login],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+      mode: 'maintainer-authorized',
+      authorityPolicy: 'owners-and-maintainers-only',
+      resolveAuthority: () => ({ outcome: 'found', roleName }),
+    });
+    assert.equal(
+      result.valid.length,
+      1,
+      `${login} (${roleName}) must stay valid`,
+    );
+    assert.equal(result.insufficientAuthority.length, 0);
+  }
+});
+
+test('summarizeExternalCheckWaivers: the #2657 self-referential-bootstrap-auto marker is exempt from the authority check even with no resolver supplied', () => {
+  const head = 'b'.repeat(40);
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+    checkSelector: 'idd-advisory-convergence',
+    reason: SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  });
+  const comment = {
+    body,
+    author: { login: 'github-actions[bot]' },
+    createdAt: '2026-05-17T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['github-actions[bot]'],
+    now: '2026-05-17T00:00:00Z',
+    mode: 'maintainer-authorized',
+    allowSelfReferentialBootstrapAuto: true,
+    // Deliberately no authorityPolicy/resolveAuthority -- the exemption
+    // must hold regardless.
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.insufficientAuthority.length, 0);
 });
 
 test('summarizeRequiredChecks: waiver covers failing required check', () => {
@@ -6027,6 +6226,7 @@ test('summarizeExternalCheckWaivers: multiple valid waivers for different checks
   };
 
   const result = summarizeExternalCheckWaivers([comment1, comment2], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['owner'],
@@ -6100,6 +6300,7 @@ test('summarizeExternalCheckWaivers: mixed valid, expired, and wrongClaim in sep
     },
   ];
   const result = summarizeExternalCheckWaivers(comments, {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['kurone-kito'],
@@ -6147,6 +6348,7 @@ test('summarizeExternalCheckWaivers: claim-id "none" on an unclaimed PR is valid
   // claim-binding check only because the gate independently confirms no
   // claim exists.
   const result = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: '',
     trustedMarkerLogins: ['kurone-kito'],
@@ -6167,6 +6369,7 @@ test('summarizeExternalCheckWaivers: "NONE"/"None" (any case) on an unclaimed PR
       lastEditedAt: null,
     };
     const result = summarizeExternalCheckWaivers([comment], {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: '',
       trustedMarkerLogins: ['kurone-kito'],
@@ -6250,6 +6453,7 @@ test('summarizeExternalCheckWaivers: a waiver bound to the immediate supersedes 
     lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-B',
     activeClaimSupersedes: 'claim-A',
@@ -6317,6 +6521,7 @@ test('summarizeExternalCheckWaivers: a window longer than maxValidity is rejecte
     lastEditedAt: null,
   };
   const opts = {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['kurone-kito'],
@@ -6352,6 +6557,7 @@ test('summarizeExternalCheckWaivers: a window within maxValidity stays valid', (
     lastEditedAt: null,
   };
   const result = summarizeExternalCheckWaivers([comment], {
+    ...ADMIN_AUTHORITY,
     prHeadSha: head,
     activeClaimId: 'claim-123',
     trustedMarkerLogins: ['kurone-kito'],
@@ -6421,6 +6627,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
     wrongHead: [],
     wrongClaim: [],
     unauthorized: [],
+    insufficientAuthority: [],
     malformed: [],
     notConfigured: [],
     modeDisabled: [],
@@ -6534,6 +6741,7 @@ test('summarizeExternalCheckWaivers: an empty mode leaves the mode gate off (leg
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -6558,6 +6766,7 @@ test('summarizeExternalCheckWaivers: waiver naming a configured-waivable check s
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -6582,6 +6791,7 @@ test('summarizeExternalCheckWaivers: a glob waivable selector admits a matching 
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -6606,6 +6816,7 @@ test('summarizeExternalCheckWaivers: omitting waivableSelectors keeps the legacy
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -6754,6 +6965,7 @@ test('summarizeExternalCheckWaivers: a glob waiver selector overlaps an exact wa
       },
     ],
     {
+      ...ADMIN_AUTHORITY,
       prHeadSha: head,
       activeClaimId: 'claim-123',
       trustedMarkerLogins: ['kurone-kito'],
@@ -7947,6 +8159,10 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
     copilotUnavailable: true,
     waivableCheckSelectors,
     externalCheckWaiverMaxValidity: 'PT24H',
+    resolveWaiverAuthority: () => ({
+      outcome: 'found' as const,
+      roleName: 'admin',
+    }),
   });
   assert.equal(advisoryWaitOf(blocked).copilotUnavailable, true);
   assert.equal(advisoryWaitOf(blocked).copilotUnavailableWaived, false);
@@ -7988,6 +8204,10 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
       copilotUnavailable: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
     },
   );
   assert.equal(advisoryWaitOf(waived).copilotUnavailable, true);
@@ -8111,6 +8331,15 @@ test('#2021: idd-advisory-convergence waiver posted but precondition window not 
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // HEAD committed 1h before `now` (2026-05-12T00:00:00Z): only 60
       // elapsed minutes against the 1440-minute (24h) default deadline, so
       // the deadline has not passed. copilotUnavailable is omitted (false),
@@ -8202,6 +8431,15 @@ test('#2021: a glob-selector waiver (e.g. idd-*) is also withheld from coveredBy
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // Precondition closed: deadline not passed, terminal not proven.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
       advisoryConvergenceHeadObservedAt: '2026-05-11T23:00:00Z',
@@ -8271,6 +8509,15 @@ test('#2021: a glob-selector waiver (e.g. idd-*) still does not cover coveredByW
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // Precondition OPEN this time: deadline has passed.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
       advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
@@ -8379,6 +8626,15 @@ test('#2021: withholding coverage from idd-advisory-convergence does not remove 
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // Precondition closed -- idd-advisory-convergence must stay
       // uncovered, but idd-security must still be covered by the same
       // glob waiver entry.
@@ -8437,6 +8693,15 @@ test('#2021: idd-advisory-convergence waiver posted and the 24h deadline has pas
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // HEAD committed 25h before `now`: 1500 elapsed minutes >= the
       // 1440-minute default deadline -- the deadline HAS passed.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
@@ -8515,6 +8780,15 @@ test('#3246: a body-edited idd-advisory-convergence waiver never sets coveredByW
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // Same deadline-passed precondition as the preceding test, where an
       // unedited waiver DOES reach `coveredByWaiver: true`.
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
@@ -8581,6 +8855,15 @@ test('#2021: idd-advisory-convergence waiver posted and terminal Copilot unavail
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       // The deadline has NOT passed (same 1h-before-now HEAD as the
       // still-blocked case above) -- only the terminal precondition is met.
       advisoryConvergenceHeadCommittedAt: '2026-05-11T23:00:00Z',
@@ -8846,6 +9129,15 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed but
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       externalCheckWaiverMode: 'disabled',
       // HEAD committed 25h before `now`: the 24h deadline has already
       // passed, so the precondition is open -- isolating that mode
@@ -8916,6 +9208,15 @@ test('#2046: idd-advisory-convergence waiver posted with the deadline passed and
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       externalCheckWaiverMode: 'maintainer-authorized',
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
       advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
@@ -8978,6 +9279,15 @@ test('#2034: idd-advisory-convergence waiver posted, precondition open, but the 
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       externalCheckWaiverMode: 'maintainer-authorized',
       // Deadline opens at 2026-05-11T23:00:00Z (24h after HEAD committed);
       // the check's own live run last completed before both that moment
@@ -9062,6 +9372,15 @@ test('#2034: the same idd-advisory-convergence waiver is covered once the check 
       includeDispositionEvidence: true,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity: 'PT24H',
+      // kurone-kito/idd-skill#3250: the consume-time authority check always
+      // runs; every waiver fixture in this block is authored by
+      // 'kurone-kito', so an authorized resolver keeps these tests
+      // exercising the SAME dimension (precondition/mode/staleness) they
+      // did before this check existed.
+      resolveWaiverAuthority: () => ({
+        outcome: 'found' as const,
+        roleName: 'admin',
+      }),
       externalCheckWaiverMode: 'maintainer-authorized',
       advisoryConvergenceHeadCommittedAt: '2026-05-10T23:00:00Z',
       advisoryConvergenceHeadObservedAt: '2026-05-10T23:00:00Z',
