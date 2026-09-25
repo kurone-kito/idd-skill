@@ -545,6 +545,14 @@ Before selecting from the surviving viable issues, eliminate candidates
 with a concurrent active non-stale claim or an unsafe stale takeover, in
 ascending issue-number order:
 
+- **Parked-issue check (once per pass).** Per
+  `provider-outage-park.mjs --parked-issues`, a candidate in its
+  `parkedIssues` is **ineligible**, as a live claim is. A failed or
+  malformed read is Step 1.5 exhaustion (report it; last bullet's
+  routing). `parkedIssuesComplete: false` still skips listed issues —
+  name the gap in the run report; an unlisted parked issue may be
+  picked. Under `instructions-only` (no park helper), this rule does
+  not apply.
 - Scan the **top N** survivors (ordered by ascending issue number),
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
@@ -568,20 +576,16 @@ After scanning the current batch:
 
 - **At least one eligible candidate in the batch**: proceed to Step 2
   to rank and select.
-- **All `N` in this batch are claimed but viable survivors remain**:
+- **All `N` in this batch are ineligible but viable survivors remain**:
   continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until
   an eligible candidate is found.
 - **Entire viable candidate set exhausted** (all surviving viable
-  candidates are claimed): resolve the exit by scope (see the note
-  below).
-
-When the entire viable candidate set is exhausted (the last bullet
-above): if the A3.5 approval-needed bucket is non-empty, apply A3.5's
-own approval-needed routing, also reporting the claimed-survivor
-exhaustion (the approval hold takes precedence — not a true zero);
-otherwise apply Step 1's **exhaustion-exit routing** above, reporting
-that all viable issues are currently claimed in place of a discard
-criterion. Retry later.
+  candidates are ineligible): if the A3.5 approval-needed bucket is
+  non-empty, apply A3.5's own approval-needed routing, also reporting
+  the survivor exhaustion (the approval hold takes precedence — not a
+  true zero); otherwise apply Step 1's **exhaustion-exit routing**
+  above, reporting that all viable issues are currently ineligible in
+  place of a discard criterion. Retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
@@ -645,8 +649,7 @@ non-vendored profiles); the formula above is the canonical fallback
 when the helper is unavailable. It reorders **only within** a single
 score tie band, never across bands, and never bypasses A4.5/A5. With
 `off`, a single-entry band, or no applicable score, keep the
-deterministic **lowest issue number** pick. See
-[rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync).
+deterministic **lowest issue number** pick.
 
 **Configured milestone-scope preference.** `discover.milestoneScope`
 (`#2340`) prefers a same-score-band candidate whose OPEN milestone
