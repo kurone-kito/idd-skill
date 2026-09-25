@@ -50,6 +50,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
   isCodeRabbitReviewInProgressSummary,
+  isCodexReviewSummaryCompleteForHeadSha,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
@@ -203,68 +204,14 @@ export function buildSummaryDispositionBody(
 // findings as their own review threads) would let the disposition-evidence
 // gate treat the review as settled ahead of findings that arrive later --
 // "a false positive is a false merge", the same hazard the CodeRabbit
-// per-HEAD re-disposition above guards against. #3260 corrects this
-// comment's prior claim that "CodeRabbit's own summary marker has no
-// analogous in-progress state": CodeRabbit edits its OWN summary comment in
-// place too, nesting a "review in progress by coderabbit.ai" marker next to
-// the previous review's content while it processes new commits (live
-// evidence: kurone-kito/idd-skill#3260, PR #3196 comment `5789875341`).
-// `buildDispositionPlan`'s own summary-walkthrough loop below gates on that
-// state via `isCodeRabbitReviewInProgressSummary` before this function ever
+// per-HEAD re-disposition above guards against. `buildDispositionPlan`'s own
+// summary-walkthrough loop below gates on that CodeRabbit-side state via
+// `isCodeRabbitReviewInProgressSummary` before `isCodexReviewSummaryCompleteForHeadSha`
+// (#3261: moved to `protocol-helpers.mts`, re-exported below unchanged) ever
 // runs -- this table-parsing gate itself still applies to Codex only,
 // because Codex's own in-progress signal is this status table, not a
-// CodeRabbit-shaped marker. Parses the
-// comment's own status table (columns identified by header text, so a
-// reordered or renamed non-Status/Commit column does not break it) and
-// requires the row for the current HEAD's (possibly-abbreviated) commit to
-// read "Completed" (case-insensitively, tolerating the emoji/bold markup
-// Codex wraps it in); any other outcome -- Running, no matching row, or an
-// unparseable table -- is treated as not-yet-complete so the caller must not
-// disposition it yet.
-export function isCodexReviewSummaryCompleteForHeadSha(
-  body: string,
-  headSha: string,
-): boolean {
-  const fullHeadSha = String(headSha ?? '')
-    .trim()
-    .toLowerCase();
-  if (!fullHeadSha) {
-    return false;
-  }
-  const rows = String(body ?? '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('|') && line.endsWith('|'))
-    .map((line) =>
-      line
-        .slice(1, -1)
-        .split('|')
-        .map((cell) => cell.trim()),
-    );
-  if (rows.length === 0) {
-    return false;
-  }
-  const header = rows[0].map((cell) => cell.toLowerCase());
-  const statusColumn = header.findIndex((cell) => cell.includes('status'));
-  const commitColumn = header.findIndex((cell) => cell.includes('commit'));
-  if (statusColumn === -1 || commitColumn === -1) {
-    return false;
-  }
-  // Last matching row wins in case the table ever lists a commit more than
-  // once, mirroring the "current state" semantics of an in-place edit.
-  let latestStatus: string | null = null;
-  for (const row of rows.slice(1)) {
-    const commitCell = (row[commitColumn] ?? '')
-      .replace(/`/g, '')
-      .trim()
-      .toLowerCase();
-    if (!commitCell || !fullHeadSha.startsWith(commitCell)) {
-      continue;
-    }
-    latestStatus = row[statusColumn] ?? '';
-  }
-  return latestStatus !== null && /completed/i.test(latestStatus);
-}
+// CodeRabbit-shaped marker.
+export { isCodexReviewSummaryCompleteForHeadSha } from './protocol-helpers.mts';
 
 /**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched

@@ -27,10 +27,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const RUN_HELPER_MJS = join(REPO_ROOT, 'bin', 'run-helper.mjs');
+const HELPER_CLI_RUNNER_MJS = join(
+  REPO_ROOT,
+  'scripts',
+  'helper-cli-runner.mjs',
+);
 // A raw filesystem path is not a valid ESM import specifier on Windows
 // (backslashes) -- generated fixture wrappers below import via this
 // `file:` URL form instead (Copilot review finding), never the bare path.
 const RUN_HELPER_MJS_URL = pathToFileURL(RUN_HELPER_MJS).href;
+const HELPER_CLI_RUNNER_MJS_URL = pathToFileURL(HELPER_CLI_RUNNER_MJS).href;
 const BRANCH_NAME_BIN = join(REPO_ROOT, 'bin', 'idd-branch-name.mjs');
 const REVIEW_DISPOSITION_VERIFY_BIN = join(
   REPO_ROOT,
@@ -340,4 +346,63 @@ test('runHelper(): a script with no --help support degrades to no usage line, st
   // exit and silently omit the usage line rather than propagating that
   // secondary failure.
   assert.equal(result.stderr, 'unknown argument: --bogus\n');
+});
+
+// ---------------------------------------------------------------------------
+// #3342 — a migrated helper's runHelperCli() defers its opt-in JSON error
+// envelope write to true process exit specifically so it stays the LAST
+// stderr line even when run-helper.mts's own shaped-parse-error branch
+// replaces everything else the child wrote. These fixtures spawn a script
+// that calls the REAL runHelperCli() (not a hand-written envelope string)
+// so this proves the two modules' actual integration, not a mocked stand-in.
+// ---------------------------------------------------------------------------
+
+test('runHelper(): re-appends the trailing error envelope line after reshaping a shaped parse error, keeping it the LAST stderr line', () => {
+  const result = spawnFixture(
+    [
+      `import { markCliUsageError, runHelperCli } from ${JSON.stringify(HELPER_CLI_RUNNER_MJS_URL)};`,
+      "process.env.IDD_HELPER_ERROR_ENVELOPE = '1';",
+      "runHelperCli('fixture-helper', () => {",
+      "  throw markCliUsageError(new Error('unknown argument: --late'));",
+      '});',
+    ].join('\n'),
+  );
+  assert.notEqual(result.status, 0);
+  const lines = result.stderr.split('\n').filter((line) => line !== '');
+  // The shaped one-liner replaces everything else the child wrote --
+  // this is the existing #1922 contract, unchanged by #3342.
+  assert.equal(lines[0], 'unknown argument: --late');
+  // The envelope line -- appended by runHelperCli()'s own uncaught-
+  // exception takeover (see RunHelperCliIo.takeOverUncaughtCrash's doc
+  // comment for why a `process.on('exit')` listener cannot do this job:
+  // its own write completes BEFORE Node's default crash text prints) --
+  // survives the reshape and stays the LAST line rather than being
+  // dropped with the rest of the raw stderr this branch otherwise
+  // discards.
+  const lastLine = lines.at(-1);
+  assert.ok(lastLine, 'expected at least one stderr line');
+  const envelope = JSON.parse(lastLine as string);
+  assert.deepEqual(envelope, {
+    iddHelperError: {
+      version: 1,
+      helper: 'fixture-helper',
+      kind: 'usage',
+      exitCode: 1,
+      message: 'unknown argument: --late',
+      httpStatus: null,
+    },
+  });
+});
+
+test('runHelper(): the envelope line is absent when the fixture never opts in (IDD_HELPER_ERROR_ENVELOPE unset)', () => {
+  const result = spawnFixture(
+    [
+      `import { markCliUsageError, runHelperCli } from ${JSON.stringify(HELPER_CLI_RUNNER_MJS_URL)};`,
+      "runHelperCli('fixture-helper', () => {",
+      "  throw markCliUsageError(new Error('unknown argument: --late'));",
+      '});',
+    ].join('\n'),
+  );
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr, 'unknown argument: --late\n');
 });

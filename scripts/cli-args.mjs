@@ -53,6 +53,11 @@
 // of this module's own code runs. See node-runtime-guard.mts.
 import './node-runtime-guard.mjs';
 import { parseArgs as nodeParseArgs } from 'node:util';
+// #3342: a non-enumerable tag (never a distinct thrown class -- see
+// markCliUsageError's own doc comment) so a migrated helper's shared CLI
+// runner can classify a shaped parse error as a usage error structurally,
+// without re-matching message text.
+import { markCliUsageError } from './helper-cli-runner.mjs';
 
 // #1922: the three message-shape prefixes toRepoShapedError() below
 // produces. Named here (rather than inlined at each call site) so
@@ -262,12 +267,14 @@ function toRepoShapedError(error) {
   switch (err.code) {
     case 'ERR_PARSE_ARGS_UNKNOWN_OPTION':
     case 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL':
-      return new Error(`${UNKNOWN_ARGUMENT_PREFIX}${token}`);
+      return markCliUsageError(new Error(`${UNKNOWN_ARGUMENT_PREFIX}${token}`));
     case 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE':
-      return new Error(
-        err.message.includes('does not take an argument')
-          ? `${UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX}${token}`
-          : `${MISSING_VALUE_FOR_ARGUMENT_PREFIX}${token}`,
+      return markCliUsageError(
+        new Error(
+          err.message.includes('does not take an argument')
+            ? `${UNEXPECTED_VALUE_FOR_ARGUMENT_PREFIX}${token}`
+            : `${MISSING_VALUE_FOR_ARGUMENT_PREFIX}${token}`,
+        ),
       );
     default:
       return err;
@@ -382,7 +389,7 @@ function isShapedMessage(message) {
 export function stripLeadingArgumentSeparator(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   if (args[0] === '--') {
-    throw new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`);
+    throw markCliUsageError(new Error(`${UNKNOWN_ARGUMENT_PREFIX}--`));
   }
   return args;
 }
@@ -445,12 +452,16 @@ function parseCanonicalIntegerToken(token, min) {
  * Parse a canonical integer token, throwing this repository's shaped error
  * when `token` is missing or invalid. Use for flags whose existing
  * contract is to fail the whole command on a bad value (e.g.
- * `ci-wait-policy.mts`'s `--rerun-count`).
+ * `ci-wait-policy.mts`'s `--rerun-count`). The thrown error carries the
+ * `markCliUsageError` tag (#3342) so a migrated helper's shared CLI
+ * runner classifies it as a usage error.
  */
 export function parseCanonicalIntegerOrThrow(token, flagName, min = 1) {
   const value = parseCanonicalIntegerToken(token, min);
   if (value === null) {
-    throw new Error(`invalid value for argument: ${flagName}`);
+    throw markCliUsageError(
+      new Error(`invalid value for argument: ${flagName}`),
+    );
   }
   return value;
 }
@@ -491,10 +502,13 @@ export function parseCanonicalIntegerOrNull(token, min = 1) {
  * `--total-item-count '0'` (emit-marker.mts / post-idd-marker.mts's
  * watermark type). A bare `!value` truthiness check would reject that `'0'`
  * as if the flag were missing.
+ *
+ * The thrown error carries the `markCliUsageError` tag (#3342) so a
+ * migrated helper's shared CLI runner classifies it as a usage error.
  */
 export function requireFlag(value, flagName) {
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`${flagName} is required`);
+    throw markCliUsageError(new Error(`${flagName} is required`));
   }
   return value;
 }

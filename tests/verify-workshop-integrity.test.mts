@@ -217,6 +217,41 @@ test('extractReferences skips links inside fenced code blocks', () => {
   assert.equal(refs[0].target, './a.md');
 });
 
+// #3283's four-row CommonMark fence/span table: extractReferences must
+// find the real link in the first two rows and not find the code one in
+// the last two.
+test('extractReferences finds a real link after a backtick fence whose content has a tilde-fence-shaped line', () => {
+  const md = [
+    '```',
+    'inside content',
+    '~~~',
+    'nested-looking line',
+    '~~~',
+    '```',
+    '[real](./a.md)',
+  ].join('\n');
+  const refs = extractReferences(md);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0].target, './a.md');
+});
+
+test('extractReferences finds a real link on the line after a 4-space-indented backtick-shaped line (indented code, not a fence)', () => {
+  const md = ['paragraph', '', '    ```', '[real](./a.md)'].join('\n');
+  const refs = extractReferences(md);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0].target, './a.md');
+});
+
+test('extractReferences ignores a link inside a tilde fence', () => {
+  const md = ['~~~', '[fake](./missing.md)', '~~~'].join('\n');
+  assert.equal(extractReferences(md).length, 0);
+});
+
+test('extractReferences ignores a link inside a double-backtick code span', () => {
+  const md = '``[fake](./missing.md)``';
+  assert.equal(extractReferences(md).length, 0);
+});
+
 test('extractReferenceDefinitions reads [label]: target pairs', () => {
   const md = `text\n\n[alpha]: ./a.md\n[beta]: https://example.com "Title"\n`;
   const defs = extractReferenceDefinitions(md);
@@ -430,6 +465,12 @@ test('stripHtmlComments masks single-line and multi-line HTML comments', () => {
   assert.equal(stripped.split('\n').length, md.split('\n').length);
 });
 
+test('stripHtmlComments does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  const md = '`<!--`\nreal content\n-->';
+  const stripped = stripHtmlComments(md);
+  assert.equal(stripped.includes('real content'), true);
+});
+
 test('extractReferences ignores links inside HTML comments', () => {
   const md = 'real [a](./a.md)\n<!-- ignored [demo](./missing.md) -->\nend';
   const refs = extractReferences(md);
@@ -444,12 +485,45 @@ test('extractReferenceDefinitions ignores definitions inside HTML comments', () 
   assert.equal(defs.get('real'), './a.md');
 });
 
+test('extractReferenceDefinitions does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  // A `<!--` shown only inside a code span (now masked away entirely,
+  // since extractReferenceDefinitions masks inline code -- see the
+  // test below) must not mask a real definition that follows it, up to
+  // a later real `-->`.
+  const md = '`<!--`\n[real]: ./a.md\n-->\n';
+  const defs = extractReferenceDefinitions(md);
+  assert.equal(defs.get('real'), './a.md');
+});
+
+test('extractReferenceDefinitions ignores a [label]: target line shown inside a multiline code span (Copilot review round 2, PR #3424)', () => {
+  // A reference definition has no legitimate reason to live inside
+  // inline code, but a multiline code span's own visible text could
+  // still contain a `[label]: target`-shaped line that this function's
+  // line-by-line regex scan cannot otherwise tell apart from a real
+  // definition -- a caller resolving `[text][label]` against the
+  // returned map could then resolve to a target only ever shown as a
+  // code example.
+  const md = '`\n[fake]: ./missing.md\n`\n\n[real][fake]\n';
+  const defs = extractReferenceDefinitions(md);
+  assert.equal(defs.has('fake'), false);
+  const refs = extractReferences(md, defs);
+  assert.deepEqual(refs, [
+    { kind: 'link', label: 'fake', line: 5, status: 'unresolved-reference' },
+  ]);
+});
+
 test('extractHeadingSlugs ignores headings inside HTML comments', () => {
   const md = `# Real\n\n<!-- # Hidden -->\n\n## Visible\n`;
   const slugs = extractHeadingSlugs(md);
   assert.equal(slugs.has('real'), true);
   assert.equal(slugs.has('visible'), true);
   assert.equal(slugs.has('hidden'), false);
+});
+
+test('extractHeadingSlugs does not read a literal <!-- inside inline code as a real comment opener (Copilot review, PR #3424)', () => {
+  const md = '`<!--`\n## Real Heading\n-->\n';
+  const slugs = extractHeadingSlugs(md);
+  assert.equal(slugs.has('real-heading'), true);
 });
 
 test('stripInlineCodeSpans masks multi-line backtick code spans', () => {

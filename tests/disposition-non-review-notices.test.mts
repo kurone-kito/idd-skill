@@ -998,6 +998,41 @@ test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is true o
   );
 });
 
+// Copilot review (PR #3422): a bare `/completed/i` substring test would
+// wrongly accept "Not Completed" or "Uncompleted" (both contain the
+// substring "completed"). Anchor to the exact bolded status word instead.
+test('#3261 (Copilot review, PR #3422): isCodexReviewSummaryCompleteForHeadSha is false for a "Not Completed" status row (substring-match false positive)', () => {
+  const notCompletedBody =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    '| 📝 **Code Review** | ⚠️ **Not Completed** | `abc1234` | PR opened |\n';
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(notCompletedBody, 'abc1234'),
+    false,
+  );
+});
+
+// Copilot review (PR #3422, second round): the first-round fix
+// (`/\*\*\s*completed\s*\*\*/i.test()`) was still an unanchored substring
+// search -- it would still match a malformed cell carrying a separately
+// bolded "Completed" segment embedded after other bolded text, since
+// `.test()` searches anywhere in the string. Extracting only the FIRST
+// bolded segment and comparing it exactly closes this.
+test('#3261 (Copilot review, PR #3422, round 2): isCodexReviewSummaryCompleteForHeadSha is false for a malformed cell with a separately bolded "Completed" segment', () => {
+  const malformedBody =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    '| 📝 **Code Review** | **Not **Completed** | `abc1234` | PR opened |\n';
+  assert.equal(
+    isCodexReviewSummaryCompleteForHeadSha(malformedBody, 'abc1234'),
+    false,
+  );
+});
+
 test('#2695 (Codex review, P1): isCodexReviewSummaryCompleteForHeadSha is false for a Completed row naming a different (stale) commit', () => {
   // A stale summary left over from a prior HEAD must not be mistaken for
   // completion at the CURRENT HEAD merely because some row says Completed.

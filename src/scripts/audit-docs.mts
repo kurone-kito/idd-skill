@@ -17,6 +17,7 @@ import type {
   InstructionSizeBudgetConfig,
   InstructionSizeBudgetFileStat,
   InstructionSizeBudgetLimitStat,
+  LiteGateParityEntry,
   OkfBundleConfig,
   RootMarkdownAllowlistConfig,
   TypeSuppressionBudgetConfig,
@@ -32,6 +33,7 @@ import {
   collectGeneratedSourceBannerViolations,
   collectInstructionSizeBudgetRatchetViolations,
   collectInstructionSizeBudgetViolations,
+  collectLiteGateParityViolations,
   collectNearCeilingRatchetViolations,
   collectOkfFrontmatterViolations,
   collectPolicyConfigDrift,
@@ -142,6 +144,7 @@ interface AuditManifest {
   typeSuppressionBudgets?: TypeSuppressionBudgetConfig | null;
   okfBundles?: OkfBundleConfig[] | null;
   markdownLinkAudit?: MarkdownLinkAuditConfig | null;
+  liteGateParity?: LiteGateParityEntry[] | null;
 }
 
 const root = process.cwd();
@@ -300,6 +303,7 @@ function main(): void {
     manifest.markdownLinkAudit ?? null,
     manifest.generatedBlocks ?? [],
   );
+  checkLiteGateParity(manifest.liteGateParity);
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
@@ -879,6 +883,36 @@ function checkMarkdownLinkAudit(
       (pattern) => globFiles(pattern, repoFiles),
       readText,
       distributedFileSet ? distributedFileSet.paths : null,
+    ),
+  );
+}
+
+// Lite-vs-standard gate parity audit (#3310): the collector lives in
+// consistency-helpers so it can be unit-tested without I/O; the audit
+// pipeline supplies a reader that reports a repo-untracked path as missing
+// (`null`) rather than throwing, since every referenced file is an explicit
+// path, not a glob `globFiles` already filtered to existing files.
+function checkLiteGateParity(
+  entries: LiteGateParityEntry[] | null | undefined,
+) {
+  const repoFileSet = new Set(repoFiles);
+  const registryMissing =
+    entries == null || (Array.isArray(entries) && entries.length === 0);
+  const hasLiteCorpus = repoFiles.some(
+    (path) =>
+      path.startsWith('idd-template/.github/instructions/lite/') &&
+      path.endsWith('.instructions.md'),
+  );
+  // A manifest that is not this source repo's full instruction tree
+  // (CLI fixtures, adopters without the lite corpus) keeps an omitted
+  // registry optional. The presence requirement applies only once the
+  // canonical lite corpus is actually in the tree (#3428 review).
+  if (registryMissing && !hasLiteCorpus) {
+    return;
+  }
+  errors.push(
+    ...collectLiteGateParityViolations(entries ?? [], (path) =>
+      repoFileSet.has(path) ? readText(path) : null,
     ),
   );
 }
