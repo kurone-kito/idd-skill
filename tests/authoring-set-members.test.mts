@@ -141,6 +141,27 @@ test('an edited trusted marker that no longer parses fails closed', () => {
   assert.equal(result.reason, 'edited trusted authoring-owner marker');
 });
 
+test('an edited trusted marker for a different set fails closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(3468, marker(3468)),
+      comment(
+        3469,
+        marker(3469, 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'),
+        'kurone-kito',
+        '2026-09-25T18:00:00Z',
+      ),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
 test('an unfinished enumeration is not a sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
@@ -260,6 +281,10 @@ test('CLI: one verified marker prints that issue and soleMember true', () => {
   const script = `
     const args = process.argv.slice(2);
     const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    }
     if (joined.includes('search/issues')) {
       process.stdout.write(JSON.stringify({
         total_count: 1,
@@ -328,6 +353,10 @@ test('CLI: a sibling only in the index-lag window is not a sole member', () => {
   const script = `
     const args = process.argv.slice(2);
     const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    }
     if (joined.includes('search/issues')) {
       process.stdout.write(JSON.stringify({
         total_count: 1,

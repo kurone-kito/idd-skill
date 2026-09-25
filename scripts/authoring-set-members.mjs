@@ -264,7 +264,9 @@ function printHelp() {
   node scripts/authoring-set-members.mjs --set <id> [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--trusted-marker-logins <login1,login2>]
 
 Lists every issue in the repository whose unedited trusted authoring-owner
-marker carries that exact set. Read-only. Exits non-zero when the listing
+marker carries that exact set. The candidate search is the owner-marker
+token, not the set id, so an edited marker that dropped the set is still
+fetched and fails closed. Read-only. Exits non-zero when the listing
 does not finish, including a search response with incomplete_results, a
 duplicate search hit, or an index-lag window that does not finish.
 soleMember is true only when exactly one such issue is listed.
@@ -362,7 +364,10 @@ function runCli() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config,
   });
-  const query = `repo:${owner}/${repo} is:issue "${args.set}"`;
+  // Search for the owner-marker token, not the set id. An edit that
+  // changes or removes the set while leaving the token in place stays
+  // in the candidate list, and the edit check below fails closed.
+  const query = `repo:${owner}/${repo} is:issue "${markerPrefix}-authoring-owner:"`;
   const search = collectSearchedIssueNumbers(fetchSearchPages(query));
   const fetchedLag = search.complete
     ? fetchIndexLagIssues(

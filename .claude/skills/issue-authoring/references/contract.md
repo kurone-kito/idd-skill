@@ -1899,6 +1899,8 @@ only approval boundary.
   target is the only passing result. The helper exits non-zero when
   enumeration does not finish, including a search response with
   `incomplete_results` or an index-lag window that does not finish.
+  The candidate search is the owner-marker token, so an edited marker
+  that dropped the set is still fetched and fails closed.
   Any other result is inconclusive and blocks
   this exception the same way. A sibling's marker lives on the
   sibling's own issue and never appears in the marked target's own
@@ -1982,7 +1984,8 @@ only approval boundary.
   helper is exactly the mechanical proof this fast path's own
   `|set|==1` premise rests on, so skipping it here would be a genuine
   weakening, not a condensation, and a non-zero exit (including
-  `incomplete_results` or an unfinished index-lag window) is
+  `incomplete_results`, an unfinished index-lag window, or an edited
+  marker the token search still fetched) is
   inconclusive; second, run the exception's
   own provenance check -- the target's body must still carry the exact
   `review-fix-loop-cutoff` marker from Stage 1 publication, and a

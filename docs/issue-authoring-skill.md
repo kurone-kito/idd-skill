@@ -1417,6 +1417,8 @@ A zero exit whose JSON has `soleMember: true` and `issues` equal to that
 one target is the only passing result. The helper exits non-zero when
 enumeration does not finish, including a search response with
 `incomplete_results` or an index-lag window that does not finish.
+The candidate search is the owner-marker token, so an edited marker
+that dropped the set is still fetched and fails closed.
 Any other result is inconclusive and blocks this
 exception the same way. A sibling's marker lives on the sibling's own
 issue and never appears in the marked target's own comment log. If either

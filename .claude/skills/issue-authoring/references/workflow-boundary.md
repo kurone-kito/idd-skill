@@ -394,7 +394,9 @@ approval boundary that hands off to IDD execution.
   `soleMember: true` with `issues` equal to that one target. The
   helper exits non-zero when enumeration does not finish, including a
   search response with `incomplete_results` or an index-lag window
-  that does not finish; any other result is inconclusive and blocks
+  that does not finish. The candidate search is the owner-marker
+  token, so an edited marker that dropped the set is still fetched
+  and fails closed; any other result is inconclusive and blocks
   this exception the same way. A sibling's
   marker lives on the sibling's own issue and never appears in the
   marked target's own comment log. If either condition fails, or the
