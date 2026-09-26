@@ -244,10 +244,10 @@ string and fails node-id resolution, so pass a JSON body:
 ```sh
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
 BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
-# shell expands the two ids; the GraphQL variables stay a JSON array
-gh api graphql --input - <<EOF
-{"query":"mutation(\$id:ID!,\$botIds:[ID!]!){ requestReviews(input:{pullRequestId:\$id,botIds:\$botIds,union:true}){ clientMutationId } }","variables":{"id":"${PR_NODE_ID}","botIds":["${BOT_NODE_ID}"]}}
-EOF
+# jq binds the ids. The query's $id / $botIds are jq/GraphQL, not shell.
+jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
+  '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' \
+  | gh api graphql --input -
 ```
 
 Confirm the same evidence. E14 then posts its `advisory-wait` marker.

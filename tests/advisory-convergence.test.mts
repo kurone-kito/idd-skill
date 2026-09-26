@@ -6839,10 +6839,15 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(
     noneText,
+    /jq -n --arg id "\$PR_NODE_ID" --arg bot "\$BOT_NODE_ID"/,
+  );
+  assert.match(
+    noneText,
     /requestReviews\(input:\{pullRequestId:\$id,botIds:\$botIds,union:true\}\)/,
   );
-  assert.match(noneText, /"botIds":\["\$\{BOT_NODE_ID\}"\]/);
-  const payloadAt = noneText.indexOf('union:true');
+  assert.match(noneText, /botIds:\[\$bot\]/);
+  assert.doesNotMatch(noneText, /<<EOF/);
+  const payloadAt = noneText.indexOf('jq -n');
   const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
   assert.ok(payloadAt > 0 && markerAt > payloadAt);
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
