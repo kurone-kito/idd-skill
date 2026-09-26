@@ -366,14 +366,15 @@ login).
      stop; otherwise (`phase-specific`, default) skip the wait,
      proceed to E15.
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"` (cap not
-     exhausted): request the bot's review and immediately post:
-
-     ```sh
-     gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-     # on GraphQL login-resolution failure:
-     gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-       -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
-     ```
+     exhausted): try add-reviewer, then REST `requested_reviewers`.
+     Post only after a `review_requested` event after HEAD or a
+     non-empty request node; exit status is not evidence (observed
+     2026-09-26 in issue `#3500`). If absent, resolve the node id
+     (never hard-code it) and call `requestReviews` with JSON-array
+     `botIds` and `union: true`
+     ([commands](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request)).
+     Still absent: stop and ask maintainer; do not poll or
+     continue to E15.
 
      ```text
      advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
@@ -395,7 +396,7 @@ login).
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
    fallback: every configured login not yet requested this HEAD) —
-   same gh-then-REST fallback as the primary, per login, no
+   same request procedure as the primary, per login, no
    `advisory-wait:` marker, no route change. Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;

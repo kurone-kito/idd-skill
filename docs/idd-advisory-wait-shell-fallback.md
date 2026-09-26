@@ -210,6 +210,50 @@ curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/com
   -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}\"}"
 ```
 
+## Registration-proven review request
+
+E14's `REQUEST_NEEDED` branch (and AW3-S step 3 below) uses this
+procedure. The two `gh` calls are attempts. Post an E14
+`advisory-wait` marker only after registration evidence: a
+`review_requested` timeline event for the bot that follows the
+current HEAD `committed` event (the same ordering AW1 uses for
+`COPILOT_PENDING_COVERS_HEAD` and AW3-S step 4 already counts), or a
+non-empty review-request node for that bot on the current PR (the
+node AW1 reads as `COPILOT_PENDING`). An older `review_requested`
+event does not count. Exit status and HTTP 201 are not
+evidence. Observed 2026-09-26 in issue `#3500` (refs #3481, #3491):
+both calls returned success while `requested_reviewers` stayed empty
+and no `review_requested` event was recorded.
+
+```sh
+gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
+# If that leaves registration evidence absent, including a zero exit
+# with no event and no node for this bot (not only a GraphQL
+# login-resolution failure):
+gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+  -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
+```
+
+Re-read the evidence. The review-request node counts only when it is
+for `{primary-advisory-bot-rest-login}` on this PR, not some other
+reviewer. If evidence is still absent, resolve both node ids live.
+Do not paste a node id. GraphQL `user(login:)` does not resolve a
+`Bot`; use the REST users endpoint. `gh api -f` sends `botIds` as a
+string and fails node-id resolution, so pass a JSON body:
+
+```sh
+PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
+BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
+# jq binds the ids. The query's $id / $botIds are jq/GraphQL, not shell.
+jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
+  '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' \
+  | gh api graphql --input -
+```
+
+Confirm the same evidence. E14 then posts its `advisory-wait` marker.
+AW3-S keeps its own step 4 disposition and does not treat this block
+as that proof.
+
 ## AW3-S
 
 Only when `staleRequestRecovery` is `"attempt"` (instruction file's
@@ -232,11 +276,10 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
 
 # Step 3 — request again (non-pending entry: the first mutating step;
-# pending entry: after step 2 verifies the removal)
-gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-# on a GraphQL login-resolution failure:
-gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-  -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
+# pending entry: after step 2 verifies the removal). Run the
+# registration-proven review request above. The two gh/REST calls
+# there are attempts, not a complete request. Step 4 below stays
+# the counted proof-of-registration rule.
 
 # Step 5 -- post exactly one bound marker, only once step 4 reaches a
 # counted disposition: proven re-registration for a pending entry, or

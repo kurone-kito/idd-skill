@@ -334,15 +334,16 @@ other GitHub side effect, confirm all of the following:
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - `REQUEST_NEEDED`, `copilotPending` `false`: request the review with
-     `gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"`
-     (on a GraphQL login-resolution failure, retry via `gh api
-     repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X POST
-     -f "reviewers[]={primary-advisory-bot-rest-login}"`). If both
-     attempts fail, stop and ask instead of posting a marker. On
-     success, immediately post `advisory-wait: {agent-id} {PR_HEAD_SHA}
-     {ISO8601-requested-at}` as plain text, not an HTML comment, then go
-     to the polling loop below.
+   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer, then
+     REST `requested_reviewers`. Post
+     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
+     as plain text only after a `review_requested` event that
+     follows HEAD, or a non-empty review-request node. Exit status
+     is not evidence
+     (observed 2026-09-26 in issue `#3500`). If both leave it absent,
+     call `requestReviews` (`botIds` JSON array, `union: true`,
+     resolved node id — never hard-coded). Still absent: stop and
+     ask; do not post. Then go to the polling loop.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the
@@ -401,7 +402,7 @@ other GitHub side effect, confirm all of the following:
     `secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
-    the same gh-then-REST fallback as the primary in step 4. Post no
+    the same request procedure as step 4. Post no
     `advisory-wait:` marker for any — none satisfy the primary gate or
     consume its cap, and none change the route already decided above.
     Each review is ordinary advisory input, picked up by the next E1
