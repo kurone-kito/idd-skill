@@ -1637,7 +1637,7 @@ export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
 const CODEX_NO_FIND_RESULT_RE =
   /^Codex Review: Didn't find any major issues\. You're on a roll\.\s*\n+\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,64})`\s*\n+\s*([\s\S]*)$/i;
 const CODEX_NO_FIND_DETAILS_RE =
-  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>[\s\S]*<\/details>$/i;
+  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>\s*<br\/>\s*\[Your team has set up Codex to review pull requests in this repo\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/general\)\s*Reviews are triggered when you\s*- Open a pull request for review\s*- Mark a draft as ready\s*- Comment "@codex review" or "@codex security review"\.\s*<\/details>$/i;
 /** Return the abbreviated reviewed commit from a valid no-find result. */
 function codexNoFindReviewedCommit(body) {
   const match = CODEX_NO_FIND_RESULT_RE.exec(String(body ?? '').trim());
@@ -1645,15 +1645,7 @@ function codexNoFindReviewedCommit(body) {
     return null;
   }
   const details = match[2] ?? '';
-  if (
-    !details.includes(
-      'Your team has set up Codex to review pull requests in this repo',
-    ) ||
-    !details.includes('https://chatgpt.com/codex/cloud/settings/general') ||
-    !details.includes('- Open a pull request for review') ||
-    !details.includes('- Mark a draft as ready') ||
-    !details.includes('- Comment "@codex review" or "@codex security review".')
-  ) {
+  if (!CODEX_NO_FIND_DETAILS_RE.test(details.trim())) {
     return null;
   }
   return match[1]?.toLowerCase() ?? null;
@@ -4269,7 +4261,10 @@ function matchTrustedAdvisoryStickyDispositions(
       requireNewerDisposition: true,
       matchesDisposition: (sticky, disposition) => {
         const parsed = parseCodexNoFindDisposition(disposition.body);
-        return parsed?.sourceCommentId === String(sticky.id);
+        return (
+          parsed?.sourceCommentId === String(sticky.id) &&
+          normalizedCurrentHead.startsWith(parsed.headSha)
+        );
       },
     });
   }
@@ -5835,6 +5830,9 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
+  const normalizedCurrentHead = String(options.prHeadSha ?? '')
+    .trim()
+    .toLowerCase();
   const threads = Array.isArray(options.threads) ? options.threads : [];
   // #3267: trusted set is the union of trustedMarkerLogins and
   // iddAgentLogins -- see classifyIddPrComment's own doc comment for why
@@ -5904,12 +5902,17 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   const isTrustedMachineDisposition = (authorLogin, body) =>
     trustedMarkerLogins.has(authorLogin) &&
     (isNonReviewNoticeDisposition({ body }) ||
-      isReviewSummaryDisposition({ body }));
+      isReviewSummaryDisposition({ body }) ||
+      (isCodexNoFindResultDisposition(body) &&
+        normalizedCurrentHead.startsWith(
+          parseCodexNoFindDisposition(body)?.headSha ?? '',
+        )));
   const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
     normalized,
     advisoryBotLogins,
     trustedMarkerLogins,
     iddAgentLogins,
+    normalizedCurrentHead,
   );
   const items = normalized
     .filter((comment) => !isIddOperationalComment(comment))
@@ -5926,6 +5929,15 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      // A terminal Codex no-find result is paired only by its source comment
+      // id and current HEAD. Do not let the generic regular-comment pairing
+      // consume it with an unrelated or stale disposition.
+      if (
+        normalizedCurrentHead &&
+        isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+      ) {
         return true;
       }
       return (
@@ -6186,6 +6198,9 @@ export function summarizeDispositionEvidenceForGate(
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
+  const normalizedCurrentHead = String(options.prHeadSha ?? '')
+    .trim()
+    .toLowerCase();
   // #3267: trusted set is the union of trustedMarkerLogins and
   // iddAgentLogins -- see classifyIddPrComment's own doc comment.
   const isIddOperationalComment = (comment) =>
@@ -6277,6 +6292,15 @@ export function summarizeDispositionEvidenceForGate(
     )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      // Keep current-head Codex no-find results on the source-specific
+      // disposition path; generic 1:1 pairing could consume them with an
+      // unrelated or stale reply.
+      if (
+        normalizedCurrentHead &&
+        isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+      ) {
         return true;
       }
       return (
@@ -6439,6 +6463,7 @@ export function summarizeDispositionEvidenceForGate(
       (comment) =>
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
+        !isCodexNoFindResultDisposition(comment.body) &&
         isValidIsoTimestamp(comment.activityAt) &&
         !isIddOperationalComment(comment),
     )
@@ -9118,6 +9143,7 @@ export function buildPreMergeReadinessSummary(
     advisoryBotLogins,
     trustedMarkerLogins,
     threads,
+    prHeadSha,
   });
   // #1818: `options.primaryBotLogin` (the configured advisory-wait primary
   // bot, e.g. a non-default Copilot form or a wholly different bot) must be
@@ -9883,6 +9909,7 @@ export function buildPreMergeReadinessSummary(
           advisoryBotLogins,
           trustedMarkerLogins,
           prAuthorLogin,
+          prHeadSha,
           snapshotBoundaryAt: watermark?.maxActivityUpdatedAt ?? null,
         },
       )

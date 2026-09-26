@@ -460,6 +460,7 @@ export function buildDispositionPlan(input, options = {}) {
   for (const comment of comments) {
     if (
       advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
+      !advisoryBotIdentities.has(advisoryBotIdentityToken(comment.login)) ||
       !isCodexNoFindResultForHeadSha(comment.body, headSha)
     ) {
       continue;

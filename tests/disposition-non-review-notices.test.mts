@@ -31,6 +31,7 @@ import {
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
   summarizeDispositionEvidenceForGate,
+  summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -534,6 +535,16 @@ test('Codex no-find classifier accepts only the observed terminal shape for the 
     false,
   );
   assert.equal(
+    isCodexNoFindResultForHeadSha(
+      CODEX_NO_FIND_RESULT.replace(
+        '</details>',
+        'I found a major issue.\n\n</details>',
+      ),
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
     isCodexNoFindResultForHeadSha(CODEX_SUMMARY_RUNNING, 'abc1234'),
     false,
   );
@@ -838,6 +849,21 @@ test('buildDispositionPlan plans and then idempotently skips a current Codex no-
   ]);
 });
 
+test('buildDispositionPlan ignores Codex no-find results outside the configured advisory bots', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(324, CODEX, CODEX_NO_FIND_RESULT)],
+    },
+    {
+      advisoryBotLogins: [CODERABBIT],
+      trustedMarkerLogins: ['kurone-kito'],
+    },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test('gate agreement: a trusted Codex no-find disposition clears the matching source comment', () => {
   const source = {
     id: 322,
@@ -863,6 +889,61 @@ test('gate agreement: a trusted Codex no-find disposition clears the matching so
     },
   );
   assert.equal(summary.missingRegularCommentCount, 0);
+});
+
+test('gate agreement requires the Codex disposition HEAD to match the current source HEAD', () => {
+  const source = {
+    id: 324,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const staleDisposition = {
+    id: 325,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'def5678', 324),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [source, staleDisposition], threads: [] },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['kurone-kito'],
+      prHeadSha: 'abc1234',
+    },
+  );
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.deepEqual(
+    summary.missingRegularComments.map((comment) => comment.id),
+    ['324'],
+  );
+});
+
+test('regular-comment gate clears a current Codex no-find disposition from an IDD agent', () => {
+  const source = {
+    id: 326,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition = {
+    id: 327,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 326),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeRegularCommentsForGate([source, disposition], {
+    iddAgentLogins: ['kurone-kito'],
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['kurone-kito'],
+    prHeadSha: 'abc1234',
+  });
+  assert.equal(summary.count, 0);
 });
 
 test('buildDispositionPlan plans a rejection for the current Codex usage-limit wording', () => {
