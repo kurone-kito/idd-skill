@@ -2760,6 +2760,7 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
           createdAt: '2026-05-12T00:00:01Z',
           body: '**Accepted** — fixed in abc123',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 3,
@@ -2772,6 +2773,7 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
           createdAt: '2026-05-12T00:00:03Z',
           body: '**Rejected** — advisory acknowledged',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -2856,6 +2858,7 @@ test('disposition evidence pairs trailing markers 1:1 across regular comments', 
           createdAt: '2026-05-12T00:00:02Z',
           body: '**Accepted** — addressed',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -2888,12 +2891,14 @@ test('disposition evidence clears two regular comments when each has its own mar
           createdAt: '2026-05-12T00:00:02Z',
           body: '**Accepted** — first addressed',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 4,
           createdAt: '2026-05-12T00:00:03Z',
           body: '**Rejected** — second declined',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5027,7 +5032,7 @@ test('disposition evidence does not flag a thread with a post-disposition human 
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
 });
 
-test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
+test('disposition evidence rejects edit-state-unresolved IDD disposition comments', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [
@@ -5050,8 +5055,8 @@ test('disposition evidence accepts edited IDD disposition comments as fresh repl
     { iddAgentLogins: ['idd-bot'] },
   );
 
-  assert.equal(summary.route, 'proceed');
-  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
 });
 
 test('disposition evidence does not let an explicitly edited IDD disposition clear feedback', () => {
@@ -5468,6 +5473,7 @@ test('disposition evidence does not carry one bot disposition onto another bot n
           // Names only the Codex connector — must not carry the CodeRabbit notice.
           body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],

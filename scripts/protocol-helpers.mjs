@@ -6523,8 +6523,8 @@ export function summarizeDispositionEvidenceForGate(
         isValidIsoTimestamp(comment.activityAt) &&
         !isIddOperationalComment(comment) &&
         (!isDispositionComment({ body: comment.body }) ||
-          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
-            'edited'),
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+            'unedited'),
     )
     .sort((left, right) => {
       const byTime = compareIsoTimestamps(left.activityAt, right.activityAt);

@@ -3501,6 +3501,42 @@ test('a digest by an iddAgentLogins member outside trustedMarkerLogins never pai
   assert.equal(summary.missingRegularComments[0].id, 'REG-3');
 });
 
+// #3249: a disposition with no verifiable edit state must not clear an
+// advisory regular comment. Ordinary non-disposition replies remain eligible
+// for the human presence-only route, but a trust-bearing disposition is
+// accepted only when GitHub explicitly reports `lastEditedAt: null`.
+test('an edit-state-unresolved disposition never pairs as a clearing reply', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 'REG-UNKNOWN-1',
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'The advisory review still needs a disposition.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 'REG-UNKNOWN-2',
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Accepted** — the implementation is correct.',
+          author: { login: 'idd-bot' },
+          // Missing lastEditedAt is the explicit edit-state-unresolved case.
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.reason, 'missing-disposition-evidence');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].id, 'REG-UNKNOWN-1');
+});
+
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
 // only named the exact required literal prefix for the narrow #1833
 // non-review-notice pairing. The far more common mistake -- an IDD-agent
@@ -3742,6 +3778,7 @@ test('disposition evidence does not hint edited-after-disposition when the dispo
           createdAt: '2026-05-12T02:00:00Z',
           body: '**Accepted** — looks correct.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
