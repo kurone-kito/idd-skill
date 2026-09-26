@@ -156,8 +156,8 @@ This section's rebase only applies **before the branch's first push**.
    --continue` — the plain form re-signs through the configured primary
    signing and stalls non-interactively right after the conflict is
    already resolved.
-7. Failed write — rebase in progress, index holds the replay, tip
-   still the pre-rebase commit, and the commit object was never
+7. Failed write — rebase in progress, index holds the replay, branch
+   tip still the pre-rebase commit, and the commit object was never
    written with no staged content conflict: run `git rebase --abort` to
    restore the branch tip, then
    restart the **full** rebase through the configured wrapper's `rebase
