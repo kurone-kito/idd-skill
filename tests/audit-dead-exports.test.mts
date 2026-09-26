@@ -940,7 +940,7 @@ test('a comma INSIDE a string literal on a bare `const` line is never mistaken f
   }
 });
 
-test('a bare multi-declarator `const` statement split across multiple physical lines still resolves every declarator (Codex C1 round-5 finding)', () => {
+test("a bare multi-declarator `const` statement split across multiple physical lines is a DOCUMENTED, accepted limitation, not resolved (round 6: reverted after the ASI regression the multi-line scan caused -- see scanBareConstDeclarators' own doc comment)", () => {
   const root = makeFixtureRoot();
   try {
     write(
@@ -951,10 +951,11 @@ test('a bare multi-declarator `const` statement split across multiple physical l
     const result = collectDeadExportAuditResult(root);
     assert.equal(
       findByName(result, 'forgotten').category,
-      'unused',
+      'production',
       '`forgotten` is declared on the SECOND physical line of a ' +
-        'multi-line declarator list -- it must still resolve to its ' +
-        "own real line, not fall back to the export statement's line",
+        'multi-line declarator list -- the scanner is deliberately ' +
+        'single-line-only (round 6 revert), so this stays misclassified ' +
+        '(an accepted limitation) rather than resolving correctly',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -980,6 +981,170 @@ test('an EXPORTED multi-declarator `const` statement (`export const a = 1, b = 2
       'unused',
       'the SECOND declarator is a genuine direct export too -- it must ' +
         'not be silently absent from the audit results entirely',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a semicolonless (ASI) bare `const` declaration does not swallow the following statement into its own scan -- the export must not silently disappear from the audit (Codex/Copilot C1 round-6 finding: the multi-line scan this reverts caused exactly this regression)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/asi.mts',
+      'const helper = 1\nexport { helper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      'a missing semicolon after a single-declarator bare `const` must ' +
+        'never cause the following export statement to be consumed by ' +
+        "the declarator scan and silently dropped from the audit's " +
+        'results entirely',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a no-`from` export list re-exporting a DEFAULT-imported local binding is classified unused, not masked by the import statement's own mention (Copilot C1 round-6 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export default function helper(): void {\n' +
+        "  console.log('hi');\n" +
+        '}\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import helper from './origin.mts';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'a default import (no braces) must get the same local-alias line ' +
+        'tracking a named import gets',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a no-`from` export list re-exporting a NAMESPACE import's own local binding is classified unused, not masked by the import statement's own mention (Copilot C1 round-6 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import * as origin from './origin.mts';\n" +
+        '\n' +
+        'export { origin as PublicOrigin };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicOrigin').category,
+      'unused',
+      "a namespace import's own local binding must get the same " +
+        'local-alias line tracking a named import gets',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` export list re-exporting a BARE function with multiple TypeScript overload signatures is classified unused, not masked by the other overload lines (Codex C1 round-6 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(a: number): void;',
+        'function helper(a: string): void;',
+        'function helper(a: number | string): void {',
+        '  console.log(a);',
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'every overload signature line mentions `helper` -- all of them ' +
+        'must be excluded from the self-reference scan, not only the ' +
+        'first one recorded',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a regex literal's own delimiters in a bare `const` initializer are a DOCUMENTED, accepted limitation, but the single-line bound (round 6) keeps the damage confined to that one line -- a LATER export is never lost (Codex/Copilot C1 round-6 findings: regex-vs-division cannot be safely disambiguated without a real parser)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      "const OPEN = /\\{/;\nfunction helper(): void {\n  console.log('hi');\n}\n\nexport { helper };\n",
+    );
+    const result = collectDeadExportAuditResult(root);
+    // The regex literal's escaped `{` corrupts THIS line's own bracket
+    // depth (an accepted limitation -- see `scanBareConstDeclarators`'s
+    // doc comment), but round 6's single-line bound means that
+    // corruption can never cross into a later line's own processing,
+    // unlike the reverted multi-line scan's ASI regression.
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      '`helper` is declared on a LATER line than the regex-containing ' +
+        '`const` -- it must resolve normally, proving the regex-literal ' +
+        "damage stays confined to the regex's own line and never " +
+        'swallows a later statement',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a TypeScript generic angle-bracket comma in an exported const arrow function is a DOCUMENTED, accepted limitation (Codex C1 round-6 finding: generic-vs-comparison cannot be safely disambiguated without a real parser)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export const helper = <T, U>(value: T): T => value;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    // Document the actual (accepted-limitation) behavior: the generic's
+    // own comma is mistaken for a declarator boundary, inventing a
+    // bogus `U` entry. This control test exists so a future reader sees
+    // this was verified and deliberately left as a known limitation
+    // (see `scanBareConstDeclarators`'s doc comment), not silently
+    // reintroduced by an unrelated future change.
+    assert.ok(findByName(result, 'helper'), 'the real export is still tracked');
+    assert.equal(
+      result.all.some((f) => f.name === 'U'),
+      true,
+      'documents the accepted false positive: a generic type parameter ' +
+        'is currently invented as a bogus declarator -- if this ever ' +
+        'starts failing, the limitation may have been fixed for real ' +
+        '(update this test and the doc comment together)',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
