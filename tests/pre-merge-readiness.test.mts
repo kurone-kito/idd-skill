@@ -807,6 +807,7 @@ test('buildPreMergeReadinessSummary: a malformed review-watermark comment surfac
             '_IDD note glued directly to the leading underscore, no space before it_',
           ].join('\n'),
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -840,6 +841,7 @@ test('buildPreMergeReadinessSummary: a review-watermark comment with a too-short
             12,
           )} none 0 none -->`,
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -868,6 +870,7 @@ test('buildPreMergeReadinessSummary: a review-watermark comment with an invalid 
           author: { login: 'kurone-kito' },
           body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} not-a-timestamp 0 none -->`,
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -897,6 +900,7 @@ test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays mi
           author: { login: 'kurone-kito' },
           body: 'just an ordinary regular comment, not marker-shaped at all',
           createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -910,6 +914,75 @@ test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays mi
   const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
   assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
   assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
+});
+
+// #3249: a body-edited watermark is not merely a different kind of
+// malformed -- it must read as though no watermark exists at all (the
+// shape was never wrong, only its current trustworthiness), so the route
+// stays the generic 'missing-watermark', not 'malformed-watermark'.
+test('buildPreMergeReadinessSummary: an edited trusted review-watermark comment reads as absent (missing-watermark), not malformed', () => {
+  const prHeadSha = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+          updatedAt: '2026-08-02T01:00:00Z',
+          lastEditedAt: '2026-08-02T01:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
+});
+
+// #3249: when an edited watermark is posted after a genuinely unedited one,
+// the unedited watermark must still be found and used -- an edit on a
+// LATER comment must not poison selection of an earlier, still-trustworthy
+// one.
+test('buildPreMergeReadinessSummary: an unedited review-watermark preceding a later edited one is still used', () => {
+  const prHeadSha = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+          createdAt: '2026-08-02T00:10:00Z',
+          updatedAt: '2026-08-02T01:00:00Z',
+          lastEditedAt: '2026-08-02T01:00:00Z',
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:15:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  // The live snapshot matches the surviving (older, unedited) watermark
+  // exactly, so the route proceeds instead of returning to E1.
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'proceed');
 });
 
 test('buildPreMergeReadinessSummary: primaryBotLogin CHANGES_REQUESTED does not block via reviewer-approval counting', () => {
@@ -2200,11 +2273,13 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
           body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`,
           createdAt: '2026-05-12T00:00:00Z',
           author: { login: 'kurone-kito' },
+          lastEditedAt: null,
         },
         {
           body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00.100Z`,
           createdAt: '2026-05-12T00:00:00.100Z',
           author: { login: 'kurone-kito' },
+          lastEditedAt: null,
         },
       ],
       headSha,
@@ -2250,6 +2325,7 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
           createdAt: '2026-05-12T00:00:00.100Z',
           body: '**Accepted** — reply',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       { iddAgentLogins: ['idd-bot'] },
@@ -2446,6 +2522,7 @@ test('regular comment gate only keeps comments after the latest IDD reply', () =
         createdAt: '2026-05-12T00:00:02Z',
         body: '**Accepted** — reply',
         author: { login: 'idd-bot' },
+        lastEditedAt: null,
       },
       {
         id: 4,
@@ -2478,6 +2555,7 @@ test('regular comment gate keeps same-second comments when no strictly later IDD
         createdAt: '2026-05-12T00:00:00Z',
         body: '**Accepted** — reply',
         author: { login: 'idd-bot' },
+        lastEditedAt: null,
       },
     ],
     { iddAgentLogins: ['idd-bot'] },
@@ -2498,6 +2576,7 @@ test('regular comment gate keeps comments later in the same second as the latest
         createdAt: '2026-05-12T00:00:00Z',
         body: '**Accepted** — reply',
         author: { login: 'idd-bot' },
+        lastEditedAt: null,
       },
       {
         id: 2,
@@ -2530,6 +2609,7 @@ test('regular comment gate keeps advisory bot comments after the latest IDD repl
         createdAt: '2026-05-12T00:00:01Z',
         body: '**Accepted** — reply',
         author: { login: 'idd-bot' },
+        lastEditedAt: null,
       },
       {
         id: 3,
@@ -2563,6 +2643,7 @@ test('regular comment gate reopens comments edited after the latest IDD reply', 
         createdAt: '2026-05-12T00:00:01Z',
         body: '**Accepted** — reply',
         author: { login: 'idd-bot' },
+        lastEditedAt: null,
       },
     ],
     { iddAgentLogins: ['idd-bot'] },
@@ -2731,6 +2812,7 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
           createdAt: '2026-05-12T00:00:01Z',
           body: '**Accepted** — fixed in abc123',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 3,
@@ -2743,6 +2825,7 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
           createdAt: '2026-05-12T00:00:03Z',
           body: '**Rejected** — advisory acknowledged',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -2827,6 +2910,7 @@ test('disposition evidence pairs trailing markers 1:1 across regular comments', 
           createdAt: '2026-05-12T00:00:02Z',
           body: '**Accepted** — addressed',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -2859,12 +2943,14 @@ test('disposition evidence clears two regular comments when each has its own mar
           createdAt: '2026-05-12T00:00:02Z',
           body: '**Accepted** — first addressed',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 4,
           createdAt: '2026-05-12T00:00:03Z',
           body: '**Rejected** — second declined',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -3066,6 +3152,7 @@ test('disposition evidence clears a Copilot thread with a stamped Accepted reply
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:00:02Z',
                 body: `**Accepted** — extracted in abc123\n\n${stamp}`,
+                lastEditedAt: null,
               },
             ],
           },
@@ -3099,6 +3186,7 @@ test('disposition evidence clears a Copilot thread with a legacy trusted Accepte
                 author: { login: 'maintainer' },
                 createdAt: '2026-05-12T00:00:02Z',
                 body: '**Accepted** — extracted in abc123',
+                lastEditedAt: null,
               },
             ],
           },
@@ -3376,6 +3464,7 @@ test('disposition evidence accepts a resolved Rejection-confirmed-by-maintainer 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:05:00Z',
                 body: '**Rejection confirmed by maintainer** — out of scope; tracked separately.',
+                lastEditedAt: null,
               },
             ],
           },
@@ -3501,6 +3590,7 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -3554,6 +3644,7 @@ test('disposition evidence recognizes a post-disposition ack across the advisory
                   author: { login: 'idd-bot' },
                   createdAt: '2026-05-12T00:30:00Z',
                   body: '**Rejected** — verified: not applicable here',
+                  lastEditedAt: null,
                 },
                 {
                   author: { login: ackAuthorLogin },
@@ -3606,6 +3697,7 @@ test('disposition evidence does not flag a resolved thread with substantive post
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'reviewer-a' },
@@ -3708,6 +3800,7 @@ test('disposition evidence still blocks but flags in-place-edit-only when a bot 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
             ],
           },
@@ -3753,6 +3846,7 @@ test('disposition evidence does not flag in-place-edit-only for a genuinely new 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 // A genuinely new reply (its own fresh createdAt, not an
@@ -3807,6 +3901,7 @@ test('disposition evidence does not flag ack-only or in-place-edit-only for a no
               {
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
+                lastEditedAt: null,
                 body: '**Rejected** — verified: not applicable here',
               },
             ],
@@ -3914,6 +4009,7 @@ test('hasFreshDisposition: PR #3160 thread PRRT_kwDOSWpaqs6kHP8I comment 4056226
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T07:17:35Z',
           updatedAt: '2026-09-20T07:17:35Z',
+          lastEditedAt: null,
           body: '**Accepted** — Fixed in 28c18a9: the CLI integration fixture exercises a contributor viewer.',
         },
       ],
@@ -3985,6 +4081,7 @@ test('hasFreshDisposition: PR #3160 thread PRRT_kwDOSWpaqs6kIwjk comment 4056812
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T11:28:18Z',
           updatedAt: '2026-09-20T11:28:18Z',
+          lastEditedAt: null,
           body: "**Accepted** — fixed in 0cd8f9fa: idd-comment-minimization.md's claim-binding description now states the exact-one-linked-issue requirement.",
         },
       ],
@@ -4056,6 +4153,7 @@ test('hasFreshDisposition: PR #3154 thread PRRT_kwDOSWpaqs6kBCfi comment 4053784
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T13:30:16Z',
           updatedAt: '2026-09-20T13:30:16Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed in fda04e38: the collision table now includes an explicit stop condition.',
         },
       ],
@@ -4124,6 +4222,7 @@ test('disposition evidence: PR #3160 thread PRRT_kwDOSWpaqs6kHP8G -- the verifie
     author: { login: 'kurone-kito' },
     createdAt: '2026-09-20T07:17:22Z',
     updatedAt: '2026-09-20T07:17:22Z',
+    lastEditedAt: null,
     body: '**Accepted** — Fixed in 28c18a9 and kept current in 6e2073e9: the primary docs and idd-template mirror now distinguish apply-time recovery-hold evidence.',
   };
   const options = {
@@ -4206,6 +4305,7 @@ test('a thread comment with an explicit lastEditedAt: null and an updatedAt late
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-23T06:40:00Z',
           updatedAt: '2026-09-23T06:40:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed in 88bf0c1d.',
         },
         {
@@ -4232,6 +4332,7 @@ test('the same comment with lastEditedAt absent or unparseable keeps updatedAt d
     author: { login: 'kurone-kito' },
     createdAt: '2026-09-23T06:40:00Z',
     updatedAt: '2026-09-23T06:40:00Z',
+    lastEditedAt: null,
     body: '**Accepted** — fixed in 88bf0c1d.',
   };
   const baseCourtesyReply = {
@@ -4312,6 +4413,7 @@ test('#3269 negative: a post-disposition revision that changes the visible text 
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T06:00:00Z',
           updatedAt: '2026-09-20T06:00:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed.',
         },
       ],
@@ -4357,6 +4459,7 @@ test('#3269 negative: a revision with a null or deleted body is unverifiable (mi
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T06:00:00Z',
           updatedAt: '2026-09-20T06:00:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed.',
         },
       ],
@@ -4466,6 +4569,7 @@ test('#3269 negative: a history whose totalCount exceeds the fetched revisions i
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T06:00:00Z',
           updatedAt: '2026-09-20T06:00:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed.',
         },
       ],
@@ -4530,6 +4634,7 @@ test('#3269 negative: a revision whose editor is not the bot dates by that revis
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T06:00:00Z',
           updatedAt: '2026-09-20T06:00:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed.',
         },
       ],
@@ -4768,6 +4873,7 @@ test('#3269 positive: a `[bot]`-suffixed editor login still verifies as cosmetic
           author: { login: 'kurone-kito' },
           createdAt: '2026-09-20T07:00:00Z',
           updatedAt: '2026-09-20T07:00:00Z',
+          lastEditedAt: null,
           body: '**Accepted** — fixed.',
         },
       ],
@@ -4809,6 +4915,7 @@ test('disposition evidence reports sole-cause false when a regular comment also 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4863,6 +4970,7 @@ test('disposition evidence flags an ack-only thread dispositioned via a rejectio
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejection confirmed by maintainer** — agreed, no change needed',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4910,6 +5018,7 @@ test('disposition evidence flags ack-only when the disposition lands after the s
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T02:00:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4956,6 +5065,7 @@ test('disposition evidence does not flag a thread with a post-disposition human 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4984,7 +5094,7 @@ test('disposition evidence does not flag a thread with a post-disposition human 
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
 });
 
-test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
+test('disposition evidence rejects edit-state-unresolved IDD disposition comments', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
       comments: [
@@ -5007,8 +5117,35 @@ test('disposition evidence accepts edited IDD disposition comments as fresh repl
     { iddAgentLogins: ['idd-bot'] },
   );
 
-  assert.equal(summary.route, 'proceed');
-  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+test('disposition evidence does not let an explicitly edited IDD disposition clear feedback', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:01:00Z',
+          body: 'please address this',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Accepted** — updated after latest feedback',
+          author: { login: 'idd-bot' },
+          lastEditedAt: '2026-05-12T00:02:00Z',
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
 });
 
 // #1018 — a persistent advisory non-review notice already dispositioned
@@ -5032,6 +5169,7 @@ test('disposition evidence carries a persistent non-review notice forward across
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5058,6 +5196,7 @@ test('disposition evidence carries a re-posted CodeRabbit rate-limit notice forw
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — coderabbitai[bot] (CodeRabbit) did not review HEAD abc1234 (review limit reached); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
         {
           id: 2,
@@ -5107,6 +5246,7 @@ test('disposition evidence credits both bots when one trusted reply names both b
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
           author: { login: 'trusted-second-session' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5153,6 +5293,7 @@ test('disposition evidence carries both notices forward when one agent reply nam
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (rate limited); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5259,6 +5400,7 @@ test('disposition evidence hints at the required phrase when a wrong-phrase **Re
           // issue's own example) but never says "did not review HEAD".
           body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5341,6 +5483,7 @@ test('a hinted missingRegularComments entry validates against pre-merge-readines
           createdAt: '2026-05-12T00:00:30Z',
           body: '**Rejected** — CodeRabbit rate-limited, no findings to triage.',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5392,6 +5535,7 @@ test('disposition evidence does not carry one bot disposition onto another bot n
           // Names only the Codex connector — must not carry the CodeRabbit notice.
           body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
           author: { login: 'idd-bot' },
+          lastEditedAt: null,
         },
       ],
       threads: [],
@@ -5675,6 +5819,7 @@ test('deriveIddAgentLogins keeps prior trusted operational actors but not generi
         {
           author: { login: 'prior-agent' },
           body: '<!-- review-baseline: github-copilot-cli claim-123 abcdefabcdefabcdefabcdefabcdefabcdefabcd -->\n\n_github-copilot-cli: critique baseline — IDD automation marker. Do not edit._',
+          lastEditedAt: null,
         },
         {
           author: { login: 'maintainer' },
@@ -5699,6 +5844,7 @@ test('deriveIddAgentLogins recognizes a trusted zero-accepted-path-a-gate marker
         {
           author: { login: 'prior-agent' },
           body: `<!-- zero-accepted-path-a-gate: prior-agent claim-123 a ${sha} -->\n\n_prior-agent: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._`,
+          lastEditedAt: null,
         },
       ],
     }),
@@ -5726,10 +5872,33 @@ test('deriveIddAgentLogins excludes trusted forced-handoff marker authors', () =
         {
           author: { login: 'maintainer' },
           body: forcedHandoffBody,
+          lastEditedAt: null,
         },
       ],
     }),
     ['current-agent'],
+  );
+});
+
+test('deriveIddAgentLogins rejects edited or unknown operational markers', () => {
+  const body =
+    '<!-- review-watermark: prior-agent claim-123 abcdefabcdefabcdefabcdefabcdefabcdefabcd none 3 none -->';
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      trustedMarkerLogins: ['prior-agent'],
+      operationalComments: [
+        {
+          author: { login: 'prior-agent' },
+          body,
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+        {
+          author: { login: 'prior-agent' },
+          body,
+        },
+      ],
+    }),
+    [],
   );
 });
 
@@ -11184,17 +11353,27 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     body: '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->',
     author: { login: 'coderabbitai[bot]' },
   });
-  const summaryDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+  const summaryDisp = (
+    author: string,
+    at = '2026-07-01T12:00:00Z',
+    lastEditedAt: string | null = null,
+  ) => ({
     id: 10,
     createdAt: at,
     body: '**Accepted** — coderabbitai[bot] summary walkthrough; no action required',
     author: { login: author },
+    lastEditedAt,
   });
-  const noticeDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+  const noticeDisp = (
+    author: string,
+    at = '2026-07-01T12:00:00Z',
+    lastEditedAt: string | null = null,
+  ) => ({
     id: 11,
     createdAt: at,
     body: '**Rejected** — coderabbitai[bot] did not review HEAD abc (rate limited); this is not a completed review',
     author: { login: author },
+    lastEditedAt,
   });
   const human = (id: number, body: string, at: string) => ({
     id,
@@ -11242,6 +11421,25 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
   ];
   assert.equal(proceeds(twoSummaries), false);
   assert.equal(unreplied(twoSummaries), 1);
+
+  // #3249: an EDITED (or edit-state-unresolved) trusted machine disposition
+  // must never clear a sticky either -- editing it after posting could
+  // otherwise let a stale acceptance re-satisfy the gate in place.
+  const editedSummaryDisp = summaryDisp(
+    'kurone-kito',
+    '2026-07-01T12:00:00Z',
+    '2026-07-01T12:30:00Z',
+  );
+  assert.equal(proceeds([summarySticky(1), editedSummaryDisp]), false);
+  const editedNoticeDisp = noticeDisp(
+    'kurone-kito',
+    '2026-07-01T12:00:00Z',
+    '2026-07-01T12:30:00Z',
+  );
+  assert.equal(proceeds([noticeSticky(1), editedNoticeDisp]), false);
+  // The minimized shape (`lastEditedAt: null`) is still honored (control case
+  // for the two edited assertions above).
+  assert.equal(proceeds([summarySticky(1), summaryDisp('kurone-kito')]), true);
 
   // #1122 stale-summary guard: a summary sticky EDITED after the disposition
   // (its `updatedAt` post-dates the `**Accepted**`) is not cleared by that stale
@@ -11357,6 +11555,7 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     createdAt: '2026-07-01T01:00:00Z',
     body,
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   });
   const classify = (dispositionBody: string) =>
     classifyRegularBotComment(

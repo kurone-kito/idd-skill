@@ -4304,6 +4304,48 @@ test('resolveIssueLoopContext: firstReviewAtMs is the earlier of the review-wate
   }
 });
 
+test('resolveIssueLoopContext: an edited matching review-watermark marker is ignored', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-merged.json',
+  );
+  const patched = JSON.parse(JSON.stringify(fixture));
+  patched.data.repository.issue.comments.nodes[1].lastEditedAt =
+    '2026-01-01T00:21:00Z';
+  const restore = stubGhReturningJson(patched);
+  try {
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9001,
+      ms('2025-12-31T23:55:00Z'),
+      ms('2026-01-01T00:35:00Z'),
+      ['claude-test'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.firstReviewAtMs, ms('2026-01-01T00:22:00Z'));
+  } finally {
+    restore();
+  }
+
+  const unknownFixture = JSON.parse(JSON.stringify(fixture));
+  delete unknownFixture.data.repository.issue.comments.nodes[1].lastEditedAt;
+  const restoreUnknown = stubGhReturningJson(unknownFixture);
+  try {
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9001,
+      ms('2025-12-31T23:55:00Z'),
+      ms('2026-01-01T00:35:00Z'),
+      ['claude-test'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.firstReviewAtMs, ms('2026-01-01T00:22:00Z'));
+  } finally {
+    restoreUnknown();
+  }
+});
+
 test('resolveIssueLoopContext: a claim marker at exactly sessionEndedAtMs is excluded (half-open interval)', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-merged.json',

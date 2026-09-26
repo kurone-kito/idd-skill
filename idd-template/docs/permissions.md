@@ -446,6 +446,23 @@ Keep approval labels and operational marker trust as separate controls:
   surface. Neither a ready label nor a trusted operational marker can
   substitute for the dedicated waiver contract.
 
+An edited comment is not evidence for any trust-bearing marker or IDD
+disposition either, generalizing the external-check-waiver rule above
+(kurone-kito/idd-skill#3249, extending #3246's original waiver-only
+scope): `review-watermark`/`review-baseline`, `advisory-wait`/
+`advisory-wait-recovery`, `review-ack`, `idd-provider-outage-declaration`/
+`idd-provider-outage-advanced`, `idd-local-validation-evidence`, and an
+`**Accepted**`/`**Rejected**`/`**Awaiting maintainer decision**`
+disposition reply all require the same GraphQL `lastEditedAt` check as
+the waiver: an explicit `null` (never body-edited), never a timestamp or
+an edit state the runtime could not resolve. Three markers are the
+deliberate exception, because for them ignoring an edited comment would
+loosen a gate instead of tightening one: an `idd-provider-outage-park`
+marker still counts toward `providerOutage.maxParkedChanges` when
+edited, an `advisory-reroll` marker still counts toward the same-HEAD
+reroll budget when edited, and a trusted A4.5 suitability-rejection
+record still excludes its candidate when edited.
+
 ## Claude Code Permission Baseline
 
 This section is **Claude Code-specific**: it documents the committed

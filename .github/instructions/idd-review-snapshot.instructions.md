@@ -237,13 +237,13 @@ Run a critique pass on the branch's changes and add any newly found
 issues to ReviewItems_snapshot. See `idd-overview-appendix.instructions.md`
 for per-agent implementation.
 
-**Incremental review**: on later passes **within the same claim**,
-scope the review to the diff since the previous E2 execution's head SHA
-(tracked via same-claim, trusted-author `<!-- review-baseline: … -->`
-comments — post a new one each run). Reset to full-branch diff after a
-rebase, a multi-fix batch, when the baseline SHA isn't an ancestor of
-current HEAD, when no trusted same-claim baseline exists, or whenever
-the active `{claim-id}` changed (restart, takeover, forced handoff).
+**Incremental review**: on later passes **within the same claim**, scope
+the review to the diff since the previous E2 head, tracked by a
+same-claim baseline whose GraphQL `lastEditedAt` was resolved via its
+node id/`includeEditState` and is explicitly `null`; use a full-branch
+diff if that proof fails, after a rebase, multi-fix batch, non-ancestor
+baseline, or active-claim change (restart, takeover, forced handoff).
+Do not infer edit state from the body, `updatedAt`, author, or claim.
 ReviewItems_snapshot is session-local; don't inherit a previous claim's
 critique findings unless persisted as reviewer-visible comments.
 

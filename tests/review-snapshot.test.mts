@@ -93,6 +93,7 @@ test('indexThreadsByReview honors an IDD-scoped disposition-author predicate', (
             body: '**Accepted** — looks fine',
             createdAt: '2026-05-12T00:00:01Z',
             pullRequestReview: { id: 'REVIEW-9' },
+            lastEditedAt: null,
           },
         ],
       },
@@ -123,6 +124,7 @@ test('indexThreadsByReview excludes an ack-only-post-disposition thread from mis
           {
             author: { login: 'idd-bot' },
             body: '**Accepted** — done.',
+            lastEditedAt: null,
             createdAt: '2026-05-12T00:00:00Z',
             pullRequestReview: { id: 'REVIEW-ACK' },
           },
@@ -214,6 +216,7 @@ test('classifyRegularBotComment honors an IDD-scoped disposition-author predicat
             author: { login: 'reviewer-a' },
             body: '**Accepted** — done',
             createdAt: '2026-05-12T00:00:02Z',
+            lastEditedAt: null,
           },
         ],
       },
@@ -247,6 +250,7 @@ test('classifyRegularBotComment IDD-scopes the explicit-disposition path', () =>
     author: { login: 'reviewer-a' },
     body: '**Accepted** — CodeRabbit summary acknowledged',
     createdAt: '2026-05-12T00:01:00Z',
+    lastEditedAt: null,
   };
   const comments = [summary, reviewerDisposition];
 
@@ -551,6 +555,7 @@ test('classifies post-disposition advisory-bot comments as ack-only', () => {
           id: 'C-1',
           author: { login: 'idd-bot' },
           body: '**Rejected** — rate-limit notice is not a completed review.',
+          lastEditedAt: null,
           createdAt: '2026-05-10T10:00:00Z',
           updatedAt: '2026-05-10T10:00:00Z',
         },
@@ -599,6 +604,7 @@ test('ack-only classification matches a configured advisory bot across the [bot]
             id: 'C-1',
             author: { login: 'idd-bot' },
             body: '**Rejected** — rate-limit notice is not a completed review.',
+            lastEditedAt: null,
             createdAt: '2026-05-10T10:00:00Z',
             updatedAt: '2026-05-10T10:00:00Z',
           },
@@ -715,6 +721,7 @@ test('resolved-thread advisory acks are excluded from effective activity', () =>
           id: 'TC-2',
           author: { login: 'idd-bot' },
           body: '**Accepted** — fixed in abc1234.',
+          lastEditedAt: null,
           createdAt: '2026-05-10T10:00:00Z',
           updatedAt: '2026-05-10T10:00:00Z',
         },

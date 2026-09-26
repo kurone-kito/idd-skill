@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  normalizeComment,
+  normalizeThread,
   parseArgs,
   resolveActivitySnapshotTrustedMarkerLogins,
 } from '../src/scripts/review-activity-snapshot.mts';
@@ -185,6 +187,7 @@ function courtesyThreadGraphql(
           },
         },
       },
+      nodes: [{ id: 'C_1', lastEditedAt: null }],
     },
   });
 }
@@ -279,6 +282,7 @@ test('review-activity snapshot keeps the courtesy-ack flag false when a regular 
   const report = runSnapshot(
     courtesyThreadGraphql(COURTESY_ACK),
     JSON.stringify({
+      node_id: 'C_1',
       user: { login: 'someone' },
       body: 'still open',
       created_at: '2026-05-12T03:00:00Z',
@@ -290,6 +294,57 @@ test('review-activity snapshot keeps the courtesy-ack flag false when a regular 
     report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
     false,
   );
+});
+
+// #3249: `normalizeComment` and `normalizeThread` must carry `lastEditedAt`
+// through from the provider-port shape, or `summarizeDispositionEvidenceFor-
+// Gate` (fed by `port.listWorkItemComments(..., { includeEditState: true })`
+// above) would see every comment's edit state as `unknown` and reject
+// legitimate unedited dispositions along with edited ones.
+
+test('normalizeComment carries lastEditedAt through from the provider comment', () => {
+  assert.equal(
+    normalizeComment({
+      id: 1,
+      nodeId: 'C_1',
+      body: 'looks good',
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T00:00:00Z',
+      authorLogin: 'reviewer-a',
+      lastEditedAt: null,
+    }).lastEditedAt,
+    null,
+  );
+  assert.equal(
+    normalizeComment({
+      id: 2,
+      nodeId: 'C_2',
+      body: 'edited later',
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T01:00:00Z',
+      authorLogin: 'reviewer-a',
+      lastEditedAt: '2026-05-12T01:00:00Z',
+    }).lastEditedAt,
+    '2026-05-12T01:00:00Z',
+  );
+});
+
+test('normalizeThread carries lastEditedAt through for each nested comment', () => {
+  const normalized = normalizeThread({
+    id: 'RT_1',
+    isResolved: false,
+    comments: [
+      {
+        body: '**Accepted** — done',
+        createdAt: '2026-05-12T00:00:00Z',
+        updatedAt: '2026-05-12T00:00:00Z',
+        authorLogin: 'idd-bot',
+        pullRequestReviewId: null,
+        lastEditedAt: null,
+      },
+    ],
+  });
+  assert.equal(normalized.comments.nodes[0].lastEditedAt, null);
 });
 
 const PR_1897_REVIEW_ID = 'PRR_kwDO_1897_4863787336';

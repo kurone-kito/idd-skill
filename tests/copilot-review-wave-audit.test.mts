@@ -165,8 +165,9 @@ function reply(
   inReplyToId: number,
   body: string,
   createdAt: string,
+  lastEditedAt: string | null = null,
 ): RawComment {
-  return { id, inReplyToId, body, createdAt };
+  return { id, inReplyToId, body, createdAt, lastEditedAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +430,24 @@ test('resolveThreadDisposition: replies to a different finding id are excluded',
     reply(10, 999, '**Accepted** — fixed', '2026-01-01T00:00:00Z'),
   ];
   assert.equal(resolveThreadDisposition(1, comments), 'none');
+});
+
+test('resolveThreadDisposition: edited or unknown replies do not count', () => {
+  const edited = reply(
+    10,
+    1,
+    '**Accepted** — fixed',
+    '2026-01-01T00:00:00Z',
+    '2026-01-01T00:01:00Z',
+  );
+  const unknown: RawComment = {
+    id: 11,
+    inReplyToId: 1,
+    body: '**Accepted** — fixed',
+    createdAt: '2026-01-01T00:02:00Z',
+  };
+  assert.equal(resolveThreadDisposition(1, [edited]), 'none');
+  assert.equal(resolveThreadDisposition(1, [unknown]), 'none');
 });
 
 // ---------------------------------------------------------------------------

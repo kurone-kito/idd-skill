@@ -2402,6 +2402,15 @@ export function hasFreshDisposition(thread, options = {}) {
     if (!isDisposition(comment)) {
       return false;
     }
+    // #3249: an edited (or edit-state-unresolved) disposition reply never
+    // counts as a fresh disposition -- it falls through to the
+    // `latestFeedbackAt` computation below as ordinary external feedback
+    // instead (the existing `!isIddDisposition(comment)` filter there
+    // already does this once this function returns `false` for it; no
+    // second mechanism is needed).
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      return false;
+    }
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
@@ -4227,10 +4236,15 @@ function matchTrustedAdvisoryStickyDispositions(
   currentHeadSha,
 ) {
   const dispositionedStickyIndexes = new Set();
+  // #3249: an edited (or edit-state-unresolved) trusted disposition must
+  // never clear an advisory sticky -- clearing one relaxes the gate the
+  // same way satisfying it would.
   const trustedDispositions = comments.filter(
     (comment) =>
       trustedMarkerLogins.has(comment.authorLogin) &&
-      !iddAgentLogins.has(comment.authorLogin),
+      !iddAgentLogins.has(comment.authorLogin) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited',
   );
   const byActivityThenIndex = (left, right) => {
     const leftTime = Date.parse(left.activityAt);
@@ -5162,6 +5176,7 @@ export function deriveIddAgentLogins({
     const markerPrefix = operationalMarkerPrefix(body);
     if (
       !trustedLogins.has(authorLogin) ||
+      classifyCommentEditState(comment) !== 'unedited' ||
       !markerPrefix ||
       !IDD_AGENT_DERIVED_MARKERS.has(markerPrefix)
     ) {
@@ -5190,7 +5205,13 @@ export function summarizeAdvisoryWaitMarkers(
     const login = String(comment?.author?.login ?? comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
-    const trusted = trustedLogins.has(login);
+    // #3249: edit state is split by consequence. An edited or unresolved
+    // trusted marker cannot satisfy same-HEAD evidence, but it must still
+    // consume the restrictive request cap so editing an old request cannot
+    // reopen the bounded budget.
+    const trustedAuthor = trustedLogins.has(login);
+    const trusted =
+      trustedAuthor && classifyCommentEditState(comment) === 'unedited';
     const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
     const isRequestMarker = advisoryWaitRequestMarker(body);
     if (isSameHeadMarker) {
@@ -5214,7 +5235,7 @@ export function summarizeAdvisoryWaitMarkers(
       }
     }
     if (isRequestMarker) {
-      if (trusted) {
+      if (trustedAuthor) {
         trustedRequestMarkerCount += 1;
       } else {
         untrustedRequestMarkerCount += 1;
@@ -5524,6 +5545,7 @@ export function buildActivitySnapshotSummary(
       .filter(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
+          classifyCommentEditState(comment) === 'unedited' &&
           isDispositionComment(comment),
       )
       .map((comment) => comment.createdAt),
@@ -5532,17 +5554,19 @@ export function buildActivitySnapshotSummary(
         .filter(
           (comment) =>
             isDispositionAuthor(comment.author?.login) &&
+            classifyCommentEditState(comment) === 'unedited' &&
             isDispositionMarkerCommentForThread(
               comment,
               Boolean(thread.isResolved),
             ),
         )
         .map((comment) =>
-          // An edited **Rejection confirmed by maintainer** marker anchors by
-          // its effective (updatedAt-preferring) activity, matching
+          // An unedited **Rejection confirmed by maintainer** marker anchors
+          // by its effective (updatedAt-preferring) activity, matching
           // classifyThreadAckOnlyPostDisposition's choice for the same
-          // marker (#2045); ordinary Accepted/Rejected markers keep the
-          // pre-existing createdAt anchor.
+          // marker (#2045). Edited or edit-state-unknown markers never anchor
+          // this window (#3249); ordinary unedited Accepted/Rejected markers
+          // keep the pre-existing createdAt anchor.
           isRejectionConfirmedDisposition(comment)
             ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
             : comment.createdAt,
@@ -5580,6 +5604,7 @@ export function buildActivitySnapshotSummary(
           .filter(
             (comment) =>
               isDispositionAuthor(comment.author?.login) &&
+              classifyCommentEditState(comment) === 'unedited' &&
               isDispositionMarkerCommentForThread(
                 comment,
                 Boolean(thread.isResolved),
@@ -5732,7 +5757,11 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
   const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
   let latest = null;
   for (const comment of comments) {
-    if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? '')) {
+    // #3249: a trusted author alone is not enough -- an edited (or
+    // edit-state-unresolved) comment must never satisfy this gate, even
+    // when its author is trusted. `isTrustEvidenceComment` folds the
+    // author-trust check and the `unedited` requirement into one predicate.
+    if (!isTrustEvidenceComment(comment, isTrustedAuthor)) {
       continue;
     }
     const parsed = parseReviewWatermarkComment(
@@ -5803,7 +5832,10 @@ export function detectMalformedReviewWatermarkComments(comments, options = {}) {
   const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
   const expectedClaimId = String(options.expectedClaimId ?? '').trim();
   return comments.some((comment) => {
-    if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? '')) {
+    // #3249: same edit-state requirement as `resolveLatestReviewWatermark` --
+    // an edited malformed-shaped comment must not be treated as evidence of
+    // a genuinely malformed live watermark either.
+    if (!isTrustEvidenceComment(comment, isTrustedAuthor)) {
       return false;
     }
     const body = comment.body ?? '';
@@ -5889,6 +5921,16 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       body: String(comment.body ?? ''),
       createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
       updatedAt: String(comment.updatedAt ?? comment.updated_at ?? ''),
+      // #3249: carried through so `isTrustedMachineDisposition` below can
+      // require `unedited` -- never derived from `updatedAt`/`updated_at`.
+      // Preserves `undefined` when neither source field was populated
+      // (matches `classifyCommentEditState`'s own three-state contract: a
+      // caller that never fetched edit state must read as `unknown`, not
+      // silently coerce to `unedited` via a `null` default).
+      lastEditedAt:
+        comment.lastEditedAt !== undefined
+          ? comment.lastEditedAt
+          : comment.last_edited_at,
       inputIndex,
     }))
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
@@ -5912,6 +5954,18 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     ) {
       return latestTimestamp;
     }
+    // #3249: an edited or edit-state-unresolved disposition must remain in
+    // the ordinary-feedback path. Letting it advance this watermark would
+    // hide earlier human feedback even though the disposition itself cannot
+    // satisfy the trust-bearing disposition gate.
+    const isDisposition =
+      isDispositionComment({ body: comment.body }) ||
+      isRejectionConfirmedDisposition({ body: comment.body }) ||
+      isNonReviewNoticeDisposition({ body: comment.body }) ||
+      isReviewSummaryDisposition({ body: comment.body });
+    if (isDisposition && classifyCommentEditState(comment) !== 'unedited') {
+      return latestTimestamp;
+    }
     if (
       !latestTimestamp ||
       compareIsoTimestamps(comment.createdAt, latestTimestamp) > 0
@@ -5924,6 +5978,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    lastEditedAt: comment.lastEditedAt,
   }));
   // A source-bound Codex no-find acceptance remains an operational comment
   // after the PR advances to a later HEAD or the source is edited in place.
@@ -5966,6 +6021,8 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   // `**Rejected**` review disposition stays a genuine comment.
   const isTrustedMachineDisposition = (comment) =>
     trustedMarkerLogins.has(comment.authorLogin) &&
+    classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+      'unedited' &&
     (isNonReviewNoticeDisposition({ body: comment.body }) ||
       isReviewSummaryDisposition({ body: comment.body }) ||
       (isCodexNoFindResultDisposition(comment.body) &&
@@ -6166,12 +6223,12 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
     ),
   );
   const nodes = thread.comments?.nodes ?? [];
-  // Recognize the same dispositions `hasFreshDisposition` accepts on a
-  // resolved thread (the gate that already decided this thread blocks): a
-  // `**Accepted**`/`**Rejected**` marker OR the terminal
-  // `**Rejection confirmed by maintainer**` marker, anchored by effective
-  // activity (`updatedAt`-preferring) so an edited disposition is dated
-  // consistently. The thread is already known resolved here.
+  // Recognize the same unedited dispositions `hasFreshDisposition` accepts
+  // on a resolved thread (the gate that already decided this thread blocks):
+  // a `**Accepted**`/`**Rejected**` marker OR the terminal
+  // `**Rejection confirmed by maintainer**` marker. Edited or edit-state-
+  // unknown markers cannot establish the ack-only window (#3249). The thread
+  // is already known resolved here.
   const threadDispositionAt = maxIsoTimestamp(
     nodes
       .filter(
@@ -6181,6 +6238,7 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
               .trim()
               .toLowerCase(),
           ) &&
+          classifyCommentEditState(comment) === 'unedited' &&
           (isDispositionComment({ body: String(comment.body ?? '') }) ||
             isRejectionConfirmedDisposition({
               body: String(comment.body ?? ''),
@@ -6303,6 +6361,13 @@ export function summarizeDispositionEvidenceForGate(
       body: String(comment.body ?? ''),
       createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
       updatedAt: String(comment.updatedAt ?? comment.updated_at ?? ''),
+      // #3249: carried through for the edit-state checks below -- preserves
+      // `undefined` when neither source field was populated (see the
+      // matching comment in `summarizeRegularCommentsForGate`).
+      lastEditedAt:
+        comment.lastEditedAt !== undefined
+          ? comment.lastEditedAt
+          : comment.last_edited_at,
       inputIndex,
     }))
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
@@ -6323,6 +6388,7 @@ export function summarizeDispositionEvidenceForGate(
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    lastEditedAt: comment.lastEditedAt,
   }));
   // #1182 trusted machine-disposition recognition, scoped to this gate. A
   // trusted-marker actor who authored one of the two machine-generated advisory
@@ -6343,8 +6409,9 @@ export function summarizeDispositionEvidenceForGate(
   // `matchTrustedAdvisoryStickyDispositions` — never joining the generic 1:1
   // pool, so a trusted disposition whose sticky is absent/already-resolved cannot
   // clear an unrelated human comment.
-  const isTrustedMachineDisposition = (authorLogin, body) =>
+  const isTrustedMachineDisposition = (authorLogin, body, lastEditedAt) =>
     trustedMarkerLogins.has(authorLogin) &&
+    classifyCommentEditState({ lastEditedAt }) === 'unedited' &&
     (isNonReviewNoticeDisposition({ body }) ||
       isReviewSummaryDisposition({ body }) ||
       isCodexNoFindResultDisposition(body));
@@ -6361,7 +6428,11 @@ export function summarizeDispositionEvidenceForGate(
     .filter(
       (comment) =>
         !iddAgentLogins.has(comment.authorLogin) &&
-        !isTrustedMachineDisposition(comment.authorLogin, comment.body),
+        !isTrustedMachineDisposition(
+          comment.authorLogin,
+          comment.body,
+          comment.lastEditedAt,
+        ),
     )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
@@ -6410,10 +6481,16 @@ export function summarizeDispositionEvidenceForGate(
   // Only IDD-agent dispositions feed the generic 1:1 pool. Trusted machine
   // dispositions are handled solely by `trustedDispositionedStickyIndexes`
   // (bot + type matched), so they can never clear an unrelated regular comment.
+  // #3249: an edited (or edit-state-unresolved) disposition reply never
+  // clears a regular comment -- it falls through to `outstandingComments`
+  // above as ordinary external feedback instead, advancing freshness the
+  // same way an edited thread disposition does in `hasFreshDisposition`.
   const dispositionComments = normalizedComments.filter(
     (comment) =>
       iddAgentLogins.has(comment.authorLogin) &&
-      isDispositionComment({ body: comment.body }),
+      isDispositionComment({ body: comment.body }) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited',
   );
   // #1018 non-review-notice carry-forward (fail-closed, author-scoped). A
   // persistent advisory non-review notice already dispositioned `**Rejected** —
@@ -6534,7 +6611,17 @@ export function summarizeDispositionEvidenceForGate(
   // comments also accept an unmarked later IDD-agent reply (presence-only,
   // #2139) so "thanks, fixed" clears the human item without hollowing out
   // Copilot / CodeRabbit pairing.
+  const isDispositionShapedReply = (body) =>
+    isDispositionComment({ body }) ||
+    AMD_MARKER_PATTERN.test(body.trimStart()) ||
+    isRejectionConfirmedDisposition({ body });
   const agentReplyComments = normalizedComments
+    .filter(
+      (comment) =>
+        !isDispositionShapedReply(comment.body) ||
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+          'unedited',
+    )
     .filter(
       (comment) =>
         iddAgentLogins.has(comment.authorLogin) &&
@@ -10784,7 +10871,13 @@ function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
     const author = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
+    if (
+      !isDispositionAuthor(author) ||
+      !isDispositionComment(comment) ||
+      // #3249: an edited (or edit-state-unresolved) disposition reply never
+      // counts as a completed IDD disposition here either.
+      classifyCommentEditState(comment) !== 'unedited'
+    ) {
       return false;
     }
     if (
@@ -11265,7 +11358,12 @@ export function hasTrustedReviewAckAfter(
     const login = String(comment.author?.login ?? comment.user?.login ?? '')
       .trim()
       .toLowerCase();
-    if (!trusted.has(login)) {
+    // #3249: an edited (or edit-state-unresolved) `review-ack:` marker must
+    // never satisfy this gate, even from a trusted login.
+    if (
+      !trusted.has(login) ||
+      classifyCommentEditState(comment) !== 'unedited'
+    ) {
       return false;
     }
     // GitHub server `createdAt`/`created_at` ONLY -- never the marker's own

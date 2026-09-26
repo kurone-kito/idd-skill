@@ -9,7 +9,8 @@
         },
         "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:55:00Z 2 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:58:00Z",
-        "updatedAt": "2026-05-11T23:58:00Z"
+        "updatedAt": "2026-05-11T23:58:00Z",
+        "lastEditedAt": null
       }
     ],
     "reviews": [
@@ -22,7 +23,8 @@
         "body": "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n",
         "submittedAt": "2026-05-11T23:54:00Z",
         "createdAt": "2026-05-11T23:54:00Z",
-        "updatedAt": "2026-05-11T23:54:00Z"
+        "updatedAt": "2026-05-11T23:54:00Z",
+        "lastEditedAt": null
       },
       {
         "author": {

@@ -1201,6 +1201,212 @@ test('acquire: a genuinely pre-existing matching lock reacquires with no racedCr
   }
 });
 
+test('acquire: an ambiguous combined rev-parse response (e.g. a newline-embedded worktree path) falls back to separate queries and still acquires (#3526 review, Copilot)', () => {
+  // A worktree path containing a literal newline byte (rare, but valid
+  // on POSIX) makes the combined `--absolute-git-dir --git-common-dir`
+  // query's own line count ambiguous, since git prints that byte
+  // verbatim with no escaping for this query family -- confirmed
+  // directly (neither `--path-format` nor `--sq` changes this output).
+  // `resolveAcquireWorktreeFacts` (src/scripts/claim-lock.mts) must
+  // recognize any line count other than exactly two as ambiguous and
+  // fall back to two separate single-flag queries -- each returns
+  // exactly one value, embedded newline and all -- rather than
+  // rejecting a perfectly valid worktree outright. This test simulates
+  // that ambiguous response (a three-line reply, exactly as a
+  // newline-embedded path would produce) via the same main-thread
+  // `child_process.execFileSync` monkey-patch technique this suite's
+  // existing "write-lock" tests already use for `node:fs`
+  // (`syncBuiltinESMExports` propagates the patch to the compiled CLI
+  // module's own ESM import; see the top-of-file comment for why a
+  // main-thread, not worker-thread, patch suffices here), while letting
+  // the fallback's own single-flag queries reach the real git for this
+  // fixture's real (newline-free) worktree -- proving the fallback
+  // recovers a valid outcome instead of failing.
+  const fixture = setupLinkedWorktree();
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  let intercepted = false;
+  try {
+    try {
+      cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+        const [file, cmdArgs] = args;
+        // Match only the combined two-flag invocation shape (5
+        // positional args, both flags present) -- never the
+        // single-flag shape `resolveClaimLockPath`/
+        // `resolveWorktreeAdminDir` (or this same function's own
+        // fallback) use, so this interception cannot corrupt those
+        // unrelated calls.
+        if (
+          file === 'git' &&
+          Array.isArray(cmdArgs) &&
+          cmdArgs.length === 5 &&
+          cmdArgs[2] === 'rev-parse' &&
+          cmdArgs[3] === '--absolute-git-dir' &&
+          cmdArgs[4] === '--git-common-dir'
+        ) {
+          intercepted = true;
+          return 'part-one\npart-two\n.git\n';
+        }
+        return originalExecFileSync(...args);
+      };
+      require('node:module').syncBuiltinESMExports();
+
+      const outcome = acquireClaimLock(
+        fixture.worktree,
+        'agent-a',
+        'claim-a',
+        false,
+      );
+      assert.equal(outcome.mode, 'acquired');
+      assert.equal(
+        intercepted,
+        true,
+        'expected the execFileSync interception to fire for the combined query',
+      );
+    } finally {
+      cp.execFileSync = originalExecFileSync;
+      require('node:module').syncBuiltinESMExports();
+    }
+    assert.equal(checkClaimLock(fixture.worktree).present, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: an empty rev-parse value still fails closed even after the ambiguous-response fallback (#3526 review, Copilot)', () => {
+  // Complements the fallback-recovery test above: the fallback exists to
+  // rescue a *valid* worktree whose path merely confuses the combined
+  // query's line count, never to paper over a genuinely broken response.
+  // Force the combined query to look ambiguous (as above) *and* force
+  // the fallback's own `--absolute-git-dir` query to return nothing, so
+  // the only value resolveAcquireWorktreeFacts ends up with for that
+  // field is empty -- this must still throw rather than silently
+  // treating an unresolved worktree as safely linked.
+  const fixture = setupLinkedWorktree();
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  let combinedIntercepted = false;
+  let fallbackIntercepted = false;
+  try {
+    try {
+      cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+        const [file, cmdArgs] = args;
+        if (
+          file === 'git' &&
+          Array.isArray(cmdArgs) &&
+          cmdArgs[2] === 'rev-parse'
+        ) {
+          if (
+            cmdArgs.length === 5 &&
+            cmdArgs[3] === '--absolute-git-dir' &&
+            cmdArgs[4] === '--git-common-dir'
+          ) {
+            combinedIntercepted = true;
+            return 'part-one\npart-two\n.git\n';
+          }
+          if (cmdArgs.length === 4 && cmdArgs[3] === '--absolute-git-dir') {
+            fallbackIntercepted = true;
+            return '';
+          }
+        }
+        return originalExecFileSync(...args);
+      };
+      require('node:module').syncBuiltinESMExports();
+
+      assert.throws(
+        () => acquireClaimLock(fixture.worktree, 'agent-a', 'claim-a', false),
+        /unexpected empty 'git rev-parse --absolute-git-dir'\/'--git-common-dir' output/,
+      );
+      assert.equal(
+        combinedIntercepted,
+        true,
+        'expected the combined-query interception to fire',
+      );
+      assert.equal(
+        fallbackIntercepted,
+        true,
+        'expected the fallback single-flag query to fire after the ambiguous combined response',
+      );
+    } finally {
+      cp.execFileSync = originalExecFileSync;
+      require('node:module').syncBuiltinESMExports();
+    }
+    // Restored to the real execFileSync before this check: no lock file
+    // was ever created on the failed-closed path above.
+    assert.equal(existsSync(resolveClaimLockPath(fixture.worktree)), false);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: filtering out empty lines would have hidden a genuinely ambiguous response -- an empty value paired with a newline-embedded one still falls back correctly (#3526 review round 2, Copilot)', () => {
+  // An earlier revision of resolveAcquireWorktreeFacts decided ambiguity
+  // by trimming each line and filtering out empty ones before counting
+  // -- Copilot's second review round found this can misclassify a
+  // genuinely ambiguous response as safely unambiguous: if one queried
+  // value is empty and the other contains an embedded newline, the raw
+  // response is "\n<part-one>\n<part-two>\n" (four segments including
+  // the leading and trailing empty ones), but filtering collapses that
+  // down to exactly two non-empty lines ("<part-one>", "<part-two>"),
+  // silently misassigning them as the admin dir and common dir instead
+  // of falling back. The fix parses the raw split directly (dropping
+  // only the one trailing empty element the response's own final line
+  // terminator always produces, never any other line) so this exact
+  // shape is correctly recognized as ambiguous. This test simulates
+  // that response for the combined query and confirms the fallback
+  // still fires and still recovers a valid outcome, matching the
+  // ordinary ambiguous-response test above -- this one specifically
+  // exercises the leading-empty-line shape the filtering approach
+  // mishandled.
+  const fixture = setupLinkedWorktree();
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  let intercepted = false;
+  try {
+    try {
+      cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+        const [file, cmdArgs] = args;
+        if (
+          file === 'git' &&
+          Array.isArray(cmdArgs) &&
+          cmdArgs.length === 5 &&
+          cmdArgs[2] === 'rev-parse' &&
+          cmdArgs[3] === '--absolute-git-dir' &&
+          cmdArgs[4] === '--git-common-dir'
+        ) {
+          intercepted = true;
+          // Simulates an empty --absolute-git-dir value paired with a
+          // --git-common-dir value containing one embedded newline: a
+          // leading empty line, then two more lines for the second
+          // value, then the response's own trailing terminator.
+          return '\npart-one\npart-two\n';
+        }
+        return originalExecFileSync(...args);
+      };
+      require('node:module').syncBuiltinESMExports();
+
+      const outcome = acquireClaimLock(
+        fixture.worktree,
+        'agent-a',
+        'claim-a',
+        false,
+      );
+      assert.equal(outcome.mode, 'acquired');
+      assert.equal(
+        intercepted,
+        true,
+        'expected the execFileSync interception to fire for the combined query',
+      );
+    } finally {
+      cp.execFileSync = originalExecFileSync;
+      require('node:module').syncBuiltinESMExports();
+    }
+    assert.equal(checkClaimLock(fixture.worktree).present, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 // Generated-tokens record tests (#2719).
 
 test('generated-tokens: record/read round trip reports the recorded fields', () => {

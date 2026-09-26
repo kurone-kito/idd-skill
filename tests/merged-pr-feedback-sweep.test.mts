@@ -200,6 +200,31 @@ test('marks an unresolved thread dispositioned on an IDD AMD reply', () => {
   assert.equal(result.prs[0].unresolvedThreads[0].dispositioned, true);
 });
 
+test('does not mark an unresolved thread dispositioned on an edited IDD AMD reply', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3,
+      threads: [
+        buildCommentThread(false, [
+          {
+            login: 'coderabbitai[bot]',
+            body: 'concern',
+            createdAt: '2026-06-09T00:00:00Z',
+          },
+          {
+            login: 'kurone-kito',
+            body: '**Awaiting maintainer decision** — needs a call.',
+            createdAt: '2026-06-09T01:00:00Z',
+            lastEditedAt: '2026-06-09T02:00:00Z',
+          },
+        ]),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs[0].unresolvedThreads[0].dispositioned, false);
+});
+
 test('excludes a thread the IDD agent itself opened', () => {
   const prs: MergedPrInput[] = [
     {
@@ -256,6 +281,7 @@ test('excludes a comment addressed by a later IDD disposition', () => {
         {
           body: '**Rejected** — covered.',
           createdAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: null,
           author: { login: 'kurone-kito' },
         },
       ],
@@ -298,7 +324,7 @@ test('a later thread-level IDD disposition addresses a top-level comment', () =>
   assert.equal(result.prs.length, 0);
 });
 
-test('prefers updatedAt when ordering an edited IDD disposition', () => {
+test('prefers updatedAt when ordering an unedited IDD disposition', () => {
   const prs: MergedPrInput[] = [
     {
       number: 17,
@@ -314,6 +340,7 @@ test('prefers updatedAt when ordering an edited IDD disposition', () => {
           body: '**Rejected** — not applicable.',
           createdAt: '2026-06-09T00:00:00Z',
           updatedAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: null,
           author: { login: 'kurone-kito' },
         },
       ],
@@ -321,6 +348,30 @@ test('prefers updatedAt when ordering an edited IDD disposition', () => {
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+test('does not let an edited IDD disposition address merged feedback', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 18,
+      comments: [
+        {
+          body: 'concern',
+          createdAt: '2026-06-09T01:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          body: '**Rejected** — not applicable.',
+          createdAt: '2026-06-09T00:00:00Z',
+          updatedAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: '2026-06-09T02:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
 });
 
 test('surfaces a non-IDD comment that opens with a disposition marker', () => {
@@ -866,6 +917,7 @@ test("#3259: a trusted review-ack naming the review's own commit, posted after i
           author: { login: 'kurone-kito' },
           body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
           createdAt: '2026-09-23T08:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },
@@ -922,6 +974,7 @@ test('#3259: a missing commitOid fails closed toward reporting, even with an oth
           author: { login: 'kurone-kito' },
           body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
           createdAt: '2026-09-23T08:00:00Z',
+          lastEditedAt: null,
         },
       ],
     },

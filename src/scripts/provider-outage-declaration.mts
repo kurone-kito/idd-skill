@@ -50,6 +50,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
 import {
+  classifyCommentEditState,
   composeGateTrustedMarkerLogins,
   type ParsedProviderOutageAdvancement,
   type ParsedProviderOutageDeclaration,
@@ -60,6 +61,7 @@ import {
   renderProviderOutageDeclarationComment,
   toSecondPrecisionIso,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 
@@ -75,6 +77,13 @@ export interface CommentLike {
   created_at?: string | null;
   user?: { login?: string | null } | null;
   author?: { login?: string | null } | null;
+  /** REST-returned GraphQL node id, needed to batch-resolve edit state via
+   * {@link fetchLastEditedAtByNodeId} (#3249). */
+  node_id?: string | null;
+  /** #3249: see `ProviderComment.lastEditedAt`'s doc comment (provider-
+   * port.mts) for the three-state contract. Populated by
+   * {@link fetchIssueComments} for every comment it fetches. */
+  last_edited_at?: string | null;
 }
 
 /** Result of {@link resolveProviderOutageDeclaration}. */
@@ -96,6 +105,13 @@ export interface ProviderOutageDeclarationResolution {
   wrongService: ParsedProviderOutageDeclaration[];
   unauthorized: { authorLogin: string; service: string; expiresAt: string }[];
   malformed: { authorLogin: string; bodyPreview: string }[];
+  /** #3249: an otherwise-valid, otherwise-authorized declaration whose
+   * comment was body-edited after posting (or whose edit state could not
+   * be resolved) -- distinct from `unauthorized` (an authority problem) and
+   * `malformed` (a shape/field problem): this comment's CURRENT content is
+   * simply untrustworthy regardless of who posted it or how well-formed it
+   * is. */
+  edited: { authorLogin: string; service: string; expiresAt: string }[];
 }
 
 const DECLARATION_MARKER_START = /^<!--\s*idd-provider-outage-declaration:/i;
@@ -150,6 +166,7 @@ export function resolveProviderOutageDeclaration(input: {
     wrongService: [],
     unauthorized: [],
     malformed: [],
+    edited: [],
   });
 
   if (!input.declarationTargetConfigured) {
@@ -182,6 +199,7 @@ export function resolveProviderOutageDeclaration(input: {
   const wrongService: ParsedProviderOutageDeclaration[] = [];
   const unauthorized: ProviderOutageDeclarationResolution['unauthorized'] = [];
   const malformed: ProviderOutageDeclarationResolution['malformed'] = [];
+  const edited: ProviderOutageDeclarationResolution['edited'] = [];
   let shapedCount = 0;
 
   for (const comment of input.comments ?? []) {
@@ -205,6 +223,17 @@ export function resolveProviderOutageDeclaration(input: {
     const authority = input.authorityOf(authorLogin);
     if (!authority.known || !authority.authorized) {
       unauthorized.push({
+        authorLogin,
+        service: parsed.service,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
+
+    // #3249: an edited (or edit-state-unresolved) declaration must never
+    // relieve the gate, even from an authorized actor.
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      edited.push({
         authorLogin,
         service: parsed.service,
         expiresAt: parsed.expiresAt,
@@ -273,6 +302,7 @@ export function resolveProviderOutageDeclaration(input: {
       wrongService,
       unauthorized,
       malformed,
+      edited,
     };
   }
 
@@ -293,6 +323,9 @@ export function resolveProviderOutageDeclaration(input: {
   } else if (unauthorized.length > 0) {
     const latest = unauthorized[unauthorized.length - 1];
     reason = `${latest.authorLogin} is not authorized to author a provider outage declaration under ${authorityPolicy}`;
+  } else if (edited.length > 0) {
+    const latest = edited[edited.length - 1];
+    reason = `${latest.authorLogin}'s provider outage declaration was edited after posting or its edit state could not be verified, so it is no longer trusted`;
   } else if (wrongService.length > 0) {
     const latest = latestByCreatedAt(wrongService);
     reason = `declaration is for service "${latest?.service}", not "${service}"`;
@@ -312,6 +345,7 @@ export function resolveProviderOutageDeclaration(input: {
     wrongService,
     unauthorized,
     malformed,
+    edited,
   };
 }
 
@@ -424,6 +458,9 @@ export function listProviderOutageAdvancements(
     if (!ADVANCED_MARKER_START.test(body)) continue;
     const authorLogin = commentAuthorLogin(comment);
     if (trustedSet.size > 0 && !trustedSet.has(authorLogin)) continue;
+    // #3249: an edited (or edit-state-unresolved) advancement marker must
+    // never be trusted either.
+    if (classifyCommentEditState(comment) !== 'unedited') continue;
     const parsed = parseProviderOutageAdvancedComment(
       body,
       String(comment?.created_at ?? ''),
@@ -647,7 +684,30 @@ function fetchIssueComments({
       ],
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
-    return parsePaginatedGhNdjson(payload) as CommentLike[];
+    const comments = parsePaginatedGhNdjson(payload) as CommentLike[];
+    // #3249: REST has no edit-timestamp field -- resolve it via one
+    // follow-up GraphQL batch read keyed by each comment's own `node_id`,
+    // same template as `external-check-waiver.mts`'s `fetchPrComments`.
+    if (comments.length === 0) return comments;
+    const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((id) => id === '')) {
+      throw new Error(
+        `issue #${issueNumber} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+    return comments.map((comment, index) => {
+      const nodeId = nodeIds[index];
+      if (!lastEditedAtByNodeId.has(nodeId)) {
+        throw new Error(
+          `missing edit-state resolution for comment node ${nodeId} on issue #${issueNumber}`,
+        );
+      }
+      return {
+        ...comment,
+        last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+      };
+    });
   } catch (error) {
     // #3346: preserve the original gh-exec.mts-tagged error as `.cause` (not
     // dropped as before) so classifyHelperError's cause-chain walk can still

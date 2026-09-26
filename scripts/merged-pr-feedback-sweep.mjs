@@ -28,6 +28,7 @@ import {
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
@@ -268,7 +269,8 @@ function threadHasIddAmd(thread, isIdd) {
       isIdd(authorLogin(comment)) &&
       String(comment.body ?? '')
         .trimStart()
-        .startsWith('**Awaiting maintainer decision**'),
+        .startsWith('**Awaiting maintainer decision**') &&
+      classifyCommentEditState(comment) === 'unedited',
   );
 }
 // #2194: GitHub embeds a review finding directly in the review `body` field
@@ -310,14 +312,18 @@ function collectUnaddressedComments(
     ...comments
       .filter(
         (comment) =>
-          isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+          isIdd(authorLogin(comment)) &&
+          classifyCommentEditState(comment) === 'unedited' &&
+          isDispositionBody(comment.body),
       )
       .map(commentTimestamp),
     ...threads.flatMap((thread) =>
       (thread.comments?.nodes ?? [])
         .filter(
           (comment) =>
-            isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+            isIdd(authorLogin(comment)) &&
+            classifyCommentEditState(comment) === 'unedited' &&
+            isDispositionBody(comment.body),
         )
         .map((comment) => comment.updatedAt ?? comment.createdAt ?? null),
     ),
@@ -618,6 +624,10 @@ function fetchMergedPr(port, number) {
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
       author: { login: comment.authorLogin },
+      // #3249: carried through so `hasTrustedReviewAckAfter` can require
+      // `unedited` -- `listChangeRequestGraphqlComments` always populates
+      // this field.
+      lastEditedAt: comment.lastEditedAt,
     })),
     reviews: port.listChangeRequestGraphqlReviews(number).map((review) => ({
       body: review.body,
@@ -639,6 +649,10 @@ function fetchMergedPr(port, number) {
             createdAt: comment.createdAt,
             updatedAt: comment.updatedAt,
             author: { login: comment.authorLogin },
+            // #3249: carried through so `hasFreshDisposition` can require
+            // `unedited` -- `listChangeRequestReviewThreadsExtended`
+            // always populates this field.
+            lastEditedAt: comment.lastEditedAt,
           })),
         },
       })),

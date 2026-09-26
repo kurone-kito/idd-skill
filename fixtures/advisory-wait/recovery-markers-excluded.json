@@ -10,14 +10,16 @@
           "login": "idd-bot"
         },
         "body": "advisory-wait: idd-bot 1111111111111111111111111111111111111111 2026-05-11T17:00:00Z",
-        "createdAt": "2026-05-11T17:00:00Z"
+        "createdAt": "2026-05-11T17:00:00Z",
+        "lastEditedAt": null
       },
       {
         "author": {
           "login": "idd-bot"
         },
         "body": "advisory-wait-recovery: idd-bot 2222222222222222222222222222222222222222 2026-05-11T17:01:00Z",
-        "createdAt": "2026-05-11T17:01:00Z"
+        "createdAt": "2026-05-11T17:01:00Z",
+        "lastEditedAt": null
       }
     ],
     "trustedMarkerLogins": [

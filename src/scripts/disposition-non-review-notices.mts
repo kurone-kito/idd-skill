@@ -58,6 +58,7 @@ import { loadIddConfig } from './idd-config.mts';
 import { appendReviewReplyStamp } from './marker-helpers.mts';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   compareIsoTimestamps,
   DEFAULT_ADVISORY_BOT_LOGINS,
@@ -88,6 +89,8 @@ export interface NoticeComment {
   // (#1122) reads it through `effectiveRegularCommentActivityAt` so its
   // idempotency agrees with the gate's updatedAt-aware scoring.
   updatedAt?: string;
+  /** #3249: only explicit `null` may make a disposition idempotency claim. */
+  lastEditedAt?: string | null;
 }
 
 export interface PlannedDisposition {
@@ -298,6 +301,7 @@ export function buildDispositionPlan(
       // and its dispositions through `effectiveRegularCommentActivityAt`,
       // matching the gate's updatedAt-aware pairing.
       updatedAt: String(comment.updatedAt ?? ''),
+      lastEditedAt: comment.lastEditedAt,
     }))
     .sort((left, right) => {
       // Oldest-first, with a deterministic tie-breaker so the oldest-first
@@ -323,6 +327,7 @@ export function buildDispositionPlan(
   for (const comment of comments) {
     if (
       !trustedMarkerLogins.has(comment.login) ||
+      classifyCommentEditState(comment) !== 'unedited' ||
       !isNonReviewNoticeDisposition({ body: comment.body })
     ) {
       continue;
@@ -402,6 +407,7 @@ export function buildDispositionPlan(
     .filter(
       (comment) =>
         trustedMarkerLogins.has(comment.login) &&
+        classifyCommentEditState(comment) === 'unedited' &&
         isReviewSummaryDisposition({ body: comment.body }),
     )
     .map((comment) => ({
@@ -1268,7 +1274,16 @@ function main(): HelperCliResult {
       body?: string;
       created_at?: string;
       updated_at?: string;
+      node_id?: string;
+      lastEditedAt?: string | null;
     }[];
+    const nodeIds = rawComments.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((nodeId) => nodeId === '')) {
+      throw new Error(
+        `disposition-non-review-notices: PR #${pr} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
     const comments: NoticeComment[] = rawComments.map((comment) => ({
       id: comment.id,
       login: comment.user?.login ?? '',
@@ -1278,6 +1293,7 @@ function main(): HelperCliResult {
       // its summary); the summary path scores it through the gate's
       // updatedAt-aware activity.
       updatedAt: comment.updated_at ?? '',
+      lastEditedAt: lastEditedAtByNodeId.get(String(comment.node_id)),
     }));
     const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(
