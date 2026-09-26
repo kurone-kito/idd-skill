@@ -1095,7 +1095,7 @@ test('gate agreement requires the Codex disposition HEAD to match the current so
   );
 });
 
-test('gate preserves a Codex no-find disposition for an earlier HEAD', () => {
+test('gate keeps a Codex no-find disposition for an earlier HEAD outstanding', () => {
   const source = {
     id: 332,
     author: { login: CODEX },
@@ -1119,10 +1119,14 @@ test('gate preserves a Codex no-find disposition for an earlier HEAD', () => {
       prHeadSha: 'def5678',
     },
   );
-  assert.equal(summary.missingRegularCommentCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.deepEqual(
+    summary.missingRegularComments.map((comment) => comment.id),
+    ['332'],
+  );
 });
 
-test('regular-comment gate ignores a prior-HEAD Codex no-find acceptance', () => {
+test('regular-comment gate keeps a prior-HEAD Codex no-find result outstanding', () => {
   const source = {
     id: 334,
     author: { login: CODEX },
@@ -1143,7 +1147,11 @@ test('regular-comment gate ignores a prior-HEAD Codex no-find acceptance', () =>
     trustedMarkerLogins: ['kurone-kito'],
     prHeadSha: 'def5678',
   });
-  assert.equal(summary.count, 0);
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['334'],
+  );
 });
 
 test('regular-comment gate ignores a stale Codex acceptance after the source is edited', () => {

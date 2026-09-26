@@ -5661,26 +5661,6 @@ function matchTrustedAdvisoryStickyDispositions<
         );
       },
     });
-    kinds.push({
-      // Preserve a source-bound acceptance for an earlier HEAD across later
-      // pushes. New acceptances remain current-HEAD-only in the planner; this
-      // historical matcher only credits an already-posted disposition whose
-      // recorded HEAD still matches the source comment's reviewed commit.
-      isSticky: (body) => codexNoFindReviewedCommit(body) !== null,
-      isStickyAuthor: (authorLogin) =>
-        advisoryBotIdentityToken(authorLogin) === 'chatgpt-codex-connector',
-      isDisposition: (body) => isCodexNoFindResultDisposition(body),
-      requireNewerDisposition: true,
-      allowIddAgentDisposition: true,
-      matchesDisposition: (sticky, disposition) => {
-        const parsed = parseCodexNoFindDisposition(disposition.body);
-        return Boolean(
-          parsed?.sourceCommentId === String(sticky.id) &&
-            parsed.headSha &&
-            isCodexNoFindResultForHeadSha(sticky.body, parsed.headSha),
-        );
-      },
-    });
   }
   for (const kind of kinds) {
     const stickiesByBot = new Map<string, T[]>();
@@ -7681,11 +7661,10 @@ export function summarizeRegularCommentsForGate(
     )
     .filter(
       (comment) =>
-        (normalizedCurrentHead &&
-          isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+        (isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
           advisoryBotIdentityToken(comment.authorLogin) ===
             'chatgpt-codex-connector' &&
-          isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)) ||
+          isCodexNoFindResult(comment.body)) ||
         !lastIddReplyAt ||
         compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0,
     )
@@ -7697,10 +7676,9 @@ export function summarizeRegularCommentsForGate(
       // id and current HEAD. Do not let the generic regular-comment pairing
       // consume it with an unrelated or stale disposition.
       if (
-        normalizedCurrentHead &&
         advisoryBotIdentityToken(comment.authorLogin) ===
           'chatgpt-codex-connector' &&
-        isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+        isCodexNoFindResult(comment.body)
       ) {
         return true;
       }
@@ -8122,11 +8100,10 @@ export function summarizeDispositionEvidenceForGate(
       // disposition path; generic 1:1 pairing could consume them with an
       // unrelated or stale reply.
       if (
-        normalizedCurrentHead &&
         isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
         advisoryBotIdentityToken(comment.authorLogin) ===
           'chatgpt-codex-connector' &&
-        isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+        isCodexNoFindResult(comment.body)
       ) {
         return true;
       }
