@@ -1294,6 +1294,48 @@ test('does not treat actorless application authorization as external coordinatio
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('does not let a cross-paragraph cannot-without dependency pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 151,
+    title: 'document credential storage',
+    body:
+      "Implementation cannot continue without the maintainer's access.\n\n" +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an indefinite external actor hide an approval dependency (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 152,
+    title: 'document credential storage',
+    body:
+      "Implementation requires a maintainer's approval before implementation. " +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a quoted independent requirement is an explicit example (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 153,
+    title: 'document review examples',
+    body:
+      'For example, "requires maintainer approval" describes the old ' +
+      'workflow. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('does not let a completed investigation hide a remaining approval blocker (#3528)', () => {
   const result = evaluateA4Viability({
     number: 145,

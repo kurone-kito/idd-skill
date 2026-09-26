@@ -111,8 +111,9 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
   String.raw`(?:\b(?:must|require[sd]?|requiring|shall|has\s+to|have\s+to|mandatory|essential|blocked|blocking|pending|waiting)\b[^.;:!?—()\n]{0,100}\b(?:supplied|provided|performed|created)\b|\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b|\b(?:approval|access|permission|authorization)\s+(?:(?:is|are|was|were)\s+)?(?:required|necessary|essential|needed)\b|\bawait(?:s|ing)?\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization|credential)\b|\bsubject\s+to\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization)\b|\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:must|will)\s+(?:supply|provide|create|obtain|generate|approve|grant|share|enable)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b)`,
   'i',
 );
+const CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN = String.raw`(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}`;
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b|\b(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b)`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_EXTERNAL_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)|(?:production\s+)?(?:approval|access|permission|authorization))\b)`,
   'gi',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
@@ -652,6 +653,11 @@ function isLikelyQuoteOpener(charBefore) {
 function isLikelyQuoteCloser(charAfter) {
   return !QUOTE_ADJACENT_WORD_CHAR_PATTERN.test(charAfter);
 }
+function isExplicitQuotedExampleFraming(textBeforeQuote) {
+  return /\b(?:for\s+example|e\.g\.|example|reference|quoted|cited)\s*,?\s*[:：]?\s*$/i.test(
+    textBeforeQuote,
+  );
+}
 function findParagraphSpan(corpus, offset) {
   let start = 0;
   for (const breakMatch of corpus
@@ -664,15 +670,10 @@ function findParagraphSpan(corpus, offset) {
   return { start, end };
 }
 function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
-  if (
+  const isIndependentCoordinationMatch =
     INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN.test(
       corpus.slice(matchIndex, matchEnd),
-    )
-  ) {
-    // The matched assertion is the issue's own requirement even when the
-    // author uses quotation marks for emphasis (#3528, PR #3528 review).
-    return false;
-  }
+    );
   const lineStart = corpus.lastIndexOf('\n', matchIndex - 1) + 1;
   if (/^[ \t]*>/.test(corpus.slice(lineStart, matchIndex))) {
     // Blockquote syntax alone does not establish the cited content is
@@ -701,6 +702,12 @@ function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
       !isLikelyQuoteCloser(after[closeIndex + 1] ?? '')
     ) {
       continue;
+    }
+    if (isIndependentCoordinationMatch) {
+      // Quotation marks used for emphasis still assert this issue's own
+      // requirement, while explicit example/citation framing describes
+      // another artifact's literal wording (#3528, PR #3528 review).
+      return isExplicitQuotedExampleFraming(before.slice(0, openIndex));
     }
     // A paired quote alone is not proof of external citation -- a nearby
     // requirement-assertion word means the quotes are just emphasizing
