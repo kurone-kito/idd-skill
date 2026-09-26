@@ -646,12 +646,54 @@ test('still fails autonomous completion when a credential is supplied by a maint
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a generic credential noun mask a maintainer prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 81,
+    title: 'document credential pattern',
+    body:
+      'Document a credential pattern supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let a credential mention mask a follow-on prerequisite (#3528)', () => {
   const result = evaluateA4Viability({
     number: 78,
     title: 'document protected material',
     body:
       'This issue concerns a credential; implementation cannot begin until ' +
+      'the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a sentence-boundary credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 82,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 83,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation may begin only after ' +
       'the maintainer creates it. Verification: add unit tests.',
     state: 'OPEN',
   });
@@ -667,6 +709,20 @@ test('keeps provided contextual credential text descriptive (#3528)', () => {
     body:
       'This issue documents a credential pattern provided below for context. ' +
       'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps already provided credential material descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 84,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential provided by the maintainer in the ' +
+      'current implementation. Verification: add unit tests.',
     state: 'OPEN',
   });
 

@@ -232,7 +232,7 @@ const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
   /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
-  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)|before|until)\b)/i;
+  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -245,7 +245,7 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_FOLLOW_ON_REQUIREMENT_PATTERN =
-  /\b(?:cannot|can't)\b[^.;:\n]{0,80}\buntil\b/i;
+  /\b(?:cannot|can't)\b[^.;:\n]{0,80}\buntil\b|\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed)\b|\bonly\s+after\b/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -706,13 +706,21 @@ function isFollowedByGenericMentionNoun(corpus, matchIndex, matchEnd) {
   const namesGenericPattern = tokens
     .slice(0, GENERIC_MENTION_LOOKAHEAD_TOKENS)
     .some((token) => GENERIC_MENTION_NOUN_PATTERN.test(token));
+  const isCredentialMention =
+    corpus.slice(matchIndex, matchEnd).toLowerCase() === 'credential';
   return (
     namesGenericPattern &&
     !(
-      corpus.slice(matchIndex, matchEnd).toLowerCase() === 'credential' &&
-      isFollowedByCredentialRequirement(corpus, matchEnd)
+      isCredentialMention && isFollowedByCredentialRequirement(corpus, matchEnd)
     ) &&
-    !isNearRequirementAssertion(corpus, matchIndex, matchEnd)
+    !isNearRequirementAssertion(
+      corpus,
+      matchIndex,
+      matchEnd,
+      isCredentialMention
+        ? CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+        : REQUIREMENT_ASSERTION_PATTERN,
+    )
   );
 }
 function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
