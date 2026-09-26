@@ -136,7 +136,9 @@ function isHelperErrorEnvelopeEnabled(env = process.env) {
 /** Write `text` to stderr (fd 2) synchronously, looping until every byte is
  * written -- mirrors helper-cli-runner.mts's own writeStderrSync, needed
  * here for the identical reason: `process.exit()` right after this call
- * must not race an async stdio write and truncate the envelope line. */
+ * must not race an async stdio write and truncate the envelope line. Used
+ * only on the crash path below, where `process.exit()` genuinely follows
+ * immediately. */
 function writeStderrSync(text) {
   const buffer = Buffer.from(text, 'utf8');
   let written = 0;
@@ -144,19 +146,32 @@ function writeStderrSync(text) {
     written += writeSync(2, buffer, written, buffer.length - written);
   }
 }
-function writeEnvelopeLine(exitCode, kind, message) {
-  writeStderrSync(
-    `${JSON.stringify({
-      iddHelperError: {
-        version: 1,
-        helper: 'minimize-superseded-markers',
-        kind,
-        exitCode,
-        message,
-        httpStatus: null,
-      },
-    })}\n`,
-  );
+/** Write `text` to stderr through Node's normal queued stream -- mirrors
+ * helper-cli-runner.mts's own `writeStderrQueued`. Used only on the
+ * returned-outcome path below (see `runHelperCli`), where no
+ * `process.exit()` forces the process down immediately afterward: queuing
+ * behind whatever `main` already wrote to stderr is what keeps this line
+ * genuinely last under real pipe backpressure. A raw synchronous write
+ * there (this file's own pre-fix behavior) could bypass `process.stderr`'s
+ * internal write queue and reach the underlying fd before an earlier,
+ * still-draining `process.stderr.write()` call from `main`, reordering
+ * stderr output ahead of the actual last line -- the same race the shared
+ * runner's `writeStderr`/`writeStderrQueued` split fixes (#3346 review
+ * finding). */
+function writeStderrQueued(text) {
+  process.stderr.write(text);
+}
+function buildEnvelopeLine(exitCode, kind, message) {
+  return `${JSON.stringify({
+    iddHelperError: {
+      version: 1,
+      helper: 'minimize-superseded-markers',
+      kind,
+      exitCode,
+      message,
+      httpStatus: null,
+    },
+  })}\n`;
 }
 function applyHelperCliOutcomeWhenDisabled(outcome) {
   process.exitCode = typeof outcome === 'number' ? outcome : outcome.exitCode;
@@ -174,7 +189,7 @@ function runHelperCli(helperName, mainFn) {
             ? caughtError.stack
             : String(caughtError);
         writeStderrSync(`${crashText}\n`);
-        writeEnvelopeLine(1, 'internal', message);
+        writeStderrSync(buildEnvelopeLine(1, 'internal', message));
         process.exit(1);
       });
     }
@@ -189,7 +204,7 @@ function runHelperCli(helperName, mainFn) {
         ? `${helperName} exited with code ${result}`
         : (result.message ??
           `${helperName} exited with code ${result.exitCode}`);
-    writeEnvelopeLine(exitCode, kind, message);
+    writeStderrQueued(buildEnvelopeLine(exitCode, kind, message));
   }
 }
 function main() {
