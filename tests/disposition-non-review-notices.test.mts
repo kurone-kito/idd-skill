@@ -1065,6 +1065,32 @@ test('gate agreement requires the Codex disposition HEAD to match the current so
   );
 });
 
+test('gate preserves a Codex no-find disposition for an earlier HEAD', () => {
+  const source = {
+    id: 332,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition = {
+    id: 333,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 332),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [source, disposition], threads: [] },
+    {
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['kurone-kito'],
+      prHeadSha: 'def5678',
+    },
+  );
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
 test('regular-comment gate clears a current Codex no-find disposition from an IDD agent', () => {
   const source = {
     id: 326,
