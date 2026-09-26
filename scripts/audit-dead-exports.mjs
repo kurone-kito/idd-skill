@@ -504,9 +504,21 @@ function parseFile(absPath, originalText) {
   // first line (1-based) -- for a multi-line list, this differs from any
   // individual item's own line, and a suppression comment above the
   // statement itself (round 9 C1 finding) must be checked there, not just
-  // above each item's own line. Returns the matching `}`'s offset (or -1
-  // if unbalanced) so the caller can advance `lineIndex` past it.
-  function processNamedImportBraceList(braceOffset, statementStartLine) {
+  // above each item's own line. `alsoCreditDefaultImport` (round 12): the
+  // combined-default+brace call site sets this so the statement's OWN
+  // default half also gets a `'default'`-keyed `imports` edge, the same
+  // fix applied to the plain default and combined default+namespace
+  // branches -- see the plain default branch's own comment for why this
+  // is a harmless no-op unless the target's own no-`from` list aliases a
+  // binding as literal `default`. The plain `import { a } from '...'`
+  // call site leaves this `false` (no default half exists there).
+  // Returns the matching `}`'s offset (or -1 if unbalanced) so the
+  // caller can advance `lineIndex` past it.
+  function processNamedImportBraceList(
+    braceOffset,
+    statementStartLine,
+    alsoCreditDefaultImport = false,
+  ) {
     const closeIndex = findMatchingBrace(strippedText, braceOffset);
     if (closeIndex === -1) {
       return -1;
@@ -528,6 +540,9 @@ function parseFile(absPath, originalText) {
       const targetFile = isRelativeSpecifier
         ? resolveSpecifier(absPath, fromMatch[1])
         : null;
+      if (targetFile && alsoCreditDefaultImport) {
+        imports.push({ name: 'default', targetFile, importerFile: absPath });
+      }
       for (const item of items) {
         if (item.isType) {
           continue;
@@ -871,19 +886,34 @@ function parseFile(absPath, originalText) {
       lineIndex += 1;
       continue;
     }
-    // #3498 (Copilot C1 finding, round 6): a default import (`import
-    // helper from './origin.mts';`) introduces a local binding the same
-    // way a named import does -- track it for the same reason. No
-    // `imports.push` here (unlike the named/namespace branches): a
-    // default export is tracked in `declared` under the DECLARATION'S
-    // OWN name (`export default function realName() {}` matches
-    // `FUNCTION_DECL_PATTERN` normally), never under the literal string
-    // `'default'`, so crediting an importer against that key would never
-    // resolve to anything -- out of scope for this file-local
-    // no-`from` bookkeeping fix regardless.
+    // #3498 (Copilot C1 finding, round 6; round 12: DOES now push a
+    // `'default'`-keyed `imports` edge, see below): a default import
+    // (`import helper from './origin.mts';`) introduces a local binding
+    // the same way a named import does -- track it for the same reason.
+    // The round-6 comment here originally reasoned no `imports.push` was
+    // ever useful, since `export default function realName() {}` is
+    // tracked in `declared` under the DECLARATION'S OWN name, never the
+    // literal string `'default'` -- true for THAT shape, but a Codex C1
+    // finding (round 12) found a second, genuinely `'default'`-keyed
+    // shape this reasoning missed: a no-`from` list aliasing a local
+    // binding AS `default` (`const helper = 1; export { helper as
+    // default };`) resolves its `declared` entry under the literal key
+    // `'default'` (`pending.exposedName`, see the no-`from` finalization
+    // pass above). Pushing this edge unconditionally is harmless for the
+    // common shape above (`resolveDeclaringFile` simply finds no
+    // `'default'`-keyed entry there and the credit silently goes
+    // nowhere) and fixes the aliased-as-`default` shape.
     const defaultMatch = IMPORT_DEFAULT_PATTERN.exec(line);
     if (defaultMatch) {
       const defaultLocalName = defaultMatch[1];
+      const defaultSpecifier = defaultMatch[2];
+      if (RELATIVE_SPECIFIER_PATTERN.test(defaultSpecifier)) {
+        imports.push({
+          name: 'default',
+          targetFile: resolveSpecifier(absPath, defaultSpecifier),
+          importerFile: absPath,
+        });
+      }
       addDeclarationLine(defaultLocalName, lineIndex + 1);
       if (!declarationSuppressionByLocalName.has(defaultLocalName)) {
         const ignoreMatch = checkOwnOrPrecedingLineSuppression(
@@ -934,9 +964,19 @@ function parseFile(absPath, originalText) {
     if (combinedNamespaceMatch) {
       const combinedSpecifier = combinedNamespaceMatch[3];
       if (RELATIVE_SPECIFIER_PATTERN.test(combinedSpecifier)) {
+        const combinedTargetFile = resolveSpecifier(absPath, combinedSpecifier);
         imports.push({
           name: '*',
-          targetFile: resolveSpecifier(absPath, combinedSpecifier),
+          targetFile: combinedTargetFile,
+          importerFile: absPath,
+        });
+        // #3498 (round 12, same reasoning as the plain default-import
+        // branch above): the DEFAULT half of this combined import can
+        // also resolve a no-`from` list aliased as literal `default` in
+        // the target file -- harmless no-op otherwise.
+        imports.push({
+          name: 'default',
+          targetFile: combinedTargetFile,
           importerFile: absPath,
         });
       }
@@ -1054,6 +1094,7 @@ function parseFile(absPath, originalText) {
       const closeIndex = processNamedImportBraceList(
         braceOffset,
         lineIndex + 1,
+        true,
       );
       if (closeIndex === -1) {
         lineIndex += 1;

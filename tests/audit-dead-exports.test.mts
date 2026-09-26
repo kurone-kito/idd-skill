@@ -1328,6 +1328,84 @@ test("a suppression comment on the line PRECEDING a wrapped COMBINED default + n
   }
 });
 
+test('a no-`from` export list item aliasing a local binding as literal `default` is credited by a plain `import x from` consumer (Codex C1 round-12 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'const helper = 1;\n' + 'export { helper as default };\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import helper from './origin.mts';\n" + 'void helper;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'default').category,
+      'production',
+      'a plain `import x from` consumer must credit a no-`from` list ' +
+        'item aliased as literal `default` -- before this fix, the ' +
+        'plain default-import branch pushed no `imports` edge at all ' +
+        '(reasoned, correctly for `export default function realName()' +
+        '{}` but not for THIS shape, that a default export is never ' +
+        "keyed `'default'`), so this entry was reported as unused even " +
+        'though a real production file imports it',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the DEFAULT half of a combined default+named import also credits a no-`from` export list item aliased as literal `default` (round-12 extension, same reasoning as the plain form above)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'const helper = 1;\n' +
+        'export function other(): void {}\n' +
+        'export { helper as default };\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import helper, { other } from './origin.mts';\n" +
+        'void helper;\n' +
+        'void other;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(findByName(result, 'default').category, 'production');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the DEFAULT half of a combined default+namespace import also credits a no-`from` export list item aliased as literal `default` (round-12 extension, same reasoning as the plain form above)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'const helper = 1;\n' +
+        'export function other(): void {}\n' +
+        'export { helper as default };\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import helper, * as ns from './origin.mts';\n" +
+        'void helper;\n' +
+        'void ns;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(findByName(result, 'default').category, 'production');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a suppression comment on the line PRECEDING a named import is honored for a no-`from` re-export resolving to that import (Codex C1 round-8 finding)', () => {
   const root = makeFixtureRoot();
   try {
