@@ -5,8 +5,7 @@ ReviewItems_snapshot non-empty; a cold E4 entry runs that file's
 Cold-start section first. Covers classifying, scoring, recording
 dispositions, and counting accepted items.
 
-Before any E-phase mutation or GitHub side effect, apply the shared
-[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+Before any E-phase side effect, apply the [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 **Skip condition E8**: if the Accepted PATH A count is zero, proceed to
 the **E-phase branch-sync check** below (its
@@ -105,8 +104,7 @@ Admin access (`GET
 three, assertion alone never reaches Accept forced — only "Verify before
 accept" confirming the claim, or an explicit maintainer confirmation
 reply, gets it there. Otherwise cap it at Rejected with the reasoned
-reply E6 already requires. CODEOWNER/required-reviewer AMD
-("Awaiting maintainer decision") handling is unchanged.
+reply E6 requires. CODEOWNER/required-reviewer AMD handling is unchanged.
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
@@ -566,11 +564,9 @@ ever reaching F3 (background:
 [design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).
 
 **Rule**: post the watermark as the **last** action before F3's
-`idd-merge-execute.mjs --apply`, every pass. Apply the canonical
-review-currency rules in [pre-merge F2](idd-pre-merge.instructions.md#f2--pre-merge-condition-check)
-when deciding whether later activity stales it; that section's
-own-agent procedural-comment and ack-only carve-outs apply here too. A
-stale `idd-advisory-convergence` rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
+`idd-merge-execute.mjs --apply`, every pass. Use F2's review-currency
+rules for later activity, including its own-agent procedural-comment and ack-only
+carve-outs. A stale `idd-advisory-convergence` rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
