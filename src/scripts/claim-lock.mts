@@ -351,49 +351,96 @@ function canonicalizeExistingDir(path: string): string {
 }
 
 /**
- * True when `worktree` is the repository's primary working tree rather
- * than a linked one. `git rev-parse --git-common-dir` and
- * `--absolute-git-dir` name the same directory only for the primary
- * worktree; a linked worktree's admin directory lives under
- * `worktrees/` and differs from the common dir. `--git-common-dir` is
- * often the relative path `.git` on the primary worktree, and a
- * symlinked worktree path can make one side canonical and the other
- * not, so compare real paths rather than the raw strings.
+ * Resolve the two git-admin facts {@link acquireClaimLock} needs -- the
+ * lock file's own path and whether `worktree` is the primary worktree --
+ * from a single `git rev-parse` spawn instead of the up-to-three
+ * separate ones a fresh-create acquire issued before this fix: one for
+ * the lock path (the same query {@link resolveWorktreeAdminDir} still
+ * issues on its own for every other caller) plus two more for the
+ * primary-worktree comparison (`--git-common-dir` and a duplicate
+ * `--absolute-git-dir`) on every attempt that found the lock absent,
+ * including the loop's own post-retry fallback. `git rev-parse` accepts
+ * multiple query flags in one invocation and prints one line per flag,
+ * in the order given (verified empirically against this repository's own
+ * git version).
  *
- * Canonicalize `worktree` before resolving a relative common dir.
- * `path.resolve` applies `..` to an unresolved symlink, so a link to a
- * subdirectory of the primary worktree would otherwise walk off the
- * real tree and miss the primary admin directory.
+ * Dozens of acquirer worker threads releasing from one barrier at once
+ * (this repository's own same-claim-id race-probe test,
+ * `tests/claim-lock.test.mts`, releases up to `RACE_TEST_WORKERS_PER_ROUND`
+ * -- 8 to 16 -- acquirers per round) previously spawned up to three
+ * `git.exe` processes each against the exact same worktree within
+ * microseconds of each other. On native Windows CI that burst
+ * intermittently failed with a spawn-level `Command failed` (`status: 1`,
+ * empty stdout *and* stderr -- no `fatal:` message from git itself,
+ * meaning the child-process spawn was contended, not genuinely refused by
+ * git) rather than a fault in the fixture or in git's own logic (#3526). A
+ * real caller never provokes this: `--acquire` is one call per worktree
+ * per mutation, never dozens racing at once. Folding the query down to
+ * one spawn per acquire removes the contention at its source instead of
+ * merely tolerating it, and is a genuine efficiency win independent of
+ * that test.
+ *
+ * `git`'s own repository discovery resolves `-C`'s target through the
+ * same OS-level symlink-resolving directory-change semantics regardless
+ * of whether the given string is already a real path or a symlink to one
+ * -- confirmed empirically against a symlinked primary worktree, a
+ * symlink to a *subdirectory* of one (which produces a relative
+ * `../.git` common-dir output, the exact case the canonicalization below
+ * exists to handle), and a symlinked linked worktree: every case produced
+ * byte-identical `--absolute-git-dir`/`--git-common-dir` output whether
+ * git was invoked against the raw path or its `realpathSync`'d form.
+ * Issuing this combined query against the raw, not-yet-canonicalized
+ * `worktree` -- exactly like {@link resolveWorktreeAdminDir}'s existing
+ * single-flag query -- therefore yields the identical `--absolute-git-dir`
+ * value that call already returns today for the same input, so the
+ * returned `path` is byte-identical to `resolveClaimLockPath(worktree)`'s
+ * own result; reusing it here (rather than a second, independently
+ * spawned copy) is what actually eliminates the duplicate spawn, not
+ * merely hides it.
+ *
+ * `resolveClaimLockPath`/`resolveWorktreeAdminDir` (used by every other
+ * command: `--check`, `--record-tokens`, `--read-tokens`,
+ * `--backfill-tokens`) are intentionally left untouched and still issue
+ * their own independent spawn -- this helper is `acquireClaimLock`'s own
+ * internal fast path, not a replacement for that exported entry point.
+ *
+ * Fails closed on a malformed response (not exactly two non-empty
+ * lines): throws rather than guessing which line is which, or silently
+ * treating an unresolved worktree as safely linked.
  */
-function isPrimaryWorktree(worktree: string): boolean {
-  const cwd = canonicalizeExistingDir(worktree);
-  const commonDir = canonicalizeExistingDir(
-    resolve(cwd, gitRevParse(cwd, ['--git-common-dir'])),
-  );
-  const adminDir = canonicalizeExistingDir(
-    resolve(cwd, gitRevParse(cwd, ['--absolute-git-dir'])),
-  );
-  return commonDir === adminDir;
-}
-
-/**
- * Refuse creating a *new* lock when `worktree` is the primary worktree.
- * Returns undefined for a linked worktree so the caller proceeds with
- * the normal create path. An already-present lock is not this function's
- * concern: reacquire, collision, and takeover stay on their existing
- * branches.
- */
-function refuseNewPrimaryWorktreeLock(
-  worktree: string,
-  path: string,
-): AcquireLockOutcome | undefined {
-  if (!isPrimaryWorktree(worktree)) {
-    return undefined;
+function resolveAcquireWorktreeFacts(worktree: string): {
+  path: string;
+  isPrimary: boolean;
+} {
+  // Reuse gitRevParse (not a fresh execFileSync call) so the #3434
+  // stderr-non-leak `stdio` setting and sanitizedGitEnvironment() apply
+  // here automatically instead of needing to stay duplicated in sync by
+  // hand.
+  const output = gitRevParse(worktree, [
+    '--absolute-git-dir',
+    '--git-common-dir',
+  ]);
+  // Split on a bare `\n` and `.trim()` each line: a `\r` left over from a
+  // `\r\n` line ending is whitespace, so `.trim()` strips it the same as
+  // any other line, and the final trailing-newline-produced empty
+  // element is dropped by the length filter below -- CRLF and LF output
+  // parse identically.
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length !== 2) {
+    throw new Error(
+      `unexpected 'git rev-parse --absolute-git-dir --git-common-dir' output for worktree ${JSON.stringify(worktree)}: ${JSON.stringify(output)}`,
+    );
   }
+  const [adminDirRaw, commonDirRaw] = lines as [string, string];
+  const cwd = canonicalizeExistingDir(worktree);
+  const commonDir = canonicalizeExistingDir(resolve(cwd, commonDirRaw));
+  const adminDir = canonicalizeExistingDir(resolve(cwd, adminDirRaw));
   return {
-    mode: 'primary-worktree-refused',
-    path,
-    message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
+    path: join(adminDirRaw, CLAIM_LOCK_FILE_NAME),
+    isPrimary: commonDir === adminDir,
   };
 }
 
@@ -716,7 +763,15 @@ export function acquireClaimLock(
   claimId: string,
   takeover: boolean,
 ): AcquireLockOutcome {
-  const path = resolveClaimLockPath(worktree);
+  const facts = resolveAcquireWorktreeFacts(worktree);
+  const { path } = facts;
+  const refused: AcquireLockOutcome | undefined = facts.isPrimary
+    ? {
+        mode: 'primary-worktree-refused',
+        path,
+        message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
+      }
+    : undefined;
 
   for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
     const read = readLock(path);
@@ -728,7 +783,6 @@ export function acquireClaimLock(
     }
 
     if (read.status === 'absent') {
-      const refused = refuseNewPrimaryWorktreeLock(worktree, path);
       if (refused) {
         return refused;
       }
@@ -768,7 +822,6 @@ export function acquireClaimLock(
     return { mode: 'acquired', path, reacquired: true, racedCreate: true };
   }
   if (finalRead.status === 'absent') {
-    const refused = refuseNewPrimaryWorktreeLock(worktree, path);
     if (refused) {
       return refused;
     }

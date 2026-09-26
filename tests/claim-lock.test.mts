@@ -1201,6 +1201,67 @@ test('acquire: a genuinely pre-existing matching lock reacquires with no racedCr
   }
 });
 
+test('acquire: a malformed combined rev-parse response fails closed instead of guessing which line is which (#3526)', () => {
+  // #3526 folded acquireClaimLock's up-to-three `git rev-parse` spawns
+  // into one combined `--absolute-git-dir --git-common-dir` call
+  // (resolveAcquireWorktreeFacts, src/scripts/claim-lock.mts), parsed
+  // positionally: line 1 is the admin dir, line 2 is the common dir. A
+  // response that is not exactly two non-empty lines (a git version
+  // emitting extra diagnostic output, a corrupted pipe, etc.) must never
+  // be silently treated as "one line short, so assume linked" or
+  // similar -- it must fail closed by throwing instead. This monkey-patches
+  // `child_process.execFileSync` on the main thread and propagates the
+  // patch to the compiled CLI module's own ESM import via `node:module`'s
+  // `syncBuiltinESMExports`, the same technique this suite's existing
+  // "write-lock" tests already use for `node:fs` (see the top-of-file
+  // comment for why a main-thread, not worker-thread, patch suffices
+  // here).
+  const fixture = setupLinkedWorktree();
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  let intercepted = false;
+  try {
+    cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+      const [file, cmdArgs] = args;
+      // Match only the new *combined* two-flag invocation shape (5
+      // positional args, both flags present) -- never the single-flag
+      // shape `resolveClaimLockPath`/`resolveWorktreeAdminDir` still use
+      // independently, so this interception cannot corrupt their own,
+      // unrelated calls.
+      if (
+        file === 'git' &&
+        Array.isArray(cmdArgs) &&
+        cmdArgs.length === 5 &&
+        cmdArgs[2] === 'rev-parse' &&
+        cmdArgs[3] === '--absolute-git-dir' &&
+        cmdArgs[4] === '--git-common-dir'
+      ) {
+        intercepted = true;
+        return 'only-one-line\n';
+      }
+      return originalExecFileSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+
+    assert.throws(
+      () => acquireClaimLock(fixture.worktree, 'agent-a', 'claim-a', false),
+      /unexpected 'git rev-parse --absolute-git-dir --git-common-dir' output/,
+    );
+    assert.equal(
+      intercepted,
+      true,
+      'expected the execFileSync interception to fire for the combined query',
+    );
+  } finally {
+    cp.execFileSync = originalExecFileSync;
+    require('node:module').syncBuiltinESMExports();
+  }
+  // Restored to the real execFileSync before this check: no lock file was
+  // ever created on the failed-closed path above.
+  assert.equal(existsSync(resolveClaimLockPath(fixture.worktree)), false);
+  teardown(fixture);
+});
+
 // Generated-tokens record tests (#2719).
 
 test('generated-tokens: record/read round trip reports the recorded fields', () => {
