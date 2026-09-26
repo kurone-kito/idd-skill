@@ -64,6 +64,8 @@ export interface SweepCommentInput {
   created_at?: string | null;
   updatedAt?: string | null;
   updated_at?: string | null;
+  /** #3249: edited trust markers must not satisfy review acknowledgements. */
+  lastEditedAt?: string | null;
   url?: string | null;
   html_url?: string | null;
 }
@@ -89,6 +91,8 @@ export interface SweepThreadCommentInput {
   author?: AuthorRef | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  /** #3249: edited trust dispositions must not satisfy the gate. */
+  lastEditedAt?: string | null;
   url?: string | null;
 }
 

@@ -1434,7 +1434,16 @@ test('evaluateReviewComment treats an edited or edit-state-unresolved dispositio
   };
   const buildThread = (
     id: string,
-    disposition: Record<string, unknown>,
+    disposition: {
+      id: string;
+      url: string;
+      author: { login: string };
+      body: string;
+      createdAt: string;
+      viewerCanMinimize: boolean;
+      isMinimized: boolean;
+      lastEditedAt?: string | null;
+    },
   ): ReviewThreadNode => ({
     id,
     isResolved: true,
