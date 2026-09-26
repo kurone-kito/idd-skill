@@ -614,6 +614,59 @@ test('passes autonomous completion when token vocabulary is descriptive (#3528)'
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('does not hide a missing authentication credential behind descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 162,
+    title: 'document authentication handling',
+    body: 'The authentication credential is missing. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps parser tokens and cache keys separate from security blockers (#3522)', () => {
+  for (const body of [
+    'The parser needs a lookahead token to disambiguate the grammar. Verification: add unit tests.',
+    'The cache requires a stable key for deterministic lookup. Verification: add unit tests.',
+  ]) {
+    const result = evaluateA4Viability({
+      number: 163,
+      title: 'clarify implementation details',
+      body,
+      state: 'OPEN',
+    });
+
+    assert.equal(result.passed, true);
+    assert.deepEqual(result.failedCriteria, []);
+  }
+});
+
+test('treats obtain credentials as a live prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 164,
+    title: 'document credential acquisition',
+    body: 'Obtain credentials from the maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('recognizes singular credential wording as descriptive with positive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 165,
+    title: 'document authentication terminology',
+    body: 'A credential is used for authentication. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('passes autonomous completion for actorless application authorization (#3528)', () => {
   const result = evaluateA4Viability({
     number: 160,

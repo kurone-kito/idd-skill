@@ -102,7 +102,6 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credentials?|keys?|tokens?|production access|cross-repo dependency)\b/gi;
 const SECURITY_VOCABULARY_PATTERN = /^(?:credentials?|keys?|tokens?)$/i;
-const GENERIC_SECURITY_VOCABULARY_PATTERN = /^(?:credentials|keys?|tokens?)$/i;
 const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
   '(?:maintainers?|operators?|owners?|teams?|customers?|administrators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
 // Application roles such as owners, teams, and customers may appear in
@@ -285,6 +284,18 @@ const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
   /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|which\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}(?:before|until)\b)|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b|,\s+which\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:\n]{0,80}(?:before|until)\b)/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
+const CREDENTIAL_FORWARD_STATUS_ASSERTION_PATTERN =
+  /^\s+(?:(?:is|are|was|were)\s+)?(?:missing|absent|unavailable|not\s+(?:available|provided|supplied))\b/i;
+const CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN =
+  /\b(?:missing|absent|unavailable|not\s+(?:available|provided|supplied))\s+$/i;
+const CREDENTIAL_ACQUISITION_ASSERTION_PATTERN =
+  /\b(?:obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
+const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
+  /\bcredential[- ]prompt(?:ing)?\b/i;
+const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
+  /\bwaits?-on-person\/credential\b|\bwait(?:s|ing)?\s+on\s+(?:a\s+)?(?:person|credential)\b/i;
+const CREDENTIAL_EXTERNAL_DISCUSSION_PATTERN =
+  /\b(?:discuss|coordinate|review)\s+(?:(?:an?|the)\s+)?credentials?\b[^.;:!?]{0,80}\b(?:with|from)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b[^.;:!?]{0,80}\b(?:before|until)\b/i;
 const CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN =
   /^\s+(?:pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)\s+that\s+(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference)\b/i;
 const CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN =
@@ -298,7 +309,7 @@ const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 const DESCRIPTIVE_SECURITY_VERB_PATTERN =
   /\b(?:concern(?:s|ed)|describ(?:es|ed)|document(?:s|ed)|cover(?:s|ed)|mention(?:s|ed)|refer(?:s|red)|discuss(?:es|ed)|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
 const DESCRIPTIVE_SECURITY_CONTEXT_PATTERN =
-  /\b(?:fine[- ]grained|least[- ]privilege|security|authentication)\b/i;
+  /\b(?:fine[- ]grained|least[- ]privilege|security|authentication|authorization|parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index|keyed|token-string|machine-readable|runtime|template|placeholder|flag|argument|value|term|job|display-name|config(?:uration)?|policy|map|field|entry|label|marker|workflow|schema|helper|source|file|issue|pr|review|metric|type|command|option|parameter|alias|name|dependency|graph|node|string|number|window|join|event|stage|vendor|session|round|signal|data|output|input|text|line|body|group|concurrency|cost|budget|model|reasoning|translation|prompt|turn|generation|performance|time|no|without|including|such\s+as|document(?:s|ed|ation)?|docs?|default|table|starting|recalibration|rename|test|judgment|canonical|failing|criteria|build|reason|outcome|history|groom|hearing|items?|comment|scope|generated|region|marker|publication)\b/i;
 const DESCRIPTIVE_SECURITY_NOUN_PATTERN =
   /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|terminology|pattern)$/i;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
@@ -922,7 +933,60 @@ function isFollowedByGenericMentionNoun(corpus, matchIndex, matchEnd) {
   );
 }
 function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
-  if (!SECURITY_VOCABULARY_PATTERN.test(corpus.slice(matchIndex, matchEnd))) {
+  const vocabulary = corpus.slice(matchIndex, matchEnd);
+  if (!SECURITY_VOCABULARY_PATTERN.test(vocabulary)) {
+    return false;
+  }
+  // Ordinary parser/cache terminology must not become an external security
+  // dependency merely because it uses `key` or `token` (#3522 Copilot
+  // review). Keep the programming-language exception narrow and let nearby
+  // security context win when both meanings are present.
+  if (/^(?:keys?|tokens?)$/i.test(vocabulary)) {
+    const contextStart = Math.max(0, matchIndex - 100);
+    const contextEnd = Math.min(corpus.length, matchEnd + 100);
+    const context = corpus.slice(contextStart, contextEnd);
+    if (
+      /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index)\b/i.test(
+        context,
+      ) &&
+      !/\b(?:production|credential|credentials|secret|secrets|security|authentication|authorization|access|permission|api|signing|private|public)\b/i.test(
+        context,
+      )
+    ) {
+      return true;
+    }
+  }
+  const backwardStart = Math.max(
+    0,
+    matchIndex - REQUIREMENT_ASSERTION_WINDOW_CHARS,
+  );
+  const requirementContextBefore = corpus.slice(backwardStart, matchIndex);
+  const requirementContextAfter = corpus.slice(matchEnd, matchEnd + 80);
+  const statusContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
+  const isSecurityStatus =
+    /^credentials?$/i.test(vocabulary) ||
+    /\b(?:security|authentication|authorization|production|secret|access|permission|api|signing|private|public)\b/i.test(
+      statusContext,
+    );
+  if (
+    CREDENTIAL_PROMPTING_ASSERTION_PATTERN.test(
+      corpus.slice(matchIndex, matchEnd + 40),
+    ) ||
+    CREDENTIAL_EXTERNAL_DISCUSSION_PATTERN.test(
+      corpus.slice(Math.max(0, matchIndex - 80), matchEnd + 120),
+    ) ||
+    CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN.test(
+      corpus.slice(Math.max(0, matchIndex - 40), matchEnd + 40),
+    ) ||
+    (isSecurityStatus &&
+      (CREDENTIAL_FORWARD_STATUS_ASSERTION_PATTERN.test(
+        requirementContextAfter,
+      ) ||
+        CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN.test(
+          requirementContextBefore,
+        ))) ||
+    CREDENTIAL_ACQUISITION_ASSERTION_PATTERN.test(requirementContextBefore)
+  ) {
     return false;
   }
   if (
@@ -947,11 +1011,11 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   if (CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(purposeTail)) {
     return true;
   }
-  const backwardStart = Math.max(
+  const descriptiveBackwardStart = Math.max(
     0,
     matchIndex - DESCRIPTIVE_SECURITY_BACKWARD_WINDOW,
   );
-  const backwardRaw = corpus.slice(backwardStart, matchIndex);
+  const backwardRaw = corpus.slice(descriptiveBackwardStart, matchIndex);
   const priorBreaks = [
     ...backwardRaw.matchAll(new RegExp(CUE_HARD_BREAK_PATTERN, 'g')),
   ];
@@ -979,12 +1043,12 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   ) {
     return true;
   }
-  // Generic key/token/credential vocabulary is non-blocking only after the
-  // explicit requirement and descriptive-context checks above. In
-  // particular, `needs production keys` has already returned false through
-  // the bounded requirement assertion path before reaching this fallback.
-  return GENERIC_SECURITY_VOCABULARY_PATTERN.test(
-    corpus.slice(matchIndex, matchEnd),
+  // A security noun is descriptive only when a positive context established
+  // that meaning. Do not use singular/plural form as a proxy: `credential`
+  // can be descriptive, while `credentials` can still be a live prerequisite
+  // (#3522 Copilot review).
+  return DESCRIPTIVE_SECURITY_CONTEXT_PATTERN.test(
+    `${backwardText} ${purposeTail} ${tail} ${corpus.slice(Math.max(0, matchIndex - 120), Math.min(corpus.length, matchEnd + 120))}`,
   );
 }
 /**
