@@ -82,6 +82,11 @@ Convergence guardrails:
   redirected by a maintainer.
 - If the critique pass reports zero issues, proceed to E11.
 
+**No confidence exception.** Fix scope or confidence never excuses
+skipping this pass — run it for every E9 batch before E11. Skipped
+one? Disclose on the PR, name the round(s), run E10 on the
+accumulated diff before F1.
+
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
 surfacing a genuinely new, real finding — that is convergence, not
@@ -229,11 +234,10 @@ falls outside the touched-file scope; or either bound is reached.
 **Non-goals**: never delays an in-flight CI wait (E15's mid-wait
 fold-in rule is unchanged); never changes PATH A/B routing or triage
 timing (still happens at the next E1 pass — only push timing changes);
-and relaxes nothing else — E14 still re-reviews every push, the
-per-HEAD `review-watermark` still invalidates on push, each E6 reply
-stays individual, and the
+and relaxes nothing else — E14 re-review, `review-watermark`
+invalidation, individual E6 replies, and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-still runs immediately before push.
+before push all still apply.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope
@@ -258,11 +262,10 @@ Start every reply with one of these prefixes so that disposition is
 unambiguous:
 
 - `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
-  Citing a commit that did not fix this item in the current round (E9's
-  batching case, or a Cold-start edge case 1 citation) requires that
-  commit to have already passed the file-path-touch check
-  `idd-review-snapshot.instructions.md`'s Cold-start edge case 1
-  defines. After that visible prefix, include the
+  Citing a commit that did not fix this item in the current round
+  requires it to already pass the file-path-touch check E9 applies
+  (`idd-review-snapshot.instructions.md`'s Cold-start edge case 1).
+  After that visible prefix, include the
   reply-identity stamp exactly as
   `idd-review-triage.instructions.md`'s E6 defines it
   (`<!-- {markerPrefix}-review-reply -->`) — same stamp mechanics and

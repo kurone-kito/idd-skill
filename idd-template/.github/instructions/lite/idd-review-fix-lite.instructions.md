@@ -160,21 +160,28 @@ other GitHub side effect, confirm all of the following:
 7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
-8. Heuristic: several new, non-repeated same-area findings across
+8. **No confidence exception.** A fix's scope, or your own
+   confidence in it, never excuses skipping this pass — E10 must run
+   for every E9 fix batch before E11. Skipped a round anyway?
+   Disclose it, name the round(s), then run E10 against the
+   accumulated diff before F1 — see
+   `idd-review-fix.instructions.md`'s E10 repair path for the full
+   procedure.
+9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer
    simplifying/removing the mechanism over a second redesign -- only
    once confirmed non-required by the issue's acceptance criteria or
    contract; if required, stop for a maintainer decision.
-9. Third tier: when each new finding is instead a genuine, distinct gap
-   against an open-ended external correctness domain (a grammar,
-   protocol, or wire format) rather than a symptom of one mechanism,
-   tiers 1-2 do not apply -- there is no mechanism to simplify, since
-   coverage of that domain is itself the acceptance criterion. Once
-   several rounds each surface a genuinely new in-scope gap rather than
-   repeating one, list every outstanding gap with evidence and the
-   round count in a hold comment and stop for a maintainer decision
-   (`#2865`).
+10. Third tier: when each new finding is instead a genuine, distinct gap
+    against an open-ended external correctness domain (a grammar,
+    protocol, or wire format) rather than a symptom of one mechanism,
+    tiers 1-2 do not apply -- there is no mechanism to simplify, since
+    coverage of that domain is itself the acceptance criterion. Once
+    several rounds each surface a genuinely new in-scope gap rather than
+    repeating one, list every outstanding gap with evidence and the
+    round count in a hold comment and stop for a maintainer decision
+    (`#2865`).
 
 ## E11 — Resolve conflicts with main
 
@@ -305,17 +312,9 @@ other GitHub side effect, confirm all of the following:
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
    the source/vendored profile; resolve the package-manager /
    ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
-   fails, returns invalid JSON, or is missing required fields
-   (`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
-   `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-   `secondaryBotLogin`, `secondaryBotLogins`, `secondaryRequestLogins`,
-   `secondaryRequestNeeded`, `earliestSameHeadAt`,
-   `requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
-   `settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
-   `trustedMarkerSummary` — the full contract in
-   `docs/idd-helper-scripts.md#stable-helper-evidence-outputs` and
-   `schemas/advisory-wait-state.schema.json`), stop and ask — do not
-   fall back to a manual per-field fetch.
+   fails, returns invalid JSON, or is missing any field from
+   `idd-advisory-wait-lite.instructions.md`'s own Required fields list,
+   stop and ask — do not fall back to a manual per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
    - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
