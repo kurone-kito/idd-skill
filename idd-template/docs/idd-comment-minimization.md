@@ -368,8 +368,8 @@ never suppress this run's own non-success evidence), and the agent F4
 step skips its own post under that same both-converged rule —
 including when the workflow itself posted the prior success record. A
 trusted comment recording any other status (`failed`, `incomplete`,
-`permission-blocked`, `rescan-failed`, `recheck-failed`,
-`helper-error`, `timeout`) does not
+`permission-blocked`, `rescan-failed`, `time-budget-exhausted`,
+`recheck-failed`, `helper-error`, `timeout`) does not
 suppress either side,
 so a `workflow_dispatch` rerun after a `rescan-failed` post still
 posts fresh evidence (preventive; no observed incident yet — issue
@@ -742,12 +742,13 @@ successful outcome (`applied` / `clean`) and this run's own outcome is
 also `applied`/`clean`** (issue `#2213`'s both-converged rule) —
 narrowing, not fully preventing, duplicate success records; a prior
 success record alone must never suppress this run's own
-`failed`/`incomplete`/`rescan-failed`/`recheck-failed`/`helper-error`/`timeout`
+`failed`/`incomplete`/`rescan-failed`/`time-budget-exhausted`/`recheck-failed`/`helper-error`/`timeout`
 evidence, even
 when this run's own apply returned `applied` for residual markers the
 other side already minimized first; still post when no prior success
 record exists, or to correct an existing `failed` / `incomplete` /
-`permission-blocked` / `rescan-failed` / `recheck-failed` record — a
+`permission-blocked` / `rescan-failed` / `time-budget-exhausted` /
+`recheck-failed` record — a
 `rescan-failed`
 record in particular invites a retry, so a later `workflow_dispatch`
 rerun (or agent F4 re-run) must post fresh evidence for its own
@@ -759,15 +760,15 @@ record (preventive; no observed incident yet — issue `#2043`):
 
 **F4 Cleanup Evidence**
 
-| Field                            | Value                                                                          |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| Status                           | applied / clean / failed / incomplete / rescan-failed / helper-error / timeout |
-| Applied                          | N                                                                              |
-| Failed                           | N                                                                              |
-| Skipped                          | N                                                                              |
-| Permission-blocked               | N                                                                              |
-| Retry attempts (bound-exhausted) | N (true / false)                                                               |
-| Notes                            | reason for any failed or skipped items                                         |
+| Field                            | Value                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Status                           | applied / clean / failed / incomplete / rescan-failed / time-budget-exhausted / helper-error / timeout |
+| Applied                          | N                                                                                                      |
+| Failed                           | N                                                                                                      |
+| Skipped                          | N                                                                                                      |
+| Permission-blocked               | N                                                                                                      |
+| Retry attempts (bound-exhausted) | N (true / false)                                                                                       |
+| Notes                            | reason for any failed or skipped items                                                                 |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror
@@ -779,6 +780,17 @@ fresh rescan still found candidates after the bound, not that
 anything went wrong. A `rescan-failed` status (below) always takes the
 cleanup-failure path regardless of `retry-bound-exhausted`, since the
 confirming rescan itself never completed.
+
+A `time-budget-exhausted` status (`--time-budget-seconds`,
+kurone-kito/idd-skill#3321) means this run's own apply-pass wall-time
+budget ran out mid-pass: every row already applied before that point is
+preserved, the remaining candidates are listed as-is, and no confirming
+rescan runs for this invocation — a later invocation (a
+`workflow_dispatch` rerun or a local F4 pass) rescans from scratch. It
+never collapses into `applied`, `clean`, or `incomplete`, and it is not
+itself a cleanup failure (below); local F4 never passes
+`--time-budget-seconds`, so this status is only ever reported by the
+server-side `post-merge-cleanup.yml` invocation.
 
 ### Cleanup-failure comment
 

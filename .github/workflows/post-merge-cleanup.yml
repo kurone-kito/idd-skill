@@ -166,7 +166,8 @@ jobs:
             --pr "$PR_NUMBER" \
             --apply \
             --skip-claim-check \
-            --format json 2>cleanup-stderr.log)
+            --format json \
+            --time-budget-seconds 360 2>cleanup-stderr.log)
           HELPER_EXIT=$?
           set -e
           # Prefer the helper's JSON report when it is parseable, even on
