@@ -376,12 +376,17 @@ no `claimed-by` and so never enters _Claim verification_ at all — the
 adopt-verbatim paragraph in `idd-claim.instructions.md` carries its own
 inline verify-then-compare instruction, the one path #1480 actually
 exercises. Beyond the AC's letter, `evaluateResumeClaimRouting`
-(`resume-claim-routing.mts`) also accepts `--claim-id`/`--nonce` and is
-unit-tested, anticipating Resume Step 1 wiring — but the documented Resume
-Step 1 invocation (`idd-resume.instructions.md`) never threads either flag
-through, and a resumed process has no local memory of which nonce was its
-own to compare against in the first place. Cold recovery
-(kurone-kito/idd-skill#1529) now fail-closes: a resume that holds no
+(`resume-claim-routing.mts`) also accepts `--claim-id`, `--nonce`, and
+`--worktree`, and is unit-tested. kurone-kito/idd-skill#3273 wired the
+documented Resume Step 1 invocation, in both the standard
+(`idd-resume.instructions.md`) and lite
+(`lite/idd-resume-lite.instructions.md`) profiles, to thread
+`--claim-id` whenever this session already recorded and verified one,
+plus `--nonce` when this session also recorded one for that same
+claim-id, and `--worktree` once the B1 worktree exists, so the helper
+reads independent owner evidence instead of treating a bare re-fetch
+as a live competitor. Cold recovery
+(kurone-kito/idd-skill#1529) still fail-closes: a resume that holds no
 local nonce treats 2+ trusted activation-nonce markers for the active
 claim-id as `disputed`/`stop` rather than guessing an owner.
 The merge write-gate half landed separately: `summarizeClaimValidation`

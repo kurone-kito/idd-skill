@@ -22,33 +22,33 @@ Resume stale checks use the `claim-stale-age` policy default from
 
 Collect all signals before routing. Use GitHub server timestamps only.
 
-| Signal                   | What to collect                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately.            |
-| Forced-handoff evidence  | Approving human, displaced `{claim-id}`, branch, linked PR, evidence URL — only when `forced-handoff: human-gated`. When an open PR exists, require issue-plus-PR approval naming that PR. |
-| Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                                   |
-| Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                                 |
-| PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                                      |
-| CI state                 | Check states for PR HEAD; latest completed `completedAt`; latest successful `completedAt`; or `none`.                                                                                      |
-| Worktrees                | `git worktree list` output.                                                                                                                                                                |
-| Local branch             | Whether the branch named in the claim comment exists locally.                                                                                                                              |
-| Worktree state           | `git status` in worktree (if it exists); otherwise `missing`.                                                                                                                              |
-| Unpushed commits         | `git log @{u}..HEAD` in worktree. Treat all commits as unpushed if no upstream is configured.                                                                                              |
-| Local HEAD SHA           | `git rev-parse HEAD` in worktree.                                                                                                                                                          |
-| Live digest state        | Count of `<!-- idd-live-status: current -->` comments on issue/PR. Do not use digest text to route resume.                                                                                 |
+| Signal                   | What to collect                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately. |
+| Forced-handoff evidence  | Approving human, displaced `{claim-id}`, branch, linked PR, evidence URL (`forced-handoff: human-gated` only); an open PR requires issue-plus-PR approval naming it.            |
+| Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                        |
+| Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                      |
+| PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                           |
+| CI state                 | Check states for PR HEAD; latest completed `completedAt`; latest successful `completedAt`; or `none`.                                                                           |
+| Worktrees                | `git worktree list` output.                                                                                                                                                     |
+| Local branch             | Whether the branch named in the claim comment exists locally.                                                                                                                   |
+| Worktree state           | `git status` in worktree (if it exists); otherwise `missing`.                                                                                                                   |
+| Unpushed commits         | `git log @{u}..HEAD` in worktree. Treat all commits as unpushed if no upstream is configured.                                                                                   |
+| Local HEAD SHA           | `git rev-parse HEAD` in worktree.                                                                                                                                               |
+| Live digest state        | Count of `<!-- idd-live-status: current -->` comments on issue/PR. Do not use digest text to route resume.                                                                      |
 
 ## Step 0 — Route classifier
 
 Evaluate in order; take the first matching row.
 
-| Condition                                                                                                               | Route                                                              |
-| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Issue closed or PR merged                                                                                               | Step 1 (§MC)                                                       |
-| `forced-handoff: human-gated` + valid evidence matching active/inheritable state                                        | Step 1 forced-handoff path (skip stall check)                      |
-| `forced-handoff: human-gated` + evidence exists but mismatches live claim/branch/PR state                               | STOP — report mismatch; do not claim, push, or mutate review state |
-| Non-owned active claim + evidence satisfying the operator-present release path below + operator-supplied input received | Operator-present release path (below); skip the stall file         |
-| Non-owned active claim + no valid forced-handoff evidence                                                               | `idd-resume-stall.instructions.md`; then Step 1 if unblocked       |
-| Otherwise                                                                                                               | Step 1                                                             |
+| Condition                                                                                 | Route                                                              |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Issue closed or PR merged                                                                 | Step 1 (§MC)                                                       |
+| `forced-handoff: human-gated` + valid evidence matching active/inheritable state          | Step 1 forced-handoff path (skip stall check)                      |
+| `forced-handoff: human-gated` + evidence exists but mismatches live claim/branch/PR state | STOP — report mismatch; do not claim, push, or mutate review state |
+| Non-owned active claim + operator-present predicate (below) met + input received          | Operator-present release path (below); skip the stall file         |
+| Non-owned active claim + no valid forced-handoff evidence                                 | `idd-resume-stall.instructions.md`; then Step 1 if unblocked       |
+| Otherwise                                                                                 | Step 1                                                             |
 
 Autopilot and unattended agents must never invent, request, or broaden
 forced handoff; they may only consume already-recorded human-gated evidence.
@@ -131,8 +131,12 @@ only; this path's own already-announced pause waits on neither.
 When helper runtime is enabled, you may collect Step 1 evidence with:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue {issue-number}
+node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
 ```
+
+Pass `--claim-id` once this session recorded and verified one,
+`--nonce {nonce}` when this session recorded one for that same
+claim-id, and `--worktree {path}` once the B1 worktree exists.
 
 When the issue is closed or its PR merged, skip every bullet below and
 go directly to the table's first three rows (§MC): the helper's routing
@@ -144,6 +148,8 @@ authoritative replacement:
 
 - `state: already_owned` + `action: keep` → continue with the same
   `{claim-id}` route.
+- `state: owner_evidence_required` + `action: stop` → retry once with
+  `--worktree {path}`; if it persists, stop (not a live competitor).
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: local_worktree_occupied` + `action: stop` → a stale or released
