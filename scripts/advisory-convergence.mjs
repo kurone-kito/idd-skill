@@ -3580,7 +3580,7 @@ function toReviewThreadPayload(node) {
           __typename: comment.authorTypename,
         },
         pullRequestReview: { id: comment.pullRequestReviewId },
-         lastEditedAt: comment.lastEditedAt,
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

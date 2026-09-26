@@ -1711,7 +1711,7 @@ export function normalizeThread(thread) {
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt || comment.createdAt,
         pullRequestReview: { id: comment.pullRequestReviewId ?? null },
-         lastEditedAt: comment.lastEditedAt,
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

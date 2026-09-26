@@ -47,8 +47,8 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
-  composeGateTrustedMarkerLogins,
   classifyCommentEditState,
+  composeGateTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   parseProviderOutageAdvancedComment,
   parseProviderOutageDeclarationComment,

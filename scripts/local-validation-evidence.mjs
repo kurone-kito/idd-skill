@@ -50,8 +50,8 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
-  composeGateTrustedMarkerLogins,
   classifyCommentEditState,
+  composeGateTrustedMarkerLogins,
   parseLocalValidationEvidenceComment,
   parsePaginatedGhNdjson,
   renderLocalValidationEvidenceComment,

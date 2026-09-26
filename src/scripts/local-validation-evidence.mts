@@ -53,8 +53,8 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
 import {
-  composeGateTrustedMarkerLogins,
   classifyCommentEditState,
+  composeGateTrustedMarkerLogins,
   type ParsedLocalValidationEvidence,
   parseLocalValidationEvidenceComment,
   parsePaginatedGhNdjson,
