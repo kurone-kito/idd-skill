@@ -58,27 +58,6 @@
 // may import only `node:` builtins -- the `typescript` devDependency is
 // unavailable there. This mirrors the existing precedent in
 // `audit-code-span-wrap.mts` and `markdown-link-audit.mts`.
-//
-// #3498 no-`from` `export { a [as b] };` list resolution -- SUPPORTED
-// SYNTAX SET (explicit boundary, added after several C1 review rounds
-// each found one more unhandled form): resolves the real declaration/
-// import line for `a` when it is a bare or exported top-level
-// `function`/`const`/`class` (including TypeScript overload signatures
-// and single-line multi-declarator `const`), or a named, default,
-// namespace, or combined default+named/namespace import (any specifier,
-// relative or bare package, and a combined form's own comma-then-newline
-// wrap before `{`/`* as` is recognized -- round 10). A form OUTSIDE this
-// set -- a multi-line multi-declarator `const`, a regex-literal or
-// generic-angle-bracket initializer confusing the declarator scan,
-// `let`/`var`, a destructuring declarator, a wrap between `import` and a
-// default identifier or between `as` and a namespace identifier (no real
-// formatter chooses those break points), or any other syntax this list
-// does not name -- falls back to the ORIGINAL, pre-#3498 behavior (the
-// export statement's own line, which can misclassify the export as
-// `production`): a documented, accepted limitation, not a defect to keep
-// chasing. See `scanBareConstDeclarators`'s own doc comment for the
-// specific AST-ambiguity cases (regex vs. division, generic vs.
-// comparison) that are deliberately rejected rather than guessed at.
 // #3240: side-effect-only import, kept first so an unsupported Node fails
 // loudly before this entry block runs. See node-runtime-guard.mts.
 import './node-runtime-guard.mjs';
@@ -93,11 +72,8 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 // real finding. For a `function`/`const`/`class` declaration, it may sit
 // on the declaration's own line OR, since a multi-line signature makes
 // that cramped, as a standalone comment on the line immediately above the
-// declaration. For an `export { a, b };` no-`from` list item, it is
-// recognized on that item's own physical line (see `parseBracedItems`)
-// AND, since #3498, on the resolved real declaration's own line -- either
-// one suppresses the finding (see `declarationSuppressionByLocalName` in
-// `parseFile`).
+// declaration. For an `export { a, b };` list item, it is checked only on
+// that item's own physical line (see `parseBracedItems`).
 const IGNORE_EXPORT_PATTERN =
   /\/\/\s*audit:ignore-dead-export(?::\s*(.*))?\s*$/;
 const RELATIVE_SPECIFIER_PATTERN = /^\.\.?\//;
@@ -181,129 +157,6 @@ function findMatchingBrace(strippedText, openIndex) {
     }
   }
   return -1;
-}
-/** #3498 (Codex/Copilot C1 findings, round 4; NARROWED after round 6):
- * scans a bare `const` statement's declarator list starting at
- * `declaratorListStart` (the absolute offset into `strippedText` right
- * after the `const ` keyword) and bounded to `scanEnd` (the CURRENT
- * physical line's own end offset -- never beyond it), tracking
- * bracket/paren/brace depth AND quote state so neither a declarator's
- * own initializer (`const a = foo(1, 2), b = 3;`) nor a comma inside a
- * string/template literal (`const text = 'x, helper';`) is mistaken for
- * a declarator boundary. Stops early at the first top-level (depth 0,
- * unquoted) `;`, or otherwise at `scanEnd`. Returns each declarator's
- * name and absolute offset -- the caller resolves the real 1-based line
- * via `lineNumberAt` (all declarators returned here share the same
- * line, since the scan never crosses a line boundary).
- *
- * **Deliberately single-line, not multi-line (round 6 revert).** An
- * earlier revision of this scanner searched forward across physical
- * lines for the terminating `;`, to also resolve a multi-declarator
- * list split across lines (`const a = 1,\n  b = 2;`). C1 review (Codex,
- * Copilot) found that this crossed into the FOLLOWING statement for
- * ordinary semicolonless (ASI) code (`const helper = 1\nexport { helper
- * };`), consuming the export statement into the scan and silently
- * dropping that export from the audit entirely -- a strictly worse
- * failure mode (real findings vanish) than the narrow multi-line-
- * declarator gap it closed (a finding is merely misclassified). Reverted
- * to single-line-only; a multi-line declarator list is an accepted,
- * out-of-scope limitation again (see the module header's "regex/line-
- * based, not an AST parse" note).
- *
- * A quoted span (single, double, or backtick) is treated as fully
- * OPAQUE text, including a template literal's own `${...}` interpolation
- * -- an accepted simplification: only a comma meant as a genuine
- * declarator separator INSIDE an interpolation expression (an
- * exceedingly rare construct) would be missed. **Also accepted, NOT
- * handled** (C1 review, round 6): a regex literal's own delimiters
- * (`const OPEN = /\{/;`) are not tracked as opaque, so a bracket
- * character inside one can corrupt `depth`; and a TypeScript generic
- * angle-bracket list (`<T, U>`) is not tracked as a depth-increasing
- * pair, so its own commas can be mistaken for declarator boundaries.
- * Both are the same class of ambiguity real JS/TS parsers resolve only
- * with full grammar context (regex-vs-division, generic-vs-comparison)
- * -- genuinely unsafe to guess at with a regex/line-based scanner, so
- * they stay accepted limitations rather than heuristics that could
- * silently misfire the other way. Destructuring declarators (`const {
- * a, b } = obj;`) stay out of scope too -- `BARE_CONST_DECL_PATTERN`
- * never matches them at all (no identifier immediately follows `const
- * `), a separate, pre-existing limitation this scanner does not extend
- * to. */
-function scanBareConstDeclarators(strippedText, declaratorListStart, scanEnd) {
-  const declarators = [];
-  let depth = 0;
-  let quote = null;
-  let segmentStart = declaratorListStart;
-  const pushSegment = (segmentEnd) => {
-    const raw = strippedText.slice(segmentStart, segmentEnd);
-    const leading = raw.length - raw.trimStart().length;
-    const nameMatch = /^([A-Za-z_$][\w$]*)/.exec(raw.slice(leading));
-    if (nameMatch) {
-      declarators.push({
-        name: nameMatch[1],
-        offset: segmentStart + leading,
-      });
-    }
-  };
-  let i = declaratorListStart;
-  for (; i < scanEnd; i += 1) {
-    const char = strippedText[i];
-    if (quote) {
-      if (char === '\\') {
-        i += 1; // skip the escaped character -- never its own quote/comma
-      } else if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      quote = char;
-    } else if (char === '(' || char === '[' || char === '{') {
-      depth += 1;
-    } else if (char === ')' || char === ']' || char === '}') {
-      depth -= 1;
-    } else if (char === ',' && depth === 0) {
-      pushSegment(i);
-      segmentStart = i + 1;
-    } else if (char === ';' && depth === 0) {
-      pushSegment(i);
-      return declarators;
-    }
-  }
-  pushSegment(i);
-  return declarators;
-}
-/** #3498: same own-line-or-preceding-line suppression check the exported
- * declaration branch already performs, parameterized to an arbitrary
- * resolved 1-based `realLineNumber` -- needed because a multi-declarator
- * `const` statement's declarators can each resolve to a DIFFERENT real
- * line (or, for a single bare declaration, the caller already knows
- * which line to check). */
-function checkOwnOrPrecedingLineSuppression(
-  originalText,
-  lineStarts,
-  realLineNumber,
-) {
-  const lineIndex = realLineNumber - 1;
-  const ownStart = lineStarts[lineIndex];
-  const ownEnd =
-    lineIndex + 1 < lineStarts.length
-      ? lineStarts[lineIndex + 1] - 1
-      : originalText.length;
-  const ownMatch = IGNORE_EXPORT_PATTERN.exec(
-    originalText.slice(ownStart, ownEnd),
-  );
-  if (ownMatch) {
-    return ownMatch;
-  }
-  if (lineIndex === 0) {
-    return null;
-  }
-  const precedingStart = lineStarts[lineIndex - 1];
-  const precedingEnd = ownStart - 1;
-  return IGNORE_EXPORT_PATTERN.exec(
-    originalText.slice(precedingStart, precedingEnd),
-  );
 }
 /** Splits the raw content between `{`/`}` (exclusive) on top-level commas
  * and parses each item's optional `type` prefix and `as alias`. */
@@ -389,48 +242,9 @@ const EXPORT_BRACE_PATTERN = /^export\s*\{/;
 const FROM_CLAUSE_AFTER_BRACE_PATTERN = /^\s*from\s*['"](\.[^'"]+)['"]/;
 const IMPORT_TYPE_ONLY_STATEMENT_PATTERN = /^import\s+type\b/;
 const IMPORT_BRACE_PATTERN = /^import\s*\{/;
-// #3498 (Copilot C1 finding, round 6): the local BINDING name (capture 1)
-// is what a later no-`from` `export { x as y };` list item's local-alias
-// bookkeeping needs -- widened to a bare package specifier (capture 2),
-// same reasoning as `IMPORT_FROM_AFTER_BRACE_PATTERN` below: only
-// cross-file importer crediting is relative-only, never this file-local
-// bookkeeping.
 const IMPORT_NAMESPACE_PATTERN =
-  /^import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
-// #3498 (Copilot C1 finding, round 6): a default import (`import helper
-// from './origin.mts';`) introduces a local binding the same way a
-// named import does -- captures the local name (1) and the specifier
-// (2), any specifier per the same round-4/round-6 reasoning as the
-// patterns above. Never matches a namespace (`* as`) or brace (`{`)
-// import, since neither `*` nor `{` can match the identifier-start
-// character class immediately after `import\s+`.
-const IMPORT_DEFAULT_PATTERN =
-  /^import\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
-// #3498 (Copilot/Codex C1 finding, round 7): a COMBINED default +
-// namespace import (`import def, * as ns from '...';`) introduces two
-// local bindings on one line -- `IMPORT_DEFAULT_PATTERN` above never
-// matches it (a comma, not `from`, follows the default identifier), and
-// neither does `IMPORT_NAMESPACE_PATTERN` (no leading default identifier
-// before `* as`). Captures the default name (1), namespace name (2), and
-// specifier (3).
-const IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN =
-  /^import\s+([A-Za-z_$][\w$]*)\s*,\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
-// #3498 (Copilot/Codex C1 finding, round 7): a COMBINED default + named
-// import (`import def, { a, b } from '...';`) -- matches only the
-// default-identifier-plus-comma PREFIX (up to and including the opening
-// `{`); the named list itself is parsed separately by
-// `processNamedImportBraceList`, mirroring how the plain brace branch
-// locates its own `{` via `strippedText.indexOf`.
-const IMPORT_DEFAULT_PLUS_BRACE_PATTERN =
-  /^import\s+([A-Za-z_$][\w$]*)\s*,\s*\{/;
-// #3498 (Codex C1 finding, round 4): unlike the `export ... from`
-// patterns above (which only ever re-export FROM one of this repo's own
-// relative files, so a leading dot is required), a named import's own
-// local-alias bookkeeping below must run for a BARE package specifier
-// too (`import { helper } from 'some-package';`) -- only the separate
-// `RELATIVE_SPECIFIER_PATTERN` check at the call site decides whether
-// the specifier can also be resolved for cross-file importer crediting.
-const IMPORT_FROM_AFTER_BRACE_PATTERN = /^\s*from\s*['"]([^'"]+)['"]/;
+  /^import\s*\*\s*as\s+[A-Za-z_$][\w$]*\s+from\s*['"](\.[^'"]+)['"]/;
+const IMPORT_FROM_AFTER_BRACE_PATTERN = /^\s*from\s*['"](\.[^'"]+)['"]/;
 /** Parses one `.mts` file's own top-level export declarations, re-export
  * edges, and import statements. `originalText` is used only for
  * suppression-comment text and self-reference scanning; every structural
@@ -440,47 +254,12 @@ function parseFile(absPath, originalText) {
   const declared = new Map();
   const reExports = [];
   const imports = [];
-  // #3498: real INTRODUCING line(s) for every top-level local binding
-  // name in this file -- a `function`/`const`/`class` declaration
-  // (exported or bare; see the bare-pattern comment above), a named
-  // import's local alias, a default import, or a namespace import's own
-  // binding (a no-`from` list item can re-export a name this file only
-  // ever imported, never declared -- Copilot C1 finding). Populated
-  // alongside `declared` below; consulted only when finalizing a
-  // no-`from` export-list item (after the full-file loop below, not
-  // inline) to resolve its `declarationLine`.
-  //
-  // An array, not a single line (Codex C1 finding, round 6): a bare
-  // FUNCTION specifically can have multiple TypeScript overload
-  // signature lines (`function helper(a: number): void; function
-  // helper(a: string): void; function helper(a) { ... }`) sharing one
-  // name -- every one of them mentions the name, so a no-`from` item
-  // resolving to only the FIRST such line would still see the other
-  // overload lines as a false self-reference. `addDeclarationLine`
-  // accumulates every introducing line per name instead of keeping only
-  // the first (harmless for `const`/`class`/import forms, which can
-  // only ever contribute one line per name -- duplicate top-level
-  // bindings are themselves a compile error).
+  // #3498: real declaration line for EVERY top-level function/const/class
+  // name in this file, exported or not -- see the bare-pattern comment
+  // above. Populated alongside `declared` below; consulted only when
+  // finalizing a no-`from` export-list item (after the full-file loop
+  // below, not inline) to resolve its `declarationLine`.
   const declarationLineByLocalName = new Map();
-  function addDeclarationLine(name, line) {
-    const existing = declarationLineByLocalName.get(name);
-    if (existing) {
-      if (!existing.includes(line)) {
-        existing.push(line);
-      }
-    } else {
-      declarationLineByLocalName.set(name, [line]);
-    }
-  }
-  // #3498 (Codex C1 finding): a suppression comment (`// audit:ignore-
-  // dead-export`) on the RESOLVED declaration's own line (or bare
-  // declaration's preceding line) must also suppress a no-`from` list
-  // item reporting that resolved line -- otherwise the audit's own
-  // remediation message ("suppressing it ... on its declaration line")
-  // points at a line the suppression check never actually reads. Tracks
-  // the exported/bare declaration's own suppression state per local name,
-  // merged with the export-list item's own suppression at finalization.
-  const declarationSuppressionByLocalName = new Map();
   // #3498 (C1 finding, both the CodeRabbit delegate and the independent
   // subagent critique): a no-`from` export-list item can textually
   // PRECEDE the declaration it re-exports (valid via function hoisting),
@@ -495,105 +274,6 @@ function parseFile(absPath, originalText) {
   const noFromItemLinesByLocalName = new Map();
   const pendingNoFromItems = [];
   const claimedNoFromExposedNames = new Set();
-  // #3498 (Copilot/Codex C1 finding, round 7): factored out of the plain
-  // `import { a } from '...'` handling so the combined `import def, { a }
-  // from '...'` form (see `IMPORT_DEFAULT_PLUS_BRACE_PATTERN` below) can
-  // reuse the identical named-list processing instead of duplicating it.
-  // `braceOffset` is the absolute `strippedText` offset of the `{` that
-  // opens the list; `statementStartLine` is the import STATEMENT's own
-  // first line (1-based) -- for a multi-line list, this differs from any
-  // individual item's own line, and a suppression comment above the
-  // statement itself (round 9 C1 finding) must be checked there, not just
-  // above each item's own line. `alsoCreditDefaultImport` (round 12): the
-  // combined-default+brace call site sets this so the statement's OWN
-  // default half also gets a `'default'`-keyed `imports` edge, the same
-  // fix applied to the plain default and combined default+namespace
-  // branches -- see the plain default branch's own comment for why this
-  // is a harmless no-op unless the target's own no-`from` list aliases a
-  // binding as literal `default`. The plain `import { a } from '...'`
-  // call site leaves this `false` (no default half exists there).
-  // Returns the matching `}`'s offset (or -1 if unbalanced) so the
-  // caller can advance `lineIndex` past it.
-  function processNamedImportBraceList(
-    braceOffset,
-    statementStartLine,
-    alsoCreditDefaultImport = false,
-  ) {
-    const closeIndex = findMatchingBrace(strippedText, braceOffset);
-    if (closeIndex === -1) {
-      return -1;
-    }
-    const items = parseBracedItems(
-      originalText,
-      strippedText,
-      braceOffset + 1,
-      closeIndex,
-    );
-    const afterBrace = strippedText.slice(closeIndex + 1, closeIndex + 200);
-    const fromMatch = IMPORT_FROM_AFTER_BRACE_PATTERN.exec(afterBrace);
-    if (fromMatch) {
-      // #3498 (Codex C1 finding, round 4): the local-alias bookkeeping
-      // below must run for EVERY named import, not only a relative
-      // (`./`/`../`) specifier -- only cross-file importer crediting
-      // stays relative-only.
-      const isRelativeSpecifier = RELATIVE_SPECIFIER_PATTERN.test(fromMatch[1]);
-      const targetFile = isRelativeSpecifier
-        ? resolveSpecifier(absPath, fromMatch[1])
-        : null;
-      if (targetFile && alsoCreditDefaultImport) {
-        imports.push({ name: 'default', targetFile, importerFile: absPath });
-      }
-      for (const item of items) {
-        if (item.isType) {
-          continue;
-        }
-        if (targetFile) {
-          imports.push({ name: item.name, targetFile, importerFile: absPath });
-        }
-        // #3498 (Copilot C1 finding): a no-`from` list item can
-        // re-export a LOCAL name this file only ever IMPORTED, never
-        // declared -- track the local alias's introducing line the same
-        // way a declaration's is tracked.
-        const localAlias = item.alias ?? item.name;
-        addDeclarationLine(localAlias, item.line);
-        // #3498 (Codex/Copilot C1 findings, rounds 3, 8, and 9):
-        // `parseBracedItems` already recognizes a suppression comment on
-        // this import item's own physical line. ALSO recognize one on
-        // the line immediately preceding the ITEM's own line (matches a
-        // single-line import, where the item and statement share one
-        // line) AND one immediately preceding the IMPORT STATEMENT's own
-        // first line (matches a multi-line list, where a comment above
-        // `import {` is not adjacent to any individual item's own line)
-        // -- matching the documented contract
-        // (`docs/idd-helper-scripts.md`) that the marker may sit on the
-        // declaration's own line or immediately above it, regardless of
-        // how many lines the import statement itself spans.
-        if (!declarationSuppressionByLocalName.has(localAlias)) {
-          const itemIgnoreMatch = checkOwnOrPrecedingLineSuppression(
-            originalText,
-            lineStarts,
-            item.line,
-          );
-          const statementIgnoreMatch =
-            item.line === statementStartLine
-              ? null
-              : checkOwnOrPrecedingLineSuppression(
-                  originalText,
-                  lineStarts,
-                  statementStartLine,
-                );
-          const ignoreMatch = itemIgnoreMatch ?? statementIgnoreMatch;
-          declarationSuppressionByLocalName.set(localAlias, {
-            suppressed: item.suppressed || !!ignoreMatch,
-            reason: item.suppressed
-              ? item.reason
-              : (ignoreMatch?.[1] ?? '').trim(),
-          });
-        }
-      }
-    }
-    return closeIndex;
-  }
   const lineStarts = [0];
   for (let i = 0; i < strippedText.length; i += 1) {
     if (strippedText[i] === '\n') {
@@ -645,45 +325,6 @@ function parseFile(absPath, originalText) {
     const classMatch =
       !functionMatch && !constMatch && CLASS_DECL_PATTERN.exec(line);
     const declMatch = functionMatch ?? constMatch ?? classMatch;
-    if (constMatch) {
-      // #3498 (proactive fix, same class as the bare-const findings
-      // above): `export const a = 1, b = 2;` is a genuine direct export
-      // of BOTH `a` and `b` -- `CONST_DECL_PATTERN` itself only captures
-      // the FIRST identifier, so resolve every declarator the same way
-      // the bare branch does (`scanBareConstDeclarators`), creating one
-      // `declared` entry per name. Single-line only (round 6 revert; see
-      // that function's own doc comment) -- every declarator returned
-      // here shares this line, since the scan never crosses a line
-      // boundary.
-      const declaratorListStart =
-        start + (constMatch[0].length - constMatch[1].length);
-      const declarators = scanBareConstDeclarators(
-        strippedText,
-        declaratorListStart,
-        end,
-      );
-      const ignoreMatch = checkOwnOrPrecedingLineSuppression(
-        originalText,
-        lineStarts,
-        lineIndex + 1,
-      );
-      for (const declarator of declarators) {
-        declared.set(declarator.name, {
-          line: lineIndex + 1,
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-          localName: declarator.name,
-          selfReferenceExcludeLines: [lineIndex + 1],
-        });
-        addDeclarationLine(declarator.name, lineIndex + 1);
-        declarationSuppressionByLocalName.set(declarator.name, {
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-        });
-      }
-      lineIndex += 1;
-      continue;
-    }
     if (declMatch) {
       const name = declMatch[1];
       // The suppression comment may sit on the declaration's own line, or
@@ -714,29 +355,7 @@ function parseFile(absPath, originalText) {
         localName: name,
         selfReferenceExcludeLines: [lineIndex + 1],
       });
-      addDeclarationLine(name, lineIndex + 1);
-      // #3498 (Codex C1 finding, round 14): the SAME "first-write-wins
-      // vs. must-merge" issue round 13 fixed for a BARE overloaded
-      // function's suppression bookkeeping also applies to an EXPORTED
-      // one -- each overload signature line independently reaches this
-      // branch and, before this fix, unconditionally overwrote this
-      // map, so a genuine suppression comment above an EARLIER signature
-      // was silently discarded by a later, unsuppressed signature or the
-      // implementation. This map feeds a no-`from` list item's OWN
-      // suppression state (`declarationSuppressionByLocalName.get(
-      // pending.localName)` at finalization), so the alias itself
-      // (`PublicHelper` in the reported repro) stayed an unsuppressed
-      // finding even though the marker was validly adjacent to one of
-      // `helper`'s own signature lines. Merge the same way: once any
-      // line for this name is found suppressed, keep it.
-      const existingExportedSuppression =
-        declarationSuppressionByLocalName.get(name);
-      if (!existingExportedSuppression?.suppressed) {
-        declarationSuppressionByLocalName.set(name, {
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-        });
-      }
+      declarationLineByLocalName.set(name, lineIndex + 1);
       lineIndex += 1;
       continue;
     }
@@ -755,53 +374,7 @@ function parseFile(absPath, originalText) {
         BARE_CLASS_DECL_PATTERN.exec(line);
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
       if (bareMatch) {
-        // #3498 (Codex C1 finding): same own-line-or-preceding-line
-        // suppression check as the exported declaration branch above, so
-        // a suppression comment on a BARE declaration's line also takes
-        // effect once a no-`from` list item resolves to it.
-        //
-        // #3498 (Codex/Copilot C1 finding, round 4; single-line-only
-        // since the round 6 revert -- see `scanBareConstDeclarators`'s
-        // own doc comment): a bare `const` statement can declare
-        // MULTIPLE comma-separated bindings on one line (`const
-        // retained = 1, forgotten = 2;`) -- resolve every declarator on
-        // this line, not just the first.
-        const bareNames = bareConstMatch
-          ? scanBareConstDeclarators(
-              strippedText,
-              start + (bareConstMatch[0].length - bareConstMatch[1].length),
-              end,
-            ).map((declarator) => declarator.name)
-          : [bareMatch[1]];
-        const bareIgnoreMatch = checkOwnOrPrecedingLineSuppression(
-          originalText,
-          lineStarts,
-          lineIndex + 1,
-        );
-        for (const bareName of bareNames) {
-          addDeclarationLine(bareName, lineIndex + 1);
-          // #3498 (Codex C1 finding, round 13): a bare FUNCTION specifically
-          // can have multiple TypeScript overload signature lines sharing
-          // one name (see `addDeclarationLine`'s own doc comment above) --
-          // a plain `!has(bareName)` guard here means only the FIRST such
-          // line's suppression state is ever recorded, so a genuine
-          // suppression comment above a LATER signature or the
-          // implementation is silently discarded once an earlier,
-          // unsuppressed line has already populated this map. Merge
-          // instead: once ANY declaration line for this name is found
-          // suppressed, that state must stick regardless of line order --
-          // only update while the recorded state is still unsuppressed
-          // (harmless no-op for `const`/`class`, which can only ever
-          // contribute one line per name).
-          const existingBareSuppression =
-            declarationSuppressionByLocalName.get(bareName);
-          if (!existingBareSuppression?.suppressed) {
-            declarationSuppressionByLocalName.set(bareName, {
-              suppressed: !!bareIgnoreMatch,
-              reason: (bareIgnoreMatch?.[1] ?? '').trim(),
-            });
-          }
-        }
+        declarationLineByLocalName.set(bareMatch[1], lineIndex + 1);
       }
     }
     const barrelMatch = BARREL_STAR_PATTERN.exec(line);
@@ -891,261 +464,37 @@ function parseFile(absPath, originalText) {
     }
     const namespaceMatch = IMPORT_NAMESPACE_PATTERN.exec(line);
     if (namespaceMatch) {
-      const namespaceSpecifier = namespaceMatch[2];
-      if (RELATIVE_SPECIFIER_PATTERN.test(namespaceSpecifier)) {
-        imports.push({
-          name: '*',
-          targetFile: resolveSpecifier(absPath, namespaceSpecifier),
-          importerFile: absPath,
-        });
-      }
-      // #3498 (Copilot C1 finding, round 6): track the namespace's own
-      // local binding name the same way a named import's local alias is
-      // tracked above -- a no-`from` list item can re-export the
-      // namespace object itself (`export { x as PublicX };`).
-      const namespaceLocalName = namespaceMatch[1];
-      addDeclarationLine(namespaceLocalName, lineIndex + 1);
-      if (!declarationSuppressionByLocalName.has(namespaceLocalName)) {
-        const ignoreMatch = checkOwnOrPrecedingLineSuppression(
-          originalText,
-          lineStarts,
-          lineIndex + 1,
-        );
-        declarationSuppressionByLocalName.set(namespaceLocalName, {
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-        });
-      }
-      lineIndex += 1;
-      continue;
-    }
-    // #3498 (Copilot C1 finding, round 6; round 12: DOES now push a
-    // `'default'`-keyed `imports` edge, see below): a default import
-    // (`import helper from './origin.mts';`) introduces a local binding
-    // the same way a named import does -- track it for the same reason.
-    // The round-6 comment here originally reasoned no `imports.push` was
-    // ever useful, since `export default function realName() {}` is
-    // tracked in `declared` under the DECLARATION'S OWN name, never the
-    // literal string `'default'` -- true for THAT shape, but a Codex C1
-    // finding (round 12) found a second, genuinely `'default'`-keyed
-    // shape this reasoning missed: a no-`from` list aliasing a local
-    // binding AS `default` (`const helper = 1; export { helper as
-    // default };`) resolves its `declared` entry under the literal key
-    // `'default'` (`pending.exposedName`, see the no-`from` finalization
-    // pass above). Pushing this edge unconditionally is harmless for the
-    // common shape above (`resolveDeclaringFile` simply finds no
-    // `'default'`-keyed entry there and the credit silently goes
-    // nowhere) and fixes the aliased-as-`default` shape.
-    const defaultMatch = IMPORT_DEFAULT_PATTERN.exec(line);
-    if (defaultMatch) {
-      const defaultLocalName = defaultMatch[1];
-      const defaultSpecifier = defaultMatch[2];
-      if (RELATIVE_SPECIFIER_PATTERN.test(defaultSpecifier)) {
-        imports.push({
-          name: 'default',
-          targetFile: resolveSpecifier(absPath, defaultSpecifier),
-          importerFile: absPath,
-        });
-      }
-      addDeclarationLine(defaultLocalName, lineIndex + 1);
-      if (!declarationSuppressionByLocalName.has(defaultLocalName)) {
-        const ignoreMatch = checkOwnOrPrecedingLineSuppression(
-          originalText,
-          lineStarts,
-          lineIndex + 1,
-        );
-        declarationSuppressionByLocalName.set(defaultLocalName, {
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-        });
-      }
-      lineIndex += 1;
-      continue;
-    }
-    // #3498 (Codex C1 finding, round 10): a combined default + named or
-    // default + namespace import can wrap onto a second physical line
-    // right after the comma -- the natural break point a formatter picks
-    // when the whole statement is too long to fit one line (`import
-    // def,\n  { named } from '...';`). Neither combined pattern below
-    // matched this: both were tested against only the single physical
-    // `line`, which never contains a `\n`, so the pattern's `\s` (which
-    // DOES match a newline) never got the chance to see one. Test
-    // against a short forward-looking WINDOW instead of `line` -- the
-    // pattern stays anchored at the statement's own start (`^`), so it
-    // can still only match this exact "import IDENT , <rest>" token
-    // sequence with nothing but whitespace in between, never accidentally
-    // spanning into an unrelated later statement. The window is bounded
-    // (cheap, and a statement wider than it falls back to the ORIGINAL,
-    // pre-#3498 unhandled-combined-form behavior -- the same degradation
-    // as before this fix existed, not a new one). Wrapping between
-    // `import` and the default identifier, or between `as` and the
-    // namespace identifier, is NOT handled -- no real formatter chooses
-    // those break points, unlike after a comma, so extending this fix
-    // there would be scope creep without a real-world case behind it.
-    const combinedImportWindow = strippedText.slice(
-      start,
-      Math.min(start + 400, strippedText.length),
-    );
-    // #3498 (Copilot/Codex C1 finding, round 7; round 10: matched against
-    // `combinedImportWindow`, see above, so a comma-then-newline wrap
-    // before `* as ns` is recognized too): a combined default + namespace
-    // import (`import def, * as ns from '...';`) introduces TWO local
-    // bindings on one statement -- track both the same way the plain
-    // default and plain namespace branches already do.
-    const combinedNamespaceMatch =
-      IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN.exec(combinedImportWindow);
-    if (combinedNamespaceMatch) {
-      const combinedSpecifier = combinedNamespaceMatch[3];
-      if (RELATIVE_SPECIFIER_PATTERN.test(combinedSpecifier)) {
-        const combinedTargetFile = resolveSpecifier(absPath, combinedSpecifier);
-        imports.push({
-          name: '*',
-          targetFile: combinedTargetFile,
-          importerFile: absPath,
-        });
-        // #3498 (round 12, same reasoning as the plain default-import
-        // branch above): the DEFAULT half of this combined import can
-        // also resolve a no-`from` list aliased as literal `default` in
-        // the target file -- harmless no-op otherwise.
-        imports.push({
-          name: 'default',
-          targetFile: combinedTargetFile,
-          importerFile: absPath,
-        });
-      }
-      // #3498 (round 10): the default identifier (group 1) always sits on
-      // the statement's own first physical line -- this fix only
-      // recognizes a wrap AFTER the comma, never before the default
-      // identifier itself (see the scope note above) -- but the
-      // NAMESPACE identifier (group 2) can now be on a LATER physical
-      // line than `lineIndex` once the wrap lands before `* as`.
-      // Crediting it against `lineIndex + 1` unconditionally (as a first
-      // version of this fix did) recorded the WRONG line: self-reference
-      // exclusion then never excluded the line the namespace identifier
-      // is actually written on, so its own import mention read as a
-      // genuine extra reference and silently masked an otherwise-unused
-      // export as production. Locate its real offset by re-matching just
-      // the "* as NAME" tail WITHIN the already-validated
-      // `combinedNamespaceMatch[0]` (never re-searching the wider,
-      // unbounded window, so this can never latch onto an unrelated
-      // later "* as" elsewhere) and using the same suffix-length trick
-      // already used for `scanBareConstDeclarators`'s own call site
-      // above (the capture group is the tail of its own submatch, so the
-      // prefix length is `submatch[0].length - submatch[1].length`).
-      const namespaceTailMatch = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(
-        combinedNamespaceMatch[0],
-      );
-      const namespaceIdentOffset = namespaceTailMatch
-        ? namespaceTailMatch.index +
-          (namespaceTailMatch[0].length - namespaceTailMatch[1].length)
-        : 0;
-      const namespaceRealLine = namespaceTailMatch
-        ? lineNumberAt(strippedText, start + namespaceIdentOffset)
-        : lineIndex + 1;
-      // #3498 (Codex C1 finding, round 11): a suppression comment above
-      // the WHOLE statement's first line (line 1, `import def,`) is not
-      // adjacent to the namespace identifier's own `realLine` once the
-      // wrap moves it to a later physical line -- checking only
-      // `realLine`'s own-or-preceding line misses it, the same gap round
-      // 9 already fixed for `processNamedImportBraceList`'s named-list
-      // items. Check both `realLine` and the statement's own start line
-      // (`lineIndex + 1`) the same way that fix does, skipping the
-      // redundant second check when they coincide (the un-wrapped,
-      // single-line case, where both identifiers already share one
-      // line).
-      const statementStartLine = lineIndex + 1;
-      for (const [localName, realLine] of [
-        [combinedNamespaceMatch[1], statementStartLine],
-        [combinedNamespaceMatch[2], namespaceRealLine],
-      ]) {
-        addDeclarationLine(localName, realLine);
-        if (!declarationSuppressionByLocalName.has(localName)) {
-          const ownIgnoreMatch = checkOwnOrPrecedingLineSuppression(
-            originalText,
-            lineStarts,
-            realLine,
-          );
-          const statementIgnoreMatch =
-            realLine === statementStartLine
-              ? null
-              : checkOwnOrPrecedingLineSuppression(
-                  originalText,
-                  lineStarts,
-                  statementStartLine,
-                );
-          const ignoreMatch = ownIgnoreMatch ?? statementIgnoreMatch;
-          declarationSuppressionByLocalName.set(localName, {
-            suppressed: !!ignoreMatch,
-            reason: (ignoreMatch?.[1] ?? '').trim(),
-          });
-        }
-      }
-      // #3498 (round 10): the match may have consumed more than one
-      // physical line (the wrapped form above) -- advance past every
-      // line it actually spans, not just the one `lineIndex` currently
-      // points at, mirroring the brace-closing advance used elsewhere in
-      // this loop. Equivalent to the previous plain `lineIndex += 1;`
-      // when the match stayed on one line (the offset below then still
-      // resolves to the SAME line, since `lineNumberAt` counts only the
-      // newlines strictly before it).
-      lineIndex =
-        lineNumberAt(strippedText, start + combinedNamespaceMatch[0].length) -
-        1;
-      lineIndex += 1;
-      continue;
-    }
-    // #3498 (Copilot/Codex C1 finding, round 7; round 10: matched against
-    // `combinedImportWindow`, see above, so a comma-then-newline wrap
-    // before `{` is recognized too): a combined default + named import
-    // (`import def, { a, b } from '...';`) -- neither the plain default
-    // pattern (requires `from` immediately after the identifier) nor the
-    // plain brace pattern (requires `{` immediately after `import`)
-    // matches this form, so it was silently unhandled entirely. Track
-    // the default binding, then reuse the shared named-list processing
-    // (`processNamedImportBraceList`) for the rest -- that helper already
-    // locates the `{` via `strippedText.indexOf` and resolves its
-    // matching `}` across however many lines it spans, so no further
-    // multi-line handling is needed here once the pattern itself
-    // matches.
-    const combinedBraceMatch =
-      IMPORT_DEFAULT_PLUS_BRACE_PATTERN.exec(combinedImportWindow);
-    if (combinedBraceMatch) {
-      const combinedDefaultLocalName = combinedBraceMatch[1];
-      addDeclarationLine(combinedDefaultLocalName, lineIndex + 1);
-      if (!declarationSuppressionByLocalName.has(combinedDefaultLocalName)) {
-        const ignoreMatch = checkOwnOrPrecedingLineSuppression(
-          originalText,
-          lineStarts,
-          lineIndex + 1,
-        );
-        declarationSuppressionByLocalName.set(combinedDefaultLocalName, {
-          suppressed: !!ignoreMatch,
-          reason: (ignoreMatch?.[1] ?? '').trim(),
-        });
-      }
-      const braceOffset = strippedText.indexOf('{', start);
-      const closeIndex = processNamedImportBraceList(
-        braceOffset,
-        lineIndex + 1,
-        true,
-      );
-      if (closeIndex === -1) {
-        lineIndex += 1;
-        continue;
-      }
-      lineIndex = lineNumberAt(strippedText, closeIndex) - 1;
+      imports.push({
+        name: '*',
+        targetFile: resolveSpecifier(absPath, namespaceMatch[1]),
+        importerFile: absPath,
+      });
       lineIndex += 1;
       continue;
     }
     if (IMPORT_BRACE_PATTERN.test(line)) {
       const braceOffset = strippedText.indexOf('{', start);
-      const closeIndex = processNamedImportBraceList(
-        braceOffset,
-        lineIndex + 1,
-      );
+      const closeIndex = findMatchingBrace(strippedText, braceOffset);
       if (closeIndex === -1) {
         lineIndex += 1;
         continue;
+      }
+      const items = parseBracedItems(
+        originalText,
+        strippedText,
+        braceOffset + 1,
+        closeIndex,
+      );
+      const afterBrace = strippedText.slice(closeIndex + 1, closeIndex + 200);
+      const fromMatch = IMPORT_FROM_AFTER_BRACE_PATTERN.exec(afterBrace);
+      if (fromMatch && RELATIVE_SPECIFIER_PATTERN.test(fromMatch[1])) {
+        const targetFile = resolveSpecifier(absPath, fromMatch[1]);
+        for (const item of items) {
+          if (item.isType) {
+            continue;
+          }
+          imports.push({ name: item.name, targetFile, importerFile: absPath });
+        }
       }
       lineIndex = lineNumberAt(strippedText, closeIndex) - 1;
       lineIndex += 1;
@@ -1157,40 +506,20 @@ function parseFile(absPath, originalText) {
   // whole file has been scanned -- see the pending-item comment above for
   // why this must happen after the loop, not inline.
   for (const pending of pendingNoFromItems) {
-    // #3498 (Codex C1 finding, round 6): every introducing line for this
-    // local name (plural -- a bare function can have multiple TypeScript
-    // overload signature lines sharing one name) must be excluded, not
-    // only the first one found.
-    const realLines = declarationLineByLocalName.get(pending.localName);
-    const line = realLines?.[0] ?? pending.itemLine;
+    const realLine = declarationLineByLocalName.get(pending.localName);
+    const line = realLine ?? pending.itemLine;
     const excludeLines = new Set();
-    if (realLines) {
-      for (const realLine of realLines) {
-        excludeLines.add(realLine);
-      }
+    if (realLine !== undefined) {
+      excludeLines.add(realLine);
     }
     for (const itemLine of noFromItemLinesByLocalName.get(pending.localName) ??
       []) {
       excludeLines.add(itemLine);
     }
-    // #3498 (Codex C1 finding): a suppression comment on the export-list
-    // item's own line still suppresses it (unchanged); ALSO recognize one
-    // on the resolved declaration's own line -- the line this entry now
-    // actually reports -- so the audit's own remediation message ("place
-    // the comment on its declaration line") is truthful for this branch
-    // too. Either one suppressing is enough.
-    const declarationSuppression = declarationSuppressionByLocalName.get(
-      pending.localName,
-    );
-    const suppressed =
-      pending.suppressed || !!declarationSuppression?.suppressed;
-    const reason = pending.suppressed
-      ? pending.reason
-      : (declarationSuppression?.reason ?? pending.reason);
     declared.set(pending.exposedName, {
       line,
-      suppressed,
-      reason,
+      suppressed: pending.suppressed,
+      reason: pending.reason,
       localName: pending.localName,
       selfReferenceExcludeLines: [...excludeLines],
     });
@@ -1221,22 +550,22 @@ function toPosixRelative(root, absPath) {
  * and never surfaced -- accepted as a limitation of the regex/line-based
  * design this audit deliberately uses (see the module header), not
  * something a full scope-aware fix belongs in this issue's scope.
- * `scanBareConstDeclarators`'s quote-tracking (#3498) does not extend
- * here: that scanner exists only to find declarator BOUNDARIES
- * correctly, an unrelated concern from scope-aware reference detection,
- * and does not change this accepted limitation either way.
  *
- * **The opposite direction (false negative), same root cause (C1
- * review, #3498 round 9)**: excluding by LINE NUMBER rather than
- * character position also means a genuine reference sharing the same
- * physical line as the declaration itself (`const helper = () =>
- * helper();`, a one-line recursive arrow function) is indistinguishable
- * from the declaration and gets excluded too, so it is never counted as
- * a self-reference. Verified pre-existing on `main` before #3498 (this
- * exact fixture already misclassified identically with the ORIGINAL
- * single-`declarationLine` signature) -- a general limitation of this
- * function's line-granularity design, not something #3498's own
- * no-`from` resolution work introduced or is scoped to fix. */
+ * **Known limitation, deferred to a follow-up issue (#3498 scope note,
+ * post-merge review)**: the fix above resolves `declarationLine`
+ * correctly only when the no-`from` list item's local name comes from a
+ * bare or exported top-level `function`/`const`/`class` declaration --
+ * `declarationLineByLocalName` is populated from `declared` alone. A
+ * local name introduced instead by an `import` (named, default,
+ * namespace, or any combined form) still falls back to the export
+ * statement's own line, the same pre-#3498 mismatch this issue fixed for
+ * the declared case, since an import statement is never added to
+ * `declared`. This was found and fixed on this issue's own PR during
+ * E-phase review, but reverted before merge as a genuine scope expansion
+ * beyond this issue's own repro and acceptance criteria (which cover
+ * only a declared, not imported, local name) -- deliberately left for a
+ * narrower follow-up issue instead of folding an open-ended
+ * import-syntax surface into this fix. */
 function hasSelfReference(strippedText, name, excludeLines) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
