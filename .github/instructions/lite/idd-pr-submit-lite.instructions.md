@@ -159,8 +159,9 @@ This section's rebase only applies **before the branch's first push**.
 7. Failed write — rebase in progress, index holds the replay, tip
    still the pre-rebase commit, and the commit object was never
    written: run `git rebase --abort` to restore the branch tip, then
-   restart the **full** rebase through the SSH `-c` wrapper's `rebase
-   origin/main` form. This replays the entire pre-rebase stack; never
+   restart the **full** rebase through the configured wrapper's `rebase
+   origin/main` form. Use explicit SSH `-c` or step 5's repository alias.
+   This replays the pre-rebase stack; never
    replace it with a cherry-pick of only one commit.
    Do not run `git commit --amend -S` or `git commit --amend '-S'`.
    Step 6 `--continue` stays for a staged content conflict.

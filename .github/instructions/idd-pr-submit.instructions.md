@@ -70,8 +70,10 @@ Failed write (observed 2026-09-26, issue `#3491`): rebase still in
 progress, the index holds the replay, and the branch tip is still the
 pre-rebase commit, so no commit object was written. Abort with
 `git rebase --abort` to restore the pre-rebase branch tip, then restart
-the **full** rebase from that branch through the SSH `-c` wrapper's
-`rebase origin/{development-branch}` form. This replays the
+the **full** rebase from that branch through the same configured
+fallback wrapper's `rebase origin/{development-branch}` form. The
+wrapper may be the explicit SSH `-c` form or a repository alias. This
+replays the
 complete pre-rebase commit range, including every earlier commit in a
 stack; do not replace it with a cherry-pick of only one commit. Do not
 run `git commit --amend -S` or `git commit --amend '-S'`, including
