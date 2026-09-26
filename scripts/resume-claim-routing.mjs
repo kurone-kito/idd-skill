@@ -27,6 +27,7 @@ import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
   DEFAULT_STALE_AGE_MS,
+  filterTrustedClaimFamilyEvents,
   isStaleByAge,
   normalizeLinkedPrReference,
   normalizeTrustedMarkerLogins,
@@ -138,8 +139,9 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     typeof options.isAuthorizedForcedHandoff === 'function'
       ? options.isAuthorizedForcedHandoff
       : () => false;
-  const events = normalizeEvents(input.events).filter((event) =>
-    trustedAuthor(event.author?.login ?? ''),
+  const events = filterTrustedClaimFamilyEvents(
+    normalizeEvents(input.events),
+    trustedAuthor,
   );
   const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
@@ -575,6 +577,7 @@ function runCli() {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
+    lastEditedAt: comment.last_edited_at,
   }));
   const routingOptions = {
     isTrustedAuthor: (login) =>
@@ -930,6 +933,18 @@ function normalizeEvents(events) {
       author: {
         login: String(event?.author?.login ?? event?.user?.login ?? ''),
       },
+      lastEditedAt:
+        event?.lastEditedAt === null || typeof event?.lastEditedAt === 'string'
+          ? event.lastEditedAt
+          : event?.last_edited_at === null ||
+              typeof event?.last_edited_at === 'string'
+            ? event.last_edited_at
+            : undefined,
+      last_edited_at:
+        event?.last_edited_at === null ||
+        typeof event?.last_edited_at === 'string'
+          ? event.last_edited_at
+          : undefined,
     }))
     .filter((event) => event.createdAt !== null);
 }
@@ -1095,11 +1110,14 @@ function fetchIssueComments(port, issueNumber) {
   // expect (body / created_at / user.login) -- listWorkItemComments's
   // camelCase ProviderComment shape is a port-level convention, not this
   // file's pre-migration contract.
-  return port.listWorkItemComments(issueNumber ?? 0).map((comment) => ({
-    body: comment.body,
-    created_at: comment.createdAt,
-    user: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber ?? 0, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      created_at: comment.createdAt,
+      user: { login: comment.authorLogin },
+      last_edited_at: comment.lastEditedAt,
+    }));
 }
 // Read-and-parse failure semantics (explicit path throws; default path
 // silently falls back only on ENOENT) are converged in idd-config.mts's

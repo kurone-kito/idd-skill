@@ -8,6 +8,7 @@ import {
   compareClaimEventOrder,
   compareClaimIds,
   computePreMergeReadinessBlockers,
+  DEFAULT_STALE_AGE_MS,
   detectMalformedReviewWatermarkComments,
   EDITED_AFTER_DISPOSITION_HINT,
   hasFreshDisposition,
@@ -17,8 +18,10 @@ import {
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
   resolveActiveClaim,
+  resolveActiveClaimForWriteGate,
   resolveLatestReviewWatermark,
   summarizeAdvisoryWaitMarkers,
+  summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
@@ -4013,6 +4016,7 @@ for (const supersedesToken of ['None', 'NONE']) {
         author: { login: 'claude-x' },
         body,
         createdAt: '2026-05-10T00:00:00Z',
+        lastEditedAt: null,
       },
     ]);
     assert.ok(active, `expected ${supersedesToken} to activate the claim`);
@@ -4102,6 +4106,7 @@ test('resolveActiveClaim resolves every valid interleaving of a same-second 3-wa
       body: item.body,
       createdAt: SECOND,
       author: { login: 'trusted-actor' },
+      lastEditedAt: null,
     }));
     const active = resolveActiveClaim(events, () => true);
     if (active?.claimId !== claimOf('a')) {
@@ -4751,4 +4756,64 @@ test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply 
     },
   };
   assert.equal(hasFreshDisposition(minimizedThread), true);
+});
+
+// kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
+// must never be considered by the activation-nonce-winner check --
+// dropped the same way an edited claimed-by/unclaimed-by is dropped from
+// claim resolution.
+test('summarizeClaimValidation ignores an edited trusted activation-nonce when checking the activation-nonce winner', () => {
+  const claimEvent = {
+    author: { login: 'kurone-kito' },
+    body: '<!-- claimed-by: agent-a claim-1 supersedes: none 2026-05-10T00:00:00Z branch: issue/1-fix -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const editedNonce = {
+    author: { login: 'kurone-kito' },
+    body: '<!-- activation-nonce: agent-a claim-1 nonce-edited 2026-05-10T00:01:00Z -->\n\n_agent-a: claim activation nonce - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:01:00Z',
+    // Body-edited after posting: must not be considered by the winner
+    // check, even though it is otherwise the only nonce posted.
+    lastEditedAt: '2026-05-10T00:05:00Z',
+  };
+  const summary = summarizeClaimValidation([claimEvent, editedNonce], {
+    trustedMarkerLogins: ['kurone-kito'],
+    expectedClaimId: 'claim-1',
+    expectedAgentId: 'agent-a',
+    expectedNonce: 'nonce-a-local',
+  });
+  // The edited nonce is ignored, so there is no trusted nonce winner to
+  // disagree with the locally-recorded nonce -- the claim still matches.
+  assert.equal(summary.matchesExpectedClaim, true);
+  assert.equal(summary.reason, 'match');
+});
+
+// kurone-kito/idd-skill#3248: an edited trusted forced-handoff marker must
+// never be honored as a handoff -- the prior claim stays active exactly as
+// if the handoff comment had never been posted.
+test('resolveActiveClaimForWriteGate ignores an edited trusted forced-handoff marker', () => {
+  const claimEvent = {
+    author: { login: 'maintainer' },
+    body: '<!-- claimed-by: agent-old claim-old supersedes: none 2026-05-10T00:00:00Z branch: issue/11-task -->\n\n_agent-old: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const editedHandoff = {
+    author: { login: 'maintainer' },
+    body: '<!-- forced-handoff: {"oldAgentId":"agent-old","oldClaimId":"claim-old","newAgentId":"agent-new","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"maintainer","reason":"handoff","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    createdAt: '2026-05-12T10:01:00Z',
+    // Body-edited after posting: must not be honored as a handoff.
+    lastEditedAt: '2026-05-12T10:05:00Z',
+  };
+  const active = resolveActiveClaimForWriteGate([claimEvent, editedHandoff], {
+    isTrustedAuthor: () => true,
+    forcedHandoffEnabled: true,
+    expectedLinkedPrs: null,
+    isAuthorizedForcedHandoff: () => true,
+    requireAuthorMatchesForcedBy: false,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  });
+  assert.equal(active?.claimId, 'claim-old');
+  assert.equal(active?.agentId, 'agent-old');
 });

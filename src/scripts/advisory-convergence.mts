@@ -156,6 +156,7 @@ import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   classifyPrLoopMembership,
+  filterTrustedClaimFamilyEvents,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -4091,11 +4092,14 @@ function fetchClaimComments(
   port: ProviderPort,
   issueNumber: number,
 ): IssueCommentPayload[] {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 
 /**
@@ -4320,7 +4324,8 @@ export function classifyClaimCandidateAmbiguity(
 }
 
 /**
- * #1686: true when at least one TRUSTED, syntactically valid `claimed-by`
+ * #1686: true when at least one TRUSTED, unedited, syntactically valid
+ * `claimed-by`
  * marker exists anywhere in `candidates`' raw comment streams -- regardless
  * of whether it currently resolves to an ACTIVE claim. A released
  * (`unclaimed-by`), superseded-without-a-qualifying-takeover, or otherwise
@@ -4348,22 +4353,19 @@ export function hasTrustedClaimMarkerHistory(
   candidates: IssueCommentPayload[][],
   trustedMarkerLogins: string[],
 ): boolean {
-  const trusted = new Set(trustedMarkerLogins);
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
   return candidates.some((candidateComments) =>
-    candidateComments.some((event) => {
-      const login = String(event.author?.login ?? event.user?.login ?? '')
-        .trim()
-        .toLowerCase();
-      if (!trusted.has(login)) {
-        return false;
-      }
-      return (
+    filterTrustedClaimFamilyEvents(candidateComments, (login) =>
+      trusted.has(login.trim().toLowerCase()),
+    ).some(
+      (event) =>
         parseClaimComment(
           event.body ?? '',
           event.createdAt ?? event.created_at ?? '',
-        ) !== null
-      );
-    }),
+        ) !== null,
+    ),
   );
 }
 

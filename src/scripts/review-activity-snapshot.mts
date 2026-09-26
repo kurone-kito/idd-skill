@@ -16,6 +16,8 @@ import {
 import { loadIddConfig } from './idd-config.mts';
 import {
   buildActivitySnapshotSummary,
+  countUncoveredCodeRabbitEmbeddedFindings,
+  extractCodeRabbitEmbeddedFindings,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -40,9 +42,24 @@ interface GhAuthorPayload {
  * is a raw passthrough). */
 interface ReviewPayload {
   state?: string | null;
+  body?: string | null;
+  node_id?: string | null;
   user?: GhAuthorPayload | null;
   submitted_at?: string | null;
   updated_at?: string | null;
+}
+
+/** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
+ * logins in that same set are not CodeRabbit reviews. */
+const CODE_RABBIT_REVIEW_LOGINS = new Set([
+  'coderabbitai',
+  'coderabbitai[bot]',
+]);
+
+export interface CodeRabbitEmbeddedFindingReport {
+  reviewId: string;
+  embeddedFindingCount: number;
+  uncoveredCount: number;
 }
 
 /** Parsed CLI arguments. */
@@ -189,6 +206,11 @@ function main(): HelperCliResult {
   // that one flag is meaningful here. The other advisory-only sub-flags
   // stay omitted; this is not `pre-merge-readiness`'s full
   // `DispositionEvidenceSummary`.
+  const embeddedFindings = buildCodeRabbitEmbeddedFindings(
+    reviews,
+    normalizedThreads,
+  );
+
   const dispositionEvidence = summarizeDispositionEvidenceForGate(
     { comments: normalizedComments, threads: normalizedThreads },
     {
@@ -219,6 +241,7 @@ function main(): HelperCliResult {
           soleCauseAckOnlyPostDisposition:
             dispositionEvidence.soleCauseAckOnlyPostDisposition,
         },
+        embeddedFindings,
       },
       null,
       2,
@@ -308,6 +331,53 @@ export function normalizeComment(comment: ProviderComment) {
     // requested.
     lastEditedAt: comment.lastEditedAt,
   };
+}
+
+/** One row per CodeRabbit COMMENTED review. Thread coverage is the number of
+ * review threads whose first comment's `pullRequestReview.id` equals
+ * the review's REST `node_id`. An empty `node_id` covers nothing, so
+ * a null review id cannot match every thread that also has none. */
+export function buildCodeRabbitEmbeddedFindings(
+  reviews: readonly ReviewPayload[],
+  threads: readonly {
+    comments?: {
+      nodes?: readonly {
+        pullRequestReview?: { id?: string | null } | null;
+      }[];
+    };
+  }[],
+): CodeRabbitEmbeddedFindingReport[] {
+  return reviews.flatMap((review) => {
+    if (review.state !== 'COMMENTED') {
+      return [];
+    }
+    const login = String(review.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!CODE_RABBIT_REVIEW_LOGINS.has(login)) {
+      return [];
+    }
+    const reviewId = String(review.node_id ?? '');
+    const body = review.body ?? '';
+    const embeddedFindingCount = extractCodeRabbitEmbeddedFindings(body).length;
+    const threadedCount =
+      reviewId === ''
+        ? 0
+        : threads.filter((thread) => {
+            const first = thread.comments?.nodes?.[0];
+            return String(first?.pullRequestReview?.id ?? '') === reviewId;
+          }).length;
+    return [
+      {
+        reviewId,
+        embeddedFindingCount,
+        uncoveredCount: countUncoveredCodeRabbitEmbeddedFindings(
+          body,
+          threadedCount,
+        ),
+      },
+    ];
+  });
 }
 
 function normalizeReview(review: ReviewPayload) {

@@ -1706,22 +1706,28 @@ function readActiveClaimIssueViewResponse(): string {
   return JSON.stringify({
     comments: [
       {
+        node_id: 'IC_old_claim',
         body: [
           '<!-- claimed-by: kurone-kito claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->',
           '',
           '_kurone-kito: issue claim — IDD automation marker._',
         ].join('\n'),
         createdAt: '2026-05-12T09:00:00Z',
+        created_at: '2026-05-12T09:00:00Z',
         author: { login: 'kurone-kito' },
+        user: { login: 'kurone-kito' },
       },
       {
+        node_id: 'IC_new_claim',
         body: [
           '<!-- claimed-by: kurone-kito claim-20260513T050000Z-337-new supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->',
           '',
           '_kurone-kito: issue claim — IDD automation marker._',
         ].join('\n'),
         createdAt: '2026-05-13T05:00:00Z',
+        created_at: '2026-05-13T05:00:00Z',
         author: { login: 'kurone-kito' },
+        user: { login: 'kurone-kito' },
       },
     ],
   });
@@ -1731,6 +1737,24 @@ function withFakeGhIssueView<T>(run: () => T): T {
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'graphql') {
+  const ids = args
+    .filter((value) => value.startsWith('ids[]='))
+    .map((value) => value.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({
+    data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) },
+  }));
+  process.exit(0);
+}
+if (args[0] === 'api' && args.includes('--paginate')) {
+  const comments = JSON.parse(
+    ${JSON.stringify(readActiveClaimIssueViewResponse())},
+  ).comments;
+  for (const comment of comments) {
+    process.stdout.write(JSON.stringify(comment) + '\\n');
+  }
+  process.exit(0);
+}
 if (args[0] === 'issue' && args[1] === 'view') {
   process.stdout.write(${JSON.stringify(readActiveClaimIssueViewResponse())});
   process.exit(0);

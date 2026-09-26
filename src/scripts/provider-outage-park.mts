@@ -30,12 +30,14 @@ import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   compareIsoTimestamps,
+  filterTrustedClaimFamilyEvents,
   type ParsedProviderOutagePark,
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
   toSecondPrecisionIso,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
@@ -182,8 +184,12 @@ export function buildParkedChangeList(
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
 interface CommentLike {
+  id?: string | number | null;
+  node_id?: string | null;
   body?: string | null;
   created_at?: string | null;
+  createdAt?: string | null;
+  author?: { login?: string | null } | null;
   user?: { login?: string | null } | null;
   /** #3249: `idd-provider-outage-park` is one of the issue's own named
    * restrict-only exceptions -- ignoring an edited marker would LOWER the
@@ -192,6 +198,9 @@ interface CommentLike {
    * so a test fixture carrying it type-checks; this reader never consults
    * it and intentionally applies no edit-state gate. */
   last_edited_at?: string | null;
+  lastEditedAt?: string | null;
+  html_url?: string | null;
+  url?: string | null;
 }
 
 /**
@@ -245,7 +254,12 @@ function latestTrustedClaimCreatedAt(
   trustedMarkerLogins: ReadonlySet<string>,
 ): string | null {
   let latest: string | null = null;
-  for (const comment of comments) {
+  const trusted = (login: string) =>
+    trustedMarkerLogins.has(login.trim().toLowerCase());
+  for (const comment of filterTrustedClaimFamilyEvents(
+    [...comments],
+    trusted,
+  )) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
@@ -357,6 +371,7 @@ type FetchComments = (
   owner: string,
   repo: string,
   number: number,
+  resolveClaimEditState?: boolean,
 ) => CommentLike[];
 
 const defaultFetchOpenPullRequests: FetchOpenPullRequests = (
@@ -373,7 +388,12 @@ const defaultFetchOpenPullRequests: FetchOpenPullRequests = (
   return payload as GhOpenPullRequest[];
 };
 
-const defaultFetchComments: FetchComments = (owner, repo, number) => {
+const defaultFetchComments: FetchComments = (
+  owner,
+  repo,
+  number,
+  resolveClaimEditState = false,
+) => {
   const payload = ghApiJson(
     `repos/${owner}/${repo}/issues/${number}/comments`,
     {
@@ -383,7 +403,21 @@ const defaultFetchComments: FetchComments = (owner, repo, number) => {
   if (!Array.isArray(payload)) {
     throw new Error('malformed comments response');
   }
-  return payload as CommentLike[];
+  const comments = payload as CommentLike[];
+  if (!resolveClaimEditState || comments.length === 0) {
+    return comments;
+  }
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'provider-outage-park: comment response is missing node_id required to resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => ({
+    ...comment,
+    lastEditedAt: lastEditedAtByNodeId.get(nodeIds[index]),
+  }));
 };
 
 /**
@@ -464,7 +498,7 @@ function collectRawParkMarkers(
     if (cached !== undefined) return cached;
     let result: string | null;
     try {
-      const issueComments = fetchComments(owner, repo, issueNumber);
+      const issueComments = fetchComments(owner, repo, issueNumber, true);
       result = latestTrustedClaimCreatedAt(
         issueComments,
         options.trustedMarkerLogins,

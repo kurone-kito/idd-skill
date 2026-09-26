@@ -38,7 +38,10 @@ import { ghGraphql } from './gh-exec.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { parseClaimComment } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
+import {
+  filterTrustedClaimFamilyEvents,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mjs';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
 import { evaluateSuitabilityLocal } from './suitability-triage.mjs';
 
@@ -231,6 +234,12 @@ function writeEntry(entry) {
   }
   writeFileSync(entryPath(entry.id), serializeJson(entry));
 }
+/** Returns whether an issue has an unedited trusted claimed-by marker. */
+export function hasTrustedClaimMarker(comments, isTrustedLogin) {
+  return filterTrustedClaimFamilyEvents([...comments], isTrustedLogin).some(
+    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
+  );
+}
 // #3368 Copilot review round 3: `labels`/`comments` are fetched as a
 // single un-paginated page each (no cursor follow-up) -- a known,
 // fails-safe limitation, not silent bad data: an issue with its
@@ -251,7 +260,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       stateReason
       labels(first: 100) { nodes { name } }
       closedByPullRequestsReferences(first: 10) { nodes { state } }
-      comments(first: 100) { nodes { author { login } body createdAt } }
+      comments(first: 100) { nodes { author { login } body createdAt lastEditedAt } }
     }
   }
 }`;
@@ -276,10 +285,8 @@ function fetchIssue(owner, repo, number, isTrustedLogin) {
   // The parser's own `createdAt` echo isn't consumed here -- only whether
   // parsing succeeds at all -- but the comment's real GraphQL `createdAt`
   // is passed through for hygiene rather than an empty placeholder.
-  const hasTrustedClaim = issue.comments.nodes.some(
-    (comment) =>
-      parseClaimComment(comment.body, comment.createdAt) !== null &&
-      isTrustedLogin(comment.author?.login ?? ''),
+  const hasTrustedClaim = hasTrustedClaimMarker(issue.comments.nodes, (login) =>
+    isTrustedLogin(login),
   );
   return {
     number: issue.number,

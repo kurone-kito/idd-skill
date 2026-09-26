@@ -53,16 +53,18 @@ import {
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
+  parseActivationNonceComment,
   parseAdvisoryWaitFamilyMarker,
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseLegacyClaimComment,
+  parseLegacyReleaseComment,
   parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mjs';
 import {
-  getReviewEscalationChangesRequestedPolicy,
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
@@ -1805,7 +1807,6 @@ function extractCodeRabbitEmbeddedFindingsFromSection(section) {
  * comparison. Never negative: a review whose threaded comments already
  * meet or exceed its embedded-finding count reports `0`.
  */
-// audit:ignore-dead-export: pending #3341's own expose-via-CLI decision for this export; do not duplicate that fix here
 export function countUncoveredCodeRabbitEmbeddedFindings(
   body,
   threadedCommentCount,
@@ -2104,105 +2105,6 @@ export function indexThreadsByReview(threads, options = {}) {
     }
   }
   return index;
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function routeRejectedChangesRequestedReview(input) {
-  const escalationPolicy = getReviewEscalationChangesRequestedPolicy(
-    input?.policyConfig ?? {},
-  );
-  const firstEscalationWindowMs = escalationPolicy.escalateAfterMs;
-  const postEscalationWindowMs = escalationPolicy.releaseAfterEscalationMs;
-  const totalWindowLabel = formatDurationLabel(
-    firstEscalationWindowMs + postEscalationWindowMs,
-  );
-  const firstWindowLabel = formatDurationLabel(firstEscalationWindowMs);
-  const reviewState = String(input.reviewState ?? '');
-  if (reviewState !== 'CHANGES_REQUESTED') {
-    return {
-      route: 'proceed',
-      reason: 'changes-requested state already cleared',
-    };
-  }
-  const reviewerDisposition = String(input.reviewerDisposition ?? 'none');
-  if (reviewerDisposition === 'disagreed') {
-    return {
-      route: 'return-to-e1',
-      reason:
-        'reviewer disagreed with the rejection and the feedback must return to triage',
-    };
-  }
-  if (reviewerDisposition === 'agreed-state-cleared') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'reviewer agreement alone does not clear a changes-requested state',
-    };
-  }
-  if (reviewerDisposition === 'agreed-state-unchanged') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'reviewer agreement alone does not clear a changes-requested state',
-    };
-  }
-  const maintainerDisposition = String(input.maintainerDisposition ?? 'none');
-  if (maintainerDisposition === 'agreed-state-unchanged') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'maintainer agreement does not clear the original changes-requested state',
-    };
-  }
-  const elapsedMs =
-    Date.parse(input.now ?? '') -
-    Date.parse(input.rejectionCommentCreatedAt ?? '');
-  if (!Number.isFinite(elapsedMs)) {
-    return {
-      route: 'hold-for-evidence',
-      reason:
-        'elapsed time cannot be computed for the rejected changes-requested review',
-    };
-  }
-  if (elapsedMs < firstEscalationWindowMs) {
-    return {
-      route: 'hold-before-escalation',
-      reason: `still within the first ${firstWindowLabel} after the rejection reply`,
-    };
-  }
-  const escalationElapsedMs =
-    Date.parse(input.now ?? '') -
-    Date.parse(input.escalationCommentCreatedAt ?? '');
-  if (!Number.isFinite(escalationElapsedMs)) {
-    return {
-      route: 'escalate-maintainer',
-      reason: `the changes-requested review is still blocking after ${firstWindowLabel} with no reviewer response`,
-    };
-  }
-  if (escalationElapsedMs < postEscalationWindowMs) {
-    return {
-      route: 'hold-after-escalation',
-      reason: `still within ${formatDurationLabel(postEscalationWindowMs)} of the maintainer escalation comment`,
-    };
-  }
-  return {
-    route: 'label-and-release',
-    reason: `the changes-requested review is still blocking after ${totalWindowLabel} with no escalation response`,
-  };
-}
-function formatDurationLabel(milliseconds) {
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
-    return '0 minutes';
-  }
-  if (milliseconds % (60 * 60 * 1000) === 0) {
-    const hours = milliseconds / (60 * 60 * 1000);
-    return `${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  if (milliseconds % (60 * 1000) === 0) {
-    const minutes = milliseconds / (60 * 1000);
-    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-  }
-  const seconds = milliseconds / 1000;
-  return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 export function diffReviewSnapshot(snapshot, live) {
   if (String(live.headSha ?? '') !== String(snapshot.headSha ?? '')) {
@@ -2705,11 +2607,6 @@ export function isRejectionConfirmedDisposition(comment) {
   return REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
     (comment.body ?? '').trimStart(),
   );
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function isIddDispositionComment(comment) {
-  const author = comment.author?.login ?? '';
-  return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
 // #1018 non-review-notice carry-forward classifiers.
 //
@@ -8331,14 +8228,15 @@ export function summarizeClaimValidation(
     // agent-id already match, since claim-id alone cannot distinguish a
     // second, independent activation of the same id. Computed lazily, here,
     // so every pre-#1528 caller that never passes expectedNonce (the
-    // default) pays no parsing/sorting cost for it. Trust-filter first
-    // (findActivationNonceWinner does no author checks of its own), matching
-    // how the resume-side caller pre-filters before calling the same shared
-    // primitive.
+    // default) pays no parsing/sorting cost for it. Trust+edit-state-filter
+    // first (findActivationNonceWinner does no author or edit-state checks
+    // of its own), matching how the resume-side caller pre-filters before
+    // calling the same shared primitive. kurone-kito/idd-skill#3248: an
+    // edited trusted `activation-nonce` marker is dropped here the same way
+    // an edited `claimed-by` is dropped from claim resolution, so it is
+    // never considered by the winner check below.
     const activationNonceWinner = findActivationNonceWinner(
-      claimEvents.filter((event) =>
-        trustedAuthorPredicate(event.author?.login ?? event.user?.login ?? ''),
-      ),
+      filterTrustedClaimFamilyEvents(claimEvents, trustedAuthorPredicate),
       activeClaim.claimId,
     );
     if (
@@ -10368,6 +10266,81 @@ export function orderClaimEvents(events) {
   return base.map(({ event }) => event);
 }
 /**
+ * kurone-kito/idd-skill#3248: `true` when `event` may participate in claim
+ * resolution, `false` when it must be ignored -- exactly like an untrusted
+ * comment. Throws when a trusted-author claim-family marker's edit state
+ * cannot be resolved, so an incomplete fetch fails loudly instead of
+ * silently reading as "no active claim" (a `claimed-by` marker is not a
+ * waiver: misreading an edited one as absent can make a genuinely claimed
+ * issue look unclaimed to Discover).
+ *
+ * Untrusted author -> `false` (unchanged from before this issue). Trusted
+ * author whose body does not parse as any claim-family marker (`claimed-by`
+ * / `unclaimed-by` in either new or legacy form / `activation-nonce` /
+ * `forced-handoff`) -> `true`
+ * (plain comments are unaffected; edit state is never checked for them).
+ * Trusted author, marker-shaped -> `classifyCommentEditState(event)`:
+ * `'unedited'` -> `true`; `'edited'` -> `false` (dropped, same treatment as
+ * an untrusted comment, per the maintainer decision this issue implements);
+ * `'unknown'` -> throws.
+ *
+ * Marker-shape detection is parse-based (the same `parseClaimComment` /
+ * `parseReleaseComment` / `parseActivationNonceComment` /
+ * `parseForcedHandoffComment` functions `applyClaimEvent` and
+ * `orderClaimEvents` already call), not a label-prefix check -- a
+ * malformed/junk body from a trusted author already resolves to "ignored"
+ * via those parse functions returning `null`, so it never reaches the
+ * edit-state check and never throws.
+ */
+function isTrustedClaimFamilyEvent(event, isTrustedAuthor) {
+  const authorLogin = event.author?.login ?? event.user?.login ?? '';
+  if (!isTrustedAuthor(authorLogin ?? '')) {
+    return false;
+  }
+  const body = event.body ?? '';
+  const createdAt = event.createdAt ?? event.created_at ?? '';
+  const isClaimFamilyMarker =
+    parseClaimComment(body, createdAt) !== null ||
+    parseLegacyClaimComment(body, createdAt) !== null ||
+    parseReleaseComment(body) !== null ||
+    parseLegacyReleaseComment(body, createdAt) !== null ||
+    parseActivationNonceComment(body, createdAt) !== null ||
+    parseForcedHandoffComment(body, createdAt) !== null;
+  if (!isClaimFamilyMarker) {
+    return true;
+  }
+  const editState = classifyCommentEditState(event);
+  if (editState === 'edited') {
+    return false;
+  }
+  if (editState === 'unknown') {
+    const identifier =
+      event.html_url ??
+      event.url ??
+      (event.id != null ? String(event.id) : '(no id)');
+    throw new Error(
+      `claim-family marker edit state unresolved for comment ${identifier} -- ` +
+        'fetch it with includeEditState (or resolve lastEditedAt) before ' +
+        'resolving claim state',
+    );
+  }
+  return true;
+}
+/**
+ * kurone-kito/idd-skill#3248: `events.filter(...)` over
+ * {@link isTrustedClaimFamilyEvent} -- the shared trust+edit-state filter
+ * every claim-family-marker consumer (this file's own
+ * `resolveActiveClaimWithForcedHandoffTrace` pre-filter and
+ * `summarizeClaimValidation`'s activation-nonce-winner pre-filter, plus
+ * `resume-claim-routing.mts`'s top-of-function filter) applies before
+ * ordering or reducing over the event stream.
+ */
+export function filterTrustedClaimFamilyEvents(events, isTrustedAuthor) {
+  return events.filter((event) =>
+    isTrustedClaimFamilyEvent(event, isTrustedAuthor),
+  );
+}
+/**
  * Same reduction as {@link resolveActiveClaim}, but also tracks which
  * specific forced-handoff marker (if any) produced the final active
  * claim's identity. `resolveActiveClaim`'s state machine has no memory of
@@ -10406,8 +10379,15 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   // identical trusted event set. `applyClaimEvent`'s own per-event
   // trust check below stays as defense in depth (always true in
   // practice now, since every event it sees already passed this filter).
-  const trustedEvents = events.filter((event) =>
-    options.isTrustedAuthor(event.author?.login ?? ''),
+  //
+  // kurone-kito/idd-skill#3248: this is also where an edited trusted
+  // claim-family marker is dropped -- before ordering, so its claim-id
+  // never enters the same-second tie-break either, exactly like an
+  // untrusted comment (see `isTrustedClaimFamilyEvent`'s doc comment for
+  // the drop-vs-throw rule).
+  const trustedEvents = filterTrustedClaimFamilyEvents(
+    events,
+    options.isTrustedAuthor,
   );
   const orderedEvents = orderClaimEvents(trustedEvents);
   let active = null;
@@ -10463,7 +10443,14 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
 export function applyClaimEvent(activeClaim, event, options = {}) {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
-  if (!normalizedOptions.isTrustedAuthor(authorLogin)) {
+  // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
+  // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
+  // every event reaching this point from that trace has already passed the
+  // identical check, so this is a no-op in that call path. Supersedes the
+  // plain `!normalizedOptions.isTrustedAuthor(authorLogin)` check this used
+  // to be: an untrusted author is still rejected (first branch inside the
+  // helper), now alongside the edited/unknown-edit-state rule.
+  if (!isTrustedClaimFamilyEvent(event, normalizedOptions.isTrustedAuthor)) {
     return activeClaim;
   }
   const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
@@ -10645,99 +10632,6 @@ export function normalizeLinkedPrReference(value) {
     // Not a URL-form linked-pr reference.
   }
   return token.toLowerCase();
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function classifyResumeRoutingCase(input, options = {}) {
-  const staleHours = Number.isFinite(options.staleHours)
-    ? options.staleHours
-    : 24;
-  const stallMinutes = Number.isFinite(options.stallMinutes)
-    ? options.stallMinutes
-    : 30;
-  const pendingCiStates = new Set(
-    options.pendingCiStates ?? ['queued', 'in_progress', 'waiting', 'pending'],
-  );
-  const terminalSafeCiStates = new Set(
-    options.terminalSafeCiStates ?? ['success', 'none'],
-  );
-  if (input.displacedByForcedHandoff) {
-    return {
-      route: 'claim-lost-stop',
-      reason: 'session was displaced by trusted forced-handoff evidence',
-    };
-  }
-  if (!input.hasActiveClaim) {
-    return {
-      route: 'unclaimed-reclaim-required',
-      reason: 'resume requires a fresh claim before continuation',
-    };
-  }
-  if (input.claimOwnedBySession) {
-    if (input.rebaseInProgress || input.worktreeDirty) {
-      return {
-        route: 'crash-recovery',
-        reason: 'owned claim with interrupted local state',
-      };
-    }
-    return {
-      route: 'ordinary-continuation',
-      reason: 'owned claim with clean local state',
-    };
-  }
-  if (input.hasUsableForcedHandoffEvidence) {
-    return {
-      route: 'forced-handoff-recovery',
-      reason:
-        'trusted forced-handoff evidence takes precedence over stalled-session takeover',
-    };
-  }
-  if (!Number.isFinite(input.claimAgeHours)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'claim age is missing for a non-owned claim',
-    };
-  }
-  if (!Number.isFinite(input.latestActivityAgeMinutes)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'activity age is missing for a non-owned active claim',
-    };
-  }
-  const ciState = String(input.ciState ?? 'none').toLowerCase();
-  if (pendingCiStates.has(ciState)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'CI is still pending for the active non-owned claim',
-    };
-  }
-  if (!terminalSafeCiStates.has(ciState)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'CI is not in a terminal-safe state for stalled-claim recovery',
-    };
-  }
-  if (input.claimAgeHours < staleHours) {
-    if (input.latestActivityAgeMinutes >= stallMinutes) {
-      return {
-        route: 'hold-for-evidence',
-        reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
-      };
-    }
-    return {
-      route: 'hold-for-evidence',
-      reason: 'non-owned claim remains non-inheritable until stale',
-    };
-  }
-  if (input.latestActivityAgeMinutes < stallMinutes) {
-    return {
-      route: 'hold-for-evidence',
-      reason: `non-owned claim is stale but quiet-window evidence is < ${stallMinutes}m`,
-    };
-  }
-  return {
-    route: 'stale-claim-takeover',
-    reason: `non-owned claim is stale at >= ${staleHours}h with quiet-window evidence >= ${stallMinutes}m`,
-  };
 }
 function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
   // Default accepts any non-bot human; an IDD-scoped predicate (when supplied)

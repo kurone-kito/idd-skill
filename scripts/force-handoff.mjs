@@ -31,6 +31,7 @@ import {
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 export const SAME_SUCCESSOR_WARNING =
   'WARNING: successor agent-id is unchanged from the displaced claim; if that session cannot resume, this issue remains effectively unclaimed.';
@@ -108,13 +109,15 @@ export async function runHandoff(options = {}) {
     }
     const issueComments = fetchIssueComments
       ? await fetchIssueComments(issueNumber)
-      : ghJson(
-          [
-            'api',
-            '--paginate',
-            `repos/${owner}/${name}/issues/${issueNumber}/comments`,
-          ],
-          true,
+      : resolveIssueCommentEditStates(
+          ghJson(
+            [
+              'api',
+              '--paginate',
+              `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+            ],
+            true,
+          ),
         );
     const trustedMarkerLogins =
       givenTrustedLogins ??
@@ -367,6 +370,24 @@ function ghJson(args, slurp = false) {
     );
   }
   return JSON.parse(ghText(finalArgs));
+}
+function resolveIssueCommentEditStates(comments) {
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'force-handoff: issue comment is missing node_id, cannot resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `force-handoff: missing edit-state resolution for comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
 }
 export function buildTrustedMarkerLogins(
   owner,
