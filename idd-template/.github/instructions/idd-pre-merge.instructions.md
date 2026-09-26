@@ -273,15 +273,14 @@ failure into a silent stall.
   [Terminal routing](idd-advisory-wait.instructions.md#terminal-routing-1570);
   an unwaived `copilot-terminal-unavailable` in `blockers[]` stops here
   with that section's hold regardless.
-- **Secondary advisory bot quiet window** (opt-in, off by default): when
-  `advisoryWait.secondaryQuietWindow` (#2335) is configured, the readiness
-  report's `secondaryQuietWindow.elapsed` must be `true` before this check
-  is satisfied — a `secondary-quiet-window` entry in `blockers[]` means the
-  window has not yet elapsed since the last substantive review activity;
-  wait (poll per `advisoryWait.pollInterval`), then re-evaluate F2. When
-  issue `#2544`'s settled buffer clamps the applied wait, that blocker
-  names the buffer separately from the configured window. Unset
-  (the off default) never adds this blocker.
+- **Secondary advisory bot quiet window** (opt-in; unset never blocks):
+  when `advisoryWait.secondaryQuietWindow` (#2335) is configured,
+  `secondaryQuietWindow.elapsed` must be `true`. A
+  `secondary-quiet-window` blocker means that window has not elapsed
+  since the last substantive review activity; wait (poll per
+  `advisoryWait.pollInterval`), then re-evaluate F2. When issue
+  `#2544`'s settled buffer clamps the wait, the blocker names that
+  buffer apart from the configured window.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
