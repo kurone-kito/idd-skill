@@ -689,17 +689,22 @@ function toPosixRelative(root, absPath) {
  * post-merge review)**: the fix above resolves `declarationLine`
  * correctly only when the no-`from` list item's local name comes from a
  * bare or exported top-level `function`/`const`/`class` declaration --
- * `declarationLineByLocalName` is populated from `declared` alone. A
- * local name introduced instead by an `import` (named, default,
- * namespace, or any combined form) still falls back to the export
- * statement's own line, the same pre-#3498 mismatch this issue fixed for
- * the declared case, since an import statement is never added to
- * `declared`. This was found and fixed on this issue's own PR during
- * E-phase review, but reverted before merge as a genuine scope expansion
- * beyond this issue's own repro and acceptance criteria (which cover
- * only a declared, not imported, local name) -- deliberately left for a
- * narrower follow-up issue instead of folding an open-ended
- * import-syntax surface into this fix. */
+ * `declarationLineByLocalName` is populated by two scans, both feeding
+ * `addDeclarationLine` directly rather than reading `declared`: the
+ * EXPORTED-declaration scan (which also creates that name's own
+ * `declared` entry) and the BARE-declaration scan (a name with no
+ * `export` keyword of its own, so it is never added to `declared` at
+ * all -- only a later no-`from` list item re-exports it). A local name
+ * introduced instead by an `import` (named, default, namespace, or any
+ * combined form) still falls back to the export statement's own line,
+ * the same pre-#3498 mismatch this issue fixed for the declared case,
+ * since an import statement feeds neither scan. This was found and
+ * fixed on this issue's own PR during E-phase review, but reverted
+ * before merge as a genuine scope expansion beyond this issue's own
+ * repro and acceptance criteria (which cover only a declared, not
+ * imported, local name) -- deliberately left for a narrower follow-up
+ * issue instead of folding an open-ended import-syntax surface into
+ * this fix. */
 function hasSelfReference(strippedText, name, excludeLines) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
