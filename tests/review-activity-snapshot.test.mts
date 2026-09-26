@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   parseArgs,
   resolveActivitySnapshotTrustedMarkerLogins,
 } from '../src/scripts/review-activity-snapshot.mts';
+import { stubExecutable } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const SNAPSHOT_HEAD = 'b'.repeat(40);
+const COURTESY_ACK =
+  '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->';
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -121,4 +130,150 @@ test('resolveActivitySnapshotTrustedMarkerLogins deduplicates a viewer login alr
     viewerLoginUnavailable: false,
   });
   assert.deepEqual(result, ['idd-bot']);
+});
+
+function courtesyThreadGraphql(replyBody: string): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'PRRT_courtesy',
+                isResolved: true,
+                path: 'src/a.ts',
+                comments: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      id: 'C1',
+                      body: 'please fix this',
+                      createdAt: '2026-05-12T00:00:00Z',
+                      updatedAt: '2026-05-12T00:00:00Z',
+                      lastEditedAt: null,
+                      author: { login: 'reviewer-a' },
+                      pullRequestReview: { id: 'PRR_1' },
+                    },
+                    {
+                      id: 'C2',
+                      body: '**Accepted** — done.',
+                      createdAt: '2026-05-12T00:30:00Z',
+                      updatedAt: '2026-05-12T00:30:00Z',
+                      lastEditedAt: null,
+                      author: { login: 'kurone-kito' },
+                      pullRequestReview: null,
+                    },
+                    {
+                      id: 'C3',
+                      body: replyBody,
+                      createdAt: '2026-05-12T02:00:00Z',
+                      updatedAt: '2026-05-12T02:00:00Z',
+                      lastEditedAt: null,
+                      author: { login: 'coderabbitai[bot]' },
+                      pullRequestReview: null,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+}
+
+function snapshotGhStub(graphqlJson: string, commentNdjson: string): string {
+  return `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'api' && args[1] === 'user') out('kurone-kito\\n');
+if (args[0] === 'pr' && args[1] === 'view') {
+  out(${JSON.stringify(JSON.stringify({ headRefOid: SNAPSHOT_HEAD, author: { login: 'pr-author' } }))});
+}
+if (args[0] === 'pr' && args[1] === 'checks') out('[]');
+if (args[0] === 'api' && args[1] === 'graphql') out(${JSON.stringify(graphqlJson)});
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) out(${JSON.stringify(commentNdjson)});
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+}
+
+function runSnapshot(
+  graphqlJson: string,
+  commentNdjson = '',
+): {
+  dispositionEvidence: {
+    missingRegularCommentCount: number;
+    missingThreadCount: number;
+    soleCauseAckOnlyPostDisposition: boolean;
+  };
+} {
+  const restore = stubExecutable(
+    'gh',
+    snapshotGhStub(graphqlJson, commentNdjson),
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/review-activity-snapshot.mjs'),
+        '--pr',
+        '42',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--advisory-bot-logins',
+        'coderabbitai[bot]',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+    );
+    return JSON.parse(output);
+  } finally {
+    restore();
+  }
+}
+
+test('review-activity snapshot JSON includes soleCauseAckOnlyPostDisposition for a courtesy ack (#3482)', () => {
+  const report = runSnapshot(courtesyThreadGraphql(COURTESY_ACK));
+  assert.equal(report.dispositionEvidence.missingRegularCommentCount, 0);
+  assert.equal(report.dispositionEvidence.missingThreadCount, 1);
+  assert.equal(
+    report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
+    true,
+  );
+});
+
+test('review-activity snapshot keeps the courtesy-ack flag false for a substantive bot reply (#3482)', () => {
+  const report = runSnapshot(
+    courtesyThreadGraphql('please also rename this helper before merging'),
+  );
+  assert.equal(report.dispositionEvidence.missingThreadCount, 1);
+  assert.equal(
+    report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
+    false,
+  );
+});
+
+test('review-activity snapshot keeps the courtesy-ack flag false when a regular comment is still missing (#3482)', () => {
+  const report = runSnapshot(
+    courtesyThreadGraphql(COURTESY_ACK),
+    JSON.stringify({
+      user: { login: 'someone' },
+      body: 'still open',
+      created_at: '2026-05-12T03:00:00Z',
+      updated_at: '2026-05-12T03:00:00Z',
+    }),
+  );
+  assert.equal(report.dispositionEvidence.missingRegularCommentCount, 1);
+  assert.equal(
+    report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
+    false,
+  );
 });
