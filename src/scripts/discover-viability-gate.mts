@@ -914,9 +914,7 @@ function isFollowedByCredentialRequirement(
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
-    CREDENTIAL_APPROVAL_ACTION_FOLLOW_ON_PATTERN.test(
-      firstFollowOnSentence,
-    ) ||
+    CREDENTIAL_APPROVAL_ACTION_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN.test(
       firstBoundary
         ? sameParagraph.slice(firstBoundary.index + firstBoundary[0].length)
