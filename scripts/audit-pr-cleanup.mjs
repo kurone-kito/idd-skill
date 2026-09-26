@@ -489,6 +489,21 @@ export async function runApplyWithRetry(
     : DEFAULT_APPLY_RETRY_MAX_ATTEMPTS;
   let report = initialReport;
   for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    // Re-check before starting this attempt's own pass, not only after it
+    // (Copilot review, PR #3499): the budget clock starts at helper start,
+    // before this function is ever called, so the caller's own initial
+    // report snapshot -- or, on a later attempt, the previous iteration's
+    // rescan -- can already have spent the whole budget before this loop
+    // gets to run `applyPass` at all. `applyCandidatePass`'s own
+    // per-candidate check would still no-op the pass itself, but checking
+    // here too keeps "start no new pass" an invariant of this orchestration
+    // function, not something every `applyPass` implementation must
+    // independently re-derive.
+    if (budget.exhausted()) {
+      pruneResolvedFromCandidates(report);
+      report.timeBudgetExhausted = true;
+      return { report, attempts: attempt, boundExhausted: false };
+    }
     await applyPass(report);
     if (report.failed.length > 0) {
       return { report, attempts: attempt, boundExhausted: false };
@@ -566,16 +581,11 @@ export async function runApplyWithRetry(
     if (attempt === totalAttempts) {
       return { report: freshReport, attempts: attempt, boundExhausted: true };
     }
-    // The rescan just found remaining candidates for another pass, but
-    // the time budget ran out while the rescan itself was in flight
-    // (#3321): stop here too, without starting another pass. `freshReport`
-    // is already self-consistent (the rescan above is a fresh, authoritative
-    // snapshot, already reconciled against `applied`), so no further pruning
-    // is needed here the way the first budget check above needs it.
-    if (budget.exhausted()) {
-      freshReport.timeBudgetExhausted = true;
-      return { report: freshReport, attempts: attempt, boundExhausted: false };
-    }
+    // A budget spent while this rescan itself was in flight is caught by
+    // the very next iteration's top-of-loop check above -- `freshReport`
+    // is already self-consistent (a fresh, authoritative snapshot already
+    // reconciled against `applied`), so that check finds nothing left to
+    // prune here.
     report = freshReport;
   }
   // Unreachable: totalAttempts is normalized to >= 1 above, so the loop

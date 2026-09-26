@@ -691,12 +691,13 @@ test('runApplyWithRetry + applyCandidatePass: an exhausted time budget stops the
     '../src/scripts/audit-pr-cleanup.mts'
   );
   let clockCalls = 0;
-  // Call 1 computes the deadline at budget-creation time; call 2 is the
-  // per-candidate `exhausted()` check ahead of c1 (still within budget);
-  // call 3 is the same check ahead of c2 (now past the deadline).
+  // Call 1 computes the deadline at budget-creation time; call 2 is
+  // runApplyWithRetry's top-of-loop check for attempt 1 (still within
+  // budget); call 3 is the per-candidate check ahead of c1 (still within
+  // budget); call 4 is the same check ahead of c2 (now past the deadline).
   const budget = createTimeBudget(1, () => {
     clockCalls += 1;
-    return clockCalls <= 2 ? 0 : 5000;
+    return clockCalls <= 3 ? 0 : 5000;
   });
   let rescanCalls = 0;
   const initial = createAuditReport({
@@ -753,14 +754,16 @@ test('runApplyWithRetry: a budget spent during backoff, after the pass itself fi
     '../src/scripts/audit-pr-cleanup.mts'
   );
   let exhaustedCalls = 0;
-  // Calls 1-2: per-candidate checks inside applyCandidatePass (both within
-  // budget). Call 3: runApplyWithRetry's post-pass check (still within
-  // budget -- the pass itself finished in time). Call 4: the new
-  // post-backoff, pre-rescan check -- budget spent while backoff "slept".
+  // Call 1: runApplyWithRetry's top-of-loop check for attempt 1 (within
+  // budget). Calls 2-3: per-candidate checks inside applyCandidatePass
+  // (both within budget). Call 4: runApplyWithRetry's post-pass check
+  // (still within budget -- the pass itself finished in time). Call 5:
+  // the post-backoff, pre-rescan check -- budget spent while backoff
+  // "slept".
   const budget = {
     exhausted: () => {
       exhaustedCalls += 1;
-      return exhaustedCalls > 3;
+      return exhaustedCalls > 4;
     },
   };
   let rescanCalls = 0;
@@ -800,6 +803,58 @@ test('runApplyWithRetry: a budget spent during backoff, after the pass itself fi
   assert.equal(result.report.applied.length, 2);
   assert.equal(result.report.timeBudgetExhausted, true);
   assert.equal(result.report.candidates.length, 0);
+});
+
+// Copilot review, PR #3499: the budget clock starts at helper start,
+// before runApplyWithRetry is ever called, so the caller's own initial
+// report snapshot can already have spent the whole budget before this
+// function gets to run the first pass at all. Prove that case starts no
+// pass and no rescan, not merely a pass that does nothing.
+test('runApplyWithRetry: an already-exhausted budget starts no pass and no rescan at all (#3321, Copilot review PR #3499)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let fetchNodeCalls = 0;
+  let rescanCalls = 0;
+  const budget = { exhausted: () => true };
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => {
+            fetchNodeCalls += 1;
+            return fakeSnapshot();
+          },
+          budget,
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    noBackoff,
+    budget,
+  );
+
+  assert.equal(fetchNodeCalls, 0);
+  assert.equal(rescanCalls, 0);
+  assert.equal(result.report.applied.length, 0);
+  assert.equal(result.report.timeBudgetExhausted, true);
+  assert.deepEqual(
+    result.report.candidates.map((row) => row.subjectId),
+    ['c1', 'c2'],
+  );
 });
 
 test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
