@@ -170,9 +170,14 @@ mergeable,mergeStateStatus`) — reflects the last pushed head, not
 unpushed E9 fixes.
 
 - **`content-conflict`** (`mergeable` `CONFLICTING`): pass the active
-  review gate, merge `{development-branch}` into the feature branch
-  (`git fetch origin {development-branch} && git merge
-  origin/{development-branch}`), resolve, complete the merge.
+  review gate, merge `{development-branch}` into the feature branch,
+  resolve, complete the merge:
+
+  ```sh
+  git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
+    && git merge origin/{development-branch}
+  ```
+
   Non-interactive-hostile signing: use the
   [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   instead.

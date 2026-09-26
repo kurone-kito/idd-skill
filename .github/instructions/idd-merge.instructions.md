@@ -495,7 +495,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    and fast-forward it:
 
    ```sh
-   git fetch origin {development-branch}
+   git fetch origin
    git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch} \
      && git merge --ff-only origin/{development-branch}
    ```

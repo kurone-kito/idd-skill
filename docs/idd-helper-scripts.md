@@ -5324,9 +5324,15 @@ a destructive re-run.
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
 `idd-review-fix.instructions.md`'s E11 both merge `main` into the feature
-branch with `git fetch origin main && git merge origin/main`. On a repo
-whose primary commit signing is non-interactive-hostile (GPG pinentry /
-hardware-touch) and that configures a fallback signing wrapper for
+branch:
+
+```sh
+git fetch origin +refs/heads/main:refs/remotes/origin/main \
+  && git merge origin/main
+```
+
+On a repo whose primary commit signing is non-interactive-hostile (GPG
+pinentry / hardware-touch) and that configures a fallback signing wrapper for
 arbitrary git subcommands, run the **merge** step — including a
 `--continue` after conflict resolution — through that wrapper, never the
 plain command (`git fetch` creates no commit and needs no signing):

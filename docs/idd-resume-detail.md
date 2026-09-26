@@ -259,7 +259,15 @@ claim ownership:
 
 From the primary worktree (HEAD stays on `main`):
 
-1. `git fetch origin {branch}` — fetch the remote tip.
+1. Fetch the remote tip with a fully-qualified destination refspec --
+   unlike a bare `git fetch origin {branch}`, this does not depend on
+   the clone's configured fetch refspec to refresh
+   `refs/remotes/origin/{branch}`:
+
+   ```sh
+   git fetch origin +refs/heads/{branch}:refs/remotes/origin/{branch}
+   ```
+
 2. `git branch {branch} origin/{branch}` — create the local branch
    without moving primary HEAD.
 3. `git worktree add <sibling-worktree-path> {branch}` — create the
@@ -314,7 +322,7 @@ example, on resume) without a fresh B1 pass, the same caveat
 example:
 
 ```sh
-git fetch origin {development-branch}
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
 git diff origin/{development-branch}...{branch}
 ```
 
