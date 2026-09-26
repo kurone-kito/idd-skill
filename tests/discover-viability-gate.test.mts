@@ -576,6 +576,20 @@ test('still fails autonomous completion when a credential is necessary (#3528)',
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion when a customer supplies the credential (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 94,
+    title: 'wire external credential approval',
+    body:
+      'This issue documents a credential that will be supplied by the customer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('still fails autonomous completion when credential handling is itself required (#3522)', () => {
   const result = evaluateA4Viability({
     number: 70,
@@ -849,6 +863,20 @@ test('does not treat a work assertion as a credential prerequisite (#3528)', () 
     body:
       'Tests must verify credential rotation behavior. Verification: add ' +
       'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat a later test assertion as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 95,
+    title: 'document credential terminology',
+    body:
+      'Document credential rotation and add necessary tests. Verification: ' +
+      'add unit tests.',
     state: 'OPEN',
   });
 

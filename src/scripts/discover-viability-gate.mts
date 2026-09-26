@@ -314,6 +314,8 @@ const REQUIREMENT_ASSERTION_PATTERN =
   /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
   /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
+const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
+  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
@@ -829,7 +831,11 @@ function isNearRequirementAssertion(
   const forwardText = forwardBreak
     ? forwardRaw.slice(0, forwardBreak.index)
     : forwardRaw;
-  if (assertionPattern.test(forwardText)) {
+  const forwardAssertion =
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN
+      : assertionPattern;
+  if (forwardAssertion.test(forwardText)) {
     return true;
   }
   const backwardStart = Math.max(
