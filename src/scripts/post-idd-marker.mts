@@ -2253,8 +2253,10 @@ function main(): HelperCliResult {
         explicitBodySha256 !== undefined &&
         explicitBodySha256 !== computedBodySha256
       ) {
-        throw new Error(
-          `refusing to post authoring-owner marker: --body-sha256 ${explicitBodySha256} does not match the freshly computed digest ${computedBodySha256} of --marker-target ${args.fields['marker-target']}'s live body`,
+        throw markCliUsageError(
+          new Error(
+            `refusing to post authoring-owner marker: --body-sha256 ${explicitBodySha256} does not match the freshly computed digest ${computedBodySha256} of --marker-target ${args.fields['marker-target']}'s live body`,
+          ),
         );
       }
       args.fields['body-sha256'] = computedBodySha256;
