@@ -117,17 +117,18 @@ forced-handoff marker names this session `newAgentId` — treat its
 forced-handoff steps:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>]
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
-Pass `--nonce` when this session already recorded one for that
-`{claim-id}` (true after forced-handoff step 5) so a session that lost
-the nonce tie-break cannot pass as `already_owned`; omit it otherwise.
+Pass `--nonce` only when already recorded for that `{claim-id}`
+(true after forced-handoff step 5); omit it otherwise. Pass
+`--worktree <path>` once the B1 worktree exists.
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
 | --- | --- |
 | `already_owned` / `keep` | Confirmed — see the two cases below |
+| `owner_evidence_required` / `stop` | Retry once with `--worktree <path>`; still returned → Stop-and-ask (not a competitor) |
 | anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
 <!-- dprint-ignore-end -->
 
