@@ -702,6 +702,34 @@ test('does not let only-after credential prerequisites pass (#3528)', () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let credential dependencies pass as descriptive storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 85,
+    title: 'document credential storage',
+    body:
+      'Credential storage depends on the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after in a later unrelated sentence block descriptive text (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 86,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern. Only after reviewing the ' +
+      'code did we notice a typo. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('keeps provided contextual credential text descriptive (#3528)', () => {
   const result = evaluateA4Viability({
     number: 79,
