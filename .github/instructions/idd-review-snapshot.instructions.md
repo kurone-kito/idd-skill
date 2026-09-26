@@ -207,12 +207,10 @@ regardless of maintainer response).
 **Review bodies** where the reviewer's latest state is
 `CHANGES_REQUESTED` — exclude reviews already replied to and
 re-review-requested in a previous E13/E14 pass. **Embedded CodeRabbit
-finding gap (helper-first, optional):** a `COMMENTED`-state CodeRabbit
-review can still carry a file/line-cited finding with no thread of its own,
-in an older collapsible body format — `review-activity-snapshot`'s
-`embeddedFindings[].uncoveredCount` reports this; add one PATH B item per
-uncovered finding. Inspect other bots' `COMMENTED` review bodies separately
-for file/line-cited findings without threads.
+findings (helper-first, optional):** only `COMMENTED` CodeRabbit reviews use
+`embeddedFindings[].uncoveredCount`; add one PATH B item per uncovered
+finding. Inspect other bots' `COMMENTED` review bodies separately for
+file/line-cited findings without threads.
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the
