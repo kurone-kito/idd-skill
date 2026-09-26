@@ -5842,6 +5842,18 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     ) {
       return latestTimestamp;
     }
+    // #3249: an edited or edit-state-unresolved disposition must remain in
+    // the ordinary-feedback path. Letting it advance this watermark would
+    // hide earlier human feedback even though the disposition itself cannot
+    // satisfy the trust-bearing disposition gate.
+    const isDisposition =
+      isDispositionComment({ body: comment.body }) ||
+      isRejectionConfirmedDisposition({ body: comment.body }) ||
+      isNonReviewNoticeDisposition({ body: comment.body }) ||
+      isReviewSummaryDisposition({ body: comment.body });
+    if (isDisposition && classifyCommentEditState(comment) !== 'unedited') {
+      return latestTimestamp;
+    }
     if (
       !latestTimestamp ||
       compareIsoTimestamps(comment.createdAt, latestTimestamp) > 0

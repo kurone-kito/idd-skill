@@ -3563,6 +3563,40 @@ test('a digest by an iddAgentLogins member outside trustedMarkerLogins never adv
   );
 });
 
+test('an edited or edit-state-unresolved IDD disposition never advances the regular-comment watermark (#3249)', () => {
+  const summarize = (lastEditedAt?: string | null) =>
+    summarizeRegularCommentsForGate(
+      [
+        {
+          id: 'REG-DISPOSITION-1',
+          author: { login: 'reviewer-a' },
+          body: 'Earlier feedback must remain outstanding.',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'REG-DISPOSITION-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — the implementation is correct.',
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+        },
+      ],
+      { iddAgentLogins: ['idd-bot'], trustedMarkerLogins: ['idd-bot'] },
+    );
+
+  for (const summary of [
+    summarize('2026-05-12T02:00:00Z'),
+    summarize(undefined),
+  ]) {
+    assert.equal(summary.count, 1);
+    assert.equal(summary.items[0].id, 'REG-DISPOSITION-1');
+  }
+
+  assert.equal(summarize(null).count, 0);
+});
+
 // Same regression, on the disposition-evidence side: if the digest branch
 // excluded only on `trustedMarkerLogins`, `agent-x`'s digest would wrongly
 // enter `agentReplyComments` and clear the human comment as a
