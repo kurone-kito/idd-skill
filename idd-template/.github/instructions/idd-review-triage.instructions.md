@@ -5,8 +5,8 @@ ReviewItems_snapshot non-empty; a cold E4 entry runs that file's
 Cold-start section first. Covers classifying, scoring, recording
 dispositions, and counting accepted items.
 
-Before posting any E-phase operational comment or GitHub reply, apply
-the shared claim revalidation gate.
+Before any E-phase mutation or GitHub side effect, apply the shared
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 **Skip condition E8**: if the Accepted PATH A count is zero, proceed to
 the **E-phase branch-sync check** below (its
@@ -566,11 +566,11 @@ ever reaching F3 (background:
 [design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).
 
 **Rule**: post the watermark as the **last** action before F3's
-`idd-merge-execute.mjs --apply`, every pass — anything after (a CI
-rerun settling, a new disposition reply, another `{development-branch}`
-advance) stales it, failing `--apply` closed on `review-currency` regardless
-of CI color; re-post before retrying. A stale `idd-advisory-convergence`
-rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
+`idd-merge-execute.mjs --apply`, every pass. Apply the canonical
+review-currency rules in [pre-merge F2](idd-pre-merge.instructions.md#f2--pre-merge-condition-check)
+when deciding whether later activity stales it; that section's
+own-agent procedural-comment and ack-only carve-outs apply here too. A
+stale `idd-advisory-convergence` rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
