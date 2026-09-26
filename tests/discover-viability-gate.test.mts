@@ -786,7 +786,7 @@ test('does not let credential creation by a maintainer pass (#3528)', () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
-test('does not let an unpunctuated maintainer prerequisite pass (#3528)', () => {
+test('does not let a maintainer prerequisite without punctuation pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 98,
     title: 'document protected material',
@@ -891,6 +891,62 @@ test('does not let a vendor credential prerequisite pass (#3528)', () => {
     body:
       'This issue concerns a credential. It will be provided by a vendor ' +
       'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a passive relative credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 110,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential, which is required before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let customer dependency hide behind descriptive storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 111,
+    title: 'document credential storage',
+    body:
+      'Credential storage depends on the customer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not associate a later pronoun prerequisite with a credential mention (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 112,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern. A local fixture supports ' +
+      'tests. It is required before tests run. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an actor-bearing relative credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 113,
+    title: 'document protected material',
+    body:
+      'Document a credential which the maintainer must supply before ' +
+      'implementation. Verification: add unit tests.',
     state: 'OPEN',
   });
 
