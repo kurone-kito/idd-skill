@@ -737,7 +737,8 @@ external scheduler to drive the loop.
 When a live session still owns its claim but is unsure what to check next
 mid E/F-phase — not after a crash, takeover, or missing review snapshot —
 use the existing gates as a navigation aid. The observed navigation failure
-is recorded in issue `#3494` (2026-09-26). With helper runtime, use the
+is recorded in source issue `kurone-kito/idd-skill#3494` (2026-09-26).
+With helper runtime, use the
 profile-selected `pre-merge-readiness` invocation documented under
 [merge-gate evidence](idd-helper-scripts.md#merge-gate-evidence) for the
 current PR, passing `--pr <n> --claim-issue <n>` and current
