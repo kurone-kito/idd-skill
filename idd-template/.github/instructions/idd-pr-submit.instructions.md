@@ -25,13 +25,12 @@ pure no-op. **Skip the rebase entirely and proceed to D2** — D1's
 pre-publication synchronization goal is already met. In a
 sibling-worktree setup a no-op `git rebase origin/{development-branch}`
 can still detach HEAD at the upstream tip without replaying the local
-commit, and re-running that no-op rebase re-detaches every time, so the
-bounded recovery below cannot converge for the no-op case; skipping it is
-the clean exit.
+commit, and retrying that no-op re-detaches every time, so skip it.
+Post-rebase verification cannot converge for that no-op.
 
 Otherwise the branch **is** behind `origin/{development-branch}`: rebase
 it onto `{development-branch}` (`git rebase origin/{development-branch}`),
-then apply the post-rebase verification and bounded recovery below.
+then apply Post-rebase verification below.
 
 After the first D-phase push, do not reuse D1 as the normal
 synchronization path. Later branch updates should return through the
@@ -58,13 +57,24 @@ to `git` before the subcommand — `git -c … rebase`, not `git rebase -c …`
 — or use a repo alias that wraps any subcommand; a commit-only alias like
 `git commit-ssh` will not run `rebase`),
 **run the initial `git rebase origin/{development-branch}` above
-through that wrapper — not the plain command — and continue it with
-the wrapper's own
-`--continue` form**; the wrapper must own the whole operation. Plain
-`git rebase --continue` re-signs the replayed commit through the
-configured primary signing, which stalls non-interactively right after
-the conflict is already resolved. This is the normal-path complement to
-the recovery-path re-signing in Post-rebase verification below.
+through that wrapper, and continue a staged content conflict with
+the wrapper's own `--continue`**. Plain `git rebase --continue`
+re-signs through primary signing and stalls non-interactively.
+
+Failed write (observed 2026-09-26, issue `#3491`): rebase still in
+progress, the index holds the replay, and the branch tip is still the
+pre-rebase commit, so no commit object was written. No staged content
+conflict: use this path; use wrapper's `--continue` for one. Abort with
+`git rebase --abort` to restore the pre-rebase branch tip, then restart
+the **full** rebase from that branch through the same configured
+fallback wrapper's `rebase origin/{development-branch}` form. The
+wrapper may be the explicit SSH `-c` form or a repository alias. This
+replays the
+complete pre-rebase commit range, including every earlier commit in a
+stack; do not replace it with a cherry-pick of only one commit. Do not
+run `git commit --amend -S` or `git commit --amend '-S'`, including
+when Git prints that hint. Post-rebase verification below covers a finished
+rebase with HEAD detached at the upstream tip.
 
 ### Post-rebase verification
 
@@ -80,22 +90,13 @@ D2, verify both:
    origin/{development-branch}..HEAD` lists it) — `origin/`-prefixed
    since a local `{development-branch}` branch may not exist.
 
-If HEAD is detached (current branch empty), **auto-recover once**: re-attach
-to the claimed branch with `git checkout {branch-name}` (the local commit is
-preserved on the branch ref), re-run the D1 rebase, then re-verify both
-checks. The re-rebase re-signs through the configured commit-signing path —
-do not hardcode an ad-hoc key. On the signed-commit repos in the rebase
-note above, run the re-rebase through that same fallback wrapper (the
-repo's blessed fallback, not an ad-hoc pin), since the plain re-rebase
-would stall on the non-interactive primary signing. If
-recovery still fails (HEAD still detached or the
-expected commit absent), post a hold note documenting the branch state and
-stop; do not push.
-
-This is the same divergence the shared
-[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-catches at the next mutation (current branch ≠ claimed branch); detecting it
-here turns a confusing later failure into an immediate, recoverable signal.
+If HEAD is detached, **auto-recover once**: `git checkout {branch-name}`
+(the commit stays on the branch ref), then re-run the D1 rebase through
+the configured signing path. Use the fallback wrapper above when
+primary signing is non-interactive-hostile; otherwise use the repo's
+normal signing path, not an ad-hoc key. Re-verify both checks. If HEAD
+is still detached or the expected commit is absent, post a hold note
+naming the branch state and stop; do not push.
 
 ## D2 — Verify claim, lint, test, push
 
