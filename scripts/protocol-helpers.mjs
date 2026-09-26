@@ -8416,9 +8416,21 @@ export function computePreMergeReadinessBlockers(report) {
   if (report.secondaryQuietWindow !== undefined) {
     const secondaryQuietWindow = preMergeAsRecord(report.secondaryQuietWindow);
     if (secondaryQuietWindow.elapsed !== true) {
+      const appliedMinutes = secondaryQuietWindow.minutes ?? 0;
+      const configuredMinutes = secondaryQuietWindow.configuredMinutes;
+      // #3485: `minutes` is the applied gate length. On the #2544
+      // settled-buffer path it is the clamped buffer, not the configured
+      // window. Name both when they differ so "(5 min)" is not read as
+      // the configured window itself.
+      const windowPhrase =
+        typeof configuredMinutes === 'number' &&
+        Number.isFinite(configuredMinutes) &&
+        configuredMinutes !== appliedMinutes
+          ? `${String(appliedMinutes)} min settled-buffer of a ${String(configuredMinutes)} min configured window`
+          : `${String(appliedMinutes)} min`;
       blockers.push({
         gate: 'secondary-quiet-window',
-        detail: `advisoryWait.secondaryQuietWindow (${String(secondaryQuietWindow.minutes ?? 0)} min) has not elapsed since the last substantive activity at "${String(secondaryQuietWindow.anchorAt ?? 'none')}" -- ${String(secondaryQuietWindow.remainingMinutes ?? 'unknown')} minute(s) remaining`,
+        detail: `advisoryWait.secondaryQuietWindow (${windowPhrase}) has not elapsed since the last substantive activity at "${String(secondaryQuietWindow.anchorAt ?? 'none')}" -- ${String(secondaryQuietWindow.remainingMinutes ?? 'unknown')} minute(s) remaining`,
       });
     }
   }

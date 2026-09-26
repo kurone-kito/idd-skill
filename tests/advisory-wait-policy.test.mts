@@ -422,9 +422,31 @@ test('buildSecondaryQuietWindowStatus uses the short settled buffer, not the ful
   });
   assert.equal(status.anchorAt, '2026-08-30T22:00:00Z');
   assert.equal(status.minutes, 5);
+  assert.equal(status.configuredMinutes, 60);
   assert.equal(status.elapsedMinutes, 4);
   assert.equal(status.elapsed, false);
   assert.equal(status.remainingMinutes, 1);
+});
+
+test('buildSecondaryQuietWindowStatus keeps configuredMinutes equal to minutes outside the settled-buffer clamp (#3485)', () => {
+  const unsettled = buildSecondaryQuietWindowStatus({
+    minutes: 60,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:04:00Z',
+  });
+  assert.equal(unsettled.minutes, 60);
+  assert.equal(unsettled.configuredMinutes, 60);
+  assert.equal(unsettled.elapsed, false);
+
+  const shorterThanBuffer = buildSecondaryQuietWindowStatus({
+    minutes: 2,
+    effectiveMaxActivityUpdatedAt: '2026-08-30T20:00:00Z',
+    secondaryBotSettledAt: '2026-08-30T22:00:00Z',
+    now: '2026-08-30T22:01:00Z',
+  });
+  assert.equal(shorterThanBuffer.minutes, 2);
+  assert.equal(shorterThanBuffer.configuredMinutes, 2);
+  assert.equal(shorterThanBuffer.elapsed, false);
 });
 
 test('buildSecondaryQuietWindowStatus reports elapsed once the settled buffer itself has passed', () => {

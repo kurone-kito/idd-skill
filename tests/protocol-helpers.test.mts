@@ -7,6 +7,7 @@ import {
   classifyThreadAckOnlyPostDisposition,
   compareClaimEventOrder,
   compareClaimIds,
+  computePreMergeReadinessBlockers,
   EDITED_AFTER_DISPOSITION_HINT,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
@@ -4225,6 +4226,47 @@ test('isTrustEvidenceComment: prefers nested author.login over the flat authorLo
       isTrusted,
     ),
     true,
+  );
+});
+
+function quietWindowDetail(
+  secondaryQuietWindow: Record<string, unknown>,
+): string | undefined {
+  return computePreMergeReadinessBlockers({
+    prHeadSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    secondaryQuietWindow,
+  }).find((blocker) => blocker.gate === 'secondary-quiet-window')?.detail;
+}
+
+test('#3485: secondary-quiet-window blocker names the settled buffer and the configured window when they differ', () => {
+  const detail = quietWindowDetail({
+    minutes: 5,
+    configuredMinutes: 60,
+    anchorAt: '2026-09-26T07:00:00Z',
+    elapsedMinutes: 1,
+    elapsed: false,
+    remainingMinutes: 4,
+    declined: false,
+  });
+  assert.equal(
+    detail,
+    'advisoryWait.secondaryQuietWindow (5 min settled-buffer of a 60 min configured window) has not elapsed since the last substantive activity at "2026-09-26T07:00:00Z" -- 4 minute(s) remaining',
+  );
+});
+
+test('#3485: secondary-quiet-window blocker keeps the applied-minutes wording when configuredMinutes matches', () => {
+  const detail = quietWindowDetail({
+    minutes: 10,
+    configuredMinutes: 10,
+    anchorAt: '2026-09-26T07:00:00Z',
+    elapsedMinutes: 1,
+    elapsed: false,
+    remainingMinutes: 9,
+    declined: false,
+  });
+  assert.equal(
+    detail,
+    'advisoryWait.secondaryQuietWindow (10 min) has not elapsed since the last substantive activity at "2026-09-26T07:00:00Z" -- 9 minute(s) remaining',
   );
 });
 
