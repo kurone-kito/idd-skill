@@ -40,6 +40,7 @@ import {
   findIndentedCodeRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
+  indentationColumns,
   type MarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
@@ -343,7 +344,7 @@ const UNSAFE_PATTERNS = [
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S])`;
+const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\be\.g)\.(?=[ \t])|(?<=\bi\.e)\.(?=[ \t]))`;
 const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
   String.raw`\b(requires?|need(?:s)?|must|depends on)\b${EXTERNAL_SYSTEM_ACCESS_GAP}{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b`,
   'i',
@@ -2181,6 +2182,12 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
           range.start < nonInlineRange.end && nonInlineRange.start < range.end,
       ),
   );
+  const strikethroughRanges = [
+    ...normalizedBody.matchAll(/~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g),
+  ].map((strikeMatch) => ({
+    start: strikeMatch.index ?? 0,
+    end: (strikeMatch.index ?? 0) + (strikeMatch[0] ?? '').length,
+  }));
   const paragraphSpans = getParagraphSpans(normalizedBody);
   const crossRepoLinks: string[] = [];
   const regex =
@@ -2213,19 +2220,32 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   });
   const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
   const listItems = [...scanBody.matchAll(listItemPattern)].map(
-    (listItemMatch) => ({
-      start: listItemMatch.index ?? 0,
-      indent: (listItemMatch[0] ?? '').search(/\S/),
-      contentIndent: (listItemMatch[0] ?? '').length,
-    }),
+    (listItemMatch) => {
+      const markerText = listItemMatch[0] ?? '';
+      const leadingWhitespace = markerText.match(/^[ \t]*/)?.[0] ?? '';
+      const markerAndSpacing = markerText.slice(leadingWhitespace.length);
+      const marker = markerAndSpacing.match(/^(?:[-+*]|\d+[.)])/u)?.[0] ?? '';
+      const spacing = markerAndSpacing.slice(marker.length);
+      const indent = indentationColumns(leadingWhitespace);
+      return {
+        start: listItemMatch.index ?? 0,
+        indent,
+        contentIndent: indentationColumns(spacing, indent + marker.length),
+      };
+    },
   );
-  const listBlockBoundaryPattern = /^[ \t]{0,3}#{1,6}(?:[ \t]+|$)/gm;
+  const listBlockBoundaryPattern =
+    /^[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|(?:=+|-+)[ \t]*)/gm;
   const listBlockBoundaries = [
     ...scanBody.matchAll(listBlockBoundaryPattern),
-  ].map((boundaryMatch) => ({
-    start: boundaryMatch.index ?? 0,
-    indent: (boundaryMatch[0] ?? '').search(/\S/),
-  }));
+  ].map((boundaryMatch) => {
+    const leadingWhitespace =
+      (boundaryMatch[0] ?? '').match(/^[ \t]*/)?.[0] ?? '';
+    return {
+      start: boundaryMatch.index ?? 0,
+      indent: indentationColumns(leadingWhitespace),
+    };
+  });
   const listItemContextFor = (matchIndex: number) => {
     const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
     let currentItem: (typeof listItems)[number] | null = null;
@@ -2248,8 +2268,9 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     ) {
       return null;
     }
-    const lineIndent =
-      normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0].length ?? 0;
+    const lineIndent = indentationColumns(
+      normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0] ?? '',
+    );
     const isMarkerLine = lineStart === currentItem.start;
     if (!isMarkerLine && lineIndent < currentItem.contentIndent) {
       return null;
@@ -2292,7 +2313,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       const cueGlobalStart = contextStart + cueIndex;
       const cueGlobalEnd = contextStart + cueEnd;
       if (
-        inlineCodeRanges.some(
+        [...inlineCodeRanges, ...strikethroughRanges].some(
           (range) => cueGlobalStart >= range.start && cueGlobalEnd <= range.end,
         )
       ) {
@@ -2302,7 +2323,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       if (REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN.test(cueWindow)) {
         continue;
       }
-      const cuePrefix = context.slice(Math.max(0, cueIndex - 80), cueIndex);
+      const cuePrefix = context.slice(0, cueIndex);
       const clauseStart = lastRepositoryFitClauseBoundary(cuePrefix);
       const cueToMatch = context.slice(cueEnd, externalMatchOffset);
       if (
@@ -2323,6 +2344,11 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       return true;
     }
     return false;
+  };
+  const hasIndependentRequirementClause = (matchText: string) => {
+    const requirementPattern = /\b(?:requires?|needs?|must|depends\s+on)\b/gi;
+    const requirementMatches = [...matchText.matchAll(requirementPattern)];
+    return requirementMatches.length > 1;
   };
   const sameContext = (
     left: { start: number; end: number },
@@ -2369,6 +2395,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     if (
       matchEnd <= span.end &&
       contextMatchCount === 1 &&
+      !hasIndependentRequirementClause(matchText) &&
       hasPositiveFixtureCue(
         scanBody.slice(span.start, span.end),
         matchIndex - span.start,

@@ -6086,6 +6086,19 @@ test('repository fit rejects a semicolon-separated fixture and live prerequisite
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects a comma-and-separated fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires protected material, but this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit rejects an unrelated should-fail sentence beside a live prerequisite', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6180,6 +6193,52 @@ test('repository fit keeps a loose-list continuation in the same fixture context
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('repository fit measures tab-indented loose-list continuations by columns', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the production access requirement below is descriptive.
+
+	This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit keeps a Setext heading from extending a fixture list item', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: production access is descriptive.
+
+Actual work
+-----------
+
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores an inactive strikethrough fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+~~Negative fixture:~~ this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit does not absorb a one-space line outside a list item', () => {
@@ -6576,6 +6635,19 @@ test('repository fit preserves negation across a hard-wrapped line', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit remains fail-closed when negation is far before the fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This is not, despite the extended explanatory preamble that documents why this scenario represents actual implementation work rather than merely descriptive coverage, a negative fixture: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit scans inline-code access terms in a live prerequisite', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6627,6 +6699,18 @@ test('repository fit still flags a real external-access requirement', () => {
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\nThis requires production dashboard credentials to verify the result.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves abbreviations inside access requirements', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+This task requires e.g. production dashboard credentials.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
