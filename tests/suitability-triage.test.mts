@@ -6642,6 +6642,28 @@ test('repository fit keeps HTTPS autolinks visible to external-access matching',
   assert.equal(result.pass, false);
 });
 
+test('repository fit keeps malformed link fragments visible', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires ](Slack access credentials).`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit separates an HTML block from preceding fixture prose', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input\n<div>\nThis task requires Slack access.\n</div>`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit keeps a Setext heading from extending a fixture paragraph', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6712,6 +6734,17 @@ test('repository fit separates a blockquote transition from preceding prose', ()
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('repository fit preserves a loose fixture list nested in a blockquote', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n> - Negative fixture: the Slack access requirement below is descriptive.\n>\n>   This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
 });
 
 test('repository fit masks multiline HTML attributes', () => {

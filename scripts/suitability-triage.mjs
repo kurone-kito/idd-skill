@@ -250,6 +250,28 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
 );
 function findRepositoryFitHiddenMetadataRanges(text) {
   const ranges = [];
+  const hasLinkLabel = (closeIndex) => {
+    let nestedClosers = 0;
+    for (let cursor = closeIndex - 1; cursor >= 0; cursor -= 1) {
+      const character = text[cursor] ?? '';
+      if (character === '\n') {
+        return false;
+      }
+      if (character === '\\') {
+        cursor -= 1;
+        continue;
+      }
+      if (character === ']') {
+        nestedClosers += 1;
+      } else if (character === '[') {
+        if (nestedClosers === 0) {
+          return true;
+        }
+        nestedClosers -= 1;
+      }
+    }
+    return false;
+  };
   const pushBalancedLinkDestination = (openIndex) => {
     let depth = 1;
     let quote = null;
@@ -284,7 +306,8 @@ function findRepositoryFitHiddenMetadataRanges(text) {
     if (
       text[index] === ']' &&
       text[index + 1] === '(' &&
-      text[index - 1] !== '\\'
+      text[index - 1] !== '\\' &&
+      hasLinkLabel(index)
     ) {
       pushBalancedLinkDestination(index + 1);
     }
@@ -373,6 +396,7 @@ function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
       const raw = lineMatch[0] ?? '';
       return {
         start: lineMatch.index ?? 0,
+        raw,
         isBlockQuote: /^[ \t]{0,3}>/u.test(raw),
       };
     },
@@ -389,6 +413,17 @@ function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
     // range must not extend into that line: consecutive quote lines belong to
     // one blockquote paragraph unless a blank quote line separates them.
     return [{ start: previousLine.start, end: line.start }];
+  });
+  const htmlBlockLinePattern =
+    /^[ \t]{0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[ \t/>])/iu;
+  const htmlBlockTransitionRanges = lineRecords.flatMap((line, index) => {
+    if (!htmlBlockLinePattern.test(line.raw)) {
+      return [];
+    }
+    const previousLine = lineRecords[index - 1];
+    return previousLine === undefined
+      ? []
+      : [{ start: previousLine.start, end: line.start }];
   });
   const setextHeadingRanges = [
     ...scanBody.matchAll(
@@ -479,6 +514,7 @@ function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
     ...headingRanges,
     ...quoteBlankLineRanges,
     ...quoteTransitionRanges,
+    ...htmlBlockTransitionRanges,
     ...setextHeadingRanges,
     ...tableCellRanges,
   ].sort((left, right) => left.start - right.start);
@@ -2287,10 +2323,13 @@ export function checkRepositoryFit(context) {
       (range) => matchStart >= range.start && matchEnd <= range.end,
     );
   });
-  const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
+  const stripBlockQuotePrefix = (line) =>
+    line.replace(/^[ \t]{0,3}>[ \t]?/u, '');
+  const listItemPattern =
+    /^(?:[ \t]{0,3}>[ \t]?)?[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
   const listItems = [...scanBody.matchAll(listItemPattern)].map(
     (listItemMatch) => {
-      const markerText = listItemMatch[0] ?? '';
+      const markerText = stripBlockQuotePrefix(listItemMatch[0] ?? '');
       const leadingWhitespace = markerText.match(/^[ \t]*/)?.[0] ?? '';
       const markerAndSpacing = markerText.slice(leadingWhitespace.length);
       const marker = markerAndSpacing.match(/^(?:[-+*]|\d+[.)])/u)?.[0] ?? '';
@@ -2304,7 +2343,7 @@ export function checkRepositoryFit(context) {
     },
   );
   const listBlockBoundaryPattern =
-    /^[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|(?:=+|-+)[ \t]*)/gm;
+    /^(?:[ \t]{0,3}>[ \t]?)?[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|(?:=+|-+)[ \t]*)/gm;
   const listBlockBoundaries = [
     ...scanBody.matchAll(listBlockBoundaryPattern),
   ].map((boundaryMatch) => {
@@ -2321,7 +2360,9 @@ export function checkRepositoryFit(context) {
       .filter((listItem) => listItem.start <= matchIndex)
       .reverse();
     const lineIndent = indentationColumns(
-      normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0] ?? '',
+      stripBlockQuotePrefix(normalizedBody.slice(lineStart)).match(
+        /^[ \t]*/,
+      )?.[0] ?? '',
     );
     for (const currentItem of candidates) {
       if (
@@ -2340,11 +2381,12 @@ export function checkRepositoryFit(context) {
         .slice(1);
       if (
         interveningLines.some((line) => {
-          if (line.trim() === '') {
+          const contentLine = stripBlockQuotePrefix(line);
+          if (contentLine.trim() === '') {
             return false;
           }
           const interveningIndent = indentationColumns(
-            line.match(/^[ \t]*/)?.[0] ?? '',
+            contentLine.match(/^[ \t]*/)?.[0] ?? '',
           );
           return interveningIndent < currentItem.contentIndent;
         })
@@ -2367,7 +2409,11 @@ export function checkRepositoryFit(context) {
         },
         allowLooseContinuation:
           !isMarkerLine &&
-          /\n[ \t]*\n/.test(normalizedBody.slice(currentItem.start, lineStart)),
+          normalizedBody
+            .slice(currentItem.start, lineStart)
+            .split('\n')
+            .slice(1, -1)
+            .some((line) => stripBlockQuotePrefix(line).trim() === ''),
       };
     }
     return null;
