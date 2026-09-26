@@ -840,6 +840,35 @@ test('a genuine same-line usage after a no-`from` export-list statement is still
   }
 });
 
+test('a function parameter sharing the exact same name as the function itself is a DOCUMENTED, ACCEPTED limitation of the whole-file text match (Codex C1 finding, round-15 redesign) -- verified to predate the offset redesign via a multi-line sibling fixture, not a new regression it introduced', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export function helper(helper: unknown): void {}\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'documents the accepted false positive: the shadowing PARAMETER ' +
+        'named `helper` is an unrelated local binding, not a use of ' +
+        'the exported function -- the SAME whole-file-text-match ' +
+        'limitation already accepted since the #3478 review, now ' +
+        'applying uniformly (a multi-line sibling with the parameter ' +
+        'on a DIFFERENT line already misclassified the same way ' +
+        'BEFORE the offset redesign, since the OLD whole-line ' +
+        'exclusion never covered a later signature line either -- ' +
+        'this is not something the redesign introduced). If this ever ' +
+        'starts reading `unused`, the limitation may have been fixed ' +
+        'for real (update this test and the doc comment together)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

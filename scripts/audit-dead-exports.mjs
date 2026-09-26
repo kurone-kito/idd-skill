@@ -750,18 +750,44 @@ function toPosixRelative(root, absPath) {
  * whole class at once: only the exact declaration/item occurrence is
  * excluded, never a sibling statement that happens to share its line.
  *
- * **Known false-negative risk (C1 critique, #3478 review), UNCHANGED by
- * the above**: this is a whole-file text match, not a scope-aware
- * reference check, so it can still be fooled into reporting a
- * self-reference that is not really one -- an unrelated local
- * variable/parameter that happens to share the export's name elsewhere
- * in the same file, or the name appearing only inside a string literal
- * (this function's `strippedText` input has comments blanked out, but
- * string contents are left intact). A false positive here means a
- * genuinely dead export is wrongly classified `production` and never
- * surfaced -- accepted as a limitation of the regex/line-based design
- * this audit deliberately uses (see the module header), not something a
- * full scope-aware fix belongs in this issue's scope.
+ * **Known false-POSITIVE risk (C1 critique, #3478 review; heading
+ * corrected -- the effect below is a false positive, a dead export
+ * wrongly read as used, not a false negative)**: this is a whole-file
+ * text match, not a scope-aware reference check, so it can still be
+ * fooled into reporting a self-reference that is not really one -- an
+ * unrelated local variable/parameter that happens to share the export's
+ * name elsewhere in the same file, or the name appearing only inside a
+ * string literal (this function's `strippedText` input has comments
+ * blanked out, but string contents are left intact). A false positive
+ * here means a genuinely dead export is wrongly classified `production`
+ * and never surfaced -- accepted as a limitation of the regex/line-based
+ * design this audit deliberately uses (see the module header), not
+ * something a full scope-aware fix belongs in this issue's scope.
+ *
+ * **Same limitation, a narrower sub-case (Codex C1 finding, round-15
+ * redesign)**: a function's own PARAMETER sharing the exact same name as
+ * the function itself (`export function helper(helper: unknown): void
+ * {}`) is this exact limitation -- the parameter is an unrelated,
+ * shadowing local binding, not a use of the exported `helper`. Verified
+ * this predates the offset redesign: the same shape with the parameter
+ * on a DIFFERENT physical line from the function's own declaration
+ * (`export function helper(\n  helper: unknown\n): void {}`) already
+ * misclassified as `production` before this redesign too, since the
+ * OLD whole-LINE exclusion only ever covered the declaration's own
+ * first line, never a later signature line. The offset redesign applies
+ * this same, pre-existing limitation UNIFORMLY (including the same-line
+ * sub-case, previously masked there only by incidental over-exclusion,
+ * never by any deliberate distinction from a genuine same-line usage)
+ * instead of inconsistently. Deliberately not specially handled:
+ * excluding a whole parameter-list RANGE to close this narrow sub-case
+ * would reintroduce the same class of over-exclusion this redesign
+ * removed, at a smaller radius -- a default parameter value can
+ * genuinely reference the exported name (`function factory(cb =
+ * helper) {}`), which a range exclusion would then wrongly swallow too.
+ * Between the two error directions, the offset redesign accepts the
+ * narrower, rarer false positive (shadowing-parameter code masked as
+ * used) over the broader false negative it replaces (any genuine
+ * same-line usage silently discarded).
  *
  * **Known limitation, deferred to a follow-up issue (#3498 scope note,
  * post-merge review)**: the fix above resolves `declarationLine`
