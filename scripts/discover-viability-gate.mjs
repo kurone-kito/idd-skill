@@ -236,7 +236,7 @@ const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // than a live dependency (#3522). Keep this exclusion tied to explicit
 // descriptive context and let requirement language win below.
 const DESCRIPTIVE_SECURITY_VERB_PATTERN =
-  /\b(?:concern(?:s|ed)?|describ(?:e|es|ed)|document(?:s|ed)?|cover(?:s|ed)?|mention(?:s|ed)?|refer(?:s|red)?|discuss(?:es|ed)?|handl(?:e|es|ed)|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
+  /\b(?:concern(?:s|ed)?|describ(?:e|es|ed)|document(?:s|ed)?|cover(?:s|ed)?|mention(?:s|ed)?|refer(?:s|red)?|discuss(?:es|ed)?|handle(?:s|d)?|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
 const DESCRIPTIVE_SECURITY_NOUN_PATTERN =
   /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|pattern)$/i;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
