@@ -179,8 +179,8 @@ test("checkPostMergeCleanupBacklog CLI: a trusted author's idd-cleanup-evidence 
         repo: 'r',
         mergedPrNumbers: MERGED_PR_NUMBERS,
         evidenceByPr: new Map([
-          [601, '5001\tgithub-actions[bot]\n'],
-          [602, '5002\tgithub-actions[bot]\n'],
+          [601, '5001\tgithub-actions[bot]\tapplied\n'],
+          [602, '5002\tgithub-actions[bot]\tapplied\n'],
         ]),
       }),
     );
@@ -200,8 +200,8 @@ test("checkPostMergeCleanupBacklog CLI: an untrusted author's identically-shaped
         repo: 'r',
         mergedPrNumbers: MERGED_PR_NUMBERS,
         evidenceByPr: new Map([
-          [601, '5001\tuntrusted-user\n'],
-          [602, '5002\tanother-untrusted-user\n'],
+          [601, '5001\tuntrusted-user\tapplied\n'],
+          [602, '5002\tanother-untrusted-user\tapplied\n'],
         ]),
       }),
     );
@@ -413,5 +413,110 @@ test('checkPostMergeCleanupBacklog CLI: without --cleanup-backlog-bootstrap-cuto
     );
     assert.ok(backlogWarning);
     assert.doesNotMatch(backlogWarning ?? '', /bootstrap-era/);
+  });
+});
+
+// idd-skill#3323: a trusted evidence comment records a status, and only
+// the latest trusted `applied` or `clean` clears the PR. These rows
+// carry that status column the production jq projection now emits.
+test('checkPostMergeCleanupBacklog CLI: a trusted timeout or helper-error comment still produces the backlog warning (idd-skill#3323)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1301, 1302],
+        evidenceByPr: new Map([
+          [1301, '13011\tgithub-actions[bot]\ttimeout\n'],
+          [1302, '13021\tgithub-actions[bot]\thelper-error\n'],
+        ]),
+      }),
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(
+      backlogWarning,
+      `expected a cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+    assert.match(
+      backlogWarning ?? '',
+      /^post-merge cleanup backlog: 2 merged PRs/,
+    );
+    assert.match(backlogWarning ?? '', /#1301/);
+    assert.match(backlogWarning ?? '', /#1302/);
+  });
+});
+
+test('checkPostMergeCleanupBacklog CLI: a later trusted applied comment clears an earlier trusted failed comment (idd-skill#3323)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1401],
+        evidenceByPr: new Map([
+          [
+            1401,
+            '14011\tgithub-actions[bot]\tfailed\n14012\tgithub-actions[bot]\tapplied\n',
+          ],
+        ]),
+      }),
+    );
+    assert.ok(
+      !report.warnings.some((w) => w.includes(BACKLOG_WARNING_SUBSTRING)),
+      `expected no cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+  });
+});
+
+test('checkPostMergeCleanupBacklog CLI: a later trusted timeout comment does not clear an earlier trusted applied comment (idd-skill#3323)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1501],
+        evidenceByPr: new Map([
+          [
+            1501,
+            '15011\tgithub-actions[bot]\tapplied\n15012\tgithub-actions[bot]\ttimeout\n',
+          ],
+        ]),
+      }),
+    );
+    const backlogWarning = report.warnings.find((w) =>
+      w.includes(BACKLOG_WARNING_SUBSTRING),
+    );
+    assert.ok(
+      backlogWarning,
+      `expected a cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
+    assert.match(
+      backlogWarning ?? '',
+      /^post-merge cleanup backlog: 1 merged PRs?/,
+    );
+    assert.match(backlogWarning ?? '', /#1501/);
+  });
+});
+
+test('checkPostMergeCleanupBacklog CLI: a trusted clean comment suppresses the backlog warning (idd-skill#3323)', () => {
+  withTempCwd((cwd) => {
+    const report = runIddDoctorReport(
+      cwd,
+      buildCleanupBacklogStubGh({
+        owner: 'o',
+        repo: 'r',
+        mergedPrNumbers: [1601],
+        evidenceByPr: new Map([[1601, '16011\tgithub-actions[bot]\tclean\n']]),
+      }),
+    );
+    assert.ok(
+      !report.warnings.some((w) => w.includes(BACKLOG_WARNING_SUBSTRING)),
+      `expected no cleanup-backlog warning, got: ${JSON.stringify(report.warnings)}`,
+    );
   });
 });

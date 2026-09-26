@@ -753,7 +753,11 @@ future inventory reviews do not need to re-infer their role from code.
   gaps without mutating any state. Its post-merge cleanup-backlog check
   scans merged PRs in a default 14-day window with one serial `gh api`
   call per PR and streams per-PR progress to stderr (stdout, including
-  `--json`, stays clean). For a local run during a merge burst, pass
+  `--json`, stays clean). A PR leaves that backlog only when its latest
+  trusted `idd-cleanup-evidence` comment records `applied` or `clean`;
+  any other status, including `timeout`, `helper-error`, and
+  `time-budget-exhausted`, or an unparseable marker line, keeps the PR
+  in the backlog. For a local run during a merge burst, pass
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
