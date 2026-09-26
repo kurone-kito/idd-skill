@@ -969,6 +969,34 @@ test('does not let awaited maintainer approval hide behind credential handling (
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let approval nouns hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 120,
+    title: 'document protected material',
+    body:
+      'This issue documents credential storage. Maintainer approval is ' +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let cannot-without credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 121,
+    title: 'document protected material',
+    body:
+      'Credential handling cannot proceed without maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let a vendor credential prerequisite pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 107,
