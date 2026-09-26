@@ -88,6 +88,17 @@ function captureStderr<T>(body: () => T): T {
 interface FakeIo {
   io: RunHelperCliIo;
   stderrWrites: string[];
+  /** #3346 review finding: `syncWrites`/`queuedWrites` record which of the
+   * two distinct `RunHelperCliIo` seams a write went through, in addition
+   * to `stderrWrites`'s combined record -- giving the two seams the same
+   * implementation (both merely appending to one shared array) would let
+   * `handleOutcome` regress to the raw synchronous `writeStderr` seam
+   * without any existing envelope assertion (which only reads the
+   * combined array/its last entry) ever detecting it, silently
+   * reintroducing the ordering/truncation race the queued seam exists to
+   * fix. */
+  syncWrites: string[];
+  queuedWrites: string[];
   getExitCode: () => number | undefined;
   takeOverCalled: () => boolean;
   /** Simulates the real `uncaughtException` firing with `error` -- the
@@ -98,14 +109,18 @@ interface FakeIo {
 
 function createFakeIo(envelopeEnabled: boolean): FakeIo {
   const stderrWrites: string[] = [];
+  const syncWrites: string[] = [];
+  const queuedWrites: string[] = [];
   let exitCode: number | undefined;
   let capturedRender: ((error: unknown) => void) | null = null;
   const io: RunHelperCliIo = {
     env: envelopeEnabled ? { [ERROR_ENVELOPE_ENV_VAR]: '1' } : {},
     writeStderr: (text) => {
+      syncWrites.push(text);
       stderrWrites.push(text);
     },
     writeStderrQueued: (text) => {
+      queuedWrites.push(text);
       stderrWrites.push(text);
     },
     setExitCode: (code) => {
@@ -118,6 +133,8 @@ function createFakeIo(envelopeEnabled: boolean): FakeIo {
   return {
     io,
     stderrWrites,
+    syncWrites,
+    queuedWrites,
     getExitCode: () => exitCode,
     takeOverCalled: () => capturedRender !== null,
     simulateUncaughtCrash: (error) => {
@@ -451,6 +468,10 @@ test('runHelperCli: a returned non-zero exit code classifies as gate', () => {
       httpStatus: null,
     },
   });
+  // #3346 review finding: a returned (never thrown) outcome must write its
+  // envelope through the queued seam, never the raw synchronous one.
+  assert.equal(fake.queuedWrites.length, 1);
+  assert.deepEqual(fake.syncWrites, []);
 });
 
 test('runHelperCli: a returned, already-classified outcome object is trusted verbatim (pre-merge-readiness pattern)', () => {
@@ -490,6 +511,11 @@ test('runHelperCli: a plain thrown Error (untagged, non-gh) classifies as intern
       httpStatus: null,
     },
   });
+  // #3346 review finding: a thrown crash must write its envelope through
+  // the raw synchronous seam (process.exit() follows immediately), never
+  // the queued one.
+  assert.equal(fake.syncWrites.length, 2); // crash text, then envelope
+  assert.deepEqual(fake.queuedWrites, []);
 });
 
 // --- envelope-unset contract ----------------------------------------------
