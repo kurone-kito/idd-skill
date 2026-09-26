@@ -91,7 +91,8 @@ then continue to Step 1.
    --pr {pr-number} --trusted-marker-logins
    "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
    equivalent — this is
-   Step 2's watermark data source, not a triage tool. The helper emits
+   Step 2's watermark data source and exposes `embeddedFindings` for
+   Step 3; raw triage fetch remains required. The helper emits
    both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
    `{latest-ci-completed-at}` is always the latter — the latest
    _passing_ (or treated-as-passed) completion, never the latest
@@ -188,29 +189,26 @@ counts as new activity, forcing a fresh E1 snapshot before F2.
 From the raw Step 1 set, select into **ReviewItems_snapshot** and
 record each item's source URL:
 
-- **Unresolved review threads** (`isResolved=false`) — exclude only
-  when the latest substantive reply is from an IDD agent or the PR
-  author with no reviewer reply since; keep it active anyway when the
-  reviewer reopened it after that reply (even with no new text), or an
-  agent reply starts with `**Awaiting maintainer decision**` (blocks
-  regardless of reply).
+- **Unresolved review threads** (`isResolved=false`) — exclude when the
+  last substantive reply is by an IDD agent or PR author with no reviewer
+  reply; keep reopened threads and `**Awaiting maintainer decision**`
+  replies active.
 - **Review bodies** whose reviewer's latest state is
   `CHANGES_REQUESTED` — exclude any already replied-to and
   re-review-requested in a prior E13/E14 pass.
-- **Regular comments** where the last speaker isn't an IDD agent and
-  you haven't replied since, or whose latest IDD-agent reply starts
-  with `**Awaiting maintainer decision**` — exclude periodic
-  notification bots (Renovate, etc.). Keep Copilot/CI advisory bot
-  comments; they route through PATH B in E4-E7 (non-review notices —
-  rate-limit / quota / queued / bare acknowledgement / error —
-  dispositioned under the E6 non-review-notice rule, not here).
+- **Embedded CodeRabbit findings:** add one PATH B item per
+  `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
+  reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
+  findings. See the [#2197/#2559 rationale](../../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
+- **Regular comments** where the last speaker is not an IDD agent and no
+  reply from **you** exists after the comment, or whose latest IDD-agent
+  reply starts with `**Awaiting maintainer decision**` — exclude periodic
+  bots; keep Copilot/CI comments for PATH B, including E6 notices.
 
-Also carry, from the same Step 1 thread set, a light
-**resolved-thread index** (`isResolved=true`): each entry's file/area,
-claim summary, source URL, and any `**Accepted**` /
-`**Rejected**` marker. Never add resolved threads back into
-ReviewItems_snapshot — a hint only for E5's duplicate pre-check in
-`idd-review-triage.instructions.md`, not a conclusion.
+Also carry a light **resolved-thread index** (`isResolved=true`) with
+file/area, claim, source URL, and any disposition marker. Never re-add
+resolved threads to ReviewItems_snapshot; use the index only for E5's
+duplicate pre-check.
 
 ## E2 — Critique pass
 

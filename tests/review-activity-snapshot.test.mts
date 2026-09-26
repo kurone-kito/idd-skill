@@ -3,11 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
 import {
+  buildCodeRabbitEmbeddedFindings,
   parseArgs,
   resolveActivitySnapshotTrustedMarkerLogins,
 } from '../src/scripts/review-activity-snapshot.mts';
+import { PR_1897_REVIEW_4863787336 } from './coderabbit-pr-1897-review.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -132,7 +133,10 @@ test('resolveActivitySnapshotTrustedMarkerLogins deduplicates a viewer login alr
   assert.deepEqual(result, ['idd-bot']);
 });
 
-function courtesyThreadGraphql(replyBody: string): string {
+function courtesyThreadGraphql(
+  replyBody: string,
+  pullRequestReviewId = 'PRR_1',
+): string {
   return JSON.stringify({
     data: {
       repository: {
@@ -154,7 +158,7 @@ function courtesyThreadGraphql(replyBody: string): string {
                       updatedAt: '2026-05-12T00:00:00Z',
                       lastEditedAt: null,
                       author: { login: 'reviewer-a' },
-                      pullRequestReview: { id: 'PRR_1' },
+                      pullRequestReview: { id: pullRequestReviewId },
                     },
                     {
                       id: 'C2',
@@ -185,7 +189,11 @@ function courtesyThreadGraphql(replyBody: string): string {
   });
 }
 
-function snapshotGhStub(graphqlJson: string, commentNdjson: string): string {
+function snapshotGhStub(
+  graphqlJson: string,
+  commentNdjson: string,
+  reviewNdjson: string,
+): string {
   return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
@@ -195,7 +203,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
 }
 if (args[0] === 'pr' && args[1] === 'checks') out('[]');
 if (args[0] === 'api' && args[1] === 'graphql') out(${JSON.stringify(graphqlJson)});
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('');
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out(${JSON.stringify(reviewNdjson)});
 if (args[0] === 'api' && /\\/comments$/.test(args[1])) out(${JSON.stringify(commentNdjson)});
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
@@ -205,16 +213,22 @@ process.exit(1);
 function runSnapshot(
   graphqlJson: string,
   commentNdjson = '',
+  reviewNdjson = '',
 ): {
   dispositionEvidence: {
     missingRegularCommentCount: number;
     missingThreadCount: number;
     soleCauseAckOnlyPostDisposition: boolean;
   };
+  embeddedFindings: {
+    reviewId: string;
+    embeddedFindingCount: number;
+    uncoveredCount: number;
+  }[];
 } {
   const restore = stubExecutable(
     'gh',
-    snapshotGhStub(graphqlJson, commentNdjson),
+    snapshotGhStub(graphqlJson, commentNdjson, reviewNdjson),
   );
   try {
     const output = execFileSync(
@@ -276,4 +290,116 @@ test('review-activity snapshot keeps the courtesy-ack flag false when a regular 
     report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
     false,
   );
+});
+
+const PR_1897_REVIEW_ID = 'PRR_kwDO_1897_4863787336';
+
+test('review-activity snapshot serializes CodeRabbit embedded findings from REST and GraphQL data (#3341)', () => {
+  const reviewNdjson = `${JSON.stringify({
+    node_id: PR_1897_REVIEW_ID,
+    user: { login: 'coderabbitai[bot]' },
+    body: PR_1897_REVIEW_4863787336,
+    state: 'COMMENTED',
+  })}\n`;
+  const report = runSnapshot(
+    courtesyThreadGraphql('embedded finding thread', PR_1897_REVIEW_ID),
+    '',
+    reviewNdjson,
+  );
+  assert.deepEqual(report.embeddedFindings, [
+    {
+      reviewId: PR_1897_REVIEW_ID,
+      embeddedFindingCount: 1,
+      uncoveredCount: 0,
+    },
+  ]);
+});
+
+test('embeddedFindings reports uncoveredCount 1 for PR #1897 review 4863787336 when no thread belongs to that review', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'coderabbitai[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+      {
+        node_id: 'PRR_other',
+        user: { login: 'copilot' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, [
+    {
+      reviewId: PR_1897_REVIEW_ID,
+      embeddedFindingCount: 1,
+      uncoveredCount: 1,
+    },
+  ]);
+});
+
+test('embeddedFindings reports uncoveredCount 0 when one thread belongs to PR #1897 review 4863787336', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'CodeRabbitAI[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [
+      {
+        comments: {
+          nodes: [
+            {
+              pullRequestReview: { id: PR_1897_REVIEW_ID },
+            },
+          ],
+        },
+      },
+    ],
+  );
+  assert.equal(findings[0]?.uncoveredCount, 0);
+  assert.equal(findings[0]?.embeddedFindingCount, 1);
+});
+
+test('embeddedFindings excludes CodeRabbit reviews that are not COMMENTED', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'coderabbitai[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'CHANGES_REQUESTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, []);
+});
+
+test('embeddedFindings does not treat a missing node_id as covering threads with no review id', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: '',
+        user: { login: 'coderabbitai' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [
+      {
+        comments: {
+          nodes: [{ pullRequestReview: { id: null } }],
+        },
+      },
+    ],
+  );
+  assert.equal(findings[0]?.uncoveredCount, 1);
 });
