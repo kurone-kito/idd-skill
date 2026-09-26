@@ -183,7 +183,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -193,6 +193,19 @@ import {
 } from './helper-cli-runner.mjs';
 
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
+/**
+ * Exit status for `--acquire` refusing to create a new lock in the
+ * primary worktree. Distinct from collision's `2` so a caller can tell
+ * "do not create a lock here" from "someone else already holds one".
+ */
+const PRIMARY_WORKTREE_ACQUIRE_EXIT = 4;
+const PRIMARY_WORKTREE_ACQUIRE_MESSAGE = [
+  '--acquire refuses the primary worktree: idd-claim.lock there has no',
+  'automatic cleanup path, because git worktree remove never deletes the',
+  'primary admin directory. --acquire is B1-onward only, on a linked',
+  'worktree (idd-claim.instructions.md). --check, --record-tokens,',
+  '--read-tokens, and --backfill-tokens are unaffected.',
+].join(' ');
 const GENERATED_TOKENS_FILE_PREFIX = 'idd-generated-tokens';
 const MAX_RETRY_ATTEMPTS = 5;
 /**
@@ -264,6 +277,23 @@ function sanitizedGitEnvironment() {
   delete env.GIT_OBJECT_DIRECTORY;
   return env;
 }
+function gitRevParse(cwd, args) {
+  // #3434: no explicit `stdio` sets Node's own `inheritStderr =
+  // !options.stdio` internal flag, which relays `git`'s captured stderr
+  // (e.g. `fatal: cannot change to '<path>': No such file or directory`)
+  // to the parent's own real stderr stream in addition to the thrown
+  // error's `.stderr`/`.message` -- the same mechanism #3076 fixed for
+  // `ghApiJson`. Passing `stdio: ['ignore', 'pipe', 'pipe']` disables the
+  // duplicate relay while leaving the error's `.stderr`/`.message` fully
+  // populated, so `runHelperCli`'s `classifyHelperError` (which renders
+  // `error.message` for this "internal" kind) still surfaces the same
+  // diagnostic text.
+  return execFileSync('git', ['-C', cwd, 'rev-parse', ...args], {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
 /**
  * Resolve `cwd`'s own private git-admin directory (`git rev-parse
  * --absolute-git-dir`) — inside a linked worktree, `.git` is a *file* (a
@@ -281,21 +311,39 @@ function sanitizedGitEnvironment() {
  * indefinitely — callers must not assume it is ever cleaned up.
  */
 function resolveWorktreeAdminDir(cwd) {
-  // #3434: no explicit `stdio` sets Node's own `inheritStderr =
-  // !options.stdio` internal flag, which relays `git`'s captured stderr
-  // (e.g. `fatal: cannot change to '<path>': No such file or directory`)
-  // to the parent's own real stderr stream in addition to the thrown
-  // error's `.stderr`/`.message` -- the same mechanism #3076 fixed for
-  // `ghApiJson`. Passing `stdio: ['ignore', 'pipe', 'pipe']` disables the
-  // duplicate relay while leaving the error's `.stderr`/`.message` fully
-  // populated, so `runHelperCli`'s `classifyHelperError` (which renders
-  // `error.message` for this "internal" kind) still surfaces the same
-  // diagnostic text.
-  return execFileSync('git', ['-C', cwd, 'rev-parse', '--absolute-git-dir'], {
-    encoding: 'utf8',
-    env: sanitizedGitEnvironment(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  return gitRevParse(cwd, ['--absolute-git-dir']);
+}
+/**
+ * True when `worktree` is the repository's primary working tree rather
+ * than a linked one. `git rev-parse --git-common-dir` and
+ * `--absolute-git-dir` resolve to the same directory only for the
+ * primary worktree; a linked worktree's admin directory lives under
+ * `worktrees/` and differs from the common dir. `--git-common-dir` is
+ * often relative (`.git`) on the primary worktree, so compare resolved
+ * paths rather than the raw strings.
+ */
+function isPrimaryWorktree(worktree) {
+  const cwd = resolve(worktree);
+  const commonDir = resolve(cwd, gitRevParse(cwd, ['--git-common-dir']));
+  const adminDir = resolve(cwd, gitRevParse(cwd, ['--absolute-git-dir']));
+  return commonDir === adminDir;
+}
+/**
+ * Refuse creating a *new* lock when `worktree` is the primary worktree.
+ * Returns undefined for a linked worktree so the caller proceeds with
+ * the normal create path. An already-present lock is not this function's
+ * concern: reacquire, collision, and takeover stay on their existing
+ * branches.
+ */
+function refuseNewPrimaryWorktreeLock(worktree, path) {
+  if (!isPrimaryWorktree(worktree)) {
+    return undefined;
+  }
+  return {
+    mode: 'primary-worktree-refused',
+    path,
+    message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
+  };
 }
 /**
  * Resolve the lock file's path inside `worktree`'s own private git-admin
@@ -539,6 +587,14 @@ function createLockFileExclusively(path, agentId, claimId) {
  * treating `reacquired: true` as proof of pre-existence (the
  * `--backfill-tokens` recovery route does) must require `racedCreate` to
  * be absent too (#2917 review, Codex).
+ *
+ * Creating a new lock in the primary worktree is refused
+ * (`primary-worktree-refused`). That admin directory is never removed by
+ * `git worktree remove`, so a lock created there has no automatic
+ * cleanup path (observed 2026-09-25, kurone-kito/idd-skill#3486). An
+ * already-present lock keeps the reacquire, collision, and takeover
+ * paths above; this refusal only blocks the create path. `--check` and
+ * the generated-tokens commands are not this function and are unaffected.
  */
 export function acquireClaimLock(worktree, agentId, claimId, takeover) {
   const path = resolveClaimLockPath(worktree);
@@ -550,6 +606,10 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         : { mode: 'acquired', path, reacquired: true, racedCreate: true };
     }
     if (read.status === 'absent') {
+      const refused = refuseNewPrimaryWorktreeLock(worktree, path);
+      if (refused) {
+        return refused;
+      }
       if (createLockFileExclusively(path, agentId, claimId) === 'created') {
         return { mode: 'acquired', path };
       }
@@ -584,6 +644,10 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     return { mode: 'acquired', path, reacquired: true, racedCreate: true };
   }
   if (finalRead.status === 'absent') {
+    const refused = refuseNewPrimaryWorktreeLock(worktree, path);
+    if (refused) {
+      return refused;
+    }
     if (createLockFileExclusively(path, agentId, claimId) === 'created') {
       return { mode: 'acquired', path };
     }
@@ -1286,6 +1350,9 @@ function runCli() {
     args.takeover,
   );
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
+  if (outcome.mode === 'primary-worktree-refused') {
+    return PRIMARY_WORKTREE_ACQUIRE_EXIT;
+  }
   if (outcome.mode === 'collision') {
     return 2;
   }
@@ -1319,6 +1386,16 @@ reason, authorizes it to override a collision -- every other verdict or
 reason means the claim was lost instead. \`holder\` in the JSON output
 reports the previous occupant on both a plain collision and an
 authorized takeover.
+
+--acquire against the primary worktree refuses to create a new
+idd-claim.lock and exits 4 with mode primary-worktree-refused. The
+primary worktree is where git rev-parse --git-common-dir and
+--absolute-git-dir resolve to the same directory. That admin directory
+is never removed by git worktree remove, so a lock created there has
+no automatic cleanup path. An already-present lock keeps today's
+reacquire, collision, and --takeover behavior. --check, --record-tokens,
+--read-tokens, and --backfill-tokens are unaffected and remain valid
+against the primary worktree.
 
 --check is read-only: it reports the current lock state without creating,
 mutating, or deleting anything. \`malformed: true\` means a lock file

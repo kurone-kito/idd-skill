@@ -171,6 +171,120 @@ test('acquire: lock-acquired — fresh acquire succeeds with no prior lock', () 
   }
 });
 
+test('acquire: primary worktree refuses a new lock; a linked worktree still acquires', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const refused = acquireClaimLock(
+      fixture.primary,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(refused.mode, 'primary-worktree-refused');
+    assert.match(refused.message ?? '', /primary worktree/);
+    assert.equal(existsSync(resolveClaimLockPath(fixture.primary)), false);
+
+    const backfill = backfillGeneratedClaimTokens(fixture.primary, 'claim-a');
+    assert.equal(backfill.status, 'lock-absent');
+    assert.equal(checkClaimLock(fixture.primary).present, false);
+    recordGeneratedClaimTokens(fixture.primary, {
+      agentId: 'agent-a',
+      claimId: 'claim-a',
+    });
+    const tokens = readGeneratedClaimTokens(fixture.primary, 'claim-a');
+    assert.equal(tokens.status, 'present');
+    if (tokens.status === 'present') {
+      assert.equal(tokens.record.claimId, 'claim-a');
+    }
+
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+    assert.equal(checkClaimLock(fixture.worktree).present, true);
+
+    const primaryLock = resolveClaimLockPath(fixture.primary);
+    writeFileSync(
+      primaryLock,
+      `${JSON.stringify({
+        agentId: 'agent-a',
+        claimId: 'claim-a',
+        acquiredAt: '2026-09-20T05:22:19.566Z',
+      })}\n`,
+    );
+    const reacquired = acquireClaimLock(
+      fixture.primary,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(reacquired.mode, 'acquired');
+    assert.equal(reacquired.reacquired, true);
+    assert.equal(
+      JSON.parse(readFileSync(primaryLock, 'utf8')).acquiredAt,
+      '2026-09-20T05:22:19.566Z',
+    );
+
+    const collision = acquireClaimLock(
+      fixture.primary,
+      'agent-b',
+      'claim-b',
+      false,
+    );
+    assert.equal(collision.mode, 'collision');
+
+    const takeover = acquireClaimLock(
+      fixture.primary,
+      'agent-b',
+      'claim-b',
+      true,
+    );
+    assert.equal(takeover.mode, 'acquired');
+    assert.equal(takeover.forcedTakeover, true);
+    assert.equal(
+      JSON.parse(readFileSync(primaryLock, 'utf8')).claimId,
+      'claim-b',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: acquire against the primary worktree exits 4 and creates no lock', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--acquire',
+          '--worktree',
+          fixture.primary,
+          '--agent-id',
+          'agent-a',
+          '--claim-id',
+          'claim-a',
+        ],
+        { env: fixtureEnv() },
+      ),
+      (error: NodeJS.ErrnoException & { stdout?: string }) => {
+        assert.equal(error.code, 4);
+        const body = JSON.parse(error.stdout ?? '');
+        assert.equal(body.mode, 'primary-worktree-refused');
+        assert.match(body.message, /primary worktree/);
+        return true;
+      },
+    );
+    assert.equal(existsSync(resolveClaimLockPath(fixture.primary)), false);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('acquire: same claim-id re-acquires purely locally (fast path), confirming without writing', () => {
   const fixture = setupLinkedWorktree();
   try {

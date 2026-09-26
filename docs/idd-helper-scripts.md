@@ -2697,10 +2697,20 @@ still fails closed:
   use the helper-free exclusive file-create fallback. If neither is
   available, disable the automatic install and acquire the lock immediately
   after worktree creation.
+- `--acquire` refuses to create `idd-claim.lock` in the primary
+  worktree, where `git rev-parse --git-common-dir` and
+  `--absolute-git-dir` resolve to the same directory. The CLI exits
+  `4` with `mode` `primary-worktree-refused`. That admin directory is
+  never removed by `git worktree remove`, so a lock created there has
+  no automatic cleanup path (observed 2026-09-25,
+  kurone-kito/idd-skill#3486). An already-present lock keeps the
+  reacquire, collision, and `--takeover` contract. `--check`,
+  `--record-tokens`, `--read-tokens`, and `--backfill-tokens` still
+  accept the primary worktree.
 - Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
   same-`claim-id` reacquire that writes nothing, or an authorized
   `--takeover` override — disambiguated by the optional `reacquired` /
-  `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
+  `forcedTakeover` boolean fields), `collision` (a different `claim-id`
   already holds the lock, or the existing path is malformed/unreadable —
   retry with `--takeover` only when
   `resume-claim-routing.mjs --fresh-claim-gate` returns an
@@ -2708,7 +2718,9 @@ still fails closed:
   `claim-id` the caller has already independently verified as its own
   **and** whose top-level `reason` is not a `released-claim-*` reason; a
   `claimable` verdict, a `stale-reclaimable` verdict, or any
-  `released-claim-*` reason means the claim was lost instead). A
+  `released-claim-*` reason means the claim was lost instead), or
+  `primary-worktree-refused` (refuses creating a new lock on the
+  primary worktree and exits `4`). A
   released new-format claim with a matching local worktree retains
   `winning_claim_id` for owner release-then-fresh in pre-check (c), but
   that retained, `released-claim-*`-tagged id never by itself authorizes
