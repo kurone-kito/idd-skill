@@ -69,8 +69,9 @@ re-signs through primary signing and stalls non-interactively.
 Failed write (observed 2026-09-26, issue `#3491`): rebase still in
 progress, the index holds the replay, and the branch tip is still the
 pre-rebase commit, so no commit object was written. Abort with
-`git rebase --abort` and replay through the SSH `-c` wrapper
-(`rebase` or `cherry-pick`). Do not run `git commit --amend -S` or
+`git rebase --abort` and replay that pre-rebase commit onto
+`origin/{development-branch}` through the SSH `-c` wrapper (`rebase`
+or `cherry-pick`). Do not run `git commit --amend -S` or
 `git commit --amend '-S'`, including when Git prints that hint.
 Wrapper `--continue` stays for a staged content conflict. Post-rebase
 verification below covers a finished rebase with HEAD detached at the
@@ -91,11 +92,12 @@ D2, verify both:
    since a local `{development-branch}` branch may not exist.
 
 If HEAD is detached, **auto-recover once**: `git checkout {branch-name}`
-(the commit stays on the branch ref), re-run the D1 rebase through the
-same fallback wrapper (not an ad-hoc key), then re-verify both checks.
-If HEAD is still detached or the expected commit is absent, post a hold
-note and stop; do not push. The claim revalidation gate catches the
-same branch mismatch at the next mutation.
+(the commit stays on the branch ref), then re-run the D1 rebase through
+the configured signing path. Use the fallback wrapper above when
+primary signing is non-interactive-hostile; otherwise use the repo's
+normal signing path, not an ad-hoc key. Re-verify both checks. If HEAD
+is still detached or the expected commit is absent, post a hold note
+naming the branch state and stop; do not push.
 
 ## D2 — Verify claim, lint, test, push
 

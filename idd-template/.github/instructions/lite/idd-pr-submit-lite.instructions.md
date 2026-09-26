@@ -152,10 +152,12 @@ This section's rebase only applies **before the branch's first push**.
    signing and stalls non-interactively right after the conflict is
    already resolved.
 7. Failed write — rebase in progress, index holds the replay, tip
-   still the pre-rebase commit: `git rebase --abort`, then replay
-   through the SSH `-c` wrapper (`rebase` or `cherry-pick`). Do not
-   run `git commit --amend -S` or `git commit --amend '-S'`. Step 6
-   `--continue` stays for a staged content conflict.
+   still the pre-rebase commit, and the commit object was never
+   written: `git rebase --abort`, then replay that commit onto
+   `origin/main` through the SSH `-c` wrapper (`rebase` or
+   `cherry-pick`). Do not run `git commit --amend -S` or
+   `git commit --amend '-S'`. Step 6 `--continue` stays for a staged
+   content conflict.
 8. After the **entire** rebase completes (not per-conflict, mid-rebase):
    if any file was hand-edited during conflict resolution, run
    **fix-validate** now, against the final rebased state, and commit
