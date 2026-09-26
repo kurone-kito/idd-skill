@@ -1538,4 +1538,27 @@ test('#3465: latestPassingCompletedAt ignores sentinel and malformed passing tim
     {},
   );
   assert.equal(latestPassingCompletedAt(onlyInvalid), 'none');
+
+  const fractional = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-06-25T11:00:00Z',
+        }),
+        checkRun({
+          name: 'docs',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-06-25T11:00:00.123Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    latestPassingCompletedAt(fractional),
+    '2026-06-25T11:00:00.123Z',
+  );
 });
