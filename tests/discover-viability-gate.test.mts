@@ -1025,6 +1025,20 @@ test('does not let that-relative credential prerequisites pass (#3528)', () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let approval action prerequisites hide behind credential mentions (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 127,
+    title: 'document protected material',
+    body:
+      "This issue concerns a credential. The maintainer's approval must be " +
+      'granted before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let cannot-without credential prerequisites pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 121,
