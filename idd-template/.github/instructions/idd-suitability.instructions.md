@@ -54,9 +54,10 @@ Does the issue describe work scoped to this repository?
   heading at the list item's indentation ends that context. Inline-code terms
   remain scannable when they occur in a live prerequisite, while an
   inline-code-only example is ignored. A separate live prerequisite still
-  fails this check, while unrelated or negated cues, a cue after the access
-  phrase, a cue in another paragraph, and ambiguous wording remain fail-closed.
-  This boundary follows the observed false positive in issue #3522.
+  fails this check, while unrelated or negated cues (including `non-`/`not-`
+  prefixed variants), a cue after the access phrase, a cue in another
+  paragraph, and ambiguous wording remain fail-closed. This boundary follows
+  the observed false positive in issue #3522.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence

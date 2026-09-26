@@ -197,6 +197,8 @@ const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
   /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|access|credentials?|login|permission|sign-?in)\b/i;
+const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
+  /(?<![\w-])(?:non|not)[ \t-]+(?:negative|regression|expected)(?=[ \t-]|$)/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
@@ -2058,6 +2060,10 @@ export function checkRepositoryFit(context) {
         continue;
       }
       const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
+      const cueWindow = context.slice(Math.max(0, cueIndex - 40), cueEnd);
+      if (REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN.test(cueWindow)) {
+        continue;
+      }
       const cuePrefix = context.slice(Math.max(0, cueIndex - 80), cueIndex);
       const clauseStart = lastRepositoryFitClauseBoundary(cuePrefix);
       const cueToMatch = context.slice(cueEnd, externalMatchOffset);

@@ -6151,6 +6151,22 @@ This is a non-negative fixture; this task requires production dashboard credenti
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects prefixed cues that contain a later fixture marker', () => {
+  for (const cue of [
+    'Non-negative regression fixture',
+    'Non-expected rejection',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\n${cue}: this task requires production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, cue);
+  }
+});
+
 test('repository fit keeps a loose-list continuation in the same fixture context', () => {
   const result = checkRepositoryFit({
     issue: {
