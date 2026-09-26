@@ -4608,11 +4608,18 @@ export function collectAssertNextActions(
     const reviewer = bot === 'copilot' ? 'copilot' : restLogin;
     items.push({
       token: T.REQUEST_REVIEW,
-      summary: `${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
+      summary:
+        `${bot} has not reviewed this PR. Request a review (E14) and post an advisory-wait marker only after registration evidence ` +
+        `(a review_requested timeline event for ${restLogin} that follows the current HEAD commit, or a non-empty requested_reviewers node). Exit status is not evidence:`,
       pointer: [
         `gh pr edit ${pr} --add-reviewer ${reviewer}`,
-        `# on GraphQL login-resolution failure ("Could not resolve user with login '${reviewer}'"):`,
+        `# if that leaves evidence absent (GraphQL login-resolution failure included):`,
         `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
+        `# if evidence is still absent, resolve the bot user node id (never hard-code it) and call requestReviews with botIds as a JSON array and union: true. gh api -f sends that array as a string.`,
+        `gh api graphql --input - <<'EOF'`,
+        `{"query":"mutation($id:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){clientMutationId}}","variables":{"id":"<pr-node-id>","botIds":["<resolved-bot-node-id>"]}}`,
+        `EOF`,
+        `# confirm the same evidence, then:`,
         `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
       ].join('\n'),
     });

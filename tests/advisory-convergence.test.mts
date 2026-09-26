@@ -6818,14 +6818,24 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const none = computeAdvisoryConvergenceVerdict(baseInputs(), baseOptions());
   const noneText = formatAssertNextActions(none);
   assert.match(noneText, /has not reviewed this PR/);
+  assert.match(noneText, /registration evidence/);
+  assert.match(noneText, /review_requested/);
   assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
-  // #2159: the gh add-reviewer form alone is not sufficient for the
-  // default bot login (GraphQL fails to resolve it) — the REST
-  // requested_reviewers fallback from E14 must also be present.
+  // #2159: add-reviewer alone is not a complete request. #3500: neither
+  // that call nor the REST requested_reviewers POST is registration
+  // evidence. The pointer must name requestReviews with a botIds array
+  // before the advisory-wait marker.
   assert.match(
     noneText,
     /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
   );
+  assert.match(noneText, /requestReviews/);
+  assert.match(noneText, /botIds/);
+  assert.match(noneText, /union: true/);
+  const evidenceAt = noneText.indexOf('registration evidence');
+  const reviewsAt = noneText.indexOf('requestReviews');
+  const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
+  assert.ok(evidenceAt >= 0 && reviewsAt > evidenceAt && markerAt > reviewsAt);
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(
     noneText,

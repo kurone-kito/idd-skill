@@ -280,8 +280,8 @@ re-verify the active claim
 ([claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate))
 and that HEAD hasn't moved since the attempt started; either failure
 aborts without mutating or counting a cycle — discard and restart from
-E1 against the new HEAD. Commands for every step (same gh-then-REST
-pattern as E14's **Primary advisory bot**):
+E1 against the new HEAD. Commands for every step (same request as
+E14's **Primary advisory bot**):
 [shell fallback AW3-S](../../docs/idd-advisory-wait-shell-fallback.md#aw3-s).
 
 1. **Remove** the stale request. Skip this step for a non-pending entry
