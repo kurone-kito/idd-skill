@@ -964,11 +964,19 @@ node scripts/discover-readiness-check.mjs --swarm-floor <N>
 
 - **Output**: `{ eligible, eligible_count, total }` — `eligible` is the
   ready-and-at/above-floor set (each `{ number, title, autopilotSuitability,
-  belowFloor }`), `eligible_count` its length, and `total` the number of open
-  issues swept. A "no score" issue is never below floor, matching the
-  discovery ranker, so it stays eligible.
+  belowFloor, isRoadmap }`), `eligible_count` its length, and `total` the
+  number of open issues swept. A "no score" issue is never below floor,
+  matching the discovery ranker, so it stays eligible.
 - **Use**: an `eligible_count == 0` result means Discover has no startable
   work at floor `N`, so an autopilot / swarm loop may stop scriptably.
+- **`isRoadmap` before direct claim**: a roadmap issue is never excluded
+  from `eligible` solely for being a roadmap
+  ([kurone-kito/idd-skill#2450](https://github.com/kurone-kito/idd-skill/issues/2450))
+  — that decision stays with A1.5. A `--swarm-floor` caller must check
+  each `eligible` entry's `isRoadmap` before treating it as directly
+  claimable: route an entry with `isRoadmap: true` through
+  [A1.5](../.github/instructions/idd-roadmap-audit.instructions.md)'s
+  roadmap-completion audit instead of a direct claim.
 - **Floor range**: `N` is the autopilot-suitability 1-5 band. A non-integer
   or out-of-range `N` is a **hard error**, not a silent coercion to the
   default floor — otherwise a typo (e.g. `--swarm-floor 50`) would quietly
