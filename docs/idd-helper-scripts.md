@@ -5327,8 +5327,8 @@ a destructive re-run.
 branch:
 
 ```sh
-git fetch origin +refs/heads/main:refs/remotes/origin/main
-git merge origin/main
+git fetch origin +refs/heads/main:refs/remotes/origin/main \
+  && git merge origin/main
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG

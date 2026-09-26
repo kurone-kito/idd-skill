@@ -179,8 +179,8 @@ unpushed E9 fixes.
   resolve, complete the merge:
 
   ```sh
-  git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
-  git merge origin/{development-branch}
+  git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
+    && git merge origin/{development-branch}
   ```
 
   Non-interactive-hostile signing: use the
