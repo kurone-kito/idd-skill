@@ -699,9 +699,18 @@ function isNearRequirementAssertion(
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
       ? CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN
       : assertionPattern;
+  const descriptivePurpose =
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.exec(forwardText)
+      : null;
+  const hasUnattachedDescriptivePurpose =
+    descriptivePurpose !== null &&
+    !CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN.test(
+      forwardText.slice(descriptivePurpose[0].length),
+    );
   if (
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-    CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(forwardText)
+    hasUnattachedDescriptivePurpose
   ) {
     return false;
   }
@@ -716,7 +725,7 @@ function isNearRequirementAssertion(
     !(
       assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
       (CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(forwardText) ||
-        CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(forwardText))
+        hasUnattachedDescriptivePurpose)
     )
   ) {
     return true;

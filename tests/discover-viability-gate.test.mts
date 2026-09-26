@@ -1025,6 +1025,21 @@ test('does not let that-relative credential prerequisites pass (#3528)', () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let an attached credential requirement hide behind a purpose clause (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 128,
+    title: 'document protected material',
+    body:
+      'Document a credential that is necessary for authentication and must ' +
+      'be supplied by the maintainer before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let approval action prerequisites hide behind credential mentions (#3528)', () => {
   const result = evaluateA4Viability({
     number: 127,
