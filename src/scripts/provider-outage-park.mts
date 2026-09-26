@@ -429,10 +429,16 @@ function collectRawParkMarkers(
   try {
     openPrs = fetchOpenPullRequests(owner, repo, sampleSize);
   } catch (error) {
+    // #3346 review finding: preserve the original gh-exec.mts-tagged error
+    // as `.cause` (not dropped as before) so classifyHelperError's
+    // cause-chain walk can still classify a real gh transport/not-found
+    // failure correctly instead of losing it to the generic `internal`
+    // fallback -- mirrors provider-outage-declaration.mts's identical fix.
     throw new Error(
       `could not read open pull requests to list parked changes: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
     );
   }
 
