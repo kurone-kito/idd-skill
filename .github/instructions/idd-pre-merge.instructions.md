@@ -283,7 +283,9 @@ failure into a silent stall.
   report's `secondaryQuietWindow.elapsed` must be `true` before this check
   is satisfied — a `secondary-quiet-window` entry in `blockers[]` means the
   window has not yet elapsed since the last substantive review activity;
-  wait (poll per `advisoryWait.pollInterval`), then re-evaluate F2. Unset
+  wait (poll per `advisoryWait.pollInterval`), then re-evaluate F2. When
+  issue `#2544`'s settled buffer clamps the applied wait, that blocker
+  names the buffer separately from the configured window. Unset
   (the off default) never adds this blocker.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the

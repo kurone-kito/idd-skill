@@ -1642,6 +1642,7 @@
       "description": "#2335: the advisoryWait.secondaryQuietWindow gate status -- once the E-phase convergence conditions are already met, requires the configured window to have elapsed since the last substantive (non-ack-only) activity before treating the review as settled. Anchored on reviewCurrency.live.effective.maxActivityUpdatedAt; stateless by design.",
       "required": [
         "minutes",
+        "configuredMinutes",
         "anchorAt",
         "elapsedMinutes",
         "elapsed",
@@ -1652,7 +1653,12 @@
       "properties": {
         "minutes": {
           "type": "integer",
-          "description": "Configured secondary quiet window in whole minutes (advisoryWait.secondaryQuietWindow, default 0 = off).",
+          "description": "Applied secondary quiet window in whole minutes. This is the value that gates elapsed. On the #2544 settled-buffer path it is the clamped buffer (never longer than the configured window); otherwise it equals configuredMinutes.",
+          "minimum": 0
+        },
+        "configuredMinutes": {
+          "type": "integer",
+          "description": "Unclamped configured advisoryWait.secondaryQuietWindow in whole minutes (default 0 = off). Equals minutes except on the #2544 settled-buffer path, where minutes is the shorter applied buffer (#3485).",
           "minimum": 0
         },
         "anchorAt": {

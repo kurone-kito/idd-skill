@@ -530,7 +530,12 @@ const SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES = 5;
  * (anchored on `secondaryBotSettledAt`) compute identically and cannot
  * drift apart.
  */
-function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
+function computeQuietWindowElapsed({
+  minutes,
+  configuredMinutes,
+  anchorAt,
+  now,
+}) {
   const nowMs = Date.parse(now);
   const anchorMs = Date.parse(anchorAt);
   const elapsedMinutes =
@@ -544,6 +549,7 @@ function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
     elapsedMinutes !== null ? Math.max(0, minutes - elapsedMinutes) : null;
   return {
     minutes,
+    configuredMinutes,
     anchorAt,
     elapsedMinutes,
     elapsed,
@@ -581,9 +587,14 @@ function computeQuietWindowElapsed({ minutes, anchorAt, now }) {
  * timestamp instead of `effectiveMaxActivityUpdatedAt`. The buffer never
  * exceeds the operator's own configured `minutes` (via `Math.min`), so a
  * repository that configures a window shorter than the buffer is never
- * kept waiting longer than what it explicitly asked for. Omitted or
- * invalid (the pre-#2544 default for every existing caller) falls through
- * to the unchanged, unsettled path -- byte-identical behavior.
+ * kept waiting longer than what it explicitly asked for. `minutes` on
+ * that path is the applied (clamped) buffer; `configuredMinutes` keeps
+ * the unclamped configured window so a report can tell them apart
+ * (#3485). `elapsed` still measures the applied `minutes`, never
+ * `configuredMinutes`. Omitted or invalid (the pre-#2544 default for
+ * every existing caller) falls through to the unchanged, unsettled path
+ * -- byte-identical behavior aside from the additive
+ * `configuredMinutes` field, which equals `minutes` there.
  *
  * #2547: `secondaryBotDeclined: true` skips the wait entirely (`elapsed:
  * true`, same as the off/no-anchor branches below) once the secondary bot
@@ -628,6 +639,7 @@ export function buildSecondaryQuietWindowStatus({
   if (resolvedMinutes <= 0) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: anchorValid ? anchorAtRaw : 'none',
       elapsedMinutes: null,
       elapsed: true,
@@ -638,6 +650,7 @@ export function buildSecondaryQuietWindowStatus({
   if (secondaryBotDeclined === true) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: 'declined',
       elapsedMinutes: null,
       elapsed: true,
@@ -652,6 +665,7 @@ export function buildSecondaryQuietWindowStatus({
         resolvedMinutes,
         SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES,
       ),
+      configuredMinutes: resolvedMinutes,
       anchorAt: settledAtRaw,
       now,
     });
@@ -659,6 +673,7 @@ export function buildSecondaryQuietWindowStatus({
   if (!anchorValid) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: 'none',
       elapsedMinutes: null,
       elapsed: true,
@@ -668,6 +683,7 @@ export function buildSecondaryQuietWindowStatus({
   }
   return computeQuietWindowElapsed({
     minutes: resolvedMinutes,
+    configuredMinutes: resolvedMinutes,
     anchorAt: anchorAtRaw,
     now,
   });
