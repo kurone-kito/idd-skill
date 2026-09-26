@@ -347,9 +347,12 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN =
   /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
 // #3522: an external-access phrase can be a deliberately negative
 // regression fixture rather than the issue's own prerequisite. Keep the
-// exception explicit and local; generic negation remains fail-closed.
+// exception explicit and local; generic or negated wording remains
+// fail-closed.
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
-  /\b(?:negative|regression)\s+fixture\b|\bexpected\s+(?:rejection|failure)\b|\b(?:should|must)\s+be\s+(?:rejected|failed?)\b|\bshould\s+fail\b/i;
+  /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected\s+(?:rejection|failure)\b/i;
+const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
+  /\b(?:not|never|no|without|isn['’]?t|doesn['’]?t)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -2182,35 +2185,83 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
     ),
   ];
+  const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
+  const listItems = [...maskedBody.matchAll(listItemPattern)].map(
+    (listItemMatch) => ({
+      start: listItemMatch.index ?? 0,
+      indent: (listItemMatch[0] ?? '').search(/\S/),
+      contentIndent: (listItemMatch[0] ?? '').length,
+    }),
+  );
+  const listItemSpanFor = (matchIndex: number) => {
+    const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
+    let currentItem: (typeof listItems)[number] | null = null;
+    for (const listItem of listItems) {
+      if (listItem.start > matchIndex) {
+        break;
+      }
+      currentItem = listItem;
+    }
+    if (currentItem === null) {
+      return null;
+    }
+    const lineIndent =
+      normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0].length ?? 0;
+    const isMarkerLine = lineStart === currentItem.start;
+    if (!isMarkerLine && lineIndent < currentItem.contentIndent) {
+      return null;
+    }
+    const nextItem = listItems.find(
+      (listItem) =>
+        listItem.start > currentItem.start &&
+        listItem.indent <= currentItem.indent,
+    );
+    return {
+      start: currentItem.start,
+      end: nextItem?.start ?? normalizedBody.length,
+    };
+  };
   const contextSpanFor = (matchIndex: number) => {
     const paragraphSpan = paragraphSpans.find(
       (span) => matchIndex >= span.start && matchIndex < span.end,
     ) ?? { start: 0, end: normalizedBody.length };
-    const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
-    listItemPattern.lastIndex = paragraphSpan.start;
-    let currentItemStart: number | null = null;
-    let nextItemStart: number | null = null;
-    let listItemMatch: RegExpExecArray | null =
-      listItemPattern.exec(maskedBody);
-    while (listItemMatch) {
-      const itemStart = listItemMatch.index;
-      if (itemStart >= paragraphSpan.end) {
-        break;
+    return listItemSpanFor(matchIndex) ?? paragraphSpan;
+  };
+  const hasPositiveFixtureCue = (
+    context: string,
+    externalMatchOffset: number,
+  ) => {
+    const cuePattern = new RegExp(
+      REPOSITORY_FIT_FIXTURE_CUE_PATTERN.source,
+      'gi',
+    );
+    for (const cueMatch of context.matchAll(cuePattern)) {
+      const cueIndex = cueMatch.index ?? 0;
+      if (cueIndex >= externalMatchOffset) {
+        continue;
       }
-      if (itemStart <= matchIndex) {
-        currentItemStart = itemStart;
-      } else {
-        nextItemStart = itemStart;
-        break;
+      const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
+      const cuePrefix = context.slice(Math.max(0, cueIndex - 80), cueIndex);
+      const clauseStart = Math.max(
+        cuePrefix.lastIndexOf('\n'),
+        cuePrefix.lastIndexOf('.'),
+        cuePrefix.lastIndexOf('!'),
+        cuePrefix.lastIndexOf('?'),
+        cuePrefix.lastIndexOf(';'),
+      );
+      if (
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
+          cuePrefix.slice(clauseStart + 1),
+        ) ||
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
+          context.slice(cueEnd, externalMatchOffset),
+        )
+      ) {
+        continue;
       }
-      listItemMatch = listItemPattern.exec(maskedBody);
+      return true;
     }
-    return currentItemStart === null
-      ? paragraphSpan
-      : {
-          start: currentItemStart,
-          end: nextItemStart ?? paragraphSpan.end,
-        };
+    return false;
   };
   const sameContext = (
     left: { start: number; end: number },
@@ -2228,6 +2279,16 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       Math.max(0, matchIndex - 60),
       matchIndex,
     );
+    const contextBeforeClauseStart = Math.max(
+      contextBefore.lastIndexOf('\n'),
+      contextBefore.lastIndexOf('.'),
+      contextBefore.lastIndexOf('!'),
+      contextBefore.lastIndexOf('?'),
+      contextBefore.lastIndexOf(';'),
+    );
+    const contextBeforeClause = contextBefore.slice(
+      contextBeforeClauseStart + 1,
+    );
     // Skip a negated non-requirement; only an un-negated external-access
     // requirement blocks Repository Fit. The negation may sit *before* the
     // match ("does **not** require production credentials") or *after* the
@@ -2236,7 +2297,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     const negatedRequirement =
       /\b(?:requires?|needs?|must|depends?\s+on)\s+(?:no|not|never|without|n['’]?t)\b/i;
     if (
-      NEGATION_PATTERN.test(contextBefore) ||
+      NEGATION_PATTERN.test(contextBeforeClause) ||
       negatedRequirement.test(matchText)
     ) {
       continue;
@@ -2247,8 +2308,9 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     if (
       matchEnd <= span.end &&
       contextMatchCount === 1 &&
-      REPOSITORY_FIT_FIXTURE_CUE_PATTERN.test(
+      hasPositiveFixtureCue(
         maskedBody.slice(span.start, span.end),
+        matchIndex - span.start,
       )
     ) {
       continue;

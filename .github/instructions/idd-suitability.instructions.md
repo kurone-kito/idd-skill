@@ -50,12 +50,13 @@ Does the issue describe work scoped to this repository?
 - **Fail**: Issue crosses repository boundaries, requires external system
   access, or is out-of-scope for this repository
 - A negative regression fixture or expected-rejection example is descriptive
-  context, not a live prerequisite, only when an explicit fixture/rejection
-  cue and the external-access phrase occur in the same Markdown paragraph or
-  list item. A separate live prerequisite still fails this check, while
-  generic negation, a cue in another paragraph, and ambiguous wording remain
-  fail-closed. This boundary follows the observed false positive in issue
-  #3522.
+  context, not a live prerequisite, only when an explicit, positively framed
+  fixture/rejection cue precedes the external-access phrase in the same
+  Markdown paragraph or list item. A loose-list item's indented continuation
+  paragraphs remain part of that list item. A separate live prerequisite still
+  fails this check, while unrelated or negated cues, a cue after the access
+  phrase, a cue in another paragraph, and ambiguous wording remain fail-closed.
+  This boundary follows the observed false positive in issue #3522.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence
