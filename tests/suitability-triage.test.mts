@@ -6580,6 +6580,50 @@ test('repository fit ignores fixture cues in HTML attributes', () => {
   assert.equal(result.pass, false);
 });
 
+test('repository fit masks hidden metadata before matching external access', () => {
+  const linkResult = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires [the example](https://production-dashboard.example/access).`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(linkResult.pass, true);
+
+  const htmlResult = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires <span title="production dashboard credentials">the example</span>.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(htmlResult.pass, true);
+});
+
+test('repository fit treats a blank blockquote line as a paragraph boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n> Negative fixture: invalid input\n>\n> This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects punctuation-delimited live clauses', () => {
+  for (const separator of ['—', ':']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail ${separator} this implementation requires Slack access.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, separator);
+  }
+});
+
 test('repository fit ignores abbreviation periods inside an explicit fixture cue', () => {
   for (const abbreviation of ['e.g.', 'i.e.']) {
     const result = checkRepositoryFit({

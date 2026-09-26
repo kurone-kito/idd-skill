@@ -489,7 +489,7 @@ function findRepositoryFitHiddenMetadataRanges(
 }
 
 function hasRepositoryFitSentenceBoundary(text: string): boolean {
-  const punctuationPattern = /[.!?;]/g;
+  const punctuationPattern = /[.!?;:—–]/g;
   let punctuation = punctuationPattern.exec(text);
   while (punctuation !== null) {
     const character = punctuation[0] ?? '';
@@ -521,9 +521,17 @@ function buildRepositoryFitParagraphSpans(
     const start = headingMatch.index ?? 0;
     return { start, end: start + (headingMatch[0] ?? '').length };
   });
-  const blockRanges = [...nonInlineCodeRanges, ...headingRanges].sort(
-    (left, right) => left.start - right.start,
-  );
+  const quoteBlankLineRanges = [
+    ...scanBody.matchAll(/^[ \t]{0,3}>[ \t]*(?:\n|$)/gm),
+  ].map((quoteBlankLineMatch) => {
+    const start = quoteBlankLineMatch.index ?? 0;
+    return { start, end: start + (quoteBlankLineMatch[0] ?? '').length };
+  });
+  const blockRanges = [
+    ...nonInlineCodeRanges,
+    ...headingRanges,
+    ...quoteBlankLineRanges,
+  ].sort((left, right) => left.start - right.start);
   const spans: { start: number; end: number }[] = [];
   for (const paragraphSpan of paragraphSpans) {
     const splitPoints = new Set([paragraphSpan.start, paragraphSpan.end]);
@@ -2341,6 +2349,10 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   }));
   const hiddenMetadataRanges =
     findRepositoryFitHiddenMetadataRanges(normalizedBody);
+  const externalAccessScanBody = maskMarkdownCodeRegionsPreservingPositions(
+    scanBody,
+    hiddenMetadataRanges,
+  );
   const paragraphSpans = buildRepositoryFitParagraphSpans(
     scanBody,
     nonInlineCodeRanges,
@@ -2369,7 +2381,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   // Match against a lowercase copy so the sentence-boundary exceptions can
   // distinguish lowercase abbreviations (such as `prod.`) from a sentence
   // starting with an uppercase word while keeping offsets stable.
-  const lowerCaseScanBody = scanBody
+  const lowerCaseScanBody = externalAccessScanBody
     .replace(
       /(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g,
       (_whole, word: string) => `${word}!`,
