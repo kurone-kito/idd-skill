@@ -16,8 +16,8 @@ on resume) without a fresh B1 pass.
 
 If the branch has not been pushed yet, sync it onto `{development-branch}`
 before the first push — the routine pre-publication history cleanup step.
-First run `git fetch origin {development-branch}`, then check whether the
-branch is **already current** with `origin/{development-branch}`: if
+First run `git fetch origin`, then check whether the branch is
+**already current** with `origin/{development-branch}`: if
 `git merge-base HEAD origin/{development-branch}` equals
 `origin/{development-branch}` (behind-count 0), the branch already
 contains every commit on `{development-branch}`, so the rebase would be a

@@ -549,7 +549,7 @@ Route based on `branchState` from the helper (or `mergeable` /
    operator confirmation before this merge, since the merge commit will
    appear in PR history.
 2. Merge `{development-branch}` into the feature branch:
-   `git fetch origin {development-branch} && git merge
+   `git fetch origin && git merge
    origin/{development-branch}`. Use the
    [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
    when primary signing is non-interactive-hostile — its merge
