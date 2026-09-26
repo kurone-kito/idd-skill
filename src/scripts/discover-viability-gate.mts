@@ -202,7 +202,7 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
 );
 const CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN = String.raw`(?:(?:the|a|an)\s+)?${CREDENTIAL_COORDINATION_ACTOR_PATTERN}`;
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
   'gi',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
@@ -375,6 +375,10 @@ const CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN =
   /\b(?:missing|absent|unavailable|not\s+(?:available|provided|supplied))\s+$/i;
 const CREDENTIAL_ACQUISITION_ASSERTION_PATTERN =
   /\b(?:obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
+const CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN =
+  /\b(?:cannot|can't)\b[^.;:!?]{0,80}\b(?:without|unless)\s+(?:(?:an?|the)\s+)?$/i;
+const CREDENTIAL_PROVIDER_FORWARD_ASSERTION_PATTERN =
+  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2})(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:!?\n]{1,40})?\s+(?:before|until)\b/i;
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
   /\bcredential[- ]prompt(?:ing)?\b/i;
 const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
@@ -403,15 +407,15 @@ const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
   /\b(?:cannot|can't)\b[^.;:!?]{0,80}\buntil\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:cannot|can't)\b[^.;:!?]{0,80}\b(?:without|unless)\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human|approval|access|permission|authorization)\b|\bonly\s+after\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:before|until)\b|\band\s+(?:it|the\s+credential|a\s+credential)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:supplied|provided|performed|created)\b[^.;:!?]{0,80}\b(?:before|until)\b|\bawaits?\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:approval|decision|input|review|access|credential)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
-  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s*(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:!?\n]{1,40}\s*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
+  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s*(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:!?\n]{1,40}\s*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 const CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\b[^.;:!?\n]*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 const CREDENTIAL_APPROVAL_ACTION_FOLLOW_ON_PATTERN =
-  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+(?:approval|decision|input|review|access|permission|authorization)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))/i;
+  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+(?:approval|decision|input|review|access|permission|authorization)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))/i;
 const CREDENTIAL_BARE_APPROVAL_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:approval|access|permission|authorization)\s+(?:(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))|(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$)))/i;
 const CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN =
-  /(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
+  /(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -1105,6 +1109,25 @@ function isDescribedSecurityVocabulary(
     return false;
   }
 
+  const backwardStart = Math.max(
+    0,
+    matchIndex - REQUIREMENT_ASSERTION_WINDOW_CHARS,
+  );
+  const requirementContextBefore = corpus.slice(backwardStart, matchIndex);
+  const requirementContextAfter = corpus.slice(matchEnd, matchEnd + 80);
+  const statusContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
+  const isSecurityStatus =
+    /^credentials?$/i.test(vocabulary) ||
+    /\b(?:security|authentication|authorization|production|secret|access|permission|api|signing|private|public)\b/i.test(
+      statusContext,
+    );
+  if (
+    CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN.test(requirementContextBefore) ||
+    CREDENTIAL_PROVIDER_FORWARD_ASSERTION_PATTERN.test(requirementContextAfter)
+  ) {
+    return false;
+  }
+
   // Ordinary parser/cache terminology must not become an external security
   // dependency merely because it uses `key` or `token` (#3522 Copilot
   // review). Keep the programming-language exception narrow and let nearby
@@ -1125,18 +1148,6 @@ function isDescribedSecurityVocabulary(
     }
   }
 
-  const backwardStart = Math.max(
-    0,
-    matchIndex - REQUIREMENT_ASSERTION_WINDOW_CHARS,
-  );
-  const requirementContextBefore = corpus.slice(backwardStart, matchIndex);
-  const requirementContextAfter = corpus.slice(matchEnd, matchEnd + 80);
-  const statusContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
-  const isSecurityStatus =
-    /^credentials?$/i.test(vocabulary) ||
-    /\b(?:security|authentication|authorization|production|secret|access|permission|api|signing|private|public)\b/i.test(
-      statusContext,
-    );
   if (
     CREDENTIAL_PROMPTING_ASSERTION_PATTERN.test(
       corpus.slice(matchIndex, matchEnd + 40),

@@ -1884,6 +1884,46 @@ test('keeps application administrator authorization autonomous (#3522)', () => {
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('does not let an actorless cannot-without credential blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 168,
+    title: 'document credential storage',
+    body: 'We cannot proceed without a credential. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('checks provider requirements before parser token exclusions (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 169,
+    title: 'document parser token handling',
+    body:
+      'The parser token must be provided by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test("detects plural possessive maintainers' approval blockers (#3522)", () => {
+  const result = evaluateA4Viability({
+    number: 170,
+    title: 'document credential storage',
+    body:
+      "Implementation requires maintainers' approval before work starts. " +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,
