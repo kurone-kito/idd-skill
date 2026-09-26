@@ -8045,16 +8045,23 @@ export function summarizeDispositionEvidenceForGate(
   // comments also accept an unmarked later IDD-agent reply (presence-only,
   // #2139) so "thanks, fixed" clears the human item without hollowing out
   // Copilot / CodeRabbit pairing.
+  const isDispositionShapedReply = (body: string) =>
+    isDispositionComment({ body }) ||
+    AMD_MARKER_PATTERN.test(body.trimStart()) ||
+    isRejectionConfirmedDisposition({ body });
   const agentReplyComments = normalizedComments
+    .filter(
+      (comment) =>
+        !isDispositionShapedReply(comment.body) ||
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+          'unedited',
+    )
     .filter(
       (comment) =>
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
         isValidIsoTimestamp(comment.activityAt) &&
-        !isIddOperationalComment(comment) &&
-        (!isDispositionComment({ body: comment.body }) ||
-          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
-            'unedited'),
+        !isIddOperationalComment(comment),
     )
     .sort((left, right) => {
       const byTime = compareIsoTimestamps(left.activityAt, right.activityAt);

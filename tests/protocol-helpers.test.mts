@@ -3632,6 +3632,38 @@ test('an edit-state-unresolved disposition never pairs as a clearing reply', () 
   assert.equal(summary.missingRegularComments[0].id, 'REG-UNKNOWN-1');
 });
 
+test('an edited or edit-state-unresolved AMD marker never pairs as a clearing reply (#3249)', () => {
+  const summarize = (lastEditedAt?: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            id: 'REG-AMD-1',
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'The advisory review still needs a disposition.',
+            author: { login: 'reviewer-a' },
+          },
+          {
+            id: 'REG-AMD-2',
+            createdAt: '2026-05-12T01:00:00Z',
+            body: '**Awaiting maintainer decision** — the implementation is correct.',
+            author: { login: 'idd-bot' },
+            ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'], advisoryBotLogins: [] },
+    );
+
+  for (const summary of [summarize('2026-05-12T02:00:00Z'), summarize()]) {
+    assert.equal(summary.route, 'return-to-e1');
+    assert.equal(summary.reason, 'missing-disposition-evidence');
+    assert.equal(summary.missingRegularCommentCount, 1);
+    assert.equal(summary.missingRegularComments[0].id, 'REG-AMD-1');
+  }
+});
+
 test('an ordinary IDD reply still clears a human regular comment', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
