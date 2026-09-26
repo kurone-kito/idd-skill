@@ -115,6 +115,8 @@ const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
   String.raw`\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b`,
   'gi',
 );
+const REMOVAL_FRAMING_CUE_PATTERN =
+  /\b(?:remove[sd]?|replace[sd]?|eliminate[sd]?|automate[sd]?|retire[sd]?|drop(?:ped|s)?)\b/gi;
 // A trigger phrase inside a phrase describing something other than a live,
 // remaining completion blocker should not count (#2738), mirroring
 // findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
@@ -177,6 +179,21 @@ function isGovernedByBackwardCue(
       cancelPattern?.test(linkText) ||
       (cueMatch[0].toLowerCase() === 'not' &&
         NOT_ONLY_IDIOM_PATTERN.test(linkText))
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+function isGovernedByRemovalFraming(corpus, matchIndex) {
+  const windowStart = Math.max(0, matchIndex - 100);
+  const windowText = corpus.slice(windowStart, matchIndex);
+  for (const cueMatch of windowText.matchAll(REMOVAL_FRAMING_CUE_PATTERN)) {
+    const linkText = windowText.slice(cueMatch.index + cueMatch[0].length);
+    if (
+      CUE_HARD_BREAK_PATTERN.test(linkText) ||
+      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)
     ) {
       continue;
     }
@@ -640,6 +657,16 @@ function findParagraphSpan(corpus, offset) {
   return { start, end };
 }
 function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
+  INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.lastIndex = 0;
+  if (
+    INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.test(
+      corpus.slice(matchIndex, matchEnd),
+    )
+  ) {
+    // The matched assertion is the issue's own requirement even when the
+    // author uses quotation marks for emphasis (#3528, PR #3528 review).
+    return false;
+  }
   const lineStart = corpus.lastIndexOf('\n', matchIndex - 1) + 1;
   if (/^[ \t]*>/.test(corpus.slice(lineStart, matchIndex))) {
     // Blockquote syntax alone does not establish the cited content is
@@ -955,6 +982,7 @@ function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
     const index = match.index;
     const end = index + match[0].length;
     if (
+      isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
       isDescribedByPastInvestigation(corpus, index, end) ||

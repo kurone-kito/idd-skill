@@ -1196,6 +1196,34 @@ test('detects approval blockers outside descriptive credential paragraphs (#3528
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('detects quoted independent approval blockers (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 142,
+    title: 'wire external approval gate',
+    body:
+      'The change "requires maintainer approval" before merging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps removed approval dependencies from blocking autonomous work (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 143,
+    title: 'automate the deployment flow',
+    body:
+      'Replace the deployment flow that requires maintainer approval with an ' +
+      'automated check. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('does not let vendor credential providers pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 136,
