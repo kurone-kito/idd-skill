@@ -731,6 +731,32 @@ test('a no-`from` export list re-exporting a BARE function with multiple TypeScr
   }
 });
 
+test('a no-`from` export list re-exporting the SECOND declarator of a bare, single-line multi-declarator `const` statement is classified unused, not masked by the whole statement counting as a self-reference (Copilot High-severity finding, post-reduction review)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      ['const other = 1, helper = 2;', '', 'export { helper };', ''].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      '`BARE_CONST_DECL_PATTERN` only ever captures the FIRST ' +
+        'identifier in the declarator list -- before this fix, the ' +
+        'SECOND declarator (`helper`) never got a real declaration ' +
+        'line at all, so the no-`from` item fell back to the ' +
+        "export-list's own line and the const statement's own " +
+        '(unexcluded) mention of `helper` registered as a false ' +
+        'self-reference, masking a genuinely unimported export as ' +
+        'production',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

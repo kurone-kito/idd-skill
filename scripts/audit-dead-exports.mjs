@@ -245,6 +245,99 @@ const IMPORT_BRACE_PATTERN = /^import\s*\{/;
 const IMPORT_NAMESPACE_PATTERN =
   /^import\s*\*\s*as\s+[A-Za-z_$][\w$]*\s+from\s*['"](\.[^'"]+)['"]/;
 const IMPORT_FROM_AFTER_BRACE_PATTERN = /^\s*from\s*['"](\.[^'"]+)['"]/;
+/** #3498 (Copilot High-severity finding, post-reduction review): a bare
+ * `const` statement can declare MULTIPLE comma-separated bindings on one
+ * line (`const other = 1, helper = 2;`), but `BARE_CONST_DECL_PATTERN`
+ * itself only ever captures the FIRST identifier -- a no-`from` item
+ * re-exporting a LATER declarator never found its real line at all,
+ * falling back to the export-list line and letting the const
+ * statement's own (unexcluded) mention of the name register as a false
+ * self-reference. Scans the declarator list starting at
+ * `declaratorListStart` (the absolute offset into `strippedText` right
+ * after the `const ` keyword) and bounded to `scanEnd` (the CURRENT
+ * physical line's own end offset -- never beyond it), tracking
+ * bracket/paren/brace depth AND quote state so neither a declarator's
+ * own initializer (`const a = foo(1, 2), b = 3;`) nor a comma inside a
+ * string/template literal (`const text = 'x, helper';`) is mistaken for
+ * a declarator boundary. Stops early at the first top-level (depth 0,
+ * unquoted) `;`, or otherwise at `scanEnd`. Returns each declarator's
+ * name and absolute offset -- the caller resolves the real 1-based line
+ * via `lineNumberAt` (all declarators returned here share the same
+ * line, since the scan never crosses a line boundary).
+ *
+ * **Deliberately single-line, not multi-line.** A multi-line
+ * declarator list (`const a = 1,\n  b = 2;`) stays an accepted,
+ * out-of-scope limitation: searching forward across physical lines for
+ * the terminating `;` risks crossing into a FOLLOWING statement for
+ * ordinary semicolonless (ASI) code (`const helper = 1\nexport {
+ * helper };`), consuming the export statement into the scan and
+ * silently dropping that export from the audit entirely -- a strictly
+ * worse failure mode (real findings vanish) than the narrow multi-line-
+ * declarator gap it would close (a finding is merely misclassified).
+ * See the module header's "regex/line-based, not an AST parse" note.
+ *
+ * A quoted span (single, double, or backtick) is treated as fully
+ * OPAQUE text, including a template literal's own `${...}` interpolation
+ * -- an accepted simplification: only a comma meant as a genuine
+ * declarator separator INSIDE an interpolation expression (an
+ * exceedingly rare construct) would be missed. **Also accepted, NOT
+ * handled**: a regex literal's own delimiters (`const OPEN = /\{/;`)
+ * are not tracked as opaque, so a bracket character inside one can
+ * corrupt `depth`; and a TypeScript generic angle-bracket list (`<T,
+ * U>`) is not tracked as a depth-increasing pair, so its own commas can
+ * be mistaken for declarator boundaries. Both are the same class of
+ * ambiguity real JS/TS parsers resolve only with full grammar context
+ * (regex-vs-division, generic-vs-comparison) -- genuinely unsafe to
+ * guess at with a regex/line-based scanner, so they stay accepted
+ * limitations rather than heuristics that could silently misfire the
+ * other way. Destructuring declarators (`const { a, b } = obj;`) stay
+ * out of scope too -- `BARE_CONST_DECL_PATTERN` never matches them at
+ * all (no identifier immediately follows `const `), a separate,
+ * pre-existing limitation this scanner does not extend to. */
+function scanBareConstDeclarators(strippedText, declaratorListStart, scanEnd) {
+  const declarators = [];
+  let depth = 0;
+  let quote = null;
+  let segmentStart = declaratorListStart;
+  const pushSegment = (segmentEnd) => {
+    const raw = strippedText.slice(segmentStart, segmentEnd);
+    const leading = raw.length - raw.trimStart().length;
+    const nameMatch = /^([A-Za-z_$][\w$]*)/.exec(raw.slice(leading));
+    if (nameMatch) {
+      declarators.push({
+        name: nameMatch[1],
+        offset: segmentStart + leading,
+      });
+    }
+  };
+  let i = declaratorListStart;
+  for (; i < scanEnd; i += 1) {
+    const char = strippedText[i];
+    if (quote) {
+      if (char === '\\') {
+        i += 1; // skip the escaped character -- never its own quote/comma
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+    } else if (char === '(' || char === '[' || char === '{') {
+      depth += 1;
+    } else if (char === ')' || char === ']' || char === '}') {
+      depth -= 1;
+    } else if (char === ',' && depth === 0) {
+      pushSegment(i);
+      segmentStart = i + 1;
+    } else if (char === ';' && depth === 0) {
+      pushSegment(i);
+      return declarators;
+    }
+  }
+  pushSegment(i);
+  return declarators;
+}
 /** Parses one `.mts` file's own top-level export declarations, re-export
  * edges, and import statements. `originalText` is used only for
  * suppression-comment text and self-reference scanning; every structural
@@ -397,7 +490,23 @@ function parseFile(absPath, originalText) {
         BARE_CLASS_DECL_PATTERN.exec(line);
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
       if (bareMatch) {
-        addDeclarationLine(bareMatch[1], lineIndex + 1);
+        // #3498 (Copilot High-severity finding, post-reduction review):
+        // a bare `const` statement can declare MULTIPLE comma-separated
+        // bindings on one line (`const other = 1, helper = 2;`) --
+        // resolve every declarator on this line, not just the first
+        // (`BARE_CONST_DECL_PATTERN` itself only ever captures the
+        // first identifier). Single-line only -- see
+        // `scanBareConstDeclarators`'s own doc comment.
+        const bareNames = bareConstMatch
+          ? scanBareConstDeclarators(
+              strippedText,
+              start + (bareConstMatch[0].length - bareConstMatch[1].length),
+              end,
+            ).map((declarator) => declarator.name)
+          : [bareMatch[1]];
+        for (const bareName of bareNames) {
+          addDeclarationLine(bareName, lineIndex + 1);
+        }
       }
     }
     const barrelMatch = BARREL_STAR_PATTERN.exec(line);
