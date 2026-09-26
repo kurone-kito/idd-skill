@@ -85,7 +85,7 @@ function recoveryComment(overrides: {
   };
 }
 
-test('buildCopilotRecoverySummary: an edited valid recovery marker consumes the restrictive cycle budget but cannot anchor terminal recovery', () => {
+test('buildCopilotRecoverySummary: an edited valid recovery marker cannot anchor terminal recovery', () => {
   const summary = buildCopilotRecoverySummary(
     {
       comments: [
@@ -100,9 +100,9 @@ test('buildCopilotRecoverySummary: an edited valid recovery marker consumes the 
     { ...BASE_RECOVERY_OPTIONS, recoveryCycleCap: 1 },
   );
 
-  assert.equal(summary.completedCycleCount, 1);
-  assert.equal(summary.remainingBudget, 0);
-  assert.equal(summary.capExhausted, true);
+  assert.equal(summary.completedCycleCount, 0);
+  assert.equal(summary.remainingBudget, 1);
+  assert.equal(summary.capExhausted, false);
   assert.equal(summary.clockAnchor, '');
   assert.equal(summary.state, 'NOT_TERMINAL');
 });

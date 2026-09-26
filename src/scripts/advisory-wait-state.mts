@@ -268,11 +268,10 @@ function minutesBetweenIso(start: string, end: string): number {
  * matching `findActivationNonceWinner`'s and `summarizeAdvisoryWaitMarkers`'s
  * shared "re-read must reconverge" design.
  *
- * A candidate `advisory-wait-recovery:` comment consumes one bounded
- * recovery-cycle slot when all of its structural, claim, HEAD, and server
- * timestamp checks hold. An edited or edit-state-unresolved marker still
- * consumes that restrictive slot, but contributes nothing to `clockAnchor`
- * (fail closed; never a whole-computation abort):
+ * A candidate `advisory-wait-recovery:` comment counts as one completed
+ * recovery cycle only when ALL of the following hold -- any single failure
+ * excludes it from both `completedCycleCount` and `clockAnchor` (fail
+ * closed; never a whole-computation abort):
  *  - the comment author is a trusted marker actor (else: untrusted);
  *  - the body parses as the BOUND form via `parseAdvisoryRecoveryComment`
  *    (a malformed body, or the legacy unbound 3-field form, both parse to
@@ -285,9 +284,7 @@ function minutesBetweenIso(start: string, end: string): number {
  *    including both an earlier and a later HEAD than the current one);
  *  - the comment's GitHub `created_at` validates as an ISO 8601 UTC
  *    timestamp (else: ambiguous-created-at -- excluded from BOTH counting
- *    and anchoring, never counted with a missing anchor contribution);
- *  - an explicit `lastEditedAt: null` is required only for the trusted
- *    `clockAnchor`, not for the restrictive cycle count.
+ *    and anchoring, never counted with a missing anchor contribution).
  */
 export function buildCopilotRecoverySummary(
   {
@@ -349,7 +346,13 @@ export function buildCopilotRecoverySummary(
       if (!trustedLogins.has(login)) {
         continue; // untrusted
       }
-      const editState = classifyCommentEditState(comment);
+      // #3249: an edited (or edit-state-unresolved) `advisory-wait-recovery:`
+      // marker must never count toward the recovery cycle or contribute a
+      // clock anchor -- editing the marker after posting must not let an
+      // operator fabricate or backdate recovery-cycle evidence.
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        continue; // edited or edit-state-unresolved
+      }
       const marker = parseAdvisoryRecoveryComment(
         String(comment?.body ?? ''),
         String(comment?.createdAt ?? ''),
@@ -377,12 +380,6 @@ export function buildCopilotRecoverySummary(
         continue;
       }
       completedCycleCount += 1;
-      // #3249: an edited (or edit-state-unresolved) marker has consumed a
-      // recovery attempt, but cannot provide the trusted clock evidence that
-      // would make the terminal state actionable.
-      if (editState !== 'unedited') {
-        continue;
-      }
       if (
         !clockAnchor ||
         compareIsoTimestamps(marker.createdAt, clockAnchor) < 0

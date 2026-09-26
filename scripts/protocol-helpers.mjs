@@ -5198,13 +5198,12 @@ export function summarizeAdvisoryWaitMarkers(
     const login = String(comment?.author?.login ?? comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
-    const trustedAuthor = trustedLogins.has(login);
     // #3249: a trusted login alone is not enough -- an edited (or
     // edit-state-unresolved) `advisory-wait:` marker must never satisfy or
-    // relax this gate. The request-cap count below is deliberately separate:
-    // an edited trusted request still consumed a bounded request attempt.
+    // relax this gate.
     const trusted =
-      trustedAuthor && classifyCommentEditState(comment) === 'unedited';
+      trustedLogins.has(login) &&
+      classifyCommentEditState(comment) === 'unedited';
     const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
     const isRequestMarker = advisoryWaitRequestMarker(body);
     if (isSameHeadMarker) {
@@ -5228,7 +5227,7 @@ export function summarizeAdvisoryWaitMarkers(
       }
     }
     if (isRequestMarker) {
-      if (trustedAuthor) {
+      if (trusted) {
         trustedRequestMarkerCount += 1;
       } else {
         untrustedRequestMarkerCount += 1;
