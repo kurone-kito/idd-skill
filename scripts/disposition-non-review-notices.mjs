@@ -543,7 +543,10 @@ export function buildDispositionPlan(input, options = {}) {
       comments.some((disposition) => {
         const parsed = parseCodexNoFindDisposition(disposition.body);
         return Boolean(
-          parsed?.sourceCommentId === String(comment.id) &&
+          trustedMarkerLogins.has(disposition.login) &&
+            parsed?.sourceCommentId === String(comment.id) &&
+            parsed.headSha === headSha.toLowerCase() &&
+            dispositionNamesAdvisoryBot(disposition.body, comment.login) &&
             classifyCommentEditState(disposition) !== 'unedited' &&
             compareIsoTimestamps(
               effectiveRegularCommentActivityAt(disposition),

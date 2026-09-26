@@ -1100,6 +1100,43 @@ test('buildDispositionPlan re-plans when an edited marker follows a replacement'
   );
 });
 
+test('buildDispositionPlan ignores an edited copied marker from an untrusted author', () => {
+  const source = notice(
+    349,
+    CODEX,
+    CODEX_NO_FIND_RESULT,
+    '2026-05-12T00:00:00Z',
+  );
+  const replacement = notice(
+    350,
+    'trusted-agent',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 349),
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+    null,
+  );
+  const copiedDisposition = notice(
+    351,
+    'untrusted-reviewer',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 349),
+    '2026-05-12T02:00:00Z',
+    '2026-05-12T03:00:00Z',
+    '2026-05-12T03:00:00Z',
+  );
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [source, replacement, copiedDisposition],
+    },
+    { trustedMarkerLogins: ['trusted-agent'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(
+    plan.skipped.map((item) => item.reason),
+    ['already-dispositioned'],
+  );
+});
+
 test('gate retires an edited no-find acceptance after a valid replacement', () => {
   const source = {
     id: 343,
