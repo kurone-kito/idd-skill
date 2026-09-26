@@ -79,9 +79,10 @@ returns `passed` for its live `--issue` invocation, but its offline
 `passed` value at all; `claim-approval-gate.mjs` returns `approved`.
 The mutation-style helpers overlap rather than cleanly splitting on
 one field: `audit-pr-cleanup.mjs` exposes both `mode`
-(`dry-run`/`apply`) and `status` (a seven-value vocabulary: `clean`,
+(`dry-run`/`apply`) and `status` (spanning `clean`,
 `needs-apply`, `permission-blocked`, `rescan-failed`, `failed`,
-`incomplete`, `applied`); `disposition-non-review-notices.mjs` prints
+`time-budget-exhausted`, `incomplete`, `applied`);
+`disposition-non-review-notices.mjs` prints
 no `status` key at all in its default dry-run mode, and its `status`
 value (`applied`/`failed`) under `--apply` is still driven only by
 `applied`/`failed` -- `--apply` output also carries a separate
@@ -1490,6 +1491,16 @@ The adopted helper boundaries are intentionally narrow:
   unless `--format table` is requested
 - apply mode is explicit and can re-validate an active claim before
   every minimization mutation
+- an apply pass snapshots the full report once and re-validates each
+  candidate with a cheap per-subject read instead of rebuilding the
+  whole report per candidate (kurone-kito/idd-skill#3321); apply mode
+  accepts `--time-budget-seconds <n>`, measured from helper start with
+  an injectable clock, to bound total apply-pass wall time -- once
+  spent, the run starts no new candidate or pass, keeps every
+  already-applied row, and reports `status: time-budget-exhausted`
+  (never collapsing into `applied`, `clean`, or `incomplete`) with no
+  confirming rescan; omitting the flag leaves apply-mode behavior
+  unchanged
 - known review-bot regular comments are considered only after merge and
   only when they match a completed-review or stale-notification signal
 - cleanup remains best-effort and never becomes a merge gate
