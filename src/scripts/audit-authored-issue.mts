@@ -12,7 +12,10 @@
 // every authoring marker, the declared shape's required section headings,
 // the roadmap shape's `## Tracks` checkbox lines actually resolving to a
 // child issue reference, the roadmap-id/blocked-by dependency-marker
-// rules, visible/hidden line agreement for the suitability and effort
+// rules, a failing check that rejects a mid-line or near-miss `Blocked
+// by`/`Depends on` mention and a cross-repository token on an otherwise
+// well-formed dependency line (see checkDependencyLineGrammar, #3285),
+// visible/hidden line agreement for the suitability and effort
 // footers, an advisory warning-severity check that flags an issue/PR
 // reference used near coordination language (e.g. "before", "once",
 // "requires") with no corresponding Blocked-by/Depends-on/task-list
@@ -44,6 +47,10 @@ import { resolve } from 'node:path';
 import type { AutopilotSuitabilityMarkerDetection } from './autopilot-suitability.mts';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
+import {
+  hasDependencyReferenceListStart,
+  matchDependencyKeywordLine,
+} from './dependency-grammar.mts';
 import {
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
@@ -255,11 +262,17 @@ export interface AuditOptions {
   expectedAuthoringBucket?: AuthoringBucketMarkerValue;
   /**
    * The repository the drafted body belongs to, as `owner/repo` (matching
-   * the `GITHUB_REPOSITORY` env var's own format). Used only by the
-   * advisory `prose-dependency` check to tell a local issue/PR reference
-   * from a cross-repo one: the encodings it recommends (`Blocked by #N` /
+   * the `GITHUB_REPOSITORY` env var's own format). Used by the advisory
+   * `prose-dependency` check to tell a local issue/PR reference from a
+   * cross-repo one: the encodings it recommends (`Blocked by #N` /
    * `Depends on #N`) are inherently local, so a cross-repo reference would
-   * otherwise get the same, actively-wrong advice.
+   * otherwise get the same, actively-wrong advice. Also used by the
+   * hard-failing `dependency-line-grammar` check (#3285 final review
+   * round, Copilot): unlike `prose-dependency`, a cross-repository token
+   * there only fails the line when `currentRepo` is explicitly supplied
+   * and does not match -- omitting this option changes which qualified
+   * dependency lines fail publication, not just which ones get flagged as
+   * advisory.
    *
    * The two reference forms this option affects default in **opposite**
    * directions when it is omitted:
@@ -671,6 +684,68 @@ const AUTHORING_PUBLICATION_INTENT_MEMBER_OR_LATER = new Set([
 // `/`.
 export const REAL_ISSUE_REFERENCE_PATTERN = /^[\w.-]+\/[\w.-]+#[1-9][0-9]*$/;
 
+// A canonical or near-miss spelling of one of the two dependency
+// keywords, case-insensitively, optionally wrapped in up to 3 leading
+// and/or trailing `*`/`_` emphasis markers (a colon, and any emphasis
+// this pattern's own trailing group doesn't happen to consume, is
+// handled separately by stripDependencyLineDecoration further down).
+// Deliberately does NOT use `\b` around the alternation: `\b` treats `_`
+// as a word character, so `_Blocked by_ #12` -- ordinary CommonMark
+// underscore emphasis, not an obscure shape -- would silently fail to
+// match. Both boundaries break independently: a leading `_` (`_Blocked
+// by #12`) defeats the boundary check right after the emphasis run, and
+// a trailing `_` (`Blocked by_ #12`) defeats the one right after "by",
+// so either one alone -- and certainly both together, as in the example
+// above -- silently drops the match (confirmed empirically during the
+// C1 review of this file, #3285).
+// Instead, `(?<![A-Za-z0-9])`/`(?![A-Za-z0-9])` bound the whole
+// emphasis-plus-keyword run against a true letter/digit, which an
+// emphasis marker never is, so leading/trailing `*`/`_` count as a
+// boundary the same as whitespace or punctuation does. This does NOT by
+// itself exclude a real machine marker like `idd-skill-blocked-by` (a
+// `-` is not a letter/digit either, so the boundary check still passes
+// there) -- a marker whose value happens to look like a reference (e.g.
+// `<!-- idd-skill-blocked-by: #12 -->`) is instead excluded upstream, by
+// checkDependencyLineGrammar masking every well-formed
+// `{markerPrefix}-blocked-by` marker out of its near-miss scan input
+// before this pattern ever runs against it (#3285 final review round,
+// Copilot) -- not by requiring a genuine reference to follow, which
+// alone is not enough, since the marker's own value can itself look
+// like one. Same TDZ hazard as REAL_ISSUE_REFERENCE_PATTERN and its
+// siblings above -- declared here, ahead of the import.meta.main
+// trigger, not next to
+// findDependencyKeywordMisuse()/checkDependencyLineGrammar() further down
+// (#3285: checkDependencyLineGrammar runs synchronously off of
+// main() -> auditAuthoredIssue() at CLI-entry time, so a `const` declared
+// after this trigger point is still in the temporal dead zone when it
+// fires).
+const NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN =
+  /(?<![A-Za-z0-9])[*_]{0,3}(?:blocked\s+by|blocked-by|blockedby|depends\s+on|depends-on|dependson)[*_]{0,3}(?![A-Za-z0-9])/gi;
+
+// Matches a Markdown link's opening `[label](target)` shape at the start
+// of a string -- deliberately looser than ISSUE_OR_PR_REFERENCE_PATTERN's
+// own Markdown-link alternative (which requires a full GitHub issue/PR
+// URL target): looksLikeIssueMarkdownLink further down narrows it back
+// down by requiring an issue-shaped label or target, so this only needs
+// to find the link's own boundaries. Same TDZ hazard as
+// NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN immediately above.
+const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
+
+// Matches a Markdown reference-style link's opening usage at the start of
+// a string -- `[label][ref]` (the `ref` itself is defined elsewhere in
+// the body, e.g. `[ref]: https://...`, which this per-line function has
+// no access to; only the label is checked here, same limitation as
+// MARKDOWN_LINK_START_PATTERN's inline-link form above). Deliberately
+// does not require the `ref` to be non-empty, unlike
+// REFERENCE_STYLE_LINK_USAGE_PATTERN elsewhere in this file (which
+// excludes the shortcut `[text][]`/bare `[text]` forms for its own,
+// different purpose of resolving a real definition) -- here, any
+// bracketed second segment (including empty) still reads as "shaped like
+// a reference-style link", which is all this near-miss check needs to
+// decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
+// hazard as MARKDOWN_LINK_START_PATTERN immediately above.
+const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[[^\]\n]*\]/;
+
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
   // a stack. Catch that tagged throw here. Call main() directly on the
@@ -789,6 +864,12 @@ export function auditAuthoredIssue(
       normalizeCurrentRepo(options.currentRepo),
     ),
     checkDependencyMarkerRule(text, rawText, markerPrefix, shape),
+    checkDependencyLineGrammar(
+      text,
+      rawText,
+      normalizeCurrentRepo(options.currentRepo),
+      markerPrefix,
+    ),
     checkCandidateFilesNotEmpty(
       rawText,
       shape,
@@ -1580,6 +1661,299 @@ function checkDependencyMarkerRule(
   }
 
   return pass(id, name, `no roadmap-id marker on this ${shape} issue`);
+}
+
+/**
+ * `true` when `text` begins with a Markdown link whose label contains a
+ * bare `#N` reference (e.g. `[#12](...)`) or whose target contains a
+ * GitHub issue/PR path segment (`/issues/N` or `/pull/N`) -- the
+ * "Markdown-link reference list" near-miss shape the issue describes
+ * (`Blocked by [#12](https://github.com/owner/repo/issues/12)`), which
+ * `hasDependencyReferenceListStart` alone does not recognize (its
+ * `TOKEN_START` grammar has no Markdown-link alternative). Also
+ * recognizes the reference-style form `[#12][ref]` by the same
+ * label-contains-`#N` heuristic (`idd-skill#3285` final review round,
+ * CodeRabbit): `Blocked by [#12][ref]` resolves no dependency under the
+ * shared grammar either, so it must be caught here too, not only the
+ * inline-link form.
+ */
+function looksLikeIssueMarkdownLink(text: string): boolean {
+  const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
+  if (inlineMatch) {
+    const [, label, target] = inlineMatch;
+    if (/#\d+/.test(label) || /\/(?:issues|pull)\/\d+/.test(target)) {
+      return true;
+    }
+  }
+  const referenceMatch = text.match(MARKDOWN_REFERENCE_LINK_START_PATTERN);
+  return referenceMatch !== null && /#\d+/.test(referenceMatch[1]);
+}
+
+/**
+ * Strip, in any order and up to a few repeats, the decoration that can
+ * sit between a near-miss/mid-line keyword match and its reference:
+ * horizontal whitespace, an emphasis-close marker (1-3 of `*`/`_`), and a
+ * colon (ASCII `:` or the full-width `：` near-miss spelling) --
+ * handles `:**`, `**:`, `** :`, and a bare `:` or `：` alone, in
+ * whatever order the author happened to type them.
+ */
+function stripDependencyLineDecoration(after: string): string {
+  let result = after;
+  for (let iteration = 0; iteration < 6; iteration += 1) {
+    const stripped = result
+      .replace(/^[ \t]+/, '')
+      .replace(/^[*_]{1,3}/, '')
+      .replace(/^[:：]/, '');
+    if (stripped === result) {
+      break;
+    }
+    result = stripped;
+  }
+  return result;
+}
+
+/**
+ * Search `line` for a near-miss or mid-line `Blocked by`/`Depends on`
+ * mention: a canonical-or-near-miss-spelled keyword occurrence (anywhere
+ * on the line, not just at its start -- distinguishing "near-miss" from
+ * "mid-line mention" is a purely positional labeling question the issue's
+ * own text does not draw a hard line on, e.g. a hidden mention inside an
+ * HTML comment reads as either; both are equally a `dependency-line-grammar`
+ * failure, so this function does not classify further) immediately
+ * followed -- after stripping any decoration between them -- by something
+ * that looks like an issue reference: a bare `#N`/qualified `owner/repo#N`
+ * /GitHub-issue-URL token, or a Markdown link to an issue. Returns the
+ * first match's own matched text, or `undefined` when nothing on the line
+ * qualifies. Callers only reach this after confirming the shared
+ * line-anchored grammar (`matchDependencyKeywordLine`) does NOT already
+ * accept the line -- a fully canonical line is never re-flagged here.
+ */
+function findDependencyKeywordMisuse(line: string): string | undefined {
+  for (const match of line.matchAll(NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN)) {
+    const after = line.slice((match.index ?? 0) + match[0].length);
+    const stripped = stripDependencyLineDecoration(after);
+    // A leading `<` opens a CommonMark autolink (`<https://...>`) --
+    // strip it before testing `hasDependencyReferenceListStart`, whose
+    // own token grammar has no autolink-wrapper alternative and would
+    // otherwise never recognize `Blocked by <https://github.com/owner/
+    // repo/issues/12>` as reference-shaped (`idd-skill#3285` final
+    // review round, CodeRabbit). The loose `TOKEN_START` test this
+    // delegates to only checks what the text STARTS WITH, so the
+    // autolink's own trailing `>` needs no separate handling here.
+    const unwrapped = stripped.replace(/^</, '');
+    if (
+      hasDependencyReferenceListStart(unwrapped) ||
+      looksLikeIssueMarkdownLink(stripped)
+    ) {
+      return match[0].trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * #3285: fails on a `Blocked by`/`Depends on` mention that Discover's own
+ * shared line-anchored grammar (`dependency-grammar.mts`, #3284) would
+ * never resolve as a real dependency -- a mid-line mention (the keyword
+ * appears after other prose, or hidden inside an HTML comment), a
+ * near-miss line (right position, but an emphasis-wrapped keyword, a
+ * hyphenated/camelCase spelling, a full-width colon, or a Markdown-link
+ * reference instead of the three plain forms the grammar accepts), or a
+ * cross-repository token on an otherwise well-formed line. Each of these
+ * either silently produces no dependency at all (Discover's readiness
+ * check finds nothing to wait on, so the issue reads as unblocked when
+ * the author meant it to be blocked) or, for the cross-repo case,
+ * produces a dependency Discover can never resolve (the issue stays
+ * blocked forever until someone edits the line).
+ *
+ * Operates on masked views of the same body, each computed exactly once
+ * (never per line -- re-masking a single line in isolation loses the
+ * surrounding document context a structural code-block mask depends on,
+ * silently mis-masking a validly indented/nested line; see
+ * `matchDependencyKeywordLine`'s own doc comment):
+ *
+ * - `text` (already computed by the caller via `maskMarkdownForScan`
+ *   with its default options -- fenced/indented/inline code masked, HTML
+ *   comments left visible) is the base for the near-miss/mid-line scan
+ *   below, since a hidden dependency line inside an HTML comment must
+ *   stay visible to this check.
+ * - `nearMissScanLines` additionally masks every well-formed
+ *   `{markerPrefix}-blocked-by` sequential-roadmap marker out of `text`
+ *   (#3285 review, Copilot) before the near-miss scan runs, since that
+ *   marker's own grammar accepts a reference-shaped value (`#12`) and
+ *   would otherwise be misread as a "blocked-by" near-miss/mid-line
+ *   mention -- the two grammars are unrelated and only coincidentally
+ *   share the substring "blocked-by".
+ * - A second, separately masked view, masked here with
+ *   `{ htmlComments: 'mask' }` -- matching `extractDependencyReferences`'s
+ *   own internal masking, i.e. Discover's real view of the body -- is
+ *   used to ask "does the shared grammar already accept this line", via
+ *   `matchDependencyKeywordLine` (which never masks its input, so
+ *   calling it per line here never re-masks).
+ *
+ * A line the shared grammar already accepts is only re-examined for a
+ * cross-repository token (`unresolvable`, and only when `currentRepo` is
+ * actually known -- see the cross-repo design note below); it is never
+ * also run through the near-miss/mid-line scan.
+ */
+function checkDependencyLineGrammar(
+  text: string,
+  rawText: string,
+  currentRepo: string | undefined,
+  markerPrefix: string,
+): AuditFinding {
+  const id = 'dependency-line-grammar';
+  const name =
+    'Blocked by / Depends on lines use the canonical line-anchored form';
+  const discoverMaskedLines = maskMarkdownForScan(rawText, {
+    htmlComments: 'mask',
+  }).split('\n');
+  // A well-formed `<!-- {markerPrefix}-blocked-by: <value> -->` sequential-
+  // roadmap marker (checkDependencyMarkerRule above) coincidentally
+  // contains the literal substring "blocked-by", and its own grammar
+  // (extractBlockedByRoadmapMarkers) accepts ANY non-whitespace value --
+  // including one that happens to look like an issue reference (`#12`),
+  // even though a roadmap-id is meant to be a descriptive slug, not a
+  // reference (#3285 review, Copilot). Mask every such marker out of the
+  // near-miss scan's own visible-line source before running it, so a
+  // marker with a reference-shaped value is never misread as a
+  // "blocked-by" near-miss/mid-line mention -- the two are unrelated
+  // grammars that merely share a keyword substring. The pattern below is
+  // copied verbatim from `extractBlockedByRoadmapMarkers`'s own regex
+  // source (discover-readiness-check.mts) rather than hand-approximated
+  // from scratch -- unlike `hasDependencyReferenceListStart`'s single
+  // shared implementation, there is no common helper the two call sites
+  // can both import here, since one masks-and-extracts a marker value
+  // and the other only needs to blank a match, so keeping the two
+  // literal regex sources in sync by inspection (not by construction) is
+  // this function's own responsibility if either ever changes -- see
+  // this file's own TOKEN_START comment for the general hazard of
+  // independently re-deriving a shared pattern. Blanks only non-newline
+  // characters, so `nearMissScanLines` keeps the exact same per-line
+  // length/count as a plain `text.split('\n')` would produce, keeping
+  // every other offset computation below valid.
+  const blockedByMarkerPattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*[^\\s>]+\\s*-->`,
+    'gi',
+  );
+  const nearMissScanLines = text
+    .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
+    .split('\n');
+  // Maps a 1-based accepted line number to how many trailing characters of
+  // that line the shared grammar's match left unconsumed (#3285 review,
+  // Copilot): the grammar recognizes at most ONE dependency declaration
+  // per line, so a second, independent keyword-plus-reference mention
+  // after it -- "Blocked by #12. Depends on #13" -- is not itself
+  // validated by the accepted match and must still be scanned below,
+  // rather than the whole line being skipped outright.
+  const acceptedRemainingLength = new Map<number, number>();
+  const issues: string[] = [];
+
+  for (const keyword of ['Blocked by', 'Depends on'] as const) {
+    for (let index = 0; index < discoverMaskedLines.length; index += 1) {
+      const result = matchDependencyKeywordLine(
+        discoverMaskedLines,
+        index,
+        keyword,
+        { currentRepo },
+      );
+      if (!result) {
+        continue;
+      }
+      const lineNo = index + 1;
+      acceptedRemainingLength.set(lineNo, result.remaining.length);
+      // A qualified/URL token with an invalid number lands in BOTH
+      // `unresolvable` (dependency-grammar.mts preserves this for
+      // Discover's own runtime consumers, which read it directly and
+      // never read `invalidTokens`) and `invalidTokens` (added so this
+      // audit-time check can name the real problem). Report each
+      // distinct token exactly once, preferring the more specific
+      // "invalid number" message over the generic "names another
+      // repository" one when both apply to the same token string --
+      // the latter is actively misleading for a same-repo token whose
+      // only real defect is its number (#3285 final review round,
+      // Copilot: a same-repo invalid-number token was previously
+      // reported as if it named a different repository).
+      const invalidTokenSet = new Set(result.invalidTokens);
+      // Cross-repository design decision (#3285): unlike the advisory
+      // prose-dependency check (which can afford to lean toward flagging
+      // when currentRepo is unknown, since a false positive there only
+      // prompts a double-check), this is a hard-failing check -- a false
+      // positive here blocks publication outright. Mirroring
+      // checkRoadmapTracksParse's own precedent (#2765 review) for the
+      // same "no repo context available" situation, treat an unresolved
+      // token as unverifiable, not malformed, unless currentRepo is
+      // actually known and still does not match: Discover's own live run
+      // (with GITHUB_REPOSITORY set) will resolve a same-repo qualified
+      // reference correctly regardless of what this offline invocation
+      // happened to pass.
+      if (result.unresolvable.length > 0 && currentRepo !== undefined) {
+        for (const token of result.unresolvable) {
+          if (invalidTokenSet.has(token.token)) {
+            continue;
+          }
+          issues.push(
+            `line ${lineNo}: "${token.token}" names another repository and cannot be resolved locally -- Discover will keep this issue blocked until the line is fixed`,
+          );
+        }
+      }
+      // A bare token that matches the reference shape but resolves to a
+      // non-positive/non-integer number (e.g. `#0`) is silently dropped
+      // from `numbers` with no other record -- unlike a cross-repository
+      // token, it never lands in `unresolvable` either. Unconditional
+      // (no `currentRepo` gate): unlike the cross-repository case, this
+      // is never a matter of missing repo context -- `#0` is invalid
+      // regardless. A line mixing a valid and an invalid token, e.g.
+      // "Blocked by #0, #12", must still fail here even though `#12`
+      // alone is perfectly valid (#3285 final review round, Copilot) --
+      // Discover's own runtime resolution is intentionally unaffected
+      // and still resolves #12 from that same line.
+      if (result.invalidTokens.length > 0) {
+        for (const token of result.invalidTokens) {
+          issues.push(
+            `line ${lineNo}: "${token}" is not a valid issue reference (the number must be a positive integer) -- remove it or fix the number`,
+          );
+        }
+      }
+    }
+  }
+
+  for (let index = 0; index < nearMissScanLines.length; index += 1) {
+    const lineNo = index + 1;
+    const scanLine = nearMissScanLines[index] ?? '';
+    // `discoverMaskedLines[index]` and `scanLine` are always the same
+    // length (both ultimately derive from maskMarkdownForScan against the
+    // same normalized rawText, which preserves length and line structure
+    // regardless of which regions each call happens to mask -- marker
+    // masking above only blanks non-newline characters in place, so it
+    // doesn't change this either), so a trailing-character count measured
+    // against the discover-masked line slices the correct suffix of
+    // `scanLine` too -- re-scanning the marker-masked VISIBLE text (not
+    // the discover-masked one) keeps a hidden HTML-comment mention
+    // detectable the same way the no-prior-match branch below already
+    // scans it, while a well-formed blocked-by marker's own "blocked-by"
+    // substring stays masked out either way.
+    const remainingLength = acceptedRemainingLength.get(lineNo);
+    const scanText =
+      remainingLength === undefined
+        ? scanLine
+        : scanLine.slice(scanLine.length - remainingLength);
+    const misuse = findDependencyKeywordMisuse(scanText);
+    if (misuse !== undefined) {
+      issues.push(
+        `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,
+      );
+    }
+  }
+
+  if (issues.length === 0) {
+    return pass(
+      id,
+      name,
+      'every Blocked by / Depends on mention uses the canonical line-anchored form',
+    );
+  }
+  return fail(id, name, issues.join(' | '));
 }
 
 /**
@@ -3170,8 +3544,14 @@ Options:
                                     ready publish or a legacy body)
   --current-repo <owner/repo>      this repository, for the prose-dependency check
                                     to recognize a full-URL issue/PR reference as
-                                    cross-repo (default: $GITHUB_REPOSITORY), and
-                                    for authoring-owner-marker-trail's target match
+                                    cross-repo (default: $GITHUB_REPOSITORY),
+                                    for authoring-owner-marker-trail's target match,
+                                    and for dependency-line-grammar: a qualified/URL
+                                    dependency line naming a different repository
+                                    fails publication only when this is supplied
+                                    and does not match -- omitting it treats a
+                                    qualified reference as unverifiable, not
+                                    malformed
   --issue <number>                 this issue's number, for authoring-owner-marker-trail's
                                     target match (requires --current-repo or
                                     $GITHUB_REPOSITORY to be resolvable)

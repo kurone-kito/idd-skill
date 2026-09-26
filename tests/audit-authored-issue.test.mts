@@ -1118,6 +1118,339 @@ test('dependency-marker-rule fails when the roadmap-id marker is present but mis
   assert.match(finding?.detail ?? '', /malformed/);
 });
 
+// --- dependency-line-grammar (#3285) ---
+
+/**
+ * Runs `auditAuthoredIssue` on a well-formed child body with `markerLine`
+ * spliced in as its `extraMarkers` content, and returns the resulting
+ * `dependency-line-grammar` finding alongside the marker's own 1-based
+ * line number in the assembled body -- computed from the actual body
+ * text rather than hardcoded, so these tests don't silently drift if
+ * `childBody`'s own template shape ever changes.
+ */
+function dependencyLineGrammarFinding(
+  markerLine: string,
+  options: object = {},
+) {
+  const body = childBody({ extraMarkers: markerLine });
+  const report = auditAuthoredIssue(body, { shape: 'child', ...options });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding, 'expected a dependency-line-grammar finding');
+  const lineNumber = body.split('\n').indexOf(markerLine) + 1;
+  assert.ok(lineNumber > 0, 'expected to find the marker line in the body');
+  return {
+    report,
+    finding: finding as NonNullable<typeof finding>,
+    lineNumber,
+  };
+}
+
+test('dependency-line-grammar fails on an emphasis-wrapped keyword with a colon inside the emphasis', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    '**Blocked by:** #12',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a list item with an emphasis-wrapped keyword', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    '- **Blocked by** #12',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on an underscore-emphasis-wrapped keyword (C1 review: `_` is a word character, defeating a naive \\b boundary)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('_Blocked by_ #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a Markdown-link reference instead of a plain token', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by [#12](https://github.com/kurone-kito/idd-skill/issues/12)',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a mid-line Blocked by mention (#1545-shaped)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Parent roadmap: #1. Blocked by #12 (details below)',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a full-width colon after the keyword', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by：#12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a hyphenated "Blocked-by" spelling', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked-by #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a camelCase "BlockedBy" spelling', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('BlockedBy #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a hyphenated "Depends-on" spelling', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Depends-on #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a hidden dependency line inside an HTML comment', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    '<!-- Blocked by #12 -->',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a cross-repository token when currentRepo is known and does not match', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by other-org/other-repo#5',
+    { currentRepo: 'kurone-kito/idd-skill' },
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /other-org\/other-repo#5/);
+});
+
+test('dependency-line-grammar passes a bare Blocked by line', () => {
+  const { finding } = dependencyLineGrammarFinding('Blocked by #12');
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a list item with a colon and multiple refs', () => {
+  const { finding } = dependencyLineGrammarFinding('- Blocked by: #12, #13');
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a blockquoted Depends on line', () => {
+  const { finding } = dependencyLineGrammarFinding('> Depends on #12');
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes an ordered-list Blocked by line', () => {
+  const { finding } = dependencyLineGrammarFinding('1. Blocked by #12');
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a nested/indented list continuation line (no false positive from re-masking, #3285 review)', () => {
+  const body = childBody({
+    extraMarkers: '- parent item\n    - Blocked by: #12, #13',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'dependency-line-grammar'), 'pass');
+});
+
+test('dependency-line-grammar passes a Blocked by mention quoted inside an inline code span', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    'See `Blocked by #12` for an example of the encoding.',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a Refs #N (non-blocking) line', () => {
+  const { finding } = dependencyLineGrammarFinding('Refs #12 (non-blocking)');
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a real sequential-roadmap blocked-by marker', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    '<!-- idd-skill-blocked-by: some-roadmap -->',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar passes a real sequential-roadmap blocked-by marker whose value happens to look like an issue reference (final review round, Copilot: extractBlockedByRoadmapMarkers accepts any non-whitespace value)', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    '<!-- idd-skill-blocked-by: #12 -->',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar still fails a blocked-by-shaped mention whose marker prefix does not match the configured one', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    '<!-- other-prefix-blocked-by: #12 -->',
+  );
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar passes a same-repo qualified reference when currentRepo is not supplied (unverifiable, not malformed)', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    'Blocked by kurone-kito/idd-skill#1391',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar does not treat "unblocked by" as a keyword mention (C1 round 2 review: pins the boundary check still excludes a real word prefix after the \\b removal)', () => {
+  const { finding } = dependencyLineGrammarFinding(
+    'This work is unblocked by the recent fix in #12.',
+  );
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar fails on a second, independent mid-line mention following a valid declaration on the same line (E2 review, Copilot: "Blocked by #12. Depends on #13")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12. Depends on #13',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
+test('dependency-line-grammar fails on a second, independent mid-line mention joined by "and" on the same line (E2 review, Copilot: "Blocked by #12 and Depends on #13")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12 and Depends on #13',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
+test('dependency-line-grammar still accepts the first, genuinely valid declaration on a line that also carries a later independent mention (no double-counting the accepted numbers)', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12. Depends on #13',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  // The line fails overall (the second mention is a genuine defect), but
+  // this pins that the failure text names the SECOND mention, not the
+  // first well-formed "Blocked by #12" -- a wrong diagnosis would point
+  // the author at the wrong half of the line.
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.doesNotMatch(finding.detail, /"Blocked by"/);
+});
+
+test('dependency-line-grammar fails on a syntactically token-shaped but malformed reference (E2 review, Copilot: "Blocked by #12foo" has no word boundary after the digits)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #12foo');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a non-positive issue number (E2 review, Copilot: "Blocked by #0" is excluded by consumeDependencyReferenceList\'s target > 0 check)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #0');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar fails on a hidden HTML-comment mention immediately following a valid declaration on the same line (E10 review, Copilot: masked comment content reads as pure separator whitespace)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by #12 <!-- Depends on #13 -->',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
+});
+
+test('dependency-line-grammar fails on an invalid token mixed in with an otherwise-valid list (final review round, Copilot: "Blocked by #0, #12" must not pass merely because #12 alone is valid)', () => {
+  const { report, finding, lineNumber } =
+    dependencyLineGrammarFinding('Blocked by #0, #12');
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /"#0"/);
+});
+
+test('dependency-line-grammar fails on an invalid token in a GitHub-wrapped continuation line', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12,\n#0, #13',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, /"#0"/);
+});
+
+test('dependency-line-grammar fails on an invalid-only continuation line, not just a mixed one (final review round, Copilot: "Blocked by #12,\\n#0")', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12,\n#0',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, /"#0"/);
+});
+
+test('dependency-line-grammar fails on a same-repo qualified reference with a non-positive number (final review round, Copilot: "Blocked by kurone-kito/idd-skill#0, #12" -- must not be misreported as cross-repository)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by kurone-kito/idd-skill#0, #12',
+    { currentRepo: 'kurone-kito/idd-skill' },
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /"kurone-kito\/idd-skill#0"/);
+  assert.doesNotMatch(finding.detail, /names another repository/);
+});
+
+test('dependency-line-grammar fails on a reference-style Markdown-link mention (final review round, CodeRabbit: "Blocked by [#12][ref]")', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [#12][ref]\n\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.equal(report.passed, false);
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {
