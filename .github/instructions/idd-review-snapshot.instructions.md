@@ -142,7 +142,8 @@ Use server-reported timestamps, not the local wall clock.
 **CI-completion precondition.** Post the `review-watermark` only
 **after** every CI run counting toward the merge gate has completed —
 including any opt-in/label-triggered job enabled at the quiescent
-pre-merge point. Same precondition for an expected advisory-bot
+pre-merge point (when the final merge-gate CI set is fixed). Same
+precondition for an expected advisory-bot
 re-review: when the primary bot already reviewed an earlier head,
 check the AW1 fast-path signal in `idd-advisory-wait.instructions.md`
 (`LAST_COPILOT_COMMIT == PR_HEAD_SHA`) and post after that review
@@ -150,7 +151,8 @@ lands, bounded by the advisory-wait windows when it never does.
 Operationally: enable the late job, await completion, **then** take
 the Step 1 snapshot and post the watermark — a merge-gate run
 completing _after_ the watermark forces a wasted E1↔F2 round-trip
-(F2's `ci-pass-drift`) with no new review activity.
+because F2's latest-CI `completedAt` mismatches
+`{latest-ci-completed-at}`, with no new review activity.
 
 Note: the post-idd-marker helper above performs this JSON `POST`
 under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`
