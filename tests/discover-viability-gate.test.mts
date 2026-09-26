@@ -576,6 +576,34 @@ test('still fails autonomous completion when credential handling is itself requi
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion when handling a credential is imperative (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 72,
+    title: 'wire external credential handling',
+    body:
+      'Handle a credential supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat a distant noun as a credential description (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 73,
+    title: 'obtain external credential access',
+    body:
+      'Obtain a credential to access storage managed by the maintainer. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let a distant descriptive verb mask a later credential request (#3522)', () => {
   const result = evaluateA4Viability({
     number: 71,
@@ -583,6 +611,20 @@ test('does not let a distant descriptive verb mask a later credential request (#
     body:
       'Document the existing behavior, then a credential is needed before ' +
       'shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let descriptive title context mask a credential body blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 74,
+    title: 'document protected material',
+    body:
+      'A credential will be provided by the maintainer before shipping. ' +
+      'Verification: add unit tests.',
     state: 'OPEN',
   });
 
