@@ -183,6 +183,10 @@ function parseBracedItems(
       continue;
     }
     const name = nameMatch[1];
+    const aliasMatch = /^\s+as\s+([A-Za-z_$][\w$]*)/.exec(
+      withoutType.slice(nameMatch[0].length),
+    );
+    const alias = aliasMatch ? aliasMatch[1] : null;
     const line = lineNumberAt(strippedText, chunkStart);
     const lineStart = originalText.lastIndexOf('\n', chunkStart) + 1;
     const nextNewline = originalText.indexOf('\n', chunkStart);
@@ -191,6 +195,7 @@ function parseBracedItems(
     const ignoreMatch = IGNORE_EXPORT_PATTERN.exec(lineText);
     items.push({
       name,
+      alias,
       isType,
       line,
       suppressed: !!ignoreMatch,
@@ -304,6 +309,7 @@ function parseFile(absPath, originalText) {
         line: lineIndex + 1,
         suppressed: !!ignoreMatch,
         reason: (ignoreMatch?.[1] ?? '').trim(),
+        localName: name,
       });
       lineIndex += 1;
       continue;
@@ -312,6 +318,7 @@ function parseFile(absPath, originalText) {
     if (barrelMatch) {
       reExports.push({
         name: '*',
+        sourceName: '*',
         targetFile: resolveSpecifier(absPath, barrelMatch[1]),
       });
       lineIndex += 1;
@@ -338,18 +345,31 @@ function parseFile(absPath, originalText) {
           if (item.isType) {
             continue;
           }
-          reExports.push({ name: item.name, targetFile });
+          reExports.push({
+            name: item.alias ?? item.name,
+            sourceName: item.name,
+            targetFile,
+          });
         }
       } else {
         for (const item of items) {
           if (item.isType) {
             continue;
           }
-          if (!declared.has(item.name)) {
-            declared.set(item.name, {
+          // No `from` clause: this re-exports an already-declared local
+          // binding, so the key a consumer's import must match is the
+          // EXPOSED name (the `as` alias when present), not the local
+          // binding `item.name` identifies -- but self-reference
+          // detection still needs `item.name` (`localName` below), since
+          // this file's OTHER code reads the local binding, never the
+          // alias.
+          const exposedName = item.alias ?? item.name;
+          if (!declared.has(exposedName)) {
+            declared.set(exposedName, {
               line: item.line,
               suppressed: item.suppressed,
               reason: item.reason,
+              localName: item.name,
             });
           }
         }
@@ -417,7 +437,23 @@ function toPosixRelative(root, absPath) {
  * here means a genuinely dead export is wrongly classified `production`
  * and never surfaced -- accepted as a limitation of the regex/line-based
  * design this audit deliberately uses (see the module header), not
- * something a full scope-aware fix belongs in this issue's scope. */
+ * something a full scope-aware fix belongs in this issue's scope.
+ *
+ * **Second, narrower known false-positive (independent critique pass,
+ * #3478 review, pre-existing -- reproduces identically with no alias
+ * involved, so it is a distinct defect from the alias-chain bug this
+ * revision fixes, and stays out of THIS fix's scope)**: for the no-`from`
+ * `export { a [as b] };` list branch, the caller passes the EXPORT
+ * STATEMENT's own line as `declarationLine`, not the underlying
+ * `function`/`const`/`class` declaration's real line -- those are always
+ * two separate statements, so the real declaration always registers as a
+ * match on a line other than `declarationLine` and this function always
+ * returns `true`, regardless of whether `a` is genuinely used anywhere
+ * else. This masks whether `parseFile`'s `localName` field (used here)
+ * is even being exercised for that branch: no fixture can isolate it from
+ * this false positive without first fixing this line mismatch, which
+ * would need locating the real declaration separately -- left for a
+ * follow-up rather than folded into this alias fix. */
 function hasSelfReference(strippedText, name, declarationLine) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
@@ -452,17 +488,24 @@ export function collectDeadExportAuditResult(root) {
     textByFile.set(file, text);
     parsedByFile.set(file, parseFile(file, text));
   }
-  /** Resolves (file, name) to the file that actually DECLARES `name`,
-   * following `*`/named re-export edges to any depth with a cycle guard.
-   * Returns `null` when unresolvable (dangling specifier, or a re-export
-   * chain that never reaches a real declaration). */
+  /** Resolves (file, name) to the file that actually DECLARES the export
+   * reached by following `*`/named re-export edges to any depth (with a
+   * cycle guard), AND the name it is declared under there -- which can
+   * differ from the `name` this function was called with when an `as`
+   * alias renamed it partway along the chain (crediting an importer under
+   * the WRONG name is a distinct bug from losing the alias outright: the
+   * importer's own requested name never matches the origin file's
+   * `declared` key, so the credit silently misses even once the edge
+   * itself resolves -- #3478 review). Returns `null` when unresolvable
+   * (dangling specifier, or a re-export chain that never reaches a real
+   * declaration). */
   function resolveDeclaringFile(file, name, visited) {
     const parsed = parsedByFile.get(file);
     if (!parsed) {
       return null;
     }
     if (parsed.declared.has(name)) {
-      return file;
+      return { file, name };
     }
     const key = `${file}\u0000${name}`;
     if (visited.has(key)) {
@@ -473,7 +516,17 @@ export function collectDeadExportAuditResult(root) {
       if (edge.name !== name && edge.name !== '*') {
         continue;
       }
-      const resolved = resolveDeclaringFile(edge.targetFile, name, visited);
+      // A barrel (`edge.name === '*'`) always forwards the SAME name the
+      // caller asked for -- there is no fixed source identifier. A named
+      // edge may have renamed the export via `as`, so `sourceName` (not
+      // this file's own exposed `edge.name`) is what `targetFile` itself
+      // declares or re-exports it under.
+      const lookupName = edge.name === '*' ? name : edge.sourceName;
+      const resolved = resolveDeclaringFile(
+        edge.targetFile,
+        lookupName,
+        visited,
+      );
       if (resolved) {
         return resolved;
       }
@@ -481,7 +534,15 @@ export function collectDeadExportAuditResult(root) {
     return null;
   }
   /** Every name reachable by importing `file`'s own module namespace,
-   * mapped to the file that actually declares it -- `file`'s own direct
+   * mapped to the file that actually declares it AND the name it is
+   * declared under there (which can differ from the reachable/exposed key
+   * when an `as` alias renamed it along the way -- the same
+   * name-vs-file distinction `resolveDeclaringFile` returns, and for the
+   * same reason: crediting under the exposed name here would key the
+   * credit under a name the declaring file's own `declared` map never
+   * uses, losing it silently, exactly as the direct-import path did
+   * before `resolveDeclaringFile` started returning the resolved name
+   * -- #3478 review, namespace-import path) -- `file`'s own direct
    * declarations, plus (recursively, with a cycle guard on `file` itself)
    * every name reachable through a `*` barrel or named re-export edge.
    * Used for a namespace import (`import * as x from './file.mts'`),
@@ -500,16 +561,16 @@ export function collectDeadExportAuditResult(root) {
       return result;
     }
     for (const name of parsed.declared.keys()) {
-      result.set(name, file);
+      result.set(name, { file, name });
     }
     for (const edge of parsed.reExports) {
       if (edge.name === '*') {
-        for (const [name, declaringFile] of collectAllReachableExports(
+        for (const [name, declaration] of collectAllReachableExports(
           edge.targetFile,
           visitedFiles,
         )) {
           if (!result.has(name)) {
-            result.set(name, declaringFile);
+            result.set(name, declaration);
           }
         }
         continue;
@@ -517,13 +578,16 @@ export function collectDeadExportAuditResult(root) {
       if (result.has(edge.name)) {
         continue;
       }
-      const declaringFile = resolveDeclaringFile(
+      // `edge.sourceName`, not `edge.name`: `targetFile` declares (or
+      // re-exports) the export under its ORIGIN identifier, which may
+      // differ from the alias this file exposes it as.
+      const resolved = resolveDeclaringFile(
         edge.targetFile,
-        edge.name,
+        edge.sourceName,
         new Set(),
       );
-      if (declaringFile) {
-        result.set(edge.name, declaringFile);
+      if (resolved) {
+        result.set(edge.name, resolved);
       }
     }
     return result;
@@ -549,22 +613,35 @@ export function collectDeadExportAuditResult(root) {
       if (rawImport.name === '*') {
         // A namespace import reaches every name the target module (or its
         // own re-export chain, transitively -- see
-        // `collectAllReachableExports`) ultimately declares.
-        for (const [name, declaringFile] of collectAllReachableExports(
+        // `collectAllReachableExports`) ultimately declares. Credit the
+        // resolved declaration's own name, not the map's exposed-name key
+        // -- an aliased chain makes the two differ (see
+        // `collectAllReachableExports`'s doc comment).
+        for (const [, declaration] of collectAllReachableExports(
           rawImport.targetFile,
           new Set(),
         )) {
-          creditImporter(declaringFile, name, rawImport.importerFile);
+          creditImporter(
+            declaration.file,
+            declaration.name,
+            rawImport.importerFile,
+          );
         }
         continue;
       }
-      const declaringFile = resolveDeclaringFile(
+      // Credit the RESOLVED origin name (`resolved.name`), not
+      // `rawImport.name` (what this importer wrote) -- an aliased
+      // re-export chain makes the two differ, and crediting the
+      // requested name would key this credit under a name the
+      // declaring file's own `declared` map never uses, silently
+      // losing the credit (#3478 review).
+      const resolved = resolveDeclaringFile(
         rawImport.targetFile,
         rawImport.name,
         new Set(),
       );
-      if (declaringFile) {
-        creditImporter(declaringFile, rawImport.name, rawImport.importerFile);
+      if (resolved) {
+        creditImporter(resolved.file, resolved.name, rawImport.importerFile);
       }
     }
   }
@@ -580,7 +657,16 @@ export function collectDeadExportAuditResult(root) {
       const importers = [...(importersByExport.get(key) ?? [])].filter(
         (importer) => importer !== file,
       );
-      const selfReferenced = hasSelfReference(strippedText, name, info.line);
+      // `info.localName`, not `name` (the map key): a no-`from`
+      // `export { a as b };` list item keys `declared` by the EXPOSED
+      // name `b` (what an importer must match), but this file's own
+      // other code -- what self-reference detection scans for -- still
+      // reads the local binding `a`.
+      const selfReferenced = hasSelfReference(
+        strippedText,
+        info.localName,
+        info.line,
+      );
       // Every importer is drawn from `allFiles` (productionFiles ++
       // testFiles, a partition), so "not every importer is a test file"
       // and "at least one importer is a production file" are the same

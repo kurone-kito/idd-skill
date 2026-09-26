@@ -201,6 +201,108 @@ test('a named (non-barrel) re-export from a specific file is also credited back 
   }
 });
 
+test('an aliased named re-export (`export { x as y } from` ...) is still credited back to the origin declaration (#3478 review: the alias must not be lost when resolving the chain)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/advisory-wait-policy.mts',
+      'export const ORIGIN_BOT_LOGINS = [] as const;\n',
+    );
+    write(
+      root,
+      'src/scripts/protocol-helpers.mts',
+      "export { ORIGIN_BOT_LOGINS as EXPOSED_BOT_LOGINS } from './advisory-wait-policy.mts';\n",
+    );
+    write(
+      root,
+      'src/scripts/disposition.mts',
+      "import { EXPOSED_BOT_LOGINS } from './protocol-helpers.mts';\n" +
+        'void EXPOSED_BOT_LOGINS;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'ORIGIN_BOT_LOGINS');
+    assert.equal(
+      entry.category,
+      'production',
+      'the origin declaration must be credited with the importer that ' +
+        'reached it through the alias, not misclassified as unused ' +
+        'because the alias broke the chain',
+    );
+    assert.equal(
+      result.all.some((f) => f.name === 'EXPOSED_BOT_LOGINS'),
+      false,
+      'the alias itself is a pass-through name, never a declaration -- ' +
+        'only the origin identifier is tracked in `all`',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a namespace import reaching an aliased named re-export is also credited back to the origin declaration (same #3478 review finding, namespace-import path)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/advisory-wait-policy.mts',
+      'export const ORIGIN_BOT_LOGINS = [] as const;\n',
+    );
+    write(
+      root,
+      'src/scripts/protocol-helpers.mts',
+      "export { ORIGIN_BOT_LOGINS as EXPOSED_BOT_LOGINS } from './advisory-wait-policy.mts';\n",
+    );
+    write(
+      root,
+      'src/scripts/disposition.mts',
+      "import * as helpers from './protocol-helpers.mts';\n" +
+        'void helpers.EXPOSED_BOT_LOGINS;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'ORIGIN_BOT_LOGINS').category,
+      'production',
+      'a namespace import must also resolve an aliased named re-export ' +
+        'back to the origin declaration, not just a direct named import',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a two-hop alias chain (each hop renaming via `as`) still resolves back to the origin declaration', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(root, 'src/scripts/origin.mts', 'export const ORIGIN_VALUE = 1;\n');
+    write(
+      root,
+      'src/scripts/middle-facade.mts',
+      "export { ORIGIN_VALUE as MIDDLE_VALUE } from './origin.mts';\n",
+    );
+    write(
+      root,
+      'src/scripts/outer-facade.mts',
+      "export { MIDDLE_VALUE as OUTER_VALUE } from './middle-facade.mts';\n",
+    );
+    write(
+      root,
+      'src/scripts/consumer.mts',
+      "import { OUTER_VALUE } from './outer-facade.mts';\n" +
+        'void OUTER_VALUE;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'ORIGIN_VALUE').category,
+      'production',
+      'each hop renames the export via `as`; the chain must still ' +
+        'resolve back to the real origin declaration two hops away',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an export referenced only elsewhere in its own declaring file (self-use) is production, even with zero cross-file importers', () => {
   const root = makeFixtureRoot();
   try {
