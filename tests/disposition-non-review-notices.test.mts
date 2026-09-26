@@ -510,7 +510,10 @@ test('dispositionNamesAdvisoryBot returns false for a body matching neither cano
 
 test('Codex no-find classifier accepts only the observed terminal shape for the current HEAD', () => {
   assert.equal(
-    isCodexNoFindResultForHeadSha(CODEX_NO_FIND_RESULT, 'abc1234'),
+    isCodexNoFindResultForHeadSha(
+      CODEX_NO_FIND_RESULT,
+      `abc1234${'0'.repeat(33)}`,
+    ),
     true,
   );
   assert.equal(
@@ -847,6 +850,57 @@ test('buildDispositionPlan plans and then idempotently skips a current Codex no-
       reason: 'already-dispositioned',
     },
   ]);
+});
+
+test('buildDispositionPlan keeps Codex sticky and no-find dispositions independently idempotent', () => {
+  const headSha = `abc1234${'0'.repeat(33)}`;
+  const comments = [
+    notice(
+      328,
+      CODEX,
+      CODEX_SUMMARY_COMPLETED,
+      '2026-05-12T00:00:01Z',
+      '2026-05-12T00:00:01Z',
+    ),
+    notice(
+      329,
+      CODEX,
+      CODEX_NO_FIND_RESULT,
+      '2026-05-12T00:00:02Z',
+      '2026-05-12T00:00:02Z',
+    ),
+  ];
+  const firstPlan = buildDispositionPlan(
+    { headSha, comments },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    firstPlan.planned.map((item) => item.noticeId).sort((a, b) => a - b),
+    [328, 329],
+  );
+  assert.deepEqual(
+    firstPlan.planned.map((item) => item.reason).sort(),
+    ['Codex no-find result', 'summary walkthrough'].sort(),
+  );
+
+  const dispositions = firstPlan.planned.map((item, index) =>
+    notice(
+      330 + index,
+      'kurone-kito',
+      item.body,
+      '2026-05-12T01:00:00Z',
+      '2026-05-12T01:00:00Z',
+    ),
+  );
+  const secondPlan = buildDispositionPlan(
+    { headSha, comments: [...comments, ...dispositions] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(secondPlan.planned, []);
+  assert.deepEqual(
+    secondPlan.skipped.map((item) => item.noticeId).sort((a, b) => a - b),
+    [328, 329],
+  );
 });
 
 test('buildDispositionPlan ignores Codex no-find results outside the configured advisory bots', () => {

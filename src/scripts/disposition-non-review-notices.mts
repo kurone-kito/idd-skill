@@ -437,6 +437,7 @@ export function buildDispositionPlan(
         ) === 'review' &&
         !isAdvisoryNonReviewNotice(other.body) &&
         !isReviewSummaryComment(other.body) &&
+        !isCodexNoFindResultForHeadSha(other.body, headSha) &&
         compareIsoTimestamps(
           effectiveRegularCommentActivityAt(other),
           dispositionActivityAt,
