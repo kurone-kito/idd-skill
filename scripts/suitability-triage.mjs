@@ -196,6 +196,8 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
 // fail-closed.
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
   /(?<![\w-])(?:negative|regression)\s+fixture\b[ \t]*:|\bexpected[-\s]+(?:rejection|failure)\b[ \t]*:/i;
+const REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN =
+  /\b(?:maybe|perhaps|possibly|potentially|might|could|may)\b[^.!?\n]{0,80}\b(?:negative|regression)\s+fixture\b/i;
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
@@ -2469,6 +2471,13 @@ export function checkRepositoryFit(context) {
       }
       const cueWindow = context.slice(Math.max(0, cueIndex - 40), cueEnd);
       if (REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN.test(cueWindow)) {
+        continue;
+      }
+      if (
+        REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN.test(
+          context.slice(Math.max(0, cueIndex - 80), cueEnd),
+        )
+      ) {
         continue;
       }
       const cuePrefix = context.slice(0, cueIndex);

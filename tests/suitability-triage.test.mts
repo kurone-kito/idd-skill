@@ -6328,6 +6328,17 @@ This negative fixture shows that this task requires production dashboard credent
   assert.equal(result.pass, false);
 });
 
+test('repository fit keeps hedged fixture framing fail-closed', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nMaybe a negative fixture: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit rejects prefixed cues that contain a later fixture marker', () => {
   for (const cue of [
     'Non-negative regression fixture',
