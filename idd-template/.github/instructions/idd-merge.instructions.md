@@ -551,9 +551,10 @@ Before any mutating action in F3, apply the
    `--worktree` and getting `owner_evidence_required` /
    `claim-id-match-without-independent-owner-evidence` is incomplete,
    not claim loss: re-run with the flag. A remaining `stop` means do
-   not remove the worktree. If this shell's cwd was removed, rerun
-   from the primary. Submodule removal failure: `git worktree remove
-   --force <path>` after preserving anything worth keeping. Then:
+   not remove the worktree. Repeat that check immediately before
+   every removal, including `git worktree remove --force <path>`
+   after preserving leftovers. If this shell's cwd was removed,
+   rerun from the primary. Then:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
