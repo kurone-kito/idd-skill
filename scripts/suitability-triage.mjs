@@ -210,7 +210,8 @@ const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const REPOSITORY_FIT_ABBREVIATION_PATTERN =
   /\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|e\.g|i\.e|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|u\.s|vs|vol)\.$/i;
-const REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN = /^(?:e\.g|i\.e|u\.s)$/i;
+const REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN =
+  /\b(?:abbr|admin|approx|auth|config|coord|dev|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|vs|vol)\.$/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -374,18 +375,68 @@ function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
     const start = setextHeadingMatch.index ?? 0;
     return { start, end: start + (setextHeadingMatch[0] ?? '').length };
   });
-  const tableRowRanges = [
-    ...scanBody.matchAll(/^[ \t]{0,3}\|[^\n]*(?:\n|$)/gm),
-  ].map((tableRowMatch) => {
-    const start = tableRowMatch.index ?? 0;
-    return { start, end: start + (tableRowMatch[0] ?? '').length };
+  const tableLines = [...scanBody.matchAll(/^[ \t]{0,3}[^\n]*(?:\n|$)/gm)]
+    .map((lineMatch) => {
+      const raw = lineMatch[0] ?? '';
+      const line = raw.replace(/\n$/u, '');
+      const content = line.trim();
+      const isTableRow = /^\|?[^|\n]*(?:\|[^|\n]*)+\|?[ \t]*$/u.test(content);
+      const isTableDelimiter =
+        /^\|?[ \t]*(?::?-{1,}:?[ \t]*\|)+[ \t]*:?-{1,}:?[ \t]*\|?[ \t]*$/u.test(
+          content,
+        );
+      return {
+        start: lineMatch.index ?? 0,
+        end: (lineMatch.index ?? 0) + raw.length,
+        contentStart:
+          (lineMatch.index ?? 0) + (line.length - line.trimStart().length),
+        contentEnd: (lineMatch.index ?? 0) + line.trimEnd().length,
+        isTableRow,
+        isTableDelimiter,
+      };
+    })
+    .filter((line) => line.isTableRow);
+  const tableRows = new Set();
+  for (const delimiter of tableLines.filter((line) => line.isTableDelimiter)) {
+    const delimiterIndex = tableLines.indexOf(delimiter);
+    let start = delimiterIndex;
+    while (start > 0 && tableLines[start - 1]?.end === delimiter.start) {
+      start -= 1;
+    }
+    let end = delimiterIndex;
+    while (
+      end + 1 < tableLines.length &&
+      tableLines[end + 1]?.start === delimiter.end
+    ) {
+      end += 1;
+    }
+    if (start === delimiterIndex) {
+      continue;
+    }
+    for (let index = start; index <= end; index += 1) {
+      const row = tableLines[index];
+      if (row !== undefined) {
+        tableRows.add(row);
+      }
+    }
+  }
+  const tableCellRanges = [...tableRows].flatMap((row) => {
+    const rowText = scanBody.slice(row.contentStart, row.contentEnd);
+    const pipeOffsets = [...rowText.matchAll(/\|/g)].map(
+      (pipeMatch) => row.contentStart + (pipeMatch.index ?? 0),
+    );
+    const boundaries = [row.contentStart, ...pipeOffsets, row.contentEnd];
+    return boundaries.slice(0, -1).flatMap((start, index) => {
+      const end = boundaries[index + 1] ?? start;
+      return start < end ? [{ start, end }] : [];
+    });
   });
   const blockRanges = [
     ...nonInlineCodeRanges,
     ...headingRanges,
     ...quoteBlankLineRanges,
     ...setextHeadingRanges,
-    ...tableRowRanges,
+    ...tableCellRanges,
   ].sort((left, right) => left.start - right.start);
   const spans = [];
   for (const paragraphSpan of paragraphSpans) {
@@ -2169,14 +2220,14 @@ export function checkRepositoryFit(context) {
   // starting with an uppercase word while keeping offsets stable.
   const lowerCaseScanBody = externalAccessScanBody
     .replace(/(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g, (_whole, word) =>
-      REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN.test(word)
+      REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(`${word}.`)
         ? `${word}.`
         : `${word}!`,
     )
     .replace(
       /(?<![.\w])([A-Za-z]\.[A-Za-z])\.(?=[ \t]+[A-Z])/g,
       (_whole, word) =>
-        REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN.test(word)
+        REPOSITORY_FIT_ABBREVIATION_PATTERN.test(`${word}.`)
           ? `${word}.`
           : `${word}!`,
     )

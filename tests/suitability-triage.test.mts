@@ -6634,14 +6634,20 @@ test('repository fit preserves negation across abbreviation punctuation', () => 
 });
 
 test('repository fit separates fixture and live prerequisites across table rows', () => {
-  const result = checkRepositoryFit({
-    issue: {
-      ...BASE_ISSUE,
-      body: `${BASE_ISSUE.body}\n\n| Negative fixture: | invalid input |\n| --- | --- |\n| Actual work | This task requires Slack access |`,
-    },
-    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
-  } as Context);
-  assert.equal(result.pass, false);
+  for (const table of [
+    '| Negative fixture: | invalid input |\n| --- | --- |\n| Actual work | This task requires Slack access |',
+    '| Negative fixture: | This task requires Slack access |\n| --- | --- |',
+    'Negative fixture: | invalid input\n--- | ---\nActual work | This task requires Slack access',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\n${table}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, table);
+  }
 });
 
 test('repository fit detects an independent hard-wrapped conjunction clause', () => {
@@ -7150,6 +7156,28 @@ This change requires updating the docs. Production dashboard access is unchanged
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('repository fit preserves lexical abbreviations before capitalized services', () => {
+  for (const [abbreviation, service] of [
+    ['prod.', 'Slack'],
+    ['admin.', 'Jira'],
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body:
+          BASE_ISSUE.body +
+          '\nThis task requires ' +
+          abbreviation +
+          ' ' +
+          service +
+          ' access.',
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
 });
 
 test('duplicate check detects a URL-form duplicate declaration', () => {
