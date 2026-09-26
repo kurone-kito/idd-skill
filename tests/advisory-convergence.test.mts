@@ -2610,6 +2610,7 @@ test('#3269: dispositionEvidence.missingThreadCount agrees with F2 for the real 
           author: { login: TRUSTED },
           createdAt: '2026-09-20T07:17:35Z',
           updatedAt: '2026-09-20T07:17:35Z',
+          lastEditedAt: null,
           body: '**Accepted** — Fixed in 28c18a9.',
         },
       ],

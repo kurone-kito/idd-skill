@@ -780,6 +780,7 @@ function advancedBy(login: string): CommentLike {
     }),
     created_at: '2026-09-01T05:01:00Z',
     author: { login },
+    last_edited_at: null,
   };
 }
 

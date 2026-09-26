@@ -183,6 +183,7 @@ function courtesyThreadGraphql(replyBody: string): string {
           },
         },
       },
+      nodes: [{ id: 'C_1', lastEditedAt: null }],
     },
   });
 }
@@ -267,6 +268,7 @@ test('review-activity snapshot keeps the courtesy-ack flag false when a regular 
   const report = runSnapshot(
     courtesyThreadGraphql(COURTESY_ACK),
     JSON.stringify({
+      node_id: 'C_1',
       user: { login: 'someone' },
       body: 'still open',
       created_at: '2026-05-12T03:00:00Z',
