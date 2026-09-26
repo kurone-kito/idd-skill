@@ -66,16 +66,19 @@
 // `function`/`const`/`class` (including TypeScript overload signatures
 // and single-line multi-declarator `const`), or a named, default,
 // namespace, or combined default+named/namespace import (any specifier,
-// relative or bare package). A form OUTSIDE this set -- a multi-line
-// multi-declarator `const`, a regex-literal or generic-angle-bracket
-// initializer confusing the declarator scan, `let`/`var`, a destructuring
-// declarator, or any other syntax this list does not name -- falls back
-// to the ORIGINAL, pre-#3498 behavior (the export statement's own line,
-// which can misclassify the export as `production`): a documented,
-// accepted limitation, not a defect to keep chasing. See
-// `scanBareConstDeclarators`'s own doc comment for the specific
-// AST-ambiguity cases (regex vs. division, generic vs. comparison) that
-// are deliberately rejected rather than guessed at.
+// relative or bare package, and a combined form's own comma-then-newline
+// wrap before `{`/`* as` is recognized -- round 10). A form OUTSIDE this
+// set -- a multi-line multi-declarator `const`, a regex-literal or
+// generic-angle-bracket initializer confusing the declarator scan,
+// `let`/`var`, a destructuring declarator, a wrap between `import` and a
+// default identifier or between `as` and a namespace identifier (no real
+// formatter chooses those break points), or any other syntax this list
+// does not name -- falls back to the ORIGINAL, pre-#3498 behavior (the
+// export statement's own line, which can misclassify the export as
+// `production`): a documented, accepted limitation, not a defect to keep
+// chasing. See `scanBareConstDeclarators`'s own doc comment for the
+// specific AST-ambiguity cases (regex vs. division, generic vs.
+// comparison) that are deliberately rejected rather than guessed at.
 
 // #3240: side-effect-only import, kept first so an unsupported Node fails
 // loudly before this entry block runs. See node-runtime-guard.mts.
@@ -1061,12 +1064,39 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
       continue;
     }
 
-    // #3498 (Copilot/Codex C1 finding, round 7): a combined default +
-    // namespace import (`import def, * as ns from '...';`) introduces
-    // TWO local bindings on one line -- track both the same way the
-    // plain default and plain namespace branches already do.
+    // #3498 (Codex C1 finding, round 10): a combined default + named or
+    // default + namespace import can wrap onto a second physical line
+    // right after the comma -- the natural break point a formatter picks
+    // when the whole statement is too long to fit one line (`import
+    // def,\n  { named } from '...';`). Neither combined pattern below
+    // matched this: both were tested against only the single physical
+    // `line`, which never contains a `\n`, so the pattern's `\s` (which
+    // DOES match a newline) never got the chance to see one. Test
+    // against a short forward-looking WINDOW instead of `line` -- the
+    // pattern stays anchored at the statement's own start (`^`), so it
+    // can still only match this exact "import IDENT , <rest>" token
+    // sequence with nothing but whitespace in between, never accidentally
+    // spanning into an unrelated later statement. The window is bounded
+    // (cheap, and a statement wider than it falls back to the ORIGINAL,
+    // pre-#3498 unhandled-combined-form behavior -- the same degradation
+    // as before this fix existed, not a new one). Wrapping between
+    // `import` and the default identifier, or between `as` and the
+    // namespace identifier, is NOT handled -- no real formatter chooses
+    // those break points, unlike after a comma, so extending this fix
+    // there would be scope creep without a real-world case behind it.
+    const combinedImportWindow = strippedText.slice(
+      start,
+      Math.min(start + 400, strippedText.length),
+    );
+
+    // #3498 (Copilot/Codex C1 finding, round 7; round 10: matched against
+    // `combinedImportWindow`, see above, so a comma-then-newline wrap
+    // before `* as ns` is recognized too): a combined default + namespace
+    // import (`import def, * as ns from '...';`) introduces TWO local
+    // bindings on one statement -- track both the same way the plain
+    // default and plain namespace branches already do.
     const combinedNamespaceMatch =
-      IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN.exec(line);
+      IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN.exec(combinedImportWindow);
     if (combinedNamespaceMatch) {
       const combinedSpecifier = combinedNamespaceMatch[3];
       if (RELATIVE_SPECIFIER_PATTERN.test(combinedSpecifier)) {
@@ -1076,16 +1106,45 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
           importerFile: absPath,
         });
       }
-      for (const localName of [
-        combinedNamespaceMatch[1],
-        combinedNamespaceMatch[2],
-      ]) {
-        addDeclarationLine(localName, lineIndex + 1);
+      // #3498 (round 10): the default identifier (group 1) always sits on
+      // the statement's own first physical line -- this fix only
+      // recognizes a wrap AFTER the comma, never before the default
+      // identifier itself (see the scope note above) -- but the
+      // NAMESPACE identifier (group 2) can now be on a LATER physical
+      // line than `lineIndex` once the wrap lands before `* as`.
+      // Crediting it against `lineIndex + 1` unconditionally (as a first
+      // version of this fix did) recorded the WRONG line: self-reference
+      // exclusion then never excluded the line the namespace identifier
+      // is actually written on, so its own import mention read as a
+      // genuine extra reference and silently masked an otherwise-unused
+      // export as production. Locate its real offset by re-matching just
+      // the "* as NAME" tail WITHIN the already-validated
+      // `combinedNamespaceMatch[0]` (never re-searching the wider,
+      // unbounded window, so this can never latch onto an unrelated
+      // later "* as" elsewhere) and using the same suffix-length trick
+      // already used for `scanBareConstDeclarators`'s own call site
+      // above (the capture group is the tail of its own submatch, so the
+      // prefix length is `submatch[0].length - submatch[1].length`).
+      const namespaceTailMatch = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(
+        combinedNamespaceMatch[0],
+      );
+      const namespaceIdentOffset = namespaceTailMatch
+        ? namespaceTailMatch.index +
+          (namespaceTailMatch[0].length - namespaceTailMatch[1].length)
+        : 0;
+      const namespaceRealLine = namespaceTailMatch
+        ? lineNumberAt(strippedText, start + namespaceIdentOffset)
+        : lineIndex + 1;
+      for (const [localName, realLine] of [
+        [combinedNamespaceMatch[1], lineIndex + 1],
+        [combinedNamespaceMatch[2], namespaceRealLine],
+      ] as const) {
+        addDeclarationLine(localName, realLine);
         if (!declarationSuppressionByLocalName.has(localName)) {
           const ignoreMatch = checkOwnOrPrecedingLineSuppression(
             originalText,
             lineStarts,
-            lineIndex + 1,
+            realLine,
           );
           declarationSuppressionByLocalName.set(localName, {
             suppressed: !!ignoreMatch,
@@ -1093,18 +1152,36 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
           });
         }
       }
+      // #3498 (round 10): the match may have consumed more than one
+      // physical line (the wrapped form above) -- advance past every
+      // line it actually spans, not just the one `lineIndex` currently
+      // points at, mirroring the brace-closing advance used elsewhere in
+      // this loop. Equivalent to the previous plain `lineIndex += 1;`
+      // when the match stayed on one line (the offset below then still
+      // resolves to the SAME line, since `lineNumberAt` counts only the
+      // newlines strictly before it).
+      lineIndex =
+        lineNumberAt(strippedText, start + combinedNamespaceMatch[0].length) -
+        1;
       lineIndex += 1;
       continue;
     }
 
-    // #3498 (Copilot/Codex C1 finding, round 7): a combined default +
-    // named import (`import def, { a, b } from '...';`) -- neither the
-    // plain default pattern (requires `from` immediately after the
-    // identifier) nor the plain brace pattern (requires `{` immediately
-    // after `import`) matches this form, so it was silently unhandled
-    // entirely. Track the default binding, then reuse the shared named-
-    // list processing (`processNamedImportBraceList`) for the rest.
-    const combinedBraceMatch = IMPORT_DEFAULT_PLUS_BRACE_PATTERN.exec(line);
+    // #3498 (Copilot/Codex C1 finding, round 7; round 10: matched against
+    // `combinedImportWindow`, see above, so a comma-then-newline wrap
+    // before `{` is recognized too): a combined default + named import
+    // (`import def, { a, b } from '...';`) -- neither the plain default
+    // pattern (requires `from` immediately after the identifier) nor the
+    // plain brace pattern (requires `{` immediately after `import`)
+    // matches this form, so it was silently unhandled entirely. Track
+    // the default binding, then reuse the shared named-list processing
+    // (`processNamedImportBraceList`) for the rest -- that helper already
+    // locates the `{` via `strippedText.indexOf` and resolves its
+    // matching `}` across however many lines it spans, so no further
+    // multi-line handling is needed here once the pattern itself
+    // matches.
+    const combinedBraceMatch =
+      IMPORT_DEFAULT_PLUS_BRACE_PATTERN.exec(combinedImportWindow);
     if (combinedBraceMatch) {
       const combinedDefaultLocalName = combinedBraceMatch[1];
       addDeclarationLine(combinedDefaultLocalName, lineIndex + 1);

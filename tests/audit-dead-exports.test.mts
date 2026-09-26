@@ -1221,6 +1221,74 @@ test('a no-`from` export list re-exporting a binding from a COMBINED default + n
   }
 });
 
+test('a COMBINED default + named import wrapped onto a second line right after the comma is still recognized, so a no-`from` re-export resolving to it is classified unused, not masked as production (Codex C1 round-10 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import def,\n  { helper } from './origin.mts';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n' +
+        'void def;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'a comma-then-newline wrap before the named brace list must not ' +
+        'leave the whole import statement unrecognized -- before this ' +
+        'fix it fell through both the plain-default and plain-brace ' +
+        "patterns (neither tested more than the statement's own first " +
+        "physical line), so the import line's own mention of `helper` " +
+        'was never excluded from self-reference detection and silently ' +
+        'masked an otherwise-unused export as production',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a COMBINED default + namespace import wrapped onto a second line right after the comma is still recognized (Codex C1 round-10 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import def,\n  * as origin from './origin.mts';\n" +
+        '\n' +
+        'export { origin as PublicOrigin };\n' +
+        'void def;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicOrigin').category,
+      'unused',
+      'a comma-then-newline wrap before `* as` must not leave the ' +
+        'combined default+namespace import statement unrecognized',
+    );
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'the namespace part of the wrapped combined import must still ' +
+        "credit origin.mts's own helper as a real cross-file importer, " +
+        "the same as the non-wrapped round-7 test's expectation",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a suppression comment on the line PRECEDING a named import is honored for a no-`from` re-export resolving to that import (Codex C1 round-8 finding)', () => {
   const root = makeFixtureRoot();
   try {
