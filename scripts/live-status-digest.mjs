@@ -1699,17 +1699,26 @@ Environment:
 `);
 }
 function fail(message, error) {
-  console.error(`error: ${message}`);
   // #3346: keep exit 2 for every fail() path. process.exit never returns to
   // runHelperCli, so classify and write the envelope here -- copies
   // audit-pr-cleanup.mts's established fail(message, error?) pattern. A
   // bare message is a usage/argument error; a passed error keeps its real
-  // kind (a gh failure stays transport, not usage). Uses the exported
-  // writeStderrSync (a raw synchronous fd write), not process.stderr.write:
-  // process.exit() right below can truncate a still-pending asynchronous
-  // stdio write (#3346 review finding), the same hazard runHelperCli's own
-  // crash path already guards against.
+  // kind (a gh failure stays transport, not usage).
+  //
+  // #3346 review finding: console.error queues its write on
+  // process.stderr's own internal stream, while writeStderrSync bypasses
+  // that queue with a raw synchronous fd write. Issuing both when the
+  // envelope is enabled -- the human-readable "error: ..." line via
+  // console.error, then the envelope via writeStderrSync -- let the
+  // envelope's synchronous write physically reach the underlying fd
+  // before the still-queued console.error write finished draining under
+  // pipe backpressure, inverting the required "envelope is the last
+  // line" order. Route both lines through the same synchronous writer
+  // when the envelope is enabled, so call order is physical order; keep
+  // plain console.error on the disabled path, matching the "byte-
+  // identical when the envelope is unset" contract.
   if (isHelperErrorEnvelopeEnabled()) {
+    writeStderrSync(`error: ${message}\n`);
     const classified =
       error === undefined
         ? { kind: 'usage', message, httpStatus: null }
@@ -1717,6 +1726,8 @@ function fail(message, error) {
     writeStderrSync(
       `${JSON.stringify(buildHelperErrorEnvelope('live-status-digest', 2, classified))}\n`,
     );
+  } else {
+    console.error(`error: ${message}`);
   }
   process.exit(2);
 }
