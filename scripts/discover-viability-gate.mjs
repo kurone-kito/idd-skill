@@ -234,7 +234,7 @@ const REQUIREMENT_ASSERTION_PATTERN =
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
   /\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed|created)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
 const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
-  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))/i;
+  /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b)/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;

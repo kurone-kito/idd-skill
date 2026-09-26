@@ -800,6 +800,20 @@ test('does not let an unpunctuated maintainer prerequisite pass (#3528)', () => 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a relative-clause credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 99,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential, which must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let only-after in a later unrelated sentence block descriptive text (#3528)', () => {
   const result = evaluateA4Viability({
     number: 86,
