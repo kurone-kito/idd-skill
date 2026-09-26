@@ -356,7 +356,9 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
   /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
-  /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|access|credentials?|login|permission|sign-?in)\b/i;
+  /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
+const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b/i;
 const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
   /(?<![\w-])(?:non|not)[ \t-]+(?:negative|regression|expected)(?=[ \t-]|$)/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
@@ -2213,9 +2215,16 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   // Match against a lowercase copy so the sentence-boundary exceptions can
   // distinguish lowercase abbreviations (such as `prod.`) from a sentence
   // starting with an uppercase word while keeping offsets stable.
-  const lowerCaseScanBody = scanBody.replace(/[A-Z]/g, (character) =>
-    character.toLowerCase(),
-  );
+  const lowerCaseScanBody = scanBody
+    .replace(
+      /(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g,
+      (_whole, word: string) => `${word}!`,
+    )
+    .replace(
+      /(?<![.\w])([A-Za-z]\.[A-Za-z])\.(?=[ \t]+[A-Z])/g,
+      (_whole, word: string) => `${word}!`,
+    )
+    .replace(/[A-Z]/g, (character) => character.toLowerCase());
   const externalAccessMatches = [
     ...lowerCaseScanBody.matchAll(
       new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'g'),
@@ -2368,7 +2377,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
         (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
-        /\b(?:and|but|however|although|while|whereas)\b/i.test(cueToMatch)
+        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(cueToMatch)
       ) {
         continue;
       }
@@ -2388,8 +2397,9 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       (firstMatch?.index ?? 0) + (firstMatch?.[0].length ?? 0),
       secondMatch?.index ?? matchText.length,
     );
-    return !/\bfail(?:s|ed|ure)?\b[\s\S]{0,40}\b(?:because|when|if|that)\b/i.test(
-      betweenRequirements,
+    return (
+      /[.!?;]/.test(betweenRequirements) ||
+      REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(betweenRequirements)
     );
   };
   const contextSpans = externalAccessMatches.map((match) => {

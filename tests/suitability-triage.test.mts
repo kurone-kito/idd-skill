@@ -6185,6 +6185,32 @@ Negative fixture: invalid input should fail, and this implementation needs Slack
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects an alternative conjunction before a live clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, or this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit accepts repeated requirement verbs within one fixture subject', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires setup and needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit exempts each explicitly cued fixture independently', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6332,6 +6358,21 @@ test('repository fit measures tab-indented loose-list continuations by columns',
 - Negative fixture: the production access requirement below is descriptive.
 
 	This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit keeps loose-list fixture vocabulary aligned with access matching', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: this exercises Datadog behavior.
+
+  This task requires Datadog access.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
@@ -6845,6 +6886,18 @@ This task requires ${abbreviation} production dashboard credentials.`,
     } as Context);
     assert.equal(result.pass, false, abbreviation);
   }
+});
+
+test('repository fit treats an uppercase sentence after an abbreviation as a boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+This change requires updating the docs. Production dashboard access is unchanged.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
 });
 
 test('duplicate check detects a URL-form duplicate declaration', () => {
