@@ -538,19 +538,23 @@ Before any mutating action in F3, apply the
    reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
    out — never commit or push them. Copy other work to a different
    ref or path.
-   Before each `git worktree remove`, `cd` to the surviving primary
-   worktree; keep that cwd for every removal and remaining F4 work
-   (branch/remote deletion, digest, revalidation, unclaim, and
-   `gh`/helper calls). Before each removal, revalidate the claim and
-   worktree lock (`idd-claim.instructions.md`); stop if either is not
-   ours. A shell in the removed worktree fails a `node` call with
-   `ENOENT` on `uv_cwd`, or — even after `git worktree remove`/`git
-   branch -d` succeeded — `gh`/`git` with "Unable to read current
-   working directory", skipping `unclaimed-by`; rerun from the
-   primary worktree. If it fails with `fatal: working trees
-   containing submodules cannot be moved or removed`, retry
-   `git worktree remove --force <path>` after preserving anything
-   worth keeping. Then:
+   Before each `git worktree remove`, `cd` to the primary worktree
+   and stay there. While the issue worktree exists, revalidate:
+
+   ```sh
+   node scripts/resume-claim-routing.mjs --issue <issue-number> \
+     --claim-id <claim-id> --nonce <nonce> \
+     --worktree <issue-worktree-path>
+   ```
+
+   `keep` / `already_owned` and a matching lock means ours. Omitting
+   `--worktree` and getting `owner_evidence_required` /
+   `claim-id-match-without-independent-owner-evidence` is incomplete,
+   not claim loss: re-run with the flag. A remaining `stop` means do
+   not remove the worktree. Repeat that check immediately before
+   every removal, including `git worktree remove --force <path>`
+   after preserving leftovers. If this shell's cwd was removed,
+   rerun from the primary. Then:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (the baseline permission profile
