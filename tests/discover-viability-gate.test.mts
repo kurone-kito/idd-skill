@@ -2114,6 +2114,34 @@ test('detects waiting-on approval blockers independently (#3522)', () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let verification prose hide a later customer blocker (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 185,
+    title: 'document credential storage',
+    body:
+      'Verification: add unit tests. Implementation requires customer ' +
+      'approval before work begins.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let local token features hide provider dependencies (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 186,
+    title: 'document credential storage',
+    body:
+      'Store tokens from the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,

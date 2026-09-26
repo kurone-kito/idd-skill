@@ -306,6 +306,10 @@ const CREDENTIAL_LOCAL_OPERATION_EXTERNAL_ACTOR_PATTERN = new RegExp(
 );
 const CREDENTIAL_LOCAL_FEATURE_PATTERN =
   /\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:keys?|tokens?)\b|\b(?:keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:support|handling|management|rotation|redaction|validation|parsing)\b/i;
+const CREDENTIAL_LOCAL_FEATURE_EXTERNAL_ACTOR_PATTERN = new RegExp(
+  String.raw`\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:from|by)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b`,
+  'i',
+);
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
   /\bcredential[- ]prompt(?:ing)?\b/i;
 const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
@@ -705,8 +709,9 @@ function isExplicitQuotedExampleFraming(textBeforeQuote) {
 }
 function isDescribedExternalCoordinationExample(corpus, matchIndex) {
   const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
+  const sameClause = before.split(CUE_HARD_BREAK_PATTERN).at(-1) ?? before;
   return /\b(?:unit\s+tests?|test(?:ing)?\s+coverage|fixture|assert(?:s|ed|ion)?|render(?:s|ed|ing)?)\b/i.test(
-    before,
+    sameClause,
   );
 }
 function findParagraphSpan(corpus, offset) {
@@ -1031,6 +1036,13 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   }
   if (CREDENTIAL_LOCAL_OPERATION_PATTERN.test(requirementContextAfter)) {
     return true;
+  }
+  if (
+    CREDENTIAL_LOCAL_FEATURE_EXTERNAL_ACTOR_PATTERN.test(
+      `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
+    )
+  ) {
+    return false;
   }
   if (
     CREDENTIAL_LOCAL_FEATURE_PATTERN.test(
