@@ -856,6 +856,48 @@ test('does not let a passive follow-on credential prerequisite pass (#3528)', ()
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a has-to follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 105,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It has to be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a plain actor credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 106,
+    title: 'document protected material',
+    body:
+      'This issue documents a credential pattern. The maintainer must provide ' +
+      'it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a vendor credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 107,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It will be provided by a vendor ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let only-after in a later unrelated sentence block descriptive text (#3528)', () => {
   const result = evaluateA4Viability({
     number: 86,
@@ -1008,6 +1050,20 @@ test('does not treat necessary generic context as a credential prerequisite (#35
 
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a necessary credential prerequisite hide behind generic context (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 108,
+    title: 'document protected material',
+    body:
+      'Document a credential pattern that is necessary before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
 test('keeps provided contextual external-system text descriptive (#3528)', () => {
