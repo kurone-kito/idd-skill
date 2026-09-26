@@ -510,6 +510,21 @@ export async function runApplyWithRetry(
     // on this pass's minimizeComment calls a moment to settle, instead of
     // immediately re-querying the same stale state.
     await backoff(attempt);
+    // Re-check immediately after the backoff and before starting the
+    // rescan (Copilot/Codex review, PR #3499): the check above only
+    // covers the budget at the moment the pass itself finished. On a
+    // large PR the confirming rescan is exactly the expensive full
+    // report rebuild this budget exists to bound, so if the budget was
+    // instead spent while `backoff` was sleeping, starting `rescan()`
+    // anyway would violate "no confirming rescan starts after the
+    // budget is spent" and could still overrun the workflow's own
+    // step timeout. `report.candidates` needs the same pruning as the
+    // check above, for the same reason.
+    if (budget.exhausted()) {
+      pruneResolvedFromCandidates(report);
+      report.timeBudgetExhausted = true;
+      return { report, attempts: attempt, boundExhausted: false };
+    }
     let freshReport;
     try {
       freshReport = await rescan();
@@ -1395,12 +1410,11 @@ async function revalidateCandidate(
   // rescan re-derives it fully. Moving it to `skipped` here would also
   // wrongly exclude it from `report.candidates` on the no-rescan
   // time-budget-exhausted path (`runApplyWithRetry`), where it must still
-  // be listed as remaining work.
-  if (
-    candidate.updatedAt &&
-    fresh.updatedAt &&
-    fresh.updatedAt !== candidate.updatedAt
-  ) {
+  // be listed as remaining work. Both fields are nullable, so compare the
+  // values directly rather than gating on both being truthy first -- a
+  // transition to or from `null` (Copilot review, PR #3499) is still a
+  // genuine change and must defer the same as any other mismatch.
+  if (fresh.updatedAt !== candidate.updatedAt) {
     return null;
   }
   return { ...candidate, ...freshFields };

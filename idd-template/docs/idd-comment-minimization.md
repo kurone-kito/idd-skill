@@ -368,8 +368,8 @@ never suppress this run's own non-success evidence), and the agent F4
 step skips its own post under that same both-converged rule —
 including when the workflow itself posted the prior success record. A
 trusted comment recording any other status (`failed`, `incomplete`,
-`permission-blocked`, `rescan-failed`, `recheck-failed`,
-`helper-error`, `timeout`) does not
+`permission-blocked`, `rescan-failed`, `time-budget-exhausted`,
+`recheck-failed`, `helper-error`, `timeout`) does not
 suppress either side,
 so a `workflow_dispatch` rerun after a `rescan-failed` post still
 posts fresh evidence (preventive; no observed incident yet — issue

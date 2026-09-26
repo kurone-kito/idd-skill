@@ -500,6 +500,71 @@ test('applyCandidatePass: a candidate whose updatedAt changed since the snapshot
   assert.equal(report.candidates.length, 1);
 });
 
+// Copilot review, PR #3499: both `updatedAt` fields are nullable, so a
+// transition to or from `null` is still a genuine change and must defer
+// the same as any other mismatch -- a naive `a && b && a !== b` guard
+// would wrongly let this case fall through to minimization instead.
+test('applyCandidatePass: a candidate whose updatedAt transitioned from null to a timestamp is deferred, not minimized (#3321, Copilot review PR #3499)', async () => {
+  const row = { ...createRow('c1'), updatedAt: null };
+  const report = createAuditReport({ candidates: [row] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ updatedAt: '2026-01-02T00:00:00Z' }),
+      minimize: () => ({ isMinimized: true, minimizedReason: null }),
+    },
+  );
+
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.skipped.length, 0);
+  assert.equal(report.candidates.length, 1);
+});
+
+test('applyCandidatePass: a candidate whose updatedAt transitioned from a timestamp to null is deferred, not minimized (#3321, Copilot review PR #3499)', async () => {
+  const row = { ...createRow('c1'), updatedAt: '2026-01-01T00:00:00Z' };
+  const report = createAuditReport({ candidates: [row] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ updatedAt: null }),
+      minimize: () => ({ isMinimized: true, minimizedReason: null }),
+    },
+  );
+
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.skipped.length, 0);
+  assert.equal(report.candidates.length, 1);
+});
+
+test('applyCandidatePass: a candidate whose updatedAt stays null on both sides is minimized as usual (#3321)', async () => {
+  const row = { ...createRow('c1'), updatedAt: null };
+  const report = createAuditReport({ candidates: [row] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ updatedAt: null }),
+      minimize: () => ({ isMinimized: true, minimizedReason: null }),
+    },
+  );
+
+  assert.equal(report.applied.length, 1);
+});
+
 test('applyCandidatePass: a subject that no longer resolves is skipped defensively (#3321)', async () => {
   const report = createAuditReport({ candidates: [createRow('c1')] });
 
@@ -675,6 +740,66 @@ test('runApplyWithRetry + applyCandidatePass: an exhausted time budget stops the
 
   computeReportSummary(result.report);
   assert.equal(result.report.status, 'time-budget-exhausted');
+});
+
+// Copilot/Codex review, PR #3499: a pass that finishes every candidate
+// within budget must still re-check the budget after `backoff` and before
+// `rescan()` -- the first post-pass check alone cannot see a budget that
+// is spent only while `backoff` is sleeping, which would otherwise let a
+// confirming rescan (the same expensive full rebuild the budget exists to
+// bound) start anyway.
+test('runApplyWithRetry: a budget spent during backoff, after the pass itself finished within budget, still skips the confirming rescan (#3321, Copilot/Codex review PR #3499)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let exhaustedCalls = 0;
+  // Calls 1-2: per-candidate checks inside applyCandidatePass (both within
+  // budget). Call 3: runApplyWithRetry's post-pass check (still within
+  // budget -- the pass itself finished in time). Call 4: the new
+  // post-backoff, pre-rescan check -- budget spent while backoff "slept".
+  const budget = {
+    exhausted: () => {
+      exhaustedCalls += 1;
+      return exhaustedCalls > 3;
+    },
+  };
+  let rescanCalls = 0;
+  let backoffCalls = 0;
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: () => ({ isMinimized: true, minimizedReason: null }),
+          budget,
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    async () => {
+      backoffCalls += 1;
+    },
+    budget,
+  );
+
+  assert.equal(backoffCalls, 1);
+  assert.equal(rescanCalls, 0);
+  assert.equal(result.report.applied.length, 2);
+  assert.equal(result.report.timeBudgetExhausted, true);
+  assert.equal(result.report.candidates.length, 0);
 });
 
 test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
