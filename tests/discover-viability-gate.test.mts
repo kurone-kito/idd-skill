@@ -1966,6 +1966,72 @@ test('does not let cache-key acquisition from a maintainer pass (#3522)', () => 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('keeps ordinary key bindings autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 174,
+    title: 'document key bindings',
+    body: 'Add support for key bindings. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps token pagination autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 175,
+    title: 'document token pagination',
+    body: 'Add support for token-based pagination. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps local authentication-token redaction autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 176,
+    title: 'redact authentication tokens',
+    body:
+      'The authentication token must be redacted before logging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('detects customer approval as an implementation prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 177,
+    title: 'document credential storage',
+    body:
+      'Implementation requires customer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects follow-on cannot-without credential prerequisites (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 178,
+    title: 'document credential storage',
+    body:
+      'This issue concerns a credential. We cannot proceed without it. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,
