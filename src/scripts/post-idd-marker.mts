@@ -1895,33 +1895,29 @@ function main(): HelperCliResult {
         livePassingCompletedAt = latestPassingCompletedAt(ciSummary);
         requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(ciSummary);
       } catch (error) {
-        process.stderr.write(
-          `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${(error as Error).message}\n`,
-        );
-        process.exit(1);
+        const message = `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${(error as Error).message}`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, ...classifyHelperError(error), message };
       }
       // A second live read can observe a newer HEAD than the activity
       // snapshot already copied into the watermark fields. A passing
       // result for that newer HEAD must not authorize a marker whose
       // head-sha and ci-completed-at still belong to the snapshot.
       if (ciHead.toLowerCase() !== liveHeadSha.toLowerCase()) {
-        process.stderr.write(
-          `refusing to post watermark: PR ${args.fromPr}'s required-check read is for HEAD ${ciHead || '(empty)'}, which does not match the activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.\n`,
-        );
-        process.exit(1);
+        const message = `refusing to post watermark: PR ${args.fromPr}'s required-check read is for HEAD ${ciHead || '(empty)'}, which does not match the activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'gate', message };
       }
       if (!requiredChecksPassing) {
-        process.stderr.write(
-          `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.\n`,
-        );
-        process.exit(1);
+        const message = `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'gate', message };
       }
       const snapshotPassingCompletedAt = args.fields['ci-completed-at'];
       if (livePassingCompletedAt !== snapshotPassingCompletedAt) {
-        process.stderr.write(
-          `refusing to post watermark: PR ${args.fromPr}'s live passing completion ${livePassingCompletedAt} does not match the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. Re-run --from-pr.\n`,
-        );
-        process.exit(1);
+        const message = `refusing to post watermark: PR ${args.fromPr}'s live passing completion ${livePassingCompletedAt} does not match the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. Re-run --from-pr.`;
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'gate', message };
       }
     }
   }
