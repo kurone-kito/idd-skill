@@ -5204,6 +5204,16 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   keeps it (never `-D`) and tells the operator they may delete it by
   hand; unequal tips mean genuinely unmerged
   local work, so F4 holds instead of discarding it.
+- **Submodule removal** (step 5, issue `#2016`): plain `git worktree
+  remove <path>` fails with `fatal: working trees containing
+  submodules cannot be moved or removed`. `git worktree remove
+  --force` is warranted only for that fatal, and only after leftovers
+  are preserved. Revalidate with `--worktree` immediately before the
+  retry (`idd-merge.instructions.md`).
+- **Removed cwd** (step 5, issue `#3189`): a later `node` call fails
+  with `ENOENT` on `uv_cwd`, or `gh` / `git` fails with `Unable to
+  read current working directory`, and `unclaimed-by` is skipped
+  unless the session reruns from the primary checkout.
 
 The two step 4 holds reuse the `primary-worktree-dirty` resume rule
 (#3192): once the hold clears, re-run F4 from step 4 through step 7.

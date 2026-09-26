@@ -547,18 +547,20 @@ Before any mutating action in F3, apply the
      --worktree <issue-worktree-path>
    ```
 
-   `keep` / `already_owned` and a matching lock means ours. Omitting
-   `--worktree` and getting `owner_evidence_required` /
-   `claim-id-match-without-independent-owner-evidence` is incomplete,
-   not claim loss: re-run with the flag. A remaining `stop` means do
-   not remove the worktree. Repeat that check immediately before
-   every removal, including `git worktree remove --force <path>`
-   after preserving leftovers. If this shell's cwd was removed,
-   rerun from the primary. Then:
+   `keep` / `already_owned` plus a matching lock means ours. Omitting
+   `--worktree` (`owner_evidence_required` /
+   `claim-id-match-without-independent-owner-evidence`) is incomplete:
+   re-run with the flag. A remaining `stop` means do
+   not remove the worktree. `git worktree remove --force` runs only
+   after failure `working trees containing submodules cannot be moved
+   or removed`, and only after leftovers are preserved. Revalidate
+   `--worktree` immediately before that retry.
+   [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
+   Then:
 
    - `git worktree remove <path>`.
-   - `git branch -d <branch-name>` (the baseline permission profile
-     denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
+   - `git branch -d <branch-name>` (`-D` is denied; see
+     `docs/permissions.md`). Local `{development-branch}`
      was fast-forwarded in step 4, so this shouldn't fail with
      `error: the branch '<branch-name>' is not fully merged`. If it
      still does, compare `git rev-parse <branch-name>` with `gh pr
