@@ -722,7 +722,9 @@ merge does not re-block the merge; it is an explicit record only.
 
 ### Cleanup evidence comment
 
-Post this comment to the PR after a successful or partial apply. The
+Post this comment to the PR after a successful or partial apply, and
+when the workflow's cleanup step ends with no apply report
+(`helper-error` or `timeout`). The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
 workflow run — can detect that evidence was already posted. The
@@ -850,9 +852,11 @@ pass may re-run the re-check to confirm convergence.
 
 A `recheck-failed` record does not suppress a later run's own success
 post, the same non-suppression behavior `failed`/`incomplete`/
-`rescan-failed`/`helper-error`/`timeout` already have.
-`helper-error` and `timeout` are workflow evidence statuses, not
-apply outcomes.
+`rescan-failed`/`helper-error`/`timeout` already have. The
+`Apply status (actual)` row above lists only the agent recheck
+apply enum (`applied` / `clean` / `failed` / `incomplete` /
+`rescan-failed`). `helper-error` and `timeout` are workflow
+evidence statuses, not apply outcomes, so that row excludes them.
 
 ### Cleanup-permission-blocked comment
 
