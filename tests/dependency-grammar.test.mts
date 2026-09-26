@@ -361,3 +361,40 @@ test('matchDependencyKeywordLine still returns a defined result with numbers whe
     { numbers: [12], unresolvable: [], remaining: '', invalidTokens: ['#0'] },
   );
 });
+
+test('consumeDependencyContinuationRefLines reports an invalid token on an invalid-only continuation line instead of silently discarding it (final review round, Copilot: "Blocked by #12,\\n#0")', () => {
+  const lines = ['Blocked by #12,', '#0'];
+  assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
+    numbers: [],
+    unresolvable: [],
+    invalidTokens: ['#0'],
+  });
+});
+
+test('consumeDependencyContinuationRefLines still reports nothing for genuinely unrelated prose (no token-shaped text at all)', () => {
+  const lines = ['Blocked by #12,', 'unrelated text'];
+  assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
+    numbers: [],
+    unresolvable: [],
+    invalidTokens: [],
+  });
+});
+
+test("matchDependencyKeywordLine surfaces an invalid-only continuation line's token via invalidTokens", () => {
+  const result = matchDependencyKeywordLine(
+    ['Blocked by #12,', '#0'],
+    0,
+    'Blocked by',
+  );
+  assert.deepEqual(result, {
+    numbers: [12],
+    unresolvable: [],
+    // The trailing comma on the keyword line itself is same-line
+    // unconsumed text by `consumedTokenEnd`'s own definition (measured
+    // before the trailing separator is stripped) -- unrelated to the
+    // continuation-line fix this test targets, which is that `#0`'s
+    // own invalidTokens entry below is no longer silently dropped.
+    remaining: ',',
+    invalidTokens: ['#0'],
+  });
+});
