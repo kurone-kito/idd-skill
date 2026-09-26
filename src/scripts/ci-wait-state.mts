@@ -22,6 +22,8 @@
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
 
+import { resolveAdvisoryConvergenceIdentitySignals } from './advisory-convergence-identity.mts';
+import { DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -212,6 +214,22 @@ export interface CiWaitStateSummary {
   headRefOid: string;
   checks: CiWaitCheckEntry[];
   requiredChecks: CiWaitRequiredChecksRollup;
+  /**
+   * True when a live `idd-advisory-convergence` instance could not be
+   * tied to one workflow file and triggering event (#2919). The
+   * required-check rollup above does not itself downgrade for this;
+   * {@link ciWaitSummaryIsPreMergeCiPassing} does, matching pre-merge
+   * readiness. Stays false when the pure builder has not resolved
+   * identity (no provider call).
+   */
+  advisoryConvergenceIdentityUnresolved: boolean;
+  /**
+   * True when identity resolved and the selected pass-equivalent
+   * `idd-advisory-convergence` representative is not a
+   * `pull_request_target` run (#3256). Same consumer as
+   * {@link CiWaitStateSummary.advisoryConvergenceIdentityUnresolved}.
+   */
+  advisoryConvergenceNonTargetEventOnly: boolean;
 }
 
 /** Parsed CLI arguments. */
@@ -444,8 +462,37 @@ export function collectCiWaitState(
       protectionReadsUnreadable,
     },
   );
+  // #3465: the watermark predicate must see the same advisory-convergence
+  // downgrades pre-merge readiness applies. The rollup status itself stays
+  // the D-phase wait signal; only the returned flags and resolved
+  // workflow paths change.
+  const advisoryIdentity = resolveAdvisoryConvergenceIdentitySignals(
+    summary.checks.map((check) => ({
+      name: check.checkName,
+      type: check.type,
+      state: check.state,
+      workflowName: check.workflowName,
+      completedAt: check.completedAt || null,
+      detailsUrl: check.url,
+    })),
+    () =>
+      port.listCheckRunWorkflowPaths(
+        owner,
+        repo,
+        pr.headSha,
+        DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      ),
+  );
 
-  return summary;
+  return {
+    ...summary,
+    checks: summary.checks.map((check, index) => {
+      const path = advisoryIdentity.workflowPathByIndex.get(index);
+      return path === undefined ? check : { ...check, workflowPath: path };
+    }),
+    advisoryConvergenceIdentityUnresolved: advisoryIdentity.identityUnresolved,
+    advisoryConvergenceNonTargetEventOnly: advisoryIdentity.nonTargetEventOnly,
+  };
 }
 
 /**
@@ -523,6 +570,8 @@ export function buildCiWaitStateSummary(
     headRefOid: String(input.headRefOid ?? ''),
     checks,
     requiredChecks,
+    advisoryConvergenceIdentityUnresolved: false,
+    advisoryConvergenceNonTargetEventOnly: false,
   };
 }
 
@@ -854,7 +903,11 @@ function buildRequiredChecksRollup(
  * not read external-check waivers, so a required check that is failing
  * in the rollup stays non-passing here even when pre-merge readiness
  * would treat a valid waiver as covered. This command does not
- * re-validate waivers.
+ * re-validate waivers. It does apply the two advisory-convergence
+ * downgrades readiness applies after classification: unresolved producer
+ * identity, and a pass whose selected representative is not
+ * `pull_request_target`. Those flags are set by `collectCiWaitState`;
+ * a summary from the pure builder leaves both false.
  */
 export function ciWaitSummaryIsPreMergeCiPassing(
   summary: CiWaitStateSummary,
@@ -867,6 +920,12 @@ export function ciWaitSummaryIsPreMergeCiPassing(
   // Require both: the rollup's own success (missing names, source-pinned,
   // and unreadable stay on that status) and a producer-aware success.
   const requiredNames = new Set(rollup.names);
+  const advisoryDowngrade =
+    summary.advisoryConvergenceIdentityUnresolved ||
+    summary.advisoryConvergenceNonTargetEventOnly;
+  const advisoryDowngradeNames = advisoryDowngrade
+    ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
+    : new Set<string>();
   const producerStatus = classifyCiChecks(
     summary.checks
       .filter((check) => requiredNames.has(check.checkName))
@@ -889,11 +948,16 @@ export function ciWaitSummaryIsPreMergeCiPassing(
       workflowName: check.workflowName,
       workflowPath: check.workflowPath ?? '',
     })),
+    advisoryDowngradeNames,
   );
   const requiredChecksPassing =
     rollup.names.length > 0 &&
     rollup.status === 'success' &&
-    producerStatus === 'success';
+    producerStatus === 'success' &&
+    !(
+      advisoryDowngrade &&
+      requiredNames.has(DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR)
+    );
   return isPreMergeCiAllPassing({
     protectionReadsUnreadable:
       rollup.protectionReadsUnreadable || rollup.status === 'unreadable',

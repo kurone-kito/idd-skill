@@ -1371,3 +1371,128 @@ test('#3465: a raw required-check failure refuses without consulting waivers', (
   );
   assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
 });
+
+test('#3465: a green advisory-convergence rollup still refuses when readiness would downgrade it', () => {
+  const green = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          conclusion: 'SUCCESS',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(green), true);
+
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...green,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    false,
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...green,
+      advisoryConvergenceIdentityUnresolved: true,
+    }),
+    false,
+  );
+
+  const lintOnly = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...lintOnly,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    true,
+  );
+
+  const presentRun = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          conclusion: 'SUCCESS',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...presentRun,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    false,
+  );
+});
+
+test('#3465: collectCiWaitState records a non-target advisory pass and a qualifying target pass', () => {
+  const headSha = 'b'.repeat(40);
+  const detailsUrl = 'https://github.com/o/r/actions/runs/99/job/1';
+  const rollup = [
+    {
+      __typename: 'CheckRun',
+      name: 'idd-advisory-convergence',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      workflowName: 'IDD advisory-convergence gate',
+      detailsUrl,
+      startedAt: '2026-07-09T00:00:00Z',
+      completedAt: '2026-07-09T00:05:00Z',
+    },
+  ];
+  const governance = {
+    branchRules: { 'o/r/main': [] },
+    branchProtection: {
+      'o/r/main': {
+        required_status_checks: { contexts: ['idd-advisory-convergence'] },
+      },
+    },
+  };
+  const collect = (event: string) =>
+    collectCiWaitState(
+      ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+      () =>
+        createFakeProviderAdapter({
+          changeRequestBranchAndChecks: {
+            42: { headSha, baseRefName: 'main', statusCheckRollup: rollup },
+          },
+          ...governance,
+          checkRunWorkflowPaths: {
+            [`o/r/${headSha}/idd-advisory-convergence`]: [
+              {
+                detailsUrl,
+                workflowPath: '.github/workflows/idd-advisory-convergence.yml',
+                event,
+              },
+            ],
+          },
+        }),
+      () => ({}),
+    );
+
+  const nonTarget = collect('pull_request');
+  assert.equal(nonTarget.advisoryConvergenceNonTargetEventOnly, true);
+  assert.equal(nonTarget.advisoryConvergenceIdentityUnresolved, false);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(nonTarget), false);
+
+  const qualifying = collect('pull_request_target');
+  assert.equal(qualifying.advisoryConvergenceNonTargetEventOnly, false);
+  assert.equal(
+    qualifying.checks[0]?.workflowPath,
+    '.github/workflows/idd-advisory-convergence.yml',
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(qualifying), true);
+});

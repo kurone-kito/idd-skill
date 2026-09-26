@@ -9,6 +9,7 @@
 # docs/typescript-sources.md.
 scripts/actions-usage-report.mjs linguist-generated=true
 scripts/advisory-comment-debounce.mjs linguist-generated=true
+scripts/advisory-convergence-identity.mjs linguist-generated=true
 scripts/advisory-convergence.mjs linguist-generated=true
 scripts/advisory-wait-policy.mjs linguist-generated=true
 scripts/advisory-wait-state.mjs linguist-generated=true
