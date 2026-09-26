@@ -232,9 +232,9 @@ const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
   /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
-  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
+  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed|created)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
 const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
-  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))/i;
+  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
@@ -249,9 +249,9 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
-  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b/i;
+  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:]{0,80}\b(?:before|until)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
-  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
+  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key

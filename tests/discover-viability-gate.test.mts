@@ -590,6 +590,20 @@ test('still fails autonomous completion when a customer supplies the credential 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion for has-to credential handling (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 96,
+    title: 'wire external credential handling',
+    body:
+      'Credential handling has to be performed by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('still fails autonomous completion when credential handling is itself required (#3522)', () => {
   const result = evaluateA4Viability({
     number: 70,
@@ -751,6 +765,34 @@ test('does not let a maintainer-subject follow-on requirement pass (#3528)', () 
     body:
       'This issue concerns a credential. The maintainer must create it before ' +
       'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let credential creation by a maintainer pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 97,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It must be created by the maintainer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an unpunctuated maintainer prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 98,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential and the maintainer must create it ' +
+      'before implementation. Verification: add unit tests.',
     state: 'OPEN',
   });
 
