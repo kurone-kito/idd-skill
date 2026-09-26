@@ -1630,14 +1630,14 @@ export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
 // #3520: Codex posts a second, terminal top-level comment when a review finds
 // no major issues. It is separate from the sticky review-status summary above
 // and must be matched against the current HEAD before it can be treated as a
-// completed, no-find result. Keep the body shape narrow: the observed lead,
+// completed, no-find result. Keep the body shape narrow: the observed leads,
 // reviewed-commit line, and the standard About Codex details block are the
 // complete comment. A broader "no issues" search could auto-accept ordinary
 // prose or a result carrying findings.
 const CODEX_NO_FIND_RESULT_RE =
-  /^Codex Review: Didn't find any major issues\. You're on a roll\.\s*\n+\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,64})`\s*\n+\s*([\s\S]*)$/i;
+  /^Codex Review: Didn't find any major issues\. (?:You're on a roll\.|What shall we delve into next\?|:\+1:)\s*\n+\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,64})`\s*\n+\s*([\s\S]*)$/i;
 const CODEX_NO_FIND_DETAILS_RE =
-  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>\s*<br\/>\s*\[Your team has set up Codex to review pull requests in this repo\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/general\)\s*Reviews are triggered when you\s*- Open a pull request for review\s*- Mark a draft as ready\s*- Comment "@codex review" or "@codex security review"\.\s*<\/details>$/i;
+  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>\s*<br\/>\s*\[Your team has set up Codex to review pull requests in this repo\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/general\)(?:\.)?\s*Reviews are triggered when you\s*- Open a pull request for review\s*- Mark a draft as ready\s*- Comment "@codex review"(?: or "@codex security review")?\.\s*(?:If Codex has suggestions, it will comment; otherwise it will react with 👍\.\s*)?(?:Codex can also answer questions or update the PR\. Try commenting "@codex address that feedback"\.\s*)?<\/details>$/i;
 /** Return the abbreviated reviewed commit from a valid no-find result. */
 function codexNoFindReviewedCommit(body) {
   const match = CODEX_NO_FIND_RESULT_RE.exec(String(body ?? '').trim());
@@ -1661,6 +1661,10 @@ export function isCodexNoFindResultForHeadSha(body, headSha) {
     .trim()
     .toLowerCase();
   return Boolean(reviewedCommit && currentHead?.startsWith(reviewedCommit));
+}
+/** Recognize a terminal Codex no-find result without a HEAD comparison. */
+export function isCodexNoFindResult(body) {
+  return codexNoFindReviewedCommit(body) !== null;
 }
 const CODEX_NO_FIND_DISPOSITION_RE =
   /^\*\*Accepted[.!:]?\*\*\s+—\s+([^\s]+)\s+no-find result at HEAD\s+([0-9a-f]{7,64});\s+no actionable findings were reported\s+\(source: #issuecomment-(\d+)\)(?:\s*\n<!--\s*[a-z0-9][a-z0-9_-]*-review-reply\s*-->)?\s*$/i;
@@ -3722,6 +3726,10 @@ export const BOT_WORDING_CLASSIFIERS = [
   {
     id: 'advisory-terminal-notice',
     apply: (fixture) => isTerminalAdvisoryNonReviewNotice(fixture.body),
+  },
+  {
+    id: 'codex-no-find-result',
+    apply: (fixture) => isCodexNoFindResult(fixture.body),
   },
 ];
 // A trusted IDD disposition of a non-review notice: the canonical
