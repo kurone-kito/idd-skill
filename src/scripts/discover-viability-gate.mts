@@ -343,6 +343,8 @@ const CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\b[^.;:!?\n]*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 const CREDENTIAL_APPROVAL_ACTION_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+(?:approval|decision|input|review|access|permission|authorization)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))/i;
+const CREDENTIAL_BARE_APPROVAL_FOLLOW_ON_PATTERN =
+  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:approval|access|permission|authorization)\s+(?:(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))|(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$)))/i;
 const CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN =
   /(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s)?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 
@@ -924,6 +926,7 @@ function isFollowedByCredentialRequirement(
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_APPROVAL_ACTION_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
+    CREDENTIAL_BARE_APPROVAL_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN.test(
       firstBoundary
         ? sameParagraph.slice(firstBoundary.index + firstBoundary[0].length)

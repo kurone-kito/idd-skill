@@ -1040,6 +1040,20 @@ test('does not let an attached credential requirement hide behind a purpose clau
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let bare approval prerequisites hide behind credential mentions (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 129,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. Approval is required before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let approval action prerequisites hide behind credential mentions (#3528)', () => {
   const result = evaluateA4Viability({
     number: 127,
