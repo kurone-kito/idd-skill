@@ -2862,6 +2862,7 @@ function trustedLadderFixture({
   branch,
   createdAt,
   agentId = 'agent-x',
+  activationNonce,
 }: {
   policyTrustedMarkerActors?: string[];
   commentLogin: string;
@@ -2869,6 +2870,12 @@ function trustedLadderFixture({
   branch: string;
   createdAt: string;
   agentId?: string;
+  // #3480: an optional trusted `activation-nonce` marker comment, appended
+  // after the `claimed-by` comment, for a test proving the nonce
+  // comparison itself agrees (not merely that it is silently skipped when
+  // no nonce is posted at all -- the pre-existing AC3 backward-compat
+  // path).
+  activationNonce?: { nonce: string; createdAt: string };
 }) {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-resume-claim-routing-trust-ladder-'),
@@ -2886,21 +2893,45 @@ function trustedLadderFixture({
     updated_at: createdAt,
     user: { login: commentLogin },
   });
+  const nonceCommentJson = activationNonce
+    ? JSON.stringify({
+        id: 2,
+        node_id: 'IC_trust_ladder_nonce',
+        body: `<!-- activation-nonce: ${agentId} ${claimId} ${activationNonce.nonce} ${activationNonce.createdAt} -->`,
+        created_at: activationNonce.createdAt,
+        updated_at: activationNonce.createdAt,
+        user: { login: commentLogin },
+      })
+    : null;
+  const commentPayloadsJs = JSON.stringify(
+    [commentJson, nonceCommentJson].filter(
+      (payload): payload is string => payload !== null,
+    ),
+  );
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+const commentPayloads = ${commentPayloadsJs};
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('viewer-login\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
-  process.stdout.write(JSON.stringify({ data: { nodes: [
-    { id: 'IC_trust_ladder', lastEditedAt: null },
-  ] } }));
+  // #3480: generalized from a single hard-coded 'IC_trust_ladder' node so
+  // an optional second (activation-nonce) comment's node_id also resolves
+  // -- echoes back whichever ids fetchLastEditedAtByNodeId actually
+  // requested, in the same order, each with a null lastEditedAt (never
+  // edited).
+  const requestedIds = args
+    .filter((arg) => /^ids\\[\\]=/.test(arg))
+    .map((arg) => arg.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({
+    data: { nodes: requestedIds.map((id) => ({ id, lastEditedAt: null })) },
+  }));
   process.exit(0);
 }
 if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {
-  process.stdout.write(${JSON.stringify(commentJson)} + '\\n');
+  process.stdout.write(commentPayloads.map((payload) => payload + '\\n').join(''));
   process.exit(0);
 }
 if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1$/.test(arg))) {
@@ -3103,6 +3134,360 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
     assert.equal(output.state, 'already_owned');
     assert.equal(output.action, 'keep');
     assert.equal(output.reason, 'claim-id-match');
+  } finally {
+    fixture.restore();
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  }
+});
+
+// #3480: "network-free contract test" for Resume Step 1's own documented
+// `resume-claim-routing.mjs` invocation, extending the same idea
+// `idd-template/docs/idd-design-rationale.md` already coins for bot-comment
+// wording classifiers to an instruction file's own documented CLI
+// invocation. Issue #3273 fixed the drift this catches: at commit
+// `fa49fb6c` Step 1's documented invocation never threaded
+// `--claim-id`/`--nonce`/`--worktree`, so a session holding its own
+// verified claim could never reach `already_owned` through the
+// *documented* call, even though `evaluateResumeClaimRouting` already
+// handled those flags correctly when a caller passed them directly.
+
+const STEP_ONE_OWN_CLAIM_FLAGS = [
+  '--claim-id',
+  '--nonce',
+  '--worktree',
+] as const;
+type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
+
+/**
+ * Parses a `.instructions.md` file's text (real file content, or a test
+ * fixture string) and reports which of `--claim-id`, `--nonce`,
+ * `--worktree` its `## Step 1` section documents appending to the
+ * `resume-claim-routing.mjs --issue` invocation, for a session that
+ * already holds a recorded, verified, active claim-id for the issue.
+ *
+ * This is a behavioral drift check, not a hand-copy of today's wording: a
+ * later edit to Step 1's own text is what actually drives the result, so
+ * token detection only ever looks at literal invocation lines -- a line
+ * naming both `resume-claim-routing.mjs` and `--issue` -- never at
+ * unrelated prose. Scoping to invocation lines specifically (rather than
+ * `includes()` over the whole section) matters: `idd-resume.instructions.md`
+ * itself still mentions a bare `--claim-id` and a bare `--worktree` in two
+ * unrelated forced-handoff-retry/owner-evidence-retry sentences within the
+ * same section, and the real pre-#3273 wording (commit `fa49fb6c`) already
+ * mentioned a `--claim-id` forced-handoff retry even though Step 1's own
+ * invocation never threaded it -- a prose-wide search would have reported
+ * a false positive on that historical, already-broken wording.
+ *
+ * Step 1's own heading-to-heading span (its heading through the line
+ * before the next `## ` heading, or end of text) is checked *first* and
+ * preferred whenever it contains at least one invocation line -- a line
+ * naming both `resume-claim-routing.mjs` and `--issue`. Only when Step
+ * 1's own span contains *no* invocation line at all does the search widen
+ * to the *nearest preceding* invocation line before Step 1 (not every
+ * matching line in the widened range): `idd-resume-lite.instructions.md`'s
+ * own Step 1 section deliberately says "run the Claim-state command
+ * above" instead of repeating the invocation, so the flags it documents
+ * live on the one invocation line immediately above Step 1, never inside
+ * Step 1's own span and never on some other, possibly-unrelated
+ * invocation line further back in the file.
+ *
+ * Two precision-gap fixes landed here, both from Copilot review on
+ * #3480: preferring Step 1's own span first closes the original,
+ * unconditionally-widened design's gap, where unioning flags from every
+ * matching invocation line in the widened range regardless of where it
+ * fell would have let a stale, flag-less invocation line inserted
+ * directly inside Step 1's own body hide behind an unrelated,
+ * still-correct invocation earlier in that same range. Narrowing the
+ * fallback to only the nearest preceding line (rather than still
+ * unioning every match before Step 1) closes a second, symmetric gap:
+ * an older full-flag invocation added earlier in the file could
+ * otherwise mask a real flag drop on the line actually immediately
+ * above Step 1 -- the one lite's own "above" wording actually refers
+ * to.
+ *
+ * Step 1's own span is likewise narrowed to only its *first* invocation
+ * line rather than a union of every match inside the span (Codex review,
+ * #3480) -- the same masking risk, symmetrically, in case a later,
+ * fully-spelled-out example line ever appears in the same span.
+ *
+ * "Nearest preceding" excludes a `--fresh-claim-gate` invocation line:
+ * `idd-resume-lite.instructions.md`'s real "Always run helpers first"
+ * section documents that fresh-claim-gate form on its own line
+ * immediately *below* the actual Claim-state command this parser needs
+ * -- textually nearer to Step 1 than the Claim-state command is. That
+ * form is a categorically different `resume-claim-routing.mjs` mode
+ * (Step 1's own file already documents that it "ignores any
+ * `--claim-id`" by design), so it can never be the invocation Step 1's
+ * own "run the command above" prose refers to, and including it in the
+ * nearest-preceding candidate pool would silently pick the wrong line.
+ *
+ * Every specific-token check here -- the three own-claim flags, and the
+ * `--issue`/`--fresh-claim-gate` tokens used to select invocation lines
+ * in the first place -- uses the same whole-token match (word-boundary-
+ * aware, tolerant of the `[--flag {value}]`/`[--flag <value>]` bracket
+ * forms both files use), not a plain substring check (Codex review,
+ * #3480, in two rounds): `.includes('--worktree')` would have also
+ * matched an unrelated, differently-scoped option such as
+ * `--worktree-path`, and `.includes('--issue')` would equally have
+ * matched an `--issue-number`-shaped edit, in both cases silently
+ * treating an unsupported option as the canonical one the documented
+ * invocation never actually carries.
+ */
+function parseStepOneOwnClaimFlags(
+  instructionsText: string,
+): ReadonlySet<StepOneOwnClaimFlag> {
+  const lines = instructionsText.split(/\r?\n/);
+  const stepOneIndex = lines.findIndex((line) => line.startsWith('## Step 1'));
+  if (stepOneIndex === -1) {
+    throw new Error(
+      'parseStepOneOwnClaimFlags: no "## Step 1" heading found in the given text',
+    );
+  }
+  let sectionEnd = lines.length;
+  for (let index = stepOneIndex + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith('## ')) {
+      sectionEnd = index;
+      break;
+    }
+  }
+  const hasExactToken = (line: string, token: string): boolean => {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
+  };
+  // Word-boundary-aware, not `.includes()`: an accidental `--issue-number`
+  // or `--fresh-claim-gate-only` edit must not still count as the
+  // required `--issue`/`--fresh-claim-gate` token (Codex review, #3480 --
+  // the same class of false positive already fixed for the three
+  // own-claim flags below, now applied everywhere else this parser
+  // matches a specific CLI token).
+  const isInvocationLine = (line: string): boolean =>
+    line.includes('resume-claim-routing.mjs') && hasExactToken(line, '--issue');
+  const isFreshClaimGateLine = (line: string): boolean =>
+    hasExactToken(line, '--fresh-claim-gate');
+  const ownSpanInvocationLines = lines
+    .slice(stepOneIndex, sectionEnd)
+    .filter(isInvocationLine);
+  let invocationLines: readonly string[];
+  if (ownSpanInvocationLines.length > 0) {
+    // Use only the first (primary) invocation line Step 1's own span
+    // introduces, not a union of every match in the span: a later,
+    // fully-spelled-out example elsewhere in the same span (e.g. a
+    // forced-handoff retry re-typed in full) could otherwise mask a
+    // dropped flag on the actual primary invocation the same way an
+    // unrelated earlier line could in the fallback branch below.
+    invocationLines = [ownSpanInvocationLines[0]];
+  } else {
+    const precedingInvocationLines = lines
+      .slice(0, stepOneIndex)
+      .filter((line) => isInvocationLine(line) && !isFreshClaimGateLine(line));
+    const nearestPreceding =
+      precedingInvocationLines[precedingInvocationLines.length - 1];
+    invocationLines = nearestPreceding === undefined ? [] : [nearestPreceding];
+  }
+  const found = new Set<StepOneOwnClaimFlag>();
+  for (const line of invocationLines) {
+    for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
+      if (hasExactToken(line, flag)) {
+        found.add(flag);
+      }
+    }
+  }
+  return found;
+}
+
+test("parseStepOneOwnClaimFlags finds all three own-claim flags in idd-resume.instructions.md's live Step 1 (#3480)", () => {
+  const text = readFileSync(
+    join(REPO_ROOT, '.github/instructions/idd-resume.instructions.md'),
+    'utf8',
+  );
+  const found = parseStepOneOwnClaimFlags(text);
+  assert.deepEqual([...found].sort(), ['--claim-id', '--nonce', '--worktree']);
+});
+
+test("parseStepOneOwnClaimFlags finds all three own-claim flags in idd-resume-lite.instructions.md's live Step 1 (#3480)", () => {
+  const text = readFileSync(
+    join(
+      REPO_ROOT,
+      '.github/instructions/lite/idd-resume-lite.instructions.md',
+    ),
+    'utf8',
+  );
+  const found = parseStepOneOwnClaimFlags(text);
+  assert.deepEqual([...found].sort(), ['--claim-id', '--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags reports all three own-claim flags missing against the real pre-#3273 wording (#3480)', () => {
+  // Faithfully trimmed from the real `idd-resume.instructions.md` Step 1
+  // section at commit `fa49fb6c` (the SHA #3273's own background cites):
+  // the invocation line carries no flags at all, and the only other
+  // mention of any of these three tokens anywhere in the section is the
+  // unrelated forced-handoff-retry sentence's bare `--claim-id` -- kept
+  // here deliberately so this case also proves that mention alone does
+  // not produce a false positive.
+  const preIssue3273Fixture = `## Step 1 — Identify claim state
+
+When helper runtime is enabled, you may collect Step 1 evidence with:
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number}
+\`\`\`
+
+Use helper output as evidence mapped to this table, not as an
+authoritative replacement:
+
+- \`state: already_owned\` + \`action: keep\` → continue with the same
+  \`{claim-id}\` route.
+
+A \`non_inheritable\`/\`stop\` verdict whose \`evidence.forced_handoff\` is
+non-null (#2178) means a valid successor pair already exists — retry
+with \`--claim-id <evidence.forced_handoff.new_claim_id>\` before
+concluding the claim is not inheritable.
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(preIssue3273Fixture);
+  assert.deepEqual([...found], []);
+});
+
+test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree present is already_owned, omitted is owner_evidence_required", () => {
+  // Reuses this test file's existing "--worktree end-to-end" sandbox
+  // technique (#3272) -- a real second git worktree next to a disposable
+  // sandbox repo, carrying a matching claim lock and generated-tokens
+  // record -- but assembles argv from parseStepOneOwnClaimFlags's own
+  // output against the live idd-resume.instructions.md text, instead of
+  // hand-typing the CLI flags. This proves Step 1's *documented*
+  // invocation itself, not just the CLI's own already-tested flag
+  // handling, reaches `already_owned`/`keep` for a session holding its
+  // own claim, and `owner_evidence_required`/`stop` -- not a
+  // `non_inheritable` live-competitor stop -- once `--worktree` is no
+  // longer part of that same argv (Resume Step 1 running before Step 2
+  // locates the worktree, the precise gap issue #3272 fixed).
+  const stepOneInstructionsText = readFileSync(
+    join(REPO_ROOT, '.github/instructions/idd-resume.instructions.md'),
+    'utf8',
+  );
+  const parsedFlags = parseStepOneOwnClaimFlags(stepOneInstructionsText);
+  assert.deepEqual([...parsedFlags].sort(), [
+    '--claim-id',
+    '--nonce',
+    '--worktree',
+  ]);
+
+  const sandboxRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-step1-own-claim-cli-'),
+  );
+  const primary = join(sandboxRoot, 'primary');
+  const secondary = join(sandboxRoot, 'secondary');
+  const branch = 'issue/2-task';
+  const claimId = 'claim-step1-own-claim-cli';
+  const agentId = 'agent-step1-own-claim-cli';
+  const nonce = 'nonce-step1-own-claim-cli';
+  const createdAt = '2026-09-24T00:00:00Z';
+  const nonceCreatedAt = '2026-09-24T00:00:05Z';
+  const nowIso = '2026-09-24T00:01:00Z';
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
+  const fixture = trustedLadderFixture({
+    policyTrustedMarkerActors: ['maintainer'],
+    commentLogin: 'maintainer',
+    claimId,
+    branch,
+    createdAt,
+    agentId,
+    activationNonce: { nonce, createdAt: nonceCreatedAt },
+  });
+  try {
+    mkdirSync(primary, { recursive: true });
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: primary,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        // Disposable sandbox repo, never pushed or shared: disable commit
+        // signing rather than depend on this host's interactive GPG/SSH
+        // signing setup, which a non-interactive test run cannot satisfy.
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'root',
+      ],
+      { cwd: primary, stdio: 'ignore', env: gitEnv },
+    );
+    execFileSync('git', ['worktree', 'add', '-b', branch, secondary], {
+      cwd: primary,
+      stdio: 'ignore',
+    });
+    acquireClaimLock(secondary, agentId, claimId, false);
+    recordGeneratedClaimTokens(secondary, { agentId, claimId, nonce });
+
+    const flagValues: Record<StepOneOwnClaimFlag, string> = {
+      '--claim-id': claimId,
+      '--nonce': nonce,
+      '--worktree': secondary,
+    };
+    const baseArgs = [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      nowIso,
+      '--policy',
+      fixture.policyPath,
+    ];
+    const spawnEnv = { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' };
+
+    const withWorktreeArgs = [
+      ...baseArgs,
+      ...[...parsedFlags].flatMap((flag) => [flag, flagValues[flag]]),
+    ];
+    const withWorktree = spawnSync(process.execPath, withWorktreeArgs, {
+      cwd: primary,
+      encoding: 'utf8',
+      env: spawnEnv,
+    });
+    assert.equal(withWorktree.status, 0, withWorktree.stderr);
+    const withWorktreeOutput = JSON.parse(withWorktree.stdout);
+    assert.equal(withWorktreeOutput.state, 'already_owned');
+    assert.equal(withWorktreeOutput.action, 'keep');
+    // Also prove the nonce comparison itself agreed, not merely that it
+    // was silently skipped (the pre-existing AC3 backward-compat path):
+    // the trusted activation-nonce winner the CLI resolved must equal the
+    // fixture's own posted nonce.
+    assert.equal(withWorktreeOutput.evidence.activation_nonce_winner, nonce);
+
+    // Reuses the exact same fixture -- the second worktree still exists on
+    // disk and is still occupied -- but this time omits `--worktree` from
+    // the CLI argv while still passing the parsed `--claim-id` (and
+    // `--nonce`).
+    const withoutWorktreeArgs = [
+      ...baseArgs,
+      ...[...parsedFlags]
+        .filter((flag) => flag !== '--worktree')
+        .flatMap((flag) => [flag, flagValues[flag]]),
+    ];
+    const withoutWorktree = spawnSync(process.execPath, withoutWorktreeArgs, {
+      cwd: primary,
+      encoding: 'utf8',
+      env: spawnEnv,
+    });
+    assert.equal(withoutWorktree.status, 0, withoutWorktree.stderr);
+    const withoutWorktreeOutput = JSON.parse(withoutWorktree.stdout);
+    assert.equal(withoutWorktreeOutput.state, 'owner_evidence_required');
+    assert.equal(withoutWorktreeOutput.action, 'stop');
   } finally {
     fixture.restore();
     rmSync(sandboxRoot, { recursive: true, force: true });
