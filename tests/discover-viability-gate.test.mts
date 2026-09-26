@@ -520,6 +520,76 @@ test('passes autonomous completion when a trigger phrase is negated nearby (#271
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('passes autonomous completion when a credential is descriptive security vocabulary (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 67,
+    title: 'document protected authentication material',
+    body:
+      'This issue concerns a credential. The change is limited to the ' +
+      'documentation wording and has focused unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when credential handling and disclosure policy are descriptive (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 68,
+    title: 'clarify protected material handling',
+    body:
+      'Document credential handling and disclosure policy for the existing ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a maintainer must supply the credential (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 69,
+    title: 'wire external credential approval',
+    body:
+      'A credential must be supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when credential handling is itself required (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 70,
+    title: 'wire external credential handling',
+    body:
+      'The change requires credential handling before it can ship. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a distant descriptive verb mask a later credential request (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 71,
+    title: 'wire external credential approval',
+    body:
+      'Document the existing behavior, then a credential is needed before ' +
+      'shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test("passes autonomous completion when a trigger phrase is quoted as another artifact's own content (#2711 shape)", () => {
   const result = evaluateA4Viability({
     number: 31,

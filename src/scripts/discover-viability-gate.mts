@@ -313,6 +313,16 @@ const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
   /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
+// A security noun can describe the subject matter of a bounded change rather
+// than a live dependency (#3522). Keep this exclusion tied to explicit
+// descriptive context and let requirement language win below.
+const DESCRIPTIVE_SECURITY_VERB_PATTERN =
+  /\b(?:concern(?:s|ed)?|describ(?:e|es|ed)|document(?:s|ed)?|cover(?:s|ed)?|mention(?:s|ed)?|refer(?:s|red)?|discuss(?:es|ed)?|handl(?:e|es|ed)|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
+const DESCRIPTIVE_SECURITY_NOUN_PATTERN =
+  /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|pattern)$/i;
+const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
+const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 3;
+const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -845,6 +855,46 @@ function isFollowedByGenericMentionNoun(
   );
 }
 
+function isDescribedSecurityVocabulary(
+  corpus: string,
+  matchIndex: number,
+  matchEnd: number,
+): boolean {
+  if (corpus.slice(matchIndex, matchEnd).toLowerCase() !== 'credential') {
+    return false;
+  }
+  if (isNearRequirementAssertion(corpus, matchIndex, matchEnd)) {
+    return false;
+  }
+
+  const backwardStart = Math.max(
+    0,
+    matchIndex - DESCRIPTIVE_SECURITY_BACKWARD_WINDOW,
+  );
+  const backwardRaw = corpus.slice(backwardStart, matchIndex);
+  const priorBreaks = [
+    ...backwardRaw.matchAll(new RegExp(HARD_CLAUSE_BREAK_PATTERN, 'g')),
+  ];
+  const lastBreak = priorBreaks.at(-1);
+  const backwardText = lastBreak
+    ? backwardRaw.slice(lastBreak.index + lastBreak[0].length)
+    : backwardRaw;
+  if (DESCRIPTIVE_SECURITY_VERB_PATTERN.test(backwardText)) {
+    return true;
+  }
+
+  const rawTail = corpus.slice(
+    matchEnd,
+    matchEnd + DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS,
+  );
+  const breakMatch = HARD_CLAUSE_BREAK_PATTERN.exec(rawTail);
+  const tail = breakMatch ? rawTail.slice(0, breakMatch.index) : rawTail;
+  const tokens = tail.match(WORD_TOKEN_PATTERN) ?? [];
+  return tokens
+    .slice(0, DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS)
+    .some((token) => DESCRIPTIVE_SECURITY_NOUN_PATTERN.test(token));
+}
+
 /**
  * True when `index` (an EXTERNAL_COORDINATION_PATTERN match start) falls
  * inside a genuine resolved-decision line -- #2763: `docs/idd-workflow.md`'s
@@ -898,6 +948,7 @@ function findUnexcludedExternalCoordinationMatch(
       isGovernedByNegation(corpus, index) ||
       isDescribedByPastInvestigation(corpus, index, end) ||
       isFollowedByGenericMentionNoun(corpus, index, end) ||
+      isDescribedSecurityVocabulary(corpus, index, end) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
       continue;
