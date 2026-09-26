@@ -389,15 +389,23 @@ approval boundary that hands off to IDD execution.
   immediately before the first label removal below, whether that
   removal is a non-anchor target's or the anchor's own -- that the
   marked target is the sole member of its authoring set: it carries no
-  `<marker-prefix>-roadmap-id` marker (never a roadmap anchor), and a
-  repository-wide paginated issue-comment scan for trusted owner
-  markers whose exact `set` matches finds no sibling target -- the
-  same repository-wide, fail-closed enumeration the resume procedure
-  above requires, since a sibling's marker lives on the sibling's own
-  issue and never appears in the marked target's own comment log;
-  block on incomplete or inconclusive enumeration the same way. If
-  either condition fails, or the scan cannot be completed, the
-  exception does not authorize removing any label for this release;
+  `<marker-prefix>-roadmap-id` marker (never a roadmap anchor), and
+  `node scripts/authoring-set-members.mjs --set <id>` reports
+  `soleMember: true` with `issues` equal to that one target. The
+  helper exits non-zero when enumeration does not finish, including a
+  search response with `incomplete_results` or an index-lag window
+  that does not finish. The candidate search is the owner-marker
+  token, so an edited marker that dropped the set is still fetched
+  and fails closed. An unparseable trusted comment that still
+  carries the token fails closed too. A trusted marker whose
+  target names a different issue than the comment's host fails
+  closed as well; any other result is
+  inconclusive and blocks
+  this exception the same way. A sibling's
+  marker lives on the sibling's own issue and never appears in the
+  marked target's own comment log. If either condition fails, or the
+  helper cannot finish, the exception does not authorize removing any
+  label for this release;
   fall back to the ordinary explicit human release-request
   precondition for the whole set instead. Then, immediately
   before each label removal, append and verify the set anchor's

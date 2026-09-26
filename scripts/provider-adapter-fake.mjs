@@ -35,6 +35,7 @@ function resolveFixtureUserContentEdits(fixture, number) {
     (editedAt) => ({ editedAt, editorLogin: null }),
   );
 }
+// audit:ignore-dead-export: a test-double factory used only by tests by design, not dead production code
 export function createFakeProviderAdapter(fixture) {
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];

@@ -209,6 +209,7 @@ export function readAdvisoryPrimaryBotLogin(
  * real account login. Pure and fails closed to the default REST login when
  * `primaryBotLogin` is blank.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveAdvisoryBotRestLogin(
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
@@ -304,6 +305,7 @@ export function readAdvisorySecondaryBotLogins(
  * authoritative once more than one login is configured; a caller that needs
  * the full list uses {@link resolveAdvisorySecondaryBotLogins} instead.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
   const logins = resolveAdvisorySecondaryBotLogins(config);
   return logins.length === 1 ? logins[0] : '';
@@ -315,6 +317,7 @@ export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
  * {@link resolveAdvisorySecondaryBotLogin}'s doc comment for the exact
  * single-vs-plural rule.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisorySecondaryBotLogin(
   path: string = '.github/idd/config.json',
 ): string {
@@ -448,6 +451,7 @@ export function resolveAdvisoryRecoveryCycleCap(config: unknown = {}): number {
  * policy file, failing closed to the default window when the file is
  * missing, unreadable, or schema-invalid.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisoryTerminalWindowMinutes(
   path: string = '.github/idd/config.json',
 ): number {
@@ -547,6 +551,7 @@ export function resolveEffectiveAdvisoryTerminalWindowMinutes({
  * file, failing closed to the off (unset) default when the file is missing,
  * unreadable, or schema-invalid.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisorySecondaryQuietWindowMinutes(
   path: string = '.github/idd/config.json',
 ): number {
@@ -591,7 +596,14 @@ export function resolveAdvisorySecondaryQuietWindowMinutes(
  * `pre-merge-readiness` publishes it as `secondaryQuietWindow`.
  */
 export interface SecondaryQuietWindowStatus {
+  // Applied gate length. On the #2544 settled-buffer path this is the
+  // clamped buffer, which is what `elapsed` actually measures. It is not
+  // always the raw configured window.
   minutes: number;
+  // Unclamped `advisoryWait.secondaryQuietWindow` minutes. Equals
+  // `minutes` except when the settled buffer clamps the applied wait
+  // (#3485), so a report can tell those two numbers apart.
+  configuredMinutes: number;
   anchorAt: string;
   elapsedMinutes: number | null;
   elapsed: boolean;
@@ -619,10 +631,12 @@ const SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES = 5;
  */
 function computeQuietWindowElapsed({
   minutes,
+  configuredMinutes,
   anchorAt,
   now,
 }: {
   minutes: number;
+  configuredMinutes: number;
   anchorAt: string;
   now: string;
 }): SecondaryQuietWindowStatus {
@@ -639,6 +653,7 @@ function computeQuietWindowElapsed({
     elapsedMinutes !== null ? Math.max(0, minutes - elapsedMinutes) : null;
   return {
     minutes,
+    configuredMinutes,
     anchorAt,
     elapsedMinutes,
     elapsed,
@@ -677,9 +692,14 @@ function computeQuietWindowElapsed({
  * timestamp instead of `effectiveMaxActivityUpdatedAt`. The buffer never
  * exceeds the operator's own configured `minutes` (via `Math.min`), so a
  * repository that configures a window shorter than the buffer is never
- * kept waiting longer than what it explicitly asked for. Omitted or
- * invalid (the pre-#2544 default for every existing caller) falls through
- * to the unchanged, unsettled path -- byte-identical behavior.
+ * kept waiting longer than what it explicitly asked for. `minutes` on
+ * that path is the applied (clamped) buffer; `configuredMinutes` keeps
+ * the unclamped configured window so a report can tell them apart
+ * (#3485). `elapsed` still measures the applied `minutes`, never
+ * `configuredMinutes`. Omitted or invalid (the pre-#2544 default for
+ * every existing caller) falls through to the unchanged, unsettled path
+ * -- byte-identical behavior aside from the additive
+ * `configuredMinutes` field, which equals `minutes` there.
  *
  * #2547: `secondaryBotDeclined: true` skips the wait entirely (`elapsed:
  * true`, same as the off/no-anchor branches below) once the secondary bot
@@ -730,6 +750,7 @@ export function buildSecondaryQuietWindowStatus({
   if (resolvedMinutes <= 0) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: anchorValid ? anchorAtRaw : 'none',
       elapsedMinutes: null,
       elapsed: true,
@@ -741,6 +762,7 @@ export function buildSecondaryQuietWindowStatus({
   if (secondaryBotDeclined === true) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: 'declined',
       elapsedMinutes: null,
       elapsed: true,
@@ -756,6 +778,7 @@ export function buildSecondaryQuietWindowStatus({
         resolvedMinutes,
         SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES,
       ),
+      configuredMinutes: resolvedMinutes,
       anchorAt: settledAtRaw,
       now,
     });
@@ -764,6 +787,7 @@ export function buildSecondaryQuietWindowStatus({
   if (!anchorValid) {
     return {
       minutes: resolvedMinutes,
+      configuredMinutes: resolvedMinutes,
       anchorAt: 'none',
       elapsedMinutes: null,
       elapsed: true,
@@ -773,6 +797,7 @@ export function buildSecondaryQuietWindowStatus({
   }
   return computeQuietWindowElapsed({
     minutes: resolvedMinutes,
+    configuredMinutes: resolvedMinutes,
     anchorAt: anchorAtRaw,
     now,
   });

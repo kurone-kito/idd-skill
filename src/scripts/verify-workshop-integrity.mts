@@ -242,6 +242,7 @@ export function runVerification(
 // file as "still fenced". Each masked region is replaced with spaces
 // (newlines kept), so downstream offset -> line-number calculations
 // remain correct.
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function stripFencedCodeBlocks(content: unknown): string {
   return maskMarkdownForScan(String(content), {
     inlineCode: 'keep',
@@ -252,6 +253,7 @@ export function stripFencedCodeBlocks(content: unknown): string {
 // Masks HTML-comment regions (`<!-- ... -->`, possibly multi-line) via
 // the shared #3281 entry point, preserving newlines so offset -> line
 // numbers remain accurate. Markdown links inside comments are not real.
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function stripHtmlComments(content: unknown): string {
   return maskMarkdownForScan(String(content), {
     inlineCode: 'keep',
@@ -265,6 +267,7 @@ export function stripHtmlComments(content: unknown): string {
 // CommonMark-aware and covers multi-line spans; the replacement
 // preserves newlines so downstream offset → line numbers stay
 // accurate.
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function stripInlineCodeSpans(content: unknown): string {
   return maskMarkdownForScan(String(content), {
     inlineCode: 'mask',

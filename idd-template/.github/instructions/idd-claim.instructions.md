@@ -584,7 +584,9 @@ package-manager / ephemeral-npx forms and mechanical detail.
 `--acquire`; absent/malformed recovers only via step 5
 (`idd-overview-core.instructions.md`).
 
-Then continue to `idd-work.instructions.md`.
+Then continue to `idd-work.instructions.md` when pre-check (d) matched
+no inherited open PR. When it did, continue at
+`idd-resume.instructions.md` Step 2.
 
 ## Claim-state parsing
 

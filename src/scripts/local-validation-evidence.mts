@@ -323,6 +323,7 @@ export interface LocalValidationEvidenceRecoveryEvaluation {
  * record -- this function only ever answers "needs revalidation", never
  * "clear to merge".
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function evaluateLocalValidationEvidenceRecovery(input: {
   evidence: { headSha: string } | null | undefined;
   livePrHeadSha: string;

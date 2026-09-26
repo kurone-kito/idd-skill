@@ -20,7 +20,11 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-
+import {
+  ciWaitSummaryIsPreMergeCiPassing,
+  collectCiWaitState,
+  latestPassingCompletedAt,
+} from './ci-wait-state.mts';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -293,6 +297,8 @@ export interface PostIddMarkerResult {
    * (`dispositionEvidence.missingRegularCommentCount` /
    * `.missingThreadCount`), which this watermark's `max-activity-at` /
    * `total-item-count` are about to fold in as if already reviewed.
+   * #3482: omitted when `soleCauseAckOnlyPostDisposition` is exactly true
+   * and no regular comment is still missing.
    * Diagnostic-only: never changes `mode`, `body`, or whether the marker
    * gets POSTed.
    */
@@ -509,6 +515,13 @@ export function watermarkFieldsFromSnapshot(snapshot: unknown): MarkerFields {
  * `missing-disposition-evidence` route (or, if the item happens to look
  * ack-only-shaped, via `reviewCurrency.comparisonRoute`).
  *
+ * #3482: stays silent when `soleCauseAckOnlyPostDisposition` is exactly
+ * `true` and `missingRegularCommentCount` is 0. That is a resolved thread
+ * whose only outstanding activity is a known courtesy ack, which the
+ * pre-merge gate already treats as non-blocking. A missing or non-true
+ * flag keeps today's warning, including a payload that sets the flag while
+ * a regular comment is still missing.
+ *
  * Returns `[]` when the snapshot carries no such evidence, including when
  * `dispositionEvidence` is absent or malformed (diagnostic-only: fails open,
  * never blocks or alters what gets POSTed).
@@ -518,6 +531,7 @@ export function describeUnaddressedActivity(snapshot: unknown): string[] {
     dispositionEvidence?: {
       missingRegularCommentCount?: unknown;
       missingThreadCount?: unknown;
+      soleCauseAckOnlyPostDisposition?: unknown;
     } | null;
   };
   const missingComments = Number(
@@ -532,6 +546,12 @@ export function describeUnaddressedActivity(snapshot: unknown): string[] {
       : 0;
   const threadCount =
     Number.isInteger(missingThreads) && missingThreads > 0 ? missingThreads : 0;
+  if (
+    snap.dispositionEvidence?.soleCauseAckOnlyPostDisposition === true &&
+    commentCount === 0
+  ) {
+    return [];
+  }
   if (commentCount === 0 && threadCount === 0) {
     return [];
   }
@@ -1852,6 +1872,57 @@ function main(): HelperCliResult {
       const message = `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.`;
       process.stderr.write(`${message}\n`);
       return { exitCode: 1, kind: 'gate', message };
+    }
+    // #3465: a --from-pr watermark must not post while the required-check
+    // predicate pre-merge readiness already uses is false. Pending and
+    // failure are the same refusal. The disposition-evidence warning above
+    // stays a warning and is only emitted on the success path below.
+    // Advisory-family --from-pr types derive only head-sha and are not gated.
+    if (isWatermark) {
+      let requiredChecksPassing = false;
+      let ciHead = '';
+      let livePassingCompletedAt = 'none';
+      try {
+        const ciSummary = collectCiWaitState([
+          '--pr',
+          String(args.fromPr),
+          '--owner',
+          args.owner,
+          '--repo',
+          args.repo,
+        ]);
+        ciHead = ciSummary.headRefOid.trim();
+        livePassingCompletedAt = latestPassingCompletedAt(ciSummary);
+        requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(ciSummary);
+      } catch (error) {
+        process.stderr.write(
+          `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${(error as Error).message}\n`,
+        );
+        process.exit(1);
+      }
+      // A second live read can observe a newer HEAD than the activity
+      // snapshot already copied into the watermark fields. A passing
+      // result for that newer HEAD must not authorize a marker whose
+      // head-sha and ci-completed-at still belong to the snapshot.
+      if (ciHead.toLowerCase() !== liveHeadSha.toLowerCase()) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s required-check read is for HEAD ${ciHead || '(empty)'}, which does not match the activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.\n`,
+        );
+        process.exit(1);
+      }
+      if (!requiredChecksPassing) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.\n`,
+        );
+        process.exit(1);
+      }
+      const snapshotPassingCompletedAt = args.fields['ci-completed-at'];
+      if (livePassingCompletedAt !== snapshotPassingCompletedAt) {
+        process.stderr.write(
+          `refusing to post watermark: PR ${args.fromPr}'s live passing completion ${livePassingCompletedAt} does not match the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. Re-run --from-pr.\n`,
+        );
+        process.exit(1);
+      }
     }
   }
 

@@ -1307,6 +1307,7 @@ const preMergeReadinessFixture = {
   },
   secondaryQuietWindow: {
     minutes: 0,
+    configuredMinutes: 0,
     anchorAt: 'none',
     elapsedMinutes: null,
     elapsed: true,

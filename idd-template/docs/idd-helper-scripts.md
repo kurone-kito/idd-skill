@@ -807,7 +807,11 @@ future inventory reviews do not need to re-infer their role from code.
   gaps without mutating any state. Its post-merge cleanup-backlog check
   scans merged PRs in a default 14-day window with one serial `gh api`
   call per PR and streams per-PR progress to stderr (stdout, including
-  `--json`, stays clean). For a local run during a merge burst, pass
+  `--json`, stays clean). A PR leaves that backlog only when its latest
+  trusted `idd-cleanup-evidence` comment records `applied` or `clean`;
+  any other status, including `timeout`, `helper-error`, and
+  `time-budget-exhausted`, or an unparseable marker line, keeps the PR
+  in the backlog. For a local run during a merge burst, pass
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
@@ -1018,11 +1022,19 @@ node scripts/discover-readiness-check.mjs --swarm-floor <N>
 
 - **Output**: `{ eligible, eligible_count, total }` — `eligible` is the
   ready-and-at/above-floor set (each `{ number, title, autopilotSuitability,
-  belowFloor }`), `eligible_count` its length, and `total` the number of open
-  issues swept. A "no score" issue is never below floor, matching the
-  discovery ranker, so it stays eligible.
+  belowFloor, isRoadmap }`), `eligible_count` its length, and `total` the
+  number of open issues swept. A "no score" issue is never below floor,
+  matching the discovery ranker, so it stays eligible.
 - **Use**: an `eligible_count == 0` result means Discover has no startable
   work at floor `N`, so an autopilot / swarm loop may stop scriptably.
+- **`isRoadmap` before direct claim**: a roadmap issue is never excluded
+  from `eligible` solely for being a roadmap
+  ([kurone-kito/idd-skill#2450](https://github.com/kurone-kito/idd-skill/issues/2450))
+  — that decision stays with A1.5. A `--swarm-floor` caller must check
+  each `eligible` entry's `isRoadmap` before treating it as directly
+  claimable: route an entry with `isRoadmap: true` through
+  [A1.5](../.github/instructions/idd-roadmap-audit.instructions.md)'s
+  roadmap-completion audit instead of a direct claim.
 - **Floor range**: `N` is the autopilot-suitability 1-5 band. A non-integer
   or out-of-range `N` is a **hard error**, not a silent coercion to the
   default floor — otherwise a typo (e.g. `--swarm-floor 50`) would quietly
@@ -3377,20 +3389,26 @@ still fails closed:
   (exits non-zero, no `gh` call) when passed without `--from-pr`, since manual
   mode already supplies `--head-sha` directly with nothing to compare it
   against.
-- `--from-pr` unaddressed-activity warning (`warnings`, kurone-kito/idd-skill#1833):
+- `--from-pr` unaddressed-activity warning (`warnings`, kurone-kito/idd-skill#1833,
+  kurone-kito/idd-skill#3482):
   the JSON envelope (dry-run and `--apply` alike) carries an optional
-  `warnings` string array, present only when the fresh snapshot's
+  `warnings` string array, present when the fresh snapshot's
   `dispositionEvidence.missingRegularCommentCount` /
   `dispositionEvidence.missingThreadCount` are non-zero — comments or
   threads with **no** disposition reply at all, whose activity this watermark's
   `max-activity-at` / `total-item-count` are about to fold in as if
-  already reviewed. Surfaces the same evidence
-  `missing-disposition-evidence` blocks on at F2, but at watermark-post
-  time instead of only later via the readiness report. Diagnostic-only:
-  never blocks the post or changes `mode` / `body`. Deliberately **not**
-  based on the snapshot's `ackOnly` evidence, which is the carve-out that
-  marks post-disposition advisory-bot courtesy acks safe to fold in —
-  warning on that would fire on the routine, benign path.
+  already reviewed — except when `soleCauseAckOnlyPostDisposition` is
+  exactly true and `missingRegularCommentCount` is 0. That case is a
+  resolved thread whose only outstanding activity is a known courtesy
+  ack. A missing or non-true flag keeps the warning, including a payload
+  that sets the flag while a regular comment is still missing. Surfaces
+  the same evidence `missing-disposition-evidence` blocks on at F2, but
+  at watermark-post time instead of only later via the readiness report.
+  Diagnostic-only: never blocks the post or changes `mode` / `body`.
+  Deliberately **not** based on the snapshot's `ackOnly` evidence, which
+  is the carve-out that marks post-disposition advisory-bot courtesy acks
+  safe to fold in — warning on that would fire on the routine, benign
+  path.
 - **No claim/state gating** (the `emit-marker` philosophy): this is a
   single-marker render+POST primitive, so the calling phase must run its
   claim-revalidation gate before `--apply`, exactly as the manual POST path it
@@ -3442,8 +3460,12 @@ still fails closed:
   branch) from `<path>` instead of `process.cwd()`. Use this from the
   primary checkout, before the claimed branch's own worktree exists as the
   current directory; the occupancy probe must still report the claimed
-  branch as occupied only by that same (canonicalized) path. Omitting it
-  keeps reading from `process.cwd()` unchanged.
+  branch as occupied only by that same (canonicalized) path. F4 removal
+  is another caller of the same flag: the current directory is the
+  primary checkout, and `<path>` is the issue worktree about to be
+  removed (observed 2026-09-25, issue `#3436`, PR `#3451`). Omitting it
+  keeps reading from `process.cwd()` unchanged. The helper still reads
+  owner evidence only from `--worktree` or `process.cwd()`.
 - `--trusted-marker-logins` (kurone-kito/idd-skill#3272): trusted actors now
   resolve through the same ladder `pre-merge-readiness.mts` uses
   (`resolveTrustedMarkerActors`: flag, then `IDD_TRUSTED_MARKER_ACTORS`,
@@ -3840,16 +3862,22 @@ reflexively as any other CLI option.
   on them. The semantic residual stays with the agent per the
   courtesy-ack convergence rule, and the disposition-evidence and
   unreplied-comment gates are unaffected
-- Disposition-evidence counters (kurone-kito/idd-skill#1833): the
-  snapshot also emits `dispositionEvidence` (`missingRegularCommentCount`,
-  `missingThreadCount`) — the same `summarizeDispositionEvidenceForGate`
-  evidence the F2 `missing-disposition-evidence` gate uses, trimmed to
-  its two counters (mirrors `advisory-convergence.mjs`'s own trimmed
-  projection of the same evidence, not `pre-merge-readiness.mjs`'s
-  richer field). A `--from-pr` watermark post
+- Disposition-evidence counters (kurone-kito/idd-skill#1833,
+  kurone-kito/idd-skill#3482): the snapshot also emits
+  `dispositionEvidence` (`missingRegularCommentCount`,
+  `missingThreadCount`, `soleCauseAckOnlyPostDisposition`) — the same
+  `summarizeDispositionEvidenceForGate` evidence the F2
+  `missing-disposition-evidence` gate uses, trimmed to its two counters
+  plus that courtesy-ack flag. The flag is already meaningful with no
+  snapshot boundary: every post-disposition external comment counts, and
+  only a known courtesy-ack template qualifies. The other advisory-only
+  sub-flags stay omitted (this is not `pre-merge-readiness.mjs`'s richer
+  field, and `advisory-convergence.mjs` keeps its counters-only
+  projection). A `--from-pr` watermark post
   (`node scripts/post-idd-marker.mjs`) reads these to warn, in its own
   success output, when the watermark it is about to post already covers
-  comments/threads that were never actually dispositioned
+  comments/threads that were never actually dispositioned, and stays
+  silent for the courtesy-ack flag case above
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
@@ -5230,6 +5258,16 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   keeps it (never `-D`) and tells the operator they may delete it by
   hand; unequal tips mean genuinely unmerged
   local work, so F4 holds instead of discarding it.
+- **Submodule removal** (step 5, issue `#2016`): plain `git worktree
+  remove <path>` fails with `fatal: working trees containing
+  submodules cannot be moved or removed`. `git worktree remove
+  --force` is warranted only for that fatal, and only after leftovers
+  are preserved. Revalidate with `--worktree` immediately before the
+  retry (`idd-merge.instructions.md`).
+- **Removed cwd** (step 5, issue `#3189`): a later `node` call fails
+  with `ENOENT` on `uv_cwd`, or `gh` / `git` fails with `Unable to
+  read current working directory`, and `unclaimed-by` is skipped
+  unless the session reruns from the primary checkout.
 
 The two step 4 holds reuse the `primary-worktree-dirty` resume rule
 (#3192): once the hold clears, re-run F4 from step 4 through step 7.
@@ -5469,6 +5507,27 @@ retrying further.
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
+
+## Dead-export audit ({{PROJECT_MARKER_PREFIX}}#3478)
+
+`node scripts/audit-dead-exports.mjs --check` (source repository /
+vendored-node profile only — a repository-local lint check, not an
+IDD-phase evidence collector, so it is never invoked from an instruction
+file the way the helpers above are) flags a named `export
+function`/`const`/`class` in `src/scripts/**/*.mts` or
+`src/bin/**/*.mts` whose only importer(s), across `src/scripts/**`,
+`src/bin/**`, and `tests/**`, are all under `tests/**` (`test-only`), or
+that has no importer anywhere (`unused`) — the class of dead code an
+out-of-the-box unused-export tool cannot see, since a dedicated test
+file exercising it already counts as a real "use". An export referenced
+elsewhere in its own declaring file (e.g. a CLI's own `main()` calling
+an exported-for-testability pure function) is `production` regardless of
+cross-file importers, and a re-export (`export { x } from './y.mts'` or
+a whole-module `export * from './y.mts'` barrel) is resolved back to its
+origin declaration rather than counted as a use in its own right. A
+`// audit:ignore-dead-export: <reason>` comment — on the declaration's
+own line, or the line immediately above it — suppresses one finding.
+Wired into `lint:minimum`.
 
 ## Friction Inventory
 

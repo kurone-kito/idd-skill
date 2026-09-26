@@ -155,6 +155,7 @@
     },
     "secondaryQuietWindow": {
       "minutes": 0,
+      "configuredMinutes": 0,
       "anchorAt": "2026-05-11T23:55:00Z",
       "elapsedMinutes": null,
       "elapsed": true,

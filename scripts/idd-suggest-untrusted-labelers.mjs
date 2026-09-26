@@ -107,6 +107,7 @@ function finalizeUntrustedLabelerCandidates(counts) {
  * matching `actions-usage-report.mts`'s aggregate/fetch split so this
  * function is the one covered by an offline fixture test.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function aggregateUntrustedLabelerCandidates(events) {
   const counts = new Map();
   accumulateLabeledBotEvents(events, counts, new Set());

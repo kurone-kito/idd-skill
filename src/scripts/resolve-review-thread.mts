@@ -445,6 +445,7 @@ export function isClaimlessEligible(
  * message instead of being silently read as an empty result (which would
  * masquerade as "no review thread found").
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function assertNoGraphqlErrors(payload: unknown, context: string): void {
   const errors = (payload as { errors?: { message?: unknown }[] } | null)
     ?.errors;

@@ -1466,6 +1466,7 @@ export function trustCollaboratorMarkers() {
  * login so `isTrustedMarkerAuthor` is deterministic without shelling out to
  * `gh`. Not part of the CLI contract.
  */
+// audit:ignore-dead-export: intentionally test-only by its own name (a between-tests cache-reset hook), not dead code masquerading as covered
 export function __resetTrustedMarkerCachesForTest(seed = {}) {
   trustedMarkerAuthorCache.clear();
   collaboratorPermissionCache.clear();

@@ -123,7 +123,10 @@ jobs:
   cleanup:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Longer than the source copy: this job installs dependencies
+    # before an 8-minute cleanup step and still needs time to post
+    # evidence. The cleanup step timeout stays below this cap.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -337,6 +340,7 @@ jobs:
       - name: Run F4 cleanup (server-side fallback)
         id: cleanup
         if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous'
+        timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
           # gh reads whichever of these two matches its resolved host
@@ -438,7 +442,7 @@ jobs:
             echo "retry_bound_exhausted=$RETRY_BOUND_EXHAUSTED"
           } >> "$GITHUB_OUTPUT"
       - name: Post cleanup evidence comment
-        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous'
+        if: always() && steps.cleanup.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           # gh reads whichever of these two matches its resolved host
@@ -446,7 +450,7 @@ jobs:
           # github.com and lets this same step authenticate on a
           # self-hosted GHES host too.
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.cleanup.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.cleanup.outputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}
           STATUS: ${{ steps.cleanup.outputs.status }}
           APPLIED: ${{ steps.cleanup.outputs.applied }}
           FAILED: ${{ steps.cleanup.outputs.failed }}
@@ -455,6 +459,26 @@ jobs:
           RETRY_ATTEMPTS: ${{ steps.cleanup.outputs.retry_attempts }}
           RETRY_BOUND_EXHAUSTED: ${{ steps.cleanup.outputs.retry_bound_exhausted }}
         run: |
+          # A killed cleanup step writes no outputs. Leave before any
+          # gh call when the PR number is still unknown, and map an
+          # empty status to timeout before the duplicate-evidence skip
+          # so the marker records timeout rather than a blank token.
+          NOTES_ROW=""
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::notice::No PR number is available; exiting without posting cleanup evidence."
+            exit 0
+          fi
+          if [ -z "$STATUS" ]; then
+            echo "::warning::Cleanup step ended without reporting a status; posting timeout evidence."
+            STATUS="timeout"
+            APPLIED=0
+            FAILED=0
+            SKIPPED=0
+            BLOCKED=0
+            RETRY_ATTEMPTS=0
+            RETRY_BOUND_EXHAUSTED=false
+            NOTES_ROW="| Notes              | The cleanup step ended without reporting a status. Counts are zero. |"
+          fi
           # Avoid duplicate evidence comments, but only on a genuinely
           # converged outcome. Workflow-level concurrency only serialises
           # this workflow's own runs; an agent F4 (or a maintainer
@@ -538,4 +562,7 @@ jobs:
             "| Retry attempts (bound-exhausted) | ${RETRY_ATTEMPTS} (${RETRY_BOUND_EXHAUSTED}) |" \
             "| Posted by          | post-merge-cleanup workflow |" \
           )
+          if [ -n "$NOTES_ROW" ]; then
+            BODY="${BODY}${NOTES_ROW}"$'\n'
+          fi
           printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -

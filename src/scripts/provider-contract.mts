@@ -22,6 +22,7 @@ export const PROVIDER_IDS = ['github', 'gitlab', 'bitbucket'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /** Type guard for an untrusted value that should be a {@link ProviderId}. */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function isProviderId(value: unknown): value is ProviderId {
   return (
     typeof value === 'string' &&
@@ -115,6 +116,7 @@ export function evaluateProviderCapabilityOutcome(
  * declaration, narrowed, on success; never coerces a malformed field to a
  * default instead of rejecting it.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function assertProviderCapabilityDeclaration(
   value: unknown,
 ): ProviderCapabilityDeclaration {

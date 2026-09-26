@@ -363,6 +363,7 @@ export function buildCritiqueTelemetryHookReport(
  * given, matching the issue's documented payload shape ("`delegateCommand`
  * present only when `delegateUsed` is `true`").
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function buildCritiqueTelemetryHookPayload(input) {
   const timestamp =
     input.timestamp ?? (input.now ? input.now() : new Date()).toISOString();

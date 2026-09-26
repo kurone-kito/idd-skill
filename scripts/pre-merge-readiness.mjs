@@ -9,6 +9,7 @@ import {
   resolveSelfReferentialTriggerFiles,
   verifySelfReferentialBootstrapWaiverRun,
 } from './advisory-convergence.mjs';
+import { resolveAdvisoryConvergenceIdentitySignals } from './advisory-convergence-identity.mjs';
 import {
   advisoryWaitSectionIsValid,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
@@ -48,7 +49,6 @@ import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
-  CHECK_PASS_EQUIVALENT_STATES,
   classifyPrLoopMembership,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
@@ -65,7 +65,6 @@ import {
   resolveTrustedMarkerActors,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
-  selectLatestCheckInstance,
 } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
@@ -75,15 +74,6 @@ import {
   evaluateProviderOutageRelief,
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
-// #2919: reused (not a new regex) to extract a live check-run's owning
-// workflow-run id from its `detailsUrl` for the bounded `workflowPath`
-// enrichment below -- no import cycle (this file already isn't imported
-// by `rerun-advisory-convergence.mts`). kurone-kito/idd-skill#2926: stays
-// the enrichment's EVIDENCE gate (is there a parseable citation at all,
-// is it consistent, is the distinct-citation count in budget) -- the
-// resolved PATH itself no longer comes from this parsed id (see
-// `listCheckRunWorkflowPaths`'s own doc comment in provider-port.mts).
-import { parseRunIdFromUrl } from './rerun-advisory-convergence.mjs';
 import {
   fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
@@ -477,287 +467,35 @@ export function collectPreMergeReadiness(
   // one malformed `detailsUrl`
   // (Copilot finding, round 2); it is instead folded into "identity
   // unresolved" like any other partial-resolution case.
-  const MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS = 50;
-  const advisoryConvergenceCheckEntries = checks
-    .map((check, index) => ({ check, index }))
-    .filter(
-      ({ check }) =>
-        check.type === 'check-run' &&
-        check.name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-    );
-  // kurone-kito/idd-skill#2919: reported to `buildPreMergeReadinessSummary`
-  // (`advisoryConvergenceIdentityUnresolved` option) so it can downgrade
-  // the primary required-check gate -- see the doc comment above.
-  let advisoryConvergenceIdentityUnresolved = false;
-  // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review, PR #3425,
-  // two findings against two successive revisions -- see the resolution
-  // loop's own doc comment below for the full history): true when, among
-  // the live `idd-advisory-convergence` instances grouped by same-producer
-  // `(type, workflowName, workflowPath)` and reduced to each group's own
-  // DEDUP-SELECTED representative (the same `selectLatestCheckInstance`
-  // tie-break `classifyCiChecks` itself applies), at least one
-  // representative is pass-equivalent (something exists that would
-  // otherwise read as a pass) AND no representative is BOTH pass-equivalent
-  // AND triggered by `pull_request_target` (no genuinely qualifying pass
-  // exists anywhere to back that reported success). Deliberately keyed on
-  // each group's SELECTED representative, never a raw, un-deduped instance:
-  // a same-file group can carry an older, qualifying `pull_request_target`
-  // pass alongside a newer, non-qualifying `pull_request` pass (a PR that
-  // reintroduced that trigger and pushed again) -- `classifyCiChecks`
-  // dedupes the group down to the NEWER instance before ever classifying
-  // pass/fail, so the older pass never actually backs the reported
-  // `success`. Equally deliberately, an UNRELATED producer group (a
-  // same-display-name decoy workflow file, #2919's own motivating
-  // scenario) never spoils an otherwise-qualifying pass in a DIFFERENT
-  // group: `classifyCiChecks` treats two independent, both-passing
-  // producers as an all-passing rollup regardless of the decoy's own
-  // event, so this flag only ever fires when NO group anywhere has a
-  // qualifying representative. Reported to `buildPreMergeReadinessSummary`
-  // (`advisoryConvergenceNonTargetEventOnly` option) so it can downgrade
-  // the primary required-check gate the same way
-  // `advisoryConvergenceIdentityUnresolved` does, but as a DISTINCT cause
-  // (see `summarizeRequiredChecks`'s `nonTargetEventCheckNames` doc
-  // comment for why the two are never folded into one field). Computed
-  // only once the workflow-path/event resolution below succeeds cleanly
-  // for every live instance -- an unresolved event already routes through
-  // `advisoryConvergenceIdentityUnresolved` instead (see the resolution
-  // loop's own `!event` guard), so this flag and that one are mutually
-  // exclusive in practice. Stays `false` whenever no representative is
-  // pass-equivalent at all -- `classifyCiChecks` already reports
-  // `failed`/`pending` for that case with no help needed here, matching
-  // `summarizeRequiredChecks`'s own downgrade precedent of only ever
-  // narrowing an already-`'success'` status.
-  let advisoryConvergenceNonTargetEventOnly = false;
-  if (advisoryConvergenceCheckEntries.length > 0) {
-    const runIdsByIndex = new Map();
-    for (const { index } of advisoryConvergenceCheckEntries) {
-      const runId = parseRunIdFromUrl(
-        rawStatusCheckRollup[index]?.detailsUrl ?? '',
-      );
-      if (runId) runIdsByIndex.set(index, runId);
-    }
-    if (runIdsByIndex.size > 0) {
-      if (runIdsByIndex.size < advisoryConvergenceCheckEntries.length) {
-        // Mixed: at least one live instance has no parseable run id at
-        // all while at least one other does -- see the doc comment above.
-        advisoryConvergenceIdentityUnresolved = true;
-      } else {
-        const uniqueRunIds = [...new Set(runIdsByIndex.values())];
-        if (
-          uniqueRunIds.length > MAX_ADVISORY_CONVERGENCE_WORKFLOW_PATH_LOOKUPS
-        ) {
-          advisoryConvergenceIdentityUnresolved = true;
-        } else {
-          // kurone-kito/idd-skill#2926: `uniqueRunIds`/`runIdsByIndex` above
-          // stay exactly as #2919 left them -- `parseRunIdFromUrl` is still
-          // the EVIDENCE gate (is there a parseable citation at all? is it
-          // the same one for every live instance? is the DISTINCT-citation
-          // count within the DoS budget?), never a path SOURCE. The path
-          // itself now comes from ONE `listCheckRunWorkflowPaths` call,
-          // which resolves each live check-run's workflow FILE from its own
-          // `checkSuite.workflowRun` (GitHub-assigned) instead of trusting
-          // `getWorkflowRun` on a run id parsed from that check-run's own
-          // creator-settable `detailsUrl` -- see that port method's own doc
-          // comment for the full rationale and its documented residual.
-          //
-          // Correlation back to `rawStatusCheckRollup` still has to go
-          // through `detailsUrl` (the fixed `gh pr view --json
-          // statusCheckRollup` shape carries no check-run database id to
-          // join on instead), so this is not yet a full escape from
-          // `detailsUrl` -- but unlike the pre-#2926 code, `detailsUrl` is
-          // now used ONLY as an opaque join key between two independently-
-          // sourced records of the SAME check-run, never to derive the run
-          // id a resolved PATH comes from. A `detailsUrl` that repeats --
-          // whether among the resolved associations or among the rollup's
-          // own live instances -- can never be joined to a single instance
-          // safely (this is exactly what an attacker copying a genuine
-          // check-run's own `detailsUrl` verbatim produces), so any
-          // repetition fails the whole check name closed, same as every
-          // other resolution failure in this block.
-          let associations = [];
-          try {
-            associations = port.listCheckRunWorkflowPaths(
-              owner,
-              repo,
-              prHeadSha,
-              DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
-            );
-          } catch {
-            advisoryConvergenceIdentityUnresolved = true;
-          }
-          if (!advisoryConvergenceIdentityUnresolved) {
-            const pathByDetailsUrl = new Map();
-            // kurone-kito/idd-skill#3256: mirrors `pathByDetailsUrl` exactly
-            // -- same join key, same duplicate-detection guard below.
-            const eventByDetailsUrl = new Map();
-            const duplicateDetailsUrls = new Set();
-            for (const association of associations) {
-              if (pathByDetailsUrl.has(association.detailsUrl)) {
-                duplicateDetailsUrls.add(association.detailsUrl);
-              } else {
-                pathByDetailsUrl.set(
-                  association.detailsUrl,
-                  association.workflowPath,
-                );
-                eventByDetailsUrl.set(
-                  association.detailsUrl,
-                  association.event,
-                );
-              }
-            }
-            const rollupDetailsUrlCounts = new Map();
-            for (const { index } of advisoryConvergenceCheckEntries) {
-              const detailsUrl = String(
-                rawStatusCheckRollup[index]?.detailsUrl ?? '',
-              );
-              rollupDetailsUrlCounts.set(
-                detailsUrl,
-                (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) + 1,
-              );
-            }
-            const pathsByIndex = new Map();
-            // kurone-kito/idd-skill#3256: mirrors `pathsByIndex` -- resolved
-            // (and validated) only alongside `path` below, in the SAME loop
-            // and under the SAME fail-closed guard, so an index never ends
-            // up with one resolved and the other missing.
-            const eventsByIndex = new Map();
-            for (const { index } of advisoryConvergenceCheckEntries) {
-              const detailsUrl = String(
-                rawStatusCheckRollup[index]?.detailsUrl ?? '',
-              );
-              const path = pathByDetailsUrl.get(detailsUrl);
-              const event = eventByDetailsUrl.get(detailsUrl);
-              if (
-                duplicateDetailsUrls.has(detailsUrl) ||
-                (rollupDetailsUrlCounts.get(detailsUrl) ?? 0) > 1 ||
-                !path ||
-                !event
-              ) {
-                // A missing `event` here also skips `workflowPath`
-                // enrichment for this whole check name (both are set only
-                // AFTER this loop completes cleanly, below), which in turn
-                // leaves `workflowPath` absent -- PERMISSIVE for the
-                // self-waiver candidate filter's own `!check.workflowPath`
-                // fallback (`selfConvergenceProducerCandidates` in
-                // protocol-helpers.mts), reopening #2919's decoy-masking
-                // gap for THAT unrelated path specifically. Accepted: `event`
-                // is populated whenever `checkSuite.workflowRun` itself is
-                // non-null -- i.e. for every GENUINE Actions-triggered
-                // check-run -- and is `null` only when `workflowRun` itself
-                // is (a non-Actions check-run posted directly via the
-                // Checks API, this file's own `provider-adapter-github.test.mts`
-                // models exactly this). That non-Actions case is what this
-                // MIXED branch (a genuine instance alongside a workflowRun-
-                // less one) already fails closed on today; the self-waiver
-                // marker's own condition 4 independently rejects a
-                // non-`pull_request_target` cited run regardless. So this
-                // is a fixture-completeness gap (see the `event`-less
-                // `workflowRuns` test fixtures this repository's own test
-                // suite had to backfill for #3256), never a live
-                // production hole.
-                advisoryConvergenceIdentityUnresolved = true;
-                break;
-              }
-              pathsByIndex.set(index, path);
-              eventsByIndex.set(index, event);
-            }
-            if (!advisoryConvergenceIdentityUnresolved) {
-              checks = checks.map((check, index) => {
-                const path = pathsByIndex.get(index);
-                return path === undefined
-                  ? check
-                  : { ...check, workflowPath: path };
-              });
-              // kurone-kito/idd-skill#3256 (round 2 -- live Copilot review,
-              // PR #3425, two findings): every advisory-convergence entry
-              // now has a cleanly-resolved `event` in `eventsByIndex` (the
-              // loop above would already have set
-              // `advisoryConvergenceIdentityUnresolved` and broken out
-              // otherwise).
-              //
-              // Round-1 finding (High): the original formula checked "does
-              // ANY pass-equivalent live instance have a qualifying event"
-              // across the RAW, un-deduped entries -- wrong, because
-              // `classifyCiChecks` (via `groupChecksByProducer` +
-              // `selectLatestCheckInstance`) dedupes same-producer
-              // `(type, workflowName, workflowPath)` instances down to ONE
-              // representative before ever classifying pass/fail, and an
-              // older qualifying pass can coexist with a newer,
-              // dedup-SELECTED non-qualifying pass from the very same real
-              // workflow file (a PR that reintroduces `pull_request` and
-              // pushes a later, still-green run there) -- the raw-entry
-              // check found the older instance and stayed permissive while
-              // the newer, actually-representative instance was the one
-              // `ci.status` would report `success` from.
-              //
-              // Round-2 finding (Medium), against this file's own FIRST
-              // fix for the round-1 finding: that fix over-corrected to
-              // "flag when ANY group's own selected representative is a
-              // non-qualifying pass" -- wrong in the OPPOSITE direction, for
-              // a genuinely SEPARATE producer (a same-display-name decoy
-              // workflow file, #2919's own motivating scenario):
-              // `classifyCiChecks` treats a `pull_request_target` SUCCESS
-              // in one group and an unrelated `pull_request` SUCCESS in a
-              // DIFFERENT group as an all-passing rollup (two independent,
-              // both-passing producers), so flagging the whole check name
-              // over the unrelated decoy's own non-qualifying event wrongly
-              // downgraded an available, genuinely qualifying pass.
-              //
-              // Correct formula (mirrors the ORIGINAL round-1 existence
-              // check, but over each group's DEDUP-SELECTED representative
-              // instead of raw entries): group by
-              // `(type, workflowName, workflowPath)` (name is already
-              // constant across every entry here), pick each group's own
-              // `selectLatestCheckInstance` (the identical tie-break
-              // protocol-helpers.mts exports for this exact purpose), then
-              // flag only when at least one group's selected representative
-              // is pass-equivalent (there is something that would
-              // otherwise read as a pass) AND no group's selected
-              // representative is BOTH pass-equivalent AND
-              // `pull_request_target`-triggered (no genuinely qualifying
-              // pass exists anywhere to back that reported success).
-              const advisoryConvergenceProducerGroups = new Map();
-              for (const { index } of advisoryConvergenceCheckEntries) {
-                const check = checks[index];
-                const type = check?.type ? String(check.type).trim() : '';
-                const workflowName = check?.workflowName
-                  ? String(check.workflowName).trim()
-                  : '';
-                const path = pathsByIndex.get(index) ?? '';
-                const key = `${type}\0${workflowName}\0${path}`;
-                const entry = {
-                  state: String(check?.state ?? '').toUpperCase(),
-                  completedAt: check?.completedAt ?? null,
-                  event: eventsByIndex.get(index) ?? '',
-                };
-                const group = advisoryConvergenceProducerGroups.get(key);
-                if (group) {
-                  group.push(entry);
-                } else {
-                  advisoryConvergenceProducerGroups.set(key, [entry]);
-                }
-              }
-              const advisoryConvergenceSelectedRepresentatives = [
-                ...advisoryConvergenceProducerGroups.values(),
-              ].map((group) => selectLatestCheckInstance(group));
-              const advisoryConvergenceHasPassEquivalentGroup =
-                advisoryConvergenceSelectedRepresentatives.some((selected) =>
-                  CHECK_PASS_EQUIVALENT_STATES.has(selected.state),
-                );
-              const advisoryConvergenceHasQualifyingTargetPass =
-                advisoryConvergenceSelectedRepresentatives.some(
-                  (selected) =>
-                    CHECK_PASS_EQUIVALENT_STATES.has(selected.state) &&
-                    selected.event === 'pull_request_target',
-                );
-              advisoryConvergenceNonTargetEventOnly =
-                advisoryConvergenceHasPassEquivalentGroup &&
-                !advisoryConvergenceHasQualifyingTargetPass;
-            }
-          }
-        }
-      }
-    }
+  // #3465: the watermark gate calls this same resolver. The two flags
+  // stay distinct: identity-unresolved (#2919) and a resolved pass that
+  // is not pull_request_target (#3256).
+  const advisoryIdentity = resolveAdvisoryConvergenceIdentitySignals(
+    checks.map((check, index) => ({
+      name: String(check.name ?? ''),
+      type: String(check.type ?? ''),
+      state: String(check.state ?? ''),
+      workflowName: String(check.workflowName ?? ''),
+      completedAt: check.completedAt ?? null,
+      detailsUrl: String(rawStatusCheckRollup[index]?.detailsUrl ?? ''),
+    })),
+    () =>
+      port.listCheckRunWorkflowPaths(
+        owner,
+        repo,
+        prHeadSha,
+        DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      ),
+  );
+  const advisoryConvergenceIdentityUnresolved =
+    advisoryIdentity.identityUnresolved;
+  const advisoryConvergenceNonTargetEventOnly =
+    advisoryIdentity.nonTargetEventOnly;
+  if (advisoryIdentity.workflowPathByIndex.size > 0) {
+    checks = checks.map((check, index) => {
+      const path = advisoryIdentity.workflowPathByIndex.get(index);
+      return path === undefined ? check : { ...check, workflowPath: path };
+    });
   }
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads(iddConfig);
   const branchRulesRead = fetchGovernanceJson(
@@ -2239,6 +1977,7 @@ function unwrapGovernanceOutcome(outcome) {
  * against. No current caller sets both options, so the order is behavior-neutral
  * today; it keeps the resolver correct for any future combined call.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveToleratedGhFailure(error, options = {}) {
   const httpStatus = deriveGhHttpStatus(error);
   if (

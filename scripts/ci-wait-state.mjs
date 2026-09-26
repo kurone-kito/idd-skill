@@ -21,6 +21,8 @@
 // - HEAD drift mid-wait: this helper always reports the live `headRefOid` at
 //   read time, so a caller polling in a loop can detect the branch moving
 //   out from under an in-flight wait.
+import { resolveAdvisoryConvergenceIdentitySignals } from './advisory-convergence-identity.mjs';
+import { DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -32,6 +34,11 @@ import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  classifyCiChecks,
+  compareIsoTimestamps,
+  isCompletedCiTimestamp,
+  isPreMergeCiAllPassing,
+  resolvePresentRunConclusion,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
@@ -97,6 +104,14 @@ const CI_WAIT_STATE_FLAG_SPEC = {
   '--repo': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
+// Above the CLI entry block: a module-level binding after that block is a
+// top-level-await TDZ risk (tests/cli-entry-smoke.test.mts).
+const PASS_EQUIVALENT_STATES = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
 if (import.meta.main) {
   // #3342: call main() directly when the envelope is disabled -- see
   // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
@@ -232,7 +247,36 @@ export function collectCiWaitState(
       protectionReadsUnreadable,
     },
   );
-  return summary;
+  // #3465: the watermark predicate must see the same advisory-convergence
+  // downgrades pre-merge readiness applies. The rollup status itself stays
+  // the D-phase wait signal; only the returned flags and resolved
+  // workflow paths change.
+  const advisoryIdentity = resolveAdvisoryConvergenceIdentitySignals(
+    summary.checks.map((check) => ({
+      name: check.checkName,
+      type: check.type,
+      state: check.state,
+      workflowName: check.workflowName,
+      completedAt: check.completedAt || null,
+      detailsUrl: check.url,
+    })),
+    () =>
+      port.listCheckRunWorkflowPaths(
+        owner,
+        repo,
+        pr.headSha,
+        DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      ),
+  );
+  return {
+    ...summary,
+    checks: summary.checks.map((check, index) => {
+      const path = advisoryIdentity.workflowPathByIndex.get(index);
+      return path === undefined ? check : { ...check, workflowPath: path };
+    }),
+    advisoryConvergenceIdentityUnresolved: advisoryIdentity.identityUnresolved,
+    advisoryConvergenceNonTargetEventOnly: advisoryIdentity.nonTargetEventOnly,
+  };
 }
 /**
  * Classify whether a branch-rules or classic branch-protection governance
@@ -277,6 +321,8 @@ export function buildCiWaitStateSummary(input, options = {}) {
     headRefOid: String(input.headRefOid ?? ''),
     checks,
     requiredChecks,
+    advisoryConvergenceIdentityUnresolved: false,
+    advisoryConvergenceNonTargetEventOnly: false,
   };
 }
 function normalizeCheckEntry(entry, requiredCheckNameSet) {
@@ -574,6 +620,111 @@ function buildRequiredChecksRollup(
     protectionReadsUnreadable,
     status,
   };
+}
+/**
+ * #3465: map this helper's required-check rollup onto
+ * {@link isPreMergeCiAllPassing}, the predicate pre-merge readiness
+ * already uses. A rollup `status` of `success` is the only value that
+ * means every enumerated required check is present and passing with no
+ * source-pinned or unreadable downgrade. `no-required-checks` falls
+ * through to that predicate's present-run clause. A failing check that
+ * is not in the required set does not change a `success` rollup.
+ * The no-required-checks fallback calls {@link resolvePresentRunConclusion}
+ * so a success from a different workflow cannot hide another producer's
+ * failure. Waiver coverage is not an input: `collectCiWaitState` does
+ * not read external-check waivers, so a required check that is failing
+ * in the rollup stays non-passing here even when pre-merge readiness
+ * would treat a valid waiver as covered. This command does not
+ * re-validate waivers. It does apply the two advisory-convergence
+ * downgrades readiness applies after classification: unresolved producer
+ * identity, and a pass whose selected representative is not
+ * `pull_request_target`. Those flags are set by `collectCiWaitState`;
+ * a summary from the pure builder leaves both false.
+ */
+export function ciWaitSummaryIsPreMergeCiPassing(summary) {
+  const rollup = summary.requiredChecks;
+  // The required rollup dedupes by check name, which matches GitHub's
+  // required-status-check gate. Pre-merge readiness classifies by producer
+  // instead, so a failure from one workflow can remain blocking beside a
+  // later success from another workflow that shares the display name.
+  // Require both: the rollup's own success (missing names, source-pinned,
+  // and unreadable stay on that status) and a producer-aware success.
+  const requiredNames = new Set(rollup.names);
+  const advisoryDowngrade =
+    summary.advisoryConvergenceIdentityUnresolved ||
+    summary.advisoryConvergenceNonTargetEventOnly;
+  const advisoryDowngradeNames = advisoryDowngrade
+    ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
+    : new Set();
+  const producerStatus = classifyCiChecks(
+    summary.checks
+      .filter((check) => requiredNames.has(check.checkName))
+      .map((check) => ({
+        name: check.checkName,
+        state: check.state,
+        completedAt: check.completedAt,
+        type: check.type,
+        workflowName: check.workflowName,
+        workflowPath: check.workflowPath ?? '',
+      })),
+  ).status;
+  const presentRunConclusion = resolvePresentRunConclusion(
+    summary.checks.map((check) => ({
+      name: check.checkName,
+      state: check.state,
+      completedAt: check.completedAt,
+      coveredByWaiver: false,
+      type: check.type,
+      workflowName: check.workflowName,
+      workflowPath: check.workflowPath ?? '',
+    })),
+    advisoryDowngradeNames,
+  );
+  const requiredChecksPassing =
+    rollup.names.length > 0 &&
+    rollup.status === 'success' &&
+    producerStatus === 'success' &&
+    !(
+      advisoryDowngrade &&
+      requiredNames.has(DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR)
+    );
+  return isPreMergeCiAllPassing({
+    protectionReadsUnreadable:
+      rollup.protectionReadsUnreadable || rollup.status === 'unreadable',
+    requiredChecksPassing,
+    // `isPreMergeCiAllPassing` treats `status === 'success'` as passing on
+    // its own, so this must stay failed whenever the producer-aware check
+    // disagrees with the name-only rollup.
+    status: requiredChecksPassing ? 'success' : 'failed',
+    noRequiredChecksConfigured: rollup.status === 'no-required-checks',
+    presentRunConclusion,
+  });
+}
+/**
+ * Latest completion among pass-equivalent checks, or `none`. Mirrors the
+ * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
+ * can refuse when the live read has moved past the snapshot it is about
+ * to record.
+ */
+export function latestPassingCompletedAt(summary) {
+  let latest = '';
+  for (const check of summary.checks) {
+    if (!PASS_EQUIVALENT_STATES.has(check.state.toUpperCase())) {
+      continue;
+    }
+    // Same filter and ordering as the snapshot field this value is
+    // compared with: drop the zero-value sentinel and any non-ISO
+    // timestamp, then order with compareIsoTimestamps so a fractional
+    // second cannot sort behind a whole-second form of an earlier instant.
+    if (!isCompletedCiTimestamp(check.completedAt)) {
+      continue;
+    }
+    if (latest && compareIsoTimestamps(check.completedAt, latest) <= 0) {
+      continue;
+    }
+    latest = check.completedAt;
+  }
+  return latest || 'none';
 }
 /**
  * Restores this file's pre-#1450 permissive `Number.parseInt` contract:

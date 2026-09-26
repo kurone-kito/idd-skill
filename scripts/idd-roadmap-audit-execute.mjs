@@ -703,6 +703,7 @@ export function findWorktreeEntriesForBranch(entries, branchName) {
   );
 }
 /** The first entry {@link findWorktreeEntriesForBranch} would return, or null. */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function findWorktreeEntryForBranch(entries, branchName) {
   return findWorktreeEntriesForBranch(entries, branchName)[0] ?? null;
 }

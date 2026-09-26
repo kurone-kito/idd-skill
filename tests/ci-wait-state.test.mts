@@ -3,8 +3,10 @@ import { test } from 'node:test';
 
 import {
   buildCiWaitStateSummary,
+  ciWaitSummaryIsPreMergeCiPassing,
   collectCiWaitState,
   isProtectionReadUnreadable,
+  latestPassingCompletedAt,
   parseArgs,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
@@ -1221,5 +1223,342 @@ test('collectCiWaitState against a fake provider: an empty baseRefName with no r
         () => ({}),
       ),
     /cannot resolve a trusted ref for \.github\/idd\/config\.json/,
+  );
+});
+
+test('#3465: pre-merge CI predicate follows required-check success, pending, failure, and a non-required failure', () => {
+  const passing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+        checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(passing), true);
+
+  const failing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'FAILURE' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
+
+  const pending = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', status: 'IN_PROGRESS', conclusion: '' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(pending), false);
+
+  const unreadable = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: ['lint'], protectionReadsUnreadable: true },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(unreadable), false);
+
+  const sourcePinned = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    {
+      requiredCheckNames: ['lint'],
+      requiredCheckSourcePinned: true,
+    },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(sourcePinned), false);
+
+  const noRequired = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'ci', conclusion: 'SUCCESS' })],
+    },
+    {},
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(noRequired), true);
+
+  const staleFailureThenSuccess = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'ci',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'ci',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(staleFailureThenSuccess), true);
+
+  const otherProducerStillFailing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'ci',
+          workflowName: 'push',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'ci',
+          workflowName: 'merge',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing(otherProducerStillFailing),
+    false,
+  );
+});
+
+test('#3465: a later success from another workflow does not hide a required failure', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          workflowName: 'push',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-09T00:01:00Z',
+        }),
+        checkRun({
+          name: 'lint',
+          workflowName: 'merge',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+});
+
+test('#3465: a raw required-check failure refuses without consulting waivers', () => {
+  // collectCiWaitState does not read external-check waivers. A failing
+  // required check stays non-passing for the watermark gate even when a
+  // later pre-merge pass would treat a valid waiver as covered.
+  const failing = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'FAILURE' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
+});
+
+test('#3465: a green advisory-convergence rollup still refuses when readiness would downgrade it', () => {
+  const green = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          conclusion: 'SUCCESS',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(green), true);
+
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...green,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    false,
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...green,
+      advisoryConvergenceIdentityUnresolved: true,
+    }),
+    false,
+  );
+
+  const lintOnly = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'lint', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...lintOnly,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    true,
+  );
+
+  const presentRun = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          conclusion: 'SUCCESS',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    ciWaitSummaryIsPreMergeCiPassing({
+      ...presentRun,
+      advisoryConvergenceNonTargetEventOnly: true,
+    }),
+    false,
+  );
+});
+
+test('#3465: collectCiWaitState records a non-target advisory pass and a qualifying target pass', () => {
+  const headSha = 'b'.repeat(40);
+  const detailsUrl = 'https://github.com/o/r/actions/runs/99/job/1';
+  const rollup = [
+    {
+      __typename: 'CheckRun',
+      name: 'idd-advisory-convergence',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      workflowName: 'IDD advisory-convergence gate',
+      detailsUrl,
+      startedAt: '2026-07-09T00:00:00Z',
+      completedAt: '2026-07-09T00:05:00Z',
+    },
+  ];
+  const governance = {
+    branchRules: { 'o/r/main': [] },
+    branchProtection: {
+      'o/r/main': {
+        required_status_checks: { contexts: ['idd-advisory-convergence'] },
+      },
+    },
+  };
+  const collect = (event: string) =>
+    collectCiWaitState(
+      ['--pr', '42', '--owner', 'o', '--repo', 'r'],
+      () =>
+        createFakeProviderAdapter({
+          changeRequestBranchAndChecks: {
+            42: { headSha, baseRefName: 'main', statusCheckRollup: rollup },
+          },
+          ...governance,
+          checkRunWorkflowPaths: {
+            [`o/r/${headSha}/idd-advisory-convergence`]: [
+              {
+                detailsUrl,
+                workflowPath: '.github/workflows/idd-advisory-convergence.yml',
+                event,
+              },
+            ],
+          },
+        }),
+      () => ({}),
+    );
+
+  const nonTarget = collect('pull_request');
+  assert.equal(nonTarget.advisoryConvergenceNonTargetEventOnly, true);
+  assert.equal(nonTarget.advisoryConvergenceIdentityUnresolved, false);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(nonTarget), false);
+
+  const qualifying = collect('pull_request_target');
+  assert.equal(qualifying.advisoryConvergenceNonTargetEventOnly, false);
+  assert.equal(
+    qualifying.checks[0]?.workflowPath,
+    '.github/workflows/idd-advisory-convergence.yml',
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(qualifying), true);
+});
+
+test('#3465: latestPassingCompletedAt ignores sentinel and malformed passing timestamps', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '0001-01-01T00:00:00Z',
+        }),
+        checkRun({
+          name: 'docs',
+          conclusion: 'SUCCESS',
+          completedAt: 'not-a-timestamp',
+        }),
+        checkRun({
+          name: 'build',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(latestPassingCompletedAt(summary), '2026-07-09T00:05:00Z');
+
+  const onlyInvalid = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '0001-01-01T00:00:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(latestPassingCompletedAt(onlyInvalid), 'none');
+
+  const fractional = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-06-25T11:00:00Z',
+        }),
+        checkRun({
+          name: 'docs',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-06-25T11:00:00.123Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(
+    latestPassingCompletedAt(fractional),
+    '2026-06-25T11:00:00.123Z',
   );
 });

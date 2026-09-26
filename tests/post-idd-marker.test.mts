@@ -1183,6 +1183,52 @@ test('describeUnaddressedActivity reports threads alone (singular)', () => {
   assert.match(warnings[0], /cover it -- dispose it\b/);
 });
 
+test('describeUnaddressedActivity stays silent for a courtesy-ack-only thread set (#3482)', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      dispositionEvidence: {
+        missingRegularCommentCount: 0,
+        missingThreadCount: 1,
+        soleCauseAckOnlyPostDisposition: true,
+      },
+    }),
+    [],
+  );
+});
+
+test('describeUnaddressedActivity still warns when the courtesy-ack flag is set but a regular comment is missing (#3482)', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 1,
+      soleCauseAckOnlyPostDisposition: true,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /^1 comment and 1 thread have no disposition evidence/,
+  );
+});
+
+test('describeUnaddressedActivity still warns when the courtesy-ack flag is missing or not exactly true (#3482)', () => {
+  const base = {
+    missingRegularCommentCount: 0,
+    missingThreadCount: 1,
+  };
+  const cases: Array<Record<string, unknown>> = [
+    base,
+    { ...base, soleCauseAckOnlyPostDisposition: false },
+    { ...base, soleCauseAckOnlyPostDisposition: 'true' },
+    { ...base, soleCauseAckOnlyPostDisposition: 1 },
+  ];
+  for (const dispositionEvidence of cases) {
+    const warnings = describeUnaddressedActivity({ dispositionEvidence });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^1 thread has no disposition evidence/);
+  }
+});
+
 test('describeUnaddressedActivity fails open on negative/non-numeric counters (never throws)', () => {
   assert.deepEqual(
     describeUnaddressedActivity({
@@ -1195,25 +1241,266 @@ test('describeUnaddressedActivity fails open on negative/non-numeric counters (n
   );
 });
 
-const REVIEW_ACTIVITY_SNAPSHOT_GH_STUB = (
+const PASSING_CHECK_RUN = {
+  __typename: 'CheckRun',
+  name: 'ci',
+  status: 'COMPLETED',
+  conclusion: 'SUCCESS',
+  startedAt: '2026-06-25T10:00:00Z',
+  completedAt: '2026-06-25T11:00:00Z',
+  detailsUrl: 'https://example.test/ci',
+  checkSuite: {
+    app: { slug: 'github-actions' },
+    workflowRun: {
+      file: { path: '.github/workflows/ci.yml' },
+      workflow: { name: 'ci' },
+    },
+  },
+};
+
+function statusCheckRollupResponse(
   headSha: string,
-) => `const fs = require('node:fs');
+  nodes: readonly Record<string, unknown>[],
+): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid: headSha,
+          baseRefName: 'main',
+          statusCheckRollup: {
+            contexts: {
+              nodes,
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+/**
+ * Offline `gh` for a `--from-pr` watermark. The review-activity snapshot
+ * answers stay as they were; the extra branches answer `ci-wait-state`'s
+ * required-check read (#3465) so the shared pre-merge predicate sees one
+ * passing present run and no required-check names.
+ */
+function watermarkFromPrGhStub(
+  headSha: string,
+  options: {
+    rollupNodes?: readonly Record<string, unknown>[];
+    rollupHeadSha?: string;
+    rulesBody?: string;
+    commentsBody?: string;
+  } = {},
+): string {
+  const rollup = JSON.stringify(
+    statusCheckRollupResponse(
+      options.rollupHeadSha ?? headSha,
+      options.rollupNodes ?? [PASSING_CHECK_RUN],
+    ),
+  );
+  const rulesBody = JSON.stringify(options.rulesBody ?? '');
+  const commentsBody = JSON.stringify(
+    options.commentsBody ??
+      JSON.stringify([
+        {
+          body: 'hi',
+          created_at: '2026-06-25T10:00:00Z',
+          updated_at: '2026-06-25T10:30:00Z',
+          user: { login: 'someone' },
+        },
+      ]),
+  );
+  return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' } }));
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) {
+  out(${rollup});
+}
 if (args[0] === 'api' && args[1] === 'graphql') {
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
 }
 if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
-if (args[0] === 'api' && /\\/comments$/.test(args[1])) {
-  out(JSON.stringify([{ body: 'hi', created_at: '2026-06-25T10:00:00Z', updated_at: '2026-06-25T10:30:00Z', user: { login: 'someone' } }]));
-}
+if (args[0] === 'api' && /rules\\/branches\\//.test(args[1])) out(${rulesBody});
+if (args[0] === 'api' && /\\/protection$/.test(args[1])) out('{}');
+if (args[0] === 'api' && /contents\\/\\.github\\/idd\\/config\\.json/.test(args[1])) out('e30=');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) out(${commentsBody});
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
 `;
+}
+
+const REVIEW_ACTIVITY_SNAPSHOT_GH_STUB = (headSha: string) =>
+  watermarkFromPrGhStub(headSha);
+
+const REQUIRED_LINT_RULE =
+  '{"type":"required_status_checks","parameters":{"required_status_checks":["lint"]}}\n';
+
+function rollupCheck(
+  name: string,
+  conclusion: string,
+  status = 'COMPLETED',
+): Record<string, unknown> {
+  return { ...PASSING_CHECK_RUN, name, status, conclusion };
+}
+
+function runWatermarkFromPr(apply: boolean): string {
+  return execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      ...(apply ? ['--apply'] : []),
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+}
+
+function assertWatermarkRefused(stub: string, apply: boolean): void {
+  const restore = stubExecutable('gh', stub);
+  try {
+    runWatermarkFromPr(apply);
+  } catch (error) {
+    const failure = error as {
+      status?: number;
+      stderr?: string;
+      stdout?: string;
+    };
+    assert.equal(failure.status, 1);
+    assert.match(failure.stderr ?? '', /required checks are not passing/);
+    assert.equal(failure.stdout ?? '', '');
+    return;
+  } finally {
+    restore();
+  }
+  throw new Error('expected the CLI to exit non-zero');
+}
+
+test('#3465: --from-pr watermark refuses a failed required check in dry-run and --apply', () => {
+  const stub = watermarkFromPrGhStub(SHA, {
+    rollupNodes: [rollupCheck('lint', 'FAILURE')],
+    rulesBody: REQUIRED_LINT_RULE,
+  });
+  assertWatermarkRefused(stub, false);
+  assertWatermarkRefused(stub, true);
+});
+
+test('#3465: --from-pr watermark refuses a still-pending required check', () => {
+  assertWatermarkRefused(
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [rollupCheck('lint', '', 'IN_PROGRESS')],
+      rulesBody: REQUIRED_LINT_RULE,
+    }),
+    false,
+  );
+});
+
+test('#3465: --from-pr watermark refuses when the required-check HEAD differs from the snapshot', () => {
+  const otherHead = 'b'.repeat(40);
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, { rollupHeadSha: otherHead }),
+  );
+  try {
+    runWatermarkFromPr(false);
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /does not match the activity snapshot HEAD/,
+    );
+    assert.match(failure.stderr ?? '', new RegExp(otherHead));
+    assert.match(failure.stderr ?? '', new RegExp(SHA));
+    return;
+  } finally {
+    restore();
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('#3465: --from-pr watermark refuses when the live passing completion moved past the snapshot', () => {
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [
+        {
+          ...PASSING_CHECK_RUN,
+          completedAt: '2026-06-25T12:00:00Z',
+        },
+      ],
+    }),
+  );
+  try {
+    runWatermarkFromPr(false);
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(
+      failure.stderr ?? '',
+      /live passing completion 2026-06-25T12:00:00Z does not match the activity snapshot ci-completed-at 2026-06-25T11:00:00Z/,
+    );
+    return;
+  } finally {
+    restore();
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
+test('#3465: a non-required failure does not refuse a passing required check', () => {
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [
+        rollupCheck('lint', 'SUCCESS'),
+        rollupCheck('docs', 'FAILURE'),
+      ],
+      rulesBody: REQUIRED_LINT_RULE,
+    }),
+  );
+  try {
+    const output = runWatermarkFromPr(false);
+    assert.deepEqual(JSON.parse(output), {
+      mode: 'dry-run',
+      type: 'watermark',
+      target: 'pr',
+      number: 1200,
+      body: buildMarkerBody('watermark', {
+        'agent-id': 'claude-02f8159e',
+        'claim-id': 'claim-1134-02f8159e',
+        'head-sha': SHA,
+        'max-activity-at': '2026-06-25T10:30:00Z',
+        'total-item-count': '1',
+        'ci-completed-at': '2026-06-25T11:00:00Z',
+      }),
+      warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
+    });
+  } finally {
+    restore();
+  }
+});
 
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
   // Stub `gh` on PATH so the real subprocess composition runs offline: the
@@ -1277,21 +1564,7 @@ test('--from-pr CLI composes review-activity-snapshot and prints the derived wat
 test('--from-pr CLI omits warnings when the live snapshot has nothing missing a disposition', () => {
   const restore = stubExecutable(
     'gh',
-    `const fs = require('node:fs');
-const args = process.argv.slice(2);
-const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${SHA}', author: { login: 'someone' } }));
-if (args[0] === 'pr' && args[1] === 'checks') {
-  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
-}
-if (args[0] === 'api' && args[1] === 'graphql') {
-  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
-}
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
-if (args[0] === 'api' && /\\/comments$/.test(args[1])) out('[]');
-fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
-process.exit(1);
-`,
+    watermarkFromPrGhStub(SHA, { commentsBody: '[]' }),
   );
   try {
     const output = execFileSync(

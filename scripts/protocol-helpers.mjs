@@ -1805,6 +1805,7 @@ function extractCodeRabbitEmbeddedFindingsFromSection(section) {
  * comparison. Never negative: a review whose threaded comments already
  * meet or exceed its embedded-finding count reports `0`.
  */
+// audit:ignore-dead-export: pending #3341's own expose-via-CLI decision for this export; do not duplicate that fix here
 export function countUncoveredCodeRabbitEmbeddedFindings(
   body,
   threadedCommentCount,
@@ -2104,6 +2105,7 @@ export function indexThreadsByReview(threads, options = {}) {
   }
   return index;
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function routeRejectedChangesRequestedReview(input) {
   const escalationPolicy = getReviewEscalationChangesRequestedPolicy(
     input?.policyConfig ?? {},
@@ -2695,6 +2697,7 @@ export function isRejectionConfirmedDisposition(comment) {
     (comment.body ?? '').trimStart(),
   );
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function isIddDispositionComment(comment) {
   const author = comment.author?.login ?? '';
   return isDispositionComment(comment) && !isKnownReviewBot(author);
@@ -3723,6 +3726,7 @@ export function isAdvisoryNonReviewNotice(body) {
  * count) with no natural per-fixture source, breaking the uniform
  * one-argument shape every other entry shares.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export const BOT_WORDING_CLASSIFIERS = [
   {
     id: 'copilot-review-body',
@@ -7351,7 +7355,7 @@ export function summarizeRequiredChecks(
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
 // real run conclusions instead.
-function resolvePresentRunConclusion(
+export function resolvePresentRunConclusion(
   normalizedChecks,
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
   // check NAMES this collection pass could not fully resolve real
@@ -8315,7 +8319,14 @@ export function summarizeClaimValidationForWriteGate(
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
-function isPreMergeCiAllPassing(ci) {
+/**
+ * Whether pre-merge readiness treats this CI summary as all-passing.
+ * #3465: the `--from-pr` watermark gate calls this function rather than
+ * growing a second definition of green. `protectionReadsUnreadable` and
+ * a source-pinned downgrade (status other than `success`,
+ * `requiredChecksPassing` false) already decide the result here.
+ */
+export function isPreMergeCiAllPassing(ci) {
   // #1377: an unreadable protection/ruleset read means the required-check
   // set this report computed may be incomplete -- a masked 404 can hide
   // additional required checks the readable source(s) never surfaced. Block
@@ -8405,9 +8416,21 @@ export function computePreMergeReadinessBlockers(report) {
   if (report.secondaryQuietWindow !== undefined) {
     const secondaryQuietWindow = preMergeAsRecord(report.secondaryQuietWindow);
     if (secondaryQuietWindow.elapsed !== true) {
+      const appliedMinutes = secondaryQuietWindow.minutes ?? 0;
+      const configuredMinutes = secondaryQuietWindow.configuredMinutes;
+      // #3485: `minutes` is the applied gate length. On the #2544
+      // settled-buffer path it is the clamped buffer, not the configured
+      // window. Name both when they differ so "(5 min)" is not read as
+      // the configured window itself.
+      const windowPhrase =
+        typeof configuredMinutes === 'number' &&
+        Number.isFinite(configuredMinutes) &&
+        configuredMinutes !== appliedMinutes
+          ? `${String(appliedMinutes)} min settled-buffer of a ${String(configuredMinutes)} min configured window`
+          : `${String(appliedMinutes)} min`;
       blockers.push({
         gate: 'secondary-quiet-window',
-        detail: `advisoryWait.secondaryQuietWindow (${String(secondaryQuietWindow.minutes ?? 0)} min) has not elapsed since the last substantive activity at "${String(secondaryQuietWindow.anchorAt ?? 'none')}" -- ${String(secondaryQuietWindow.remainingMinutes ?? 'unknown')} minute(s) remaining`,
+        detail: `advisoryWait.secondaryQuietWindow (${windowPhrase}) has not elapsed since the last substantive activity at "${String(secondaryQuietWindow.anchorAt ?? 'none')}" -- ${String(secondaryQuietWindow.remainingMinutes ?? 'unknown')} minute(s) remaining`,
       });
     }
   }
@@ -10555,6 +10578,7 @@ export function normalizeLinkedPrReference(value) {
   }
   return token.toLowerCase();
 }
+// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
 export function classifyResumeRoutingCase(input, options = {}) {
   const staleHours = Number.isFinite(options.staleHours)
     ? options.staleHours
@@ -11506,7 +11530,7 @@ function hasUnresolvedKnownBotThreads(threads) {
     });
   });
 }
-function isCompletedCiTimestamp(value) {
+export function isCompletedCiTimestamp(value) {
   const timestamp = String(value ?? '');
   return timestamp !== '0001-01-01T00:00:00Z' && isValidIsoTimestamp(timestamp);
 }

@@ -11977,6 +11977,7 @@ test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread fi
 // advisoryWait.secondaryQuietWindow.
 function secondaryQuietWindowOf(summary: unknown): {
   minutes: number;
+  configuredMinutes: number;
   anchorAt: string;
   elapsedMinutes: number | null;
   elapsed: boolean;
@@ -11986,6 +11987,7 @@ function secondaryQuietWindowOf(summary: unknown): {
   return (summary as { secondaryQuietWindow: Record<string, unknown> })
     .secondaryQuietWindow as {
     minutes: number;
+    configuredMinutes: number;
     anchorAt: string;
     elapsedMinutes: number | null;
     elapsed: boolean;
@@ -12357,10 +12359,18 @@ test('#3186: one settled login and one declined login anchors on the settled log
   // The settled buffer (5min, clamped from the configured 60min) applies,
   // not the full window.
   assert.equal(status.minutes, 5);
+  assert.equal(status.configuredMinutes, 60);
   assert.equal(status.elapsedMinutes, 2);
   assert.equal(status.elapsed, false);
   assert.equal(status.remainingMinutes, 3);
   assert.equal(status.declined, false);
+  const quiet = (summary.blockers as { gate: string; detail: string }[]).find(
+    (blocker) => blocker.gate === 'secondary-quiet-window',
+  );
+  assert.match(
+    quiet?.detail ?? '',
+    /5 min settled-buffer of a 60 min configured window/,
+  );
 });
 
 test('#3186: both logins settled anchors on the LATEST genuine review timestamp', () => {

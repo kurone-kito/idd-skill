@@ -163,6 +163,16 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   // adopter repository has no `kurone-kito/idd-skill`-specific issue
   // history of its own to snapshot.
   'scripts/snapshot-issue-body-corpus.mjs',
+  // audit-dead-exports.mjs (#3478): this repository's own dogfood
+  // mechanical dead-export audit, named in docs/idd-helper-scripts.md's
+  // own usage description and wired into `lint:minimum` (package.json).
+  // It scans only this repository's own `src/scripts/**`/`src/bin/**`/
+  // `tests/**` .mts sources -- a repository-local lint check, like
+  // `audit-docs.mjs`/`audit-code-span-wrap.mjs` above, not an IDD-phase
+  // evidence collector -- and is never distributed to idd-template/; an
+  // adopter repository has an entirely different helper-source tree to
+  // audit.
+  'scripts/audit-dead-exports.mjs',
 ]);
 
 // A helper name that appears only as a *proposed*, not-yet-built script

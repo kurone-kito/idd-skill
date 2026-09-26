@@ -122,15 +122,16 @@ agent-id alone.
 
 `{branch}` = active claim `branch:` field **verbatim**.
 
-| Situation                               | Action                                                          |
-| --------------------------------------- | --------------------------------------------------------------- |
-| No worktree, PR or remote branch exists | Create sibling worktree for `{branch}` (B1 rules); install-deps |
-| Worktree dirty with open reviews        | Stop and report; do not discard uncommitted work                |
-| Worktree dirty, no reviews              | Finish or stash per operator policy; prefer stop-and-ask        |
-| Worktree clean with unpushed commits    | → D1 / push path after claim revalidation                       |
-| Worktree clean, no unpushed             | → Step 3                                                        |
-| Multiple open PRs for the claim branch  | STOP — ambiguous                                                |
-| No PR, no remote, no local branch       | → B1 fresh worktree                                             |
+| Situation                              | Action                                                          |
+| -------------------------------------- | --------------------------------------------------------------- |
+| PR exists, no worktree                 | Create sibling worktree (B1); install-deps, then re-match below |
+| Remote branch, no PR, no worktree      | Create sibling worktree (B1); install-deps                      |
+| Worktree dirty with open reviews       | Stop and report; do not discard uncommitted work                |
+| Worktree dirty, no reviews             | Finish or stash per operator policy; prefer stop-and-ask        |
+| Worktree clean with unpushed commits   | → D1 / push path after claim revalidation                       |
+| Worktree clean, no unpushed            | → Step 3                                                        |
+| Multiple open PRs for the claim branch | STOP — ambiguous                                                |
+| No PR, no remote, no local branch      | → B1 fresh worktree                                             |
 
 Primary worktree must stay on `main`. Never `git switch` the primary onto
 the issue branch.
