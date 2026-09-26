@@ -3178,31 +3178,25 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * invocation never threaded it -- a prose-wide search would have reported
  * a false positive on that historical, already-broken wording.
  *
- * The scanned range runs from the start of the given text through the end
- * of the `## Step 1` section (its heading through the line before the
- * next `## ` heading, or end of text) rather than the `## Step 1` section
- * alone: `idd-resume-lite.instructions.md`'s own Step 1 section
+ * Step 1's own heading-to-heading span (its heading through the line
+ * before the next `## ` heading, or end of text) is checked *first* and
+ * preferred whenever it contains at least one invocation line -- a line
+ * naming both `resume-claim-routing.mjs` and `--issue`. Only when Step
+ * 1's own span contains *no* invocation line at all does the search widen
+ * to the rest of the text from the start of the file through the end of
+ * that span: `idd-resume-lite.instructions.md`'s own Step 1 section
  * deliberately says "run the Claim-state command above" instead of
  * repeating the invocation, so the flags it documents live in the section
- * above Step 1, not inside Step 1's own heading-to-heading span. Widening
- * the range this way introduces no false positive against the real,
- * current `idd-resume.instructions.md`: it has no occurrence of any of
- * these three tokens anywhere before its own `## Step 1` heading, so the
- * widened range adds nothing there -- every match still comes from Step
- * 1's own invocation line, same as scanning that section alone would
- * find.
- *
- * Known precision limit (C1 review, #3480): flags are unioned across
- * *every* matching invocation line found anywhere in the scanned range,
- * not only the one(s) inside Step 1's own heading-to-heading span. This
- * cannot currently produce a false positive against either real file (see
- * above), but a hypothetical future edit that duplicated a flag-less
- * invocation line directly inside Step 1's own body -- while an
- * unrelated, still-correct invocation line elsewhere in the widened range
- * kept all three flags -- would not be caught. Tightening this would
- * require Step 1's own span to carry the flags directly except for
- * lite's documented "run the Claim-state command above" exception, which
- * is more complexity than this currently-hypothetical case warrants.
+ * above Step 1, never inside Step 1's own span. Preferring Step 1's own
+ * span first (Copilot review, #3480) closes a precision gap the original,
+ * unconditionally-widened design had: unioning flags from *every*
+ * matching invocation line in the widened range regardless of where it
+ * fell would have let a stale, flag-less invocation line inserted
+ * directly inside Step 1's own body hide behind an unrelated, still-
+ * correct invocation earlier in that same range -- exactly the kind of
+ * regression this parser exists to catch. Preferring Step 1's own span
+ * whenever it has content instead means a flag-less invocation appearing
+ * there is used as-is, with no earlier line to mask it.
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
@@ -3221,12 +3215,15 @@ function parseStepOneOwnClaimFlags(
       break;
     }
   }
-  const invocationLines = lines
-    .slice(0, sectionEnd)
-    .filter(
-      (line) =>
-        line.includes('resume-claim-routing.mjs') && line.includes('--issue'),
-    );
+  const isInvocationLine = (line: string): boolean =>
+    line.includes('resume-claim-routing.mjs') && line.includes('--issue');
+  const ownSpanInvocationLines = lines
+    .slice(stepOneIndex, sectionEnd)
+    .filter(isInvocationLine);
+  const invocationLines =
+    ownSpanInvocationLines.length > 0
+      ? ownSpanInvocationLines
+      : lines.slice(0, sectionEnd).filter(isInvocationLine);
   const found = new Set<StepOneOwnClaimFlag>();
   for (const line of invocationLines) {
     for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
