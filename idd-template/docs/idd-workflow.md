@@ -732,6 +732,19 @@ re-enters Discover for the next unclaimed issue in a fresh session. This
 composes with IDD's existing model — it ships no daemon and relies on an
 external scheduler to drive the loop.
 
+### Live-session E/F orientation
+
+When a live session still owns its claim but is unsure what to check next
+mid E/F-phase — not after a crash, takeover, or missing review snapshot —
+use the existing gates as a navigation aid. With helper runtime, run
+`pre-merge-readiness` for the current PR and route by its
+`branchCurrency`, `threads` plus `unrepliedComments` plus
+`reviewerStates`, `advisoryWait`, and `ci` sections to the existing
+E-phase or F-phase section that resolves the blocker. Without helper
+runtime, use `idd-resume.instructions.md` Step 3's CI-state × review-state
+table for the same routing. This is a pointer only: it changes no phase
+behavior and creates no new rule.
+
 Treat the **context window as a first-class, exhaustible resource**,
 alongside wall-clock time and token budget. A single session that runs
 F5 → Discover → … → F5 in-process accumulates every issue's tool output,

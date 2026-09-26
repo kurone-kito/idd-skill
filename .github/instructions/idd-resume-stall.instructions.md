@@ -10,6 +10,10 @@ rate-limited session and needs a dedicated, safety-first decision path.
 This path relies only on externally observable state. It never depends
 on the prior session posting a graceful shutdown.
 
+A live session that still owns its claim but is unsure what to check next
+mid E/F-phase should use the [E/F orientation]
+(../../docs/idd-workflow.md#live-session-ef-orientation) instead.
+
 This file applies only to unattended stale-takeover evidence for a
 non-owned claim. Human-gated forced handoff is a separate recovery path
 and is routed from `idd-resume.instructions.md` before this file runs.
