@@ -297,6 +297,7 @@ export function defaultCodexSessionsDir() {
  * idd-skill worktree or clone, and harvest each into a
  * {@link TokenCostAdapterResult}.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function scanCodexSessions(options) {
   const sessionsDir = options?.sessionsDir ?? defaultCodexSessionsDir();
   const files = globSync('**/rollout-*.jsonl', {

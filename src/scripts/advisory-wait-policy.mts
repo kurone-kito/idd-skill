@@ -209,6 +209,7 @@ export function readAdvisoryPrimaryBotLogin(
  * real account login. Pure and fails closed to the default REST login when
  * `primaryBotLogin` is blank.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveAdvisoryBotRestLogin(
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
@@ -304,6 +305,7 @@ export function readAdvisorySecondaryBotLogins(
  * authoritative once more than one login is configured; a caller that needs
  * the full list uses {@link resolveAdvisorySecondaryBotLogins} instead.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
   const logins = resolveAdvisorySecondaryBotLogins(config);
   return logins.length === 1 ? logins[0] : '';
@@ -315,6 +317,7 @@ export function resolveAdvisorySecondaryBotLogin(config: unknown = {}): string {
  * {@link resolveAdvisorySecondaryBotLogin}'s doc comment for the exact
  * single-vs-plural rule.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisorySecondaryBotLogin(
   path: string = '.github/idd/config.json',
 ): string {
@@ -448,6 +451,7 @@ export function resolveAdvisoryRecoveryCycleCap(config: unknown = {}): number {
  * policy file, failing closed to the default window when the file is
  * missing, unreadable, or schema-invalid.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisoryTerminalWindowMinutes(
   path: string = '.github/idd/config.json',
 ): number {
@@ -547,6 +551,7 @@ export function resolveEffectiveAdvisoryTerminalWindowMinutes({
  * file, failing closed to the off (unset) default when the file is missing,
  * unreadable, or schema-invalid.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function readAdvisorySecondaryQuietWindowMinutes(
   path: string = '.github/idd/config.json',
 ): number {

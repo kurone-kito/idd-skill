@@ -420,6 +420,7 @@ export interface BuildCritiqueTelemetryHookPayloadInput {
  * given, matching the issue's documented payload shape ("`delegateCommand`
  * present only when `delegateUsed` is `true`").
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function buildCritiqueTelemetryHookPayload(
   input: BuildCritiqueTelemetryHookPayloadInput,
 ): CritiqueTelemetryHookPayload {

@@ -1227,6 +1227,7 @@ function resolveConfiguredHelperRuntime(root: string): {
   return { profile: 'instructions-only', packageSpec: '' };
 }
 
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveConfiguredHelperRuntimeProfile(root: string): string {
   return resolveConfiguredHelperRuntime(root).profile;
 }
@@ -1240,6 +1241,7 @@ export function resolveConfiguredHelperRuntimeProfile(root: string): string {
  * no candidate file, invalid JSON, an invalid `helperRuntime`, or simply no
  * `packageSpec` configured.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveConfiguredHelperRuntimePackageSpec(
   root: string,
 ): string {

@@ -5428,6 +5428,27 @@ Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
 
+## Dead-export audit ({{PROJECT_MARKER_PREFIX}}#3478)
+
+`node scripts/audit-dead-exports.mjs --check` (source repository /
+vendored-node profile only — a repository-local lint check, not an
+IDD-phase evidence collector, so it is never invoked from an instruction
+file the way the helpers above are) flags a named `export
+function`/`const`/`class` in `src/scripts/**/*.mts` or
+`src/bin/**/*.mts` whose only importer(s), across `src/scripts/**`,
+`src/bin/**`, and `tests/**`, are all under `tests/**` (`test-only`), or
+that has no importer anywhere (`unused`) — the class of dead code an
+out-of-the-box unused-export tool cannot see, since a dedicated test
+file exercising it already counts as a real "use". An export referenced
+elsewhere in its own declaring file (e.g. a CLI's own `main()` calling
+an exported-for-testability pure function) is `production` regardless of
+cross-file importers, and a re-export (`export { x } from './y.mts'` or
+a whole-module `export * from './y.mts'` barrel) is resolved back to its
+origin declaration rather than counted as a use in its own right. A
+`// audit:ignore-dead-export: <reason>` comment — on the declaration's
+own line, or the line immediately above it — suppresses one finding.
+Wired into `lint:minimum`.
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:

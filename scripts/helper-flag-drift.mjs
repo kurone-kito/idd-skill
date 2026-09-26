@@ -67,6 +67,7 @@ export function extractFencedBlocks(text) {
  * `text` (three or more backticks, see `extractFencedBlocks`), across
  * every block, in document order.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function extractFencedLines(text) {
   return extractFencedBlocks(text).flat();
 }

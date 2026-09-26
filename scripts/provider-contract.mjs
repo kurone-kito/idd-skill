@@ -18,6 +18,7 @@
 /** Providers this contract names. Only `github` is implemented today. */
 export const PROVIDER_IDS = ['github', 'gitlab', 'bitbucket'];
 /** Type guard for an untrusted value that should be a {@link ProviderId}. */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function isProviderId(value) {
   return typeof value === 'string' && PROVIDER_IDS.includes(value);
 }
@@ -82,6 +83,7 @@ export function evaluateProviderCapabilityOutcome(declaration) {
  * declaration, narrowed, on success; never coerces a malformed field to a
  * default instead of rejecting it.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function assertProviderCapabilityDeclaration(value) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('provider capability declaration must be an object');

@@ -487,6 +487,7 @@ export function buildMarkerHidePolicyMap(entries) {
  * guard and {@link freezeMap} for why this is a closure-backed object
  * exposing only the `ReadonlyMap<K, V>` surface, not a `Map` itself.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; its OPERATIONAL_MARKERS parity/mutation-safety coverage lives in marker-helpers-facade.test.mts (#2752, #2759)
 export const MARKER_HIDE_POLICY = buildMarkerHidePolicyMap(
   MARKER_HIDE_POLICY_ENTRIES,
 );

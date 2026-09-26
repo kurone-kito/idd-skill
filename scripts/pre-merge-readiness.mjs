@@ -1977,6 +1977,7 @@ function unwrapGovernanceOutcome(outcome) {
  * against. No current caller sets both options, so the order is behavior-neutral
  * today; it keeps the resolver correct for any future combined call.
  */
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveToleratedGhFailure(error, options = {}) {
   const httpStatus = deriveGhHttpStatus(error);
   if (

@@ -53,6 +53,7 @@ export function classifyReviewCommentOrigin(body, markerPrefix) {
   }
   return { iddOriginated: reasons.length > 0, reasons };
 }
+// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function isIddOriginatedReviewComment(body, markerPrefix) {
   return classifyReviewCommentOrigin(body, markerPrefix).iddOriginated;
 }

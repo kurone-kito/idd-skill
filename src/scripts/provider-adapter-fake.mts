@@ -365,6 +365,7 @@ function resolveFixtureUserContentEdits(
   );
 }
 
+// audit:ignore-dead-export: a test-double factory used only by tests by design, not dead production code
 export function createFakeProviderAdapter(
   fixture: FakeProviderFixture,
 ): ProviderPort {
