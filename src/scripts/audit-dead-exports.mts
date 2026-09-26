@@ -791,6 +791,35 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         lineIndex += 1;
         continue;
       }
+      // #3498 (Codex C1 finding, round 18; known limitation, NOT fixed):
+      // once this brace list is consumed, `lineIndex` below advances
+      // PAST the closing brace's own physical line unconditionally --
+      // any FURTHER statement crammed onto that SAME line, after the
+      // list's own terminating `;` (`export { helper as Public };
+      // const helper = 1;`), is never scanned at all, so a bare
+      // declaration written there is never added to
+      // `declarationOffsetsByLocalName`. This is unchanged from this
+      // branch's very first commit (`b05b5cf05`) -- the loop has always
+      // advanced past a consumed construct this way -- but the ORIGINAL
+      // whole-LINE self-reference exclusion masked it by coincidence
+      // (excluding the export item's own line also excluded the
+      // trailing declaration sharing it, purely because they shared a
+      // line number, not because the declaration was ever found). The
+      // offset redesign's finer exclusion granularity exposes this
+      // pre-existing loop-SCANNING gap -- a different mechanism from,
+      // though the same general category (a redesign-revealed,
+      // previously-masked pre-existing limitation) as, the shadowing-
+      // parameter TEXT-MATCH limitation documented on `hasSelfReference`
+      // below. Verified this is specifically about a TRAILING statement
+      // sharing the closing brace's own physical line, not about
+      // declaration-after-export ordering in general: moving the
+      // declaration to its own separate line (valid via hoisting) is
+      // already handled correctly. A real fix needs a statement-level
+      // cursor into the current line's remaining text, not just a
+      // bounded lookahead regex -- a bigger structural change than this
+      // line-oriented parser's design accommodates safely right now;
+      // deferred as a follow-up rather than risking a hasty rewrite of
+      // the core scanning loop under review pressure.
       const items = parseBracedItems(
         originalText,
         strippedText,

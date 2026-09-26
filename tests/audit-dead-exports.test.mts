@@ -925,6 +925,35 @@ test("a no-`from` item whose alias merely CONTAINS the local name as a whole wor
   }
 });
 
+test('a bare declaration crammed onto the SAME physical line as a preceding, already-consumed no-`from` export list is a DOCUMENTED, ACCEPTED limitation of the line-oriented parsing loop (Codex C1 finding, round 18) -- verified this is specifically about a trailing same-line statement, not declaration-after-export ordering in general, since moving the declaration to its own separate line already works correctly', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export { helper as PublicHelper }; const helper = 1;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'production',
+      'documents the accepted limitation: once the export-list is ' +
+        'consumed, the loop advances past its closing line ' +
+        'unconditionally, so a declaration crammed onto that SAME ' +
+        'line afterward is never scanned or added to ' +
+        'declarationOffsetsByLocalName -- unchanged since this ' +
+        "branch's first commit, but only exposed now that exclusion " +
+        'is offset-based rather than whole-line (the old whole-line ' +
+        'exclusion masked it by coincidence, not because the ' +
+        'declaration was ever found). If this ever starts reading ' +
+        '`unused`, the limitation may have been fixed for real ' +
+        '(update this test and the doc comment together)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(
