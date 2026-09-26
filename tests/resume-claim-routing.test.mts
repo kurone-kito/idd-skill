@@ -3183,20 +3183,46 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * preferred whenever it contains at least one invocation line -- a line
  * naming both `resume-claim-routing.mjs` and `--issue`. Only when Step
  * 1's own span contains *no* invocation line at all does the search widen
- * to the rest of the text from the start of the file through the end of
- * that span: `idd-resume-lite.instructions.md`'s own Step 1 section
- * deliberately says "run the Claim-state command above" instead of
- * repeating the invocation, so the flags it documents live in the section
- * above Step 1, never inside Step 1's own span. Preferring Step 1's own
- * span first (Copilot review, #3480) closes a precision gap the original,
- * unconditionally-widened design had: unioning flags from *every*
+ * to the *nearest preceding* invocation line before Step 1 (not every
+ * matching line in the widened range): `idd-resume-lite.instructions.md`'s
+ * own Step 1 section deliberately says "run the Claim-state command
+ * above" instead of repeating the invocation, so the flags it documents
+ * live on the one invocation line immediately above Step 1, never inside
+ * Step 1's own span and never on some other, possibly-unrelated
+ * invocation line further back in the file.
+ *
+ * Two precision-gap fixes landed here, both from Copilot review on
+ * #3480: preferring Step 1's own span first closes the original,
+ * unconditionally-widened design's gap, where unioning flags from every
  * matching invocation line in the widened range regardless of where it
  * fell would have let a stale, flag-less invocation line inserted
- * directly inside Step 1's own body hide behind an unrelated, still-
- * correct invocation earlier in that same range -- exactly the kind of
- * regression this parser exists to catch. Preferring Step 1's own span
- * whenever it has content instead means a flag-less invocation appearing
- * there is used as-is, with no earlier line to mask it.
+ * directly inside Step 1's own body hide behind an unrelated,
+ * still-correct invocation earlier in that same range. Narrowing the
+ * fallback to only the nearest preceding line (rather than still
+ * unioning every match before Step 1) closes a second, symmetric gap:
+ * an older full-flag invocation added earlier in the file could
+ * otherwise mask a real flag drop on the line actually immediately
+ * above Step 1 -- the one lite's own "above" wording actually refers
+ * to.
+ *
+ * "Nearest preceding" excludes a `--fresh-claim-gate` invocation line:
+ * `idd-resume-lite.instructions.md`'s real "Always run helpers first"
+ * section documents that fresh-claim-gate form on its own line
+ * immediately *below* the actual Claim-state command this parser needs
+ * -- textually nearer to Step 1 than the Claim-state command is. That
+ * form is a categorically different `resume-claim-routing.mjs` mode
+ * (Step 1's own file already documents that it "ignores any
+ * `--claim-id`" by design), so it can never be the invocation Step 1's
+ * own "run the command above" prose refers to, and including it in the
+ * nearest-preceding candidate pool would silently pick the wrong line.
+ *
+ * Flag detection itself uses a whole-token match (word-boundary-aware,
+ * tolerant of the `[--flag {value}]`/`[--flag <value>]` bracket forms
+ * both files use), not a plain substring check (Codex review, #3480):
+ * `.includes('--worktree')` would have also matched an unrelated,
+ * differently-scoped option such as `--worktree-path`, silently
+ * reporting the canonical flag present even when the documented
+ * invocation never actually carries it.
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
@@ -3217,17 +3243,30 @@ function parseStepOneOwnClaimFlags(
   }
   const isInvocationLine = (line: string): boolean =>
     line.includes('resume-claim-routing.mjs') && line.includes('--issue');
+  const isFreshClaimGateLine = (line: string): boolean =>
+    line.includes('--fresh-claim-gate');
   const ownSpanInvocationLines = lines
     .slice(stepOneIndex, sectionEnd)
     .filter(isInvocationLine);
-  const invocationLines =
-    ownSpanInvocationLines.length > 0
-      ? ownSpanInvocationLines
-      : lines.slice(0, sectionEnd).filter(isInvocationLine);
+  let invocationLines: readonly string[];
+  if (ownSpanInvocationLines.length > 0) {
+    invocationLines = ownSpanInvocationLines;
+  } else {
+    const precedingInvocationLines = lines
+      .slice(0, stepOneIndex)
+      .filter((line) => isInvocationLine(line) && !isFreshClaimGateLine(line));
+    const nearestPreceding =
+      precedingInvocationLines[precedingInvocationLines.length - 1];
+    invocationLines = nearestPreceding === undefined ? [] : [nearestPreceding];
+  }
+  const hasFlagToken = (line: string, flag: string): boolean => {
+    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
+  };
   const found = new Set<StepOneOwnClaimFlag>();
   for (const line of invocationLines) {
     for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
-      if (line.includes(flag)) {
+      if (hasFlagToken(line, flag)) {
         found.add(flag);
       }
     }
