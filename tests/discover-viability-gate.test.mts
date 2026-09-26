@@ -1252,6 +1252,48 @@ test('does not let an unrelated removal verb hide a later approval blocker (#352
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('detects approval-from actor blockers across descriptive credential paragraphs (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 148,
+    title: 'document credential storage',
+    body:
+      'Implementation requires approval from the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let causal removal framing hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 149,
+    title: 'document deployment requirements',
+    body:
+      'Remove the old fallback because implementation requires maintainer ' +
+      'approval before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat actorless application authorization as external coordination (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 150,
+    title: 'test authorization responses',
+    body:
+      'Add a unit test where authorization is required and assert a 403 ' +
+      'response. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('does not let a completed investigation hide a remaining approval blocker (#3528)', () => {
   const result = evaluateA4Viability({
     number: 145,

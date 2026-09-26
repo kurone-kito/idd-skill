@@ -193,7 +193,7 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
   'i',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b)`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b|\b(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b)`,
   'gi',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
@@ -203,7 +203,7 @@ const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
 const REMOVAL_FRAMING_CUE_PATTERN =
   /\b(?:remove[sd]?|replace[sd]?|eliminate[sd]?|automate[sd]?|retire[sd]?|drop(?:ped|s)?)\b/gi;
 const REMOVAL_FRAMING_CLAUSE_BREAK_PATTERN =
-  /\b(?:and|but|while|although|whereas|however|with|instead|rather|after|once|before|until)\b/i;
+  /\b(?:and|but|while|although|whereas|however|with|instead|rather|after|once|before|until|because|since)\b/i;
 // A trigger phrase inside a phrase describing something other than a live,
 // remaining completion blocker should not count (#2738), mirroring
 // findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
