@@ -2442,6 +2442,47 @@ export function formatCleanupBacklogExamples(examples, bootstrapEra) {
     .map((n) => (bootstrapEra.has(n) ? `#${n} (bootstrap-era)` : `#${n}`))
     .join(', ');
 }
+/**
+ * Status tokens that mean post-merge cleanup actually converged.
+ * Everything else — `timeout`, `helper-error`, `failed`, an empty
+ * token, or any other word — leaves the PR in the backlog
+ * (idd-skill#3323).
+ */
+const CONVERGED_CLEANUP_EVIDENCE_STATUSES = new Set(['applied', 'clean']);
+/**
+ * jq projection for one PR's cleanup-evidence comments. Emits
+ * `id`, author login, and the status token (the first word after
+ * `<!-- idd-cleanup-evidence:` on the comment's first line), in
+ * creation order. Callers keep the last trusted row.
+ */
+const CLEANUP_EVIDENCE_COMMENTS_JQ =
+  '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login, (.body | split("\\n")[0] | sub("^<!-- idd-cleanup-evidence:[[:space:]]*"; "") | split(" ")[0])] | @tsv';
+/**
+ * Status recorded by the latest trusted cleanup-evidence row in a
+ * `gh api --jq` TSV stream, or `null` when no trusted row is present.
+ * Rows are already in creation order, so the last trusted match wins.
+ * A trusted row with no status column yields `''` (unparseable), which
+ * is not a converged status.
+ */
+function latestTrustedCleanupEvidenceStatus(stdout, trustedLogins) {
+  let latest = null;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      continue;
+    }
+    const fields = line.split('\t');
+    if (fields.length < 2) {
+      continue;
+    }
+    const login = fields[1].trim().toLowerCase();
+    if (!trustedLogins.has(login)) {
+      continue;
+    }
+    latest = fields.length >= 3 ? fields[2].trim() : '';
+  }
+  return latest;
+}
 function checkPostMergeCleanupBacklog(root, options, report) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
@@ -2561,7 +2602,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
         '--paginate',
         `repos/${owner}/${repo}/issues/${number}/comments`,
         '--jq',
-        '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | [.id, .user.login] | @tsv',
+        CLEANUP_EVIDENCE_COMMENTS_JQ,
       ],
       root,
     );
@@ -2569,26 +2610,21 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       evidenceFailures.push(number);
       continue;
     }
-    // Only a trusted-author match counts as genuine cleanup evidence (see
-    // readCleanupEvidenceTrustedLogins) -- an untrusted commenter's
-    // pre-posted marker-prefixed comment must not suppress this backlog
-    // warning.
-    const hasTrustedEvidence = String(evidence.stdout)
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .some((line) => {
-        const tabIndex = line.indexOf('\t');
-        if (tabIndex === -1) {
-          return false;
-        }
-        const login = line
-          .slice(tabIndex + 1)
-          .trim()
-          .toLowerCase();
-        return trustedLogins.has(login);
-      });
-    if (!hasTrustedEvidence) {
+    // Only the latest trusted author's status counts, and only
+    // `applied` or `clean` means cleanup converged (idd-skill#3323).
+    // An untrusted commenter's pre-posted marker must not suppress
+    // this warning, and a later untrusted row must not replace an
+    // earlier trusted status. Any other trusted status, including
+    // `timeout` and `helper-error`, or an unparseable marker line,
+    // leaves the PR in the backlog.
+    const latestStatus = latestTrustedCleanupEvidenceStatus(
+      String(evidence.stdout),
+      trustedLogins,
+    );
+    if (
+      latestStatus === null ||
+      !CONVERGED_CLEANUP_EVIDENCE_STATUSES.has(latestStatus)
+    ) {
       missing.push(number);
     }
   }
