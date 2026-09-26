@@ -983,6 +983,20 @@ test('does not let approval nouns hide behind credential storage (#3528)', () =>
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let possessive approval nouns hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 124,
+    title: 'document protected material',
+    body:
+      "This issue concerns a credential. A maintainer's approval is " +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let cannot-without credential prerequisites pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 121,
