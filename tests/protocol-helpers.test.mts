@@ -3537,6 +3537,34 @@ test('an edit-state-unresolved disposition never pairs as a clearing reply', () 
   assert.equal(summary.missingRegularComments[0].id, 'REG-UNKNOWN-1');
 });
 
+test('an ordinary IDD reply still clears a human regular comment', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 'REG-HUMAN-1',
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'Please address this human review comment.',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 'REG-HUMAN-2',
+          createdAt: '2026-05-12T01:00:00Z',
+          body: 'Fixed in the latest commit.',
+          author: { login: 'idd-bot' },
+          // Non-disposition human replies remain presence-only evidence.
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'], advisoryBotLogins: [] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
 // only named the exact required literal prefix for the narrow #1833
 // non-review-notice pairing. The far more common mistake -- an IDD-agent
