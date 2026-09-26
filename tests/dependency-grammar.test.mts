@@ -355,6 +355,57 @@ test('consumeDependencyReferenceList records an invalid bare token without dropp
   });
 });
 
+test('consumeDependencyReferenceList validates a qualified token\'s number independently of repo resolution (final review round, Copilot: "kurone-kito/idd-skill#0")', () => {
+  // A non-positive number on an otherwise same-repo-matching qualified
+  // token must land in invalidTokens, not be folded into unresolvable
+  // under the misleading "cross_repository_reference" reason.
+  assert.deepEqual(
+    consumeDependencyReferenceList('kurone-kito/idd-skill#0', {
+      currentRepo: CURRENT_REPO,
+    }),
+    {
+      numbers: [],
+      unresolvable: [],
+      remaining: '',
+      consumedTokenEnd: 23,
+      invalidTokens: ['kurone-kito/idd-skill#0'],
+    },
+  );
+});
+
+test("consumeDependencyReferenceList validates a URL token's number independently of repo resolution", () => {
+  assert.deepEqual(
+    consumeDependencyReferenceList(
+      'https://github.com/kurone-kito/idd-skill/issues/0',
+      { currentRepo: CURRENT_REPO },
+    ),
+    {
+      numbers: [],
+      unresolvable: [],
+      remaining: '',
+      consumedTokenEnd: 49,
+      invalidTokens: ['https://github.com/kurone-kito/idd-skill/issues/0'],
+    },
+  );
+});
+
+test('consumeDependencyReferenceList still treats a valid qualified cross-repo token as unresolvable, not invalid', () => {
+  assert.deepEqual(
+    consumeDependencyReferenceList('other/repo#5', {
+      currentRepo: CURRENT_REPO,
+    }),
+    {
+      numbers: [],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+      remaining: '',
+      consumedTokenEnd: 12,
+      invalidTokens: [],
+    },
+  );
+});
+
 test('matchDependencyKeywordLine still returns a defined result with numbers when an invalid token is mixed in, but reports it in invalidTokens', () => {
   assert.deepEqual(
     matchDependencyKeywordLine(['Blocked by #0, #12'], 0, 'Blocked by'),
