@@ -201,7 +201,7 @@ const REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN =
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
-  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b(?:[ \t]+|\r?\n[ \t]+)(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b)/i;
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b(?:[ \t]+|\r?\n[ \t]*)(?:(?:(?:then|also|now|still|subsequently)[ \t]+)*(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b))/i;
 const REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN =
   /\b(?:but|yet|nor|however|although|while|whereas)\b(?:[ \t]+(?:(?:the|a|an|this|that|our|your|its|their)\b(?:[ \t]+[A-Za-z][\w-]*){0,4}|(?:[A-Za-z][\w-]*)(?:[ \t]+[A-Za-z][\w-]*){0,3}))?[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
 const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
@@ -212,8 +212,12 @@ const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const REPOSITORY_FIT_ABBREVIATION_PATTERN =
   /\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|e\.g|i\.e|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|u\.s|vs|vol)\.$/i;
+const REPOSITORY_FIT_ALWAYS_NON_BOUNDARY_ABBREVIATION_PATTERN =
+  /\b(?:e\.g|i\.e|u\.s)\.$/i;
 const REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN =
   /\b(?:abbr|admin|approx|auth|config|coord|dev|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|vs|vol)\.$/i;
+const REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN =
+  /^(?:slack|jira|datadog)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -377,7 +381,16 @@ function isRepositoryFitPeriodBoundary(text, periodIndex) {
     return false;
   }
   const prefix = text.slice(0, periodIndex + 1);
-  return !REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix);
+  if (REPOSITORY_FIT_ALWAYS_NON_BOUNDARY_ABBREVIATION_PATTERN.test(prefix)) {
+    return false;
+  }
+  if (!REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix)) {
+    return true;
+  }
+  return !(
+    REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(prefix) &&
+    REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN.test(suffix.trimStart())
+  );
 }
 function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
   const paragraphSpans = getParagraphSpans(scanBody);
@@ -2301,10 +2314,19 @@ export function checkRepositoryFit(context) {
   // distinguish lowercase abbreviations (such as `prod.`) from a sentence
   // starting with an uppercase word while keeping offsets stable.
   const lowerCaseScanBody = externalAccessScanBody
-    .replace(/(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g, (_whole, word) =>
-      REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(`${word}.`)
-        ? `${word}.`
-        : `${word}!`,
+    .replace(
+      /(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g,
+      (_whole, word, offset, source) => {
+        const suffix = source.slice(offset + _whole.length);
+        return REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(
+          `${word}.`,
+        ) &&
+          REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN.test(
+            suffix.trimStart(),
+          )
+          ? `${word}.`
+          : `${word}!`;
+      },
     )
     .replace(
       /(?<![.\w])([A-Za-z]\.[A-Za-z])\.(?=[ \t]+[A-Z])/g,
@@ -2476,6 +2498,13 @@ export function checkRepositoryFit(context) {
       if (
         REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN.test(
           context.slice(Math.max(0, cueIndex - 80), cueEnd),
+        )
+      ) {
+        continue;
+      }
+      if (
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
+          context.slice(Math.max(0, cueIndex - 80), cueIndex),
         )
       ) {
         continue;

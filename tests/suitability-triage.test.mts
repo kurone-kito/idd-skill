@@ -6185,6 +6185,22 @@ Negative fixture: invalid input should fail, and this implementation needs Slack
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects hard-wrapped and adverbial independent clauses', () => {
+  for (const continuation of [
+    'and\nthis implementation needs Slack access.',
+    'and then this implementation needs Slack access.',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail ${continuation}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, continuation);
+  }
+});
+
 test('repository fit rejects an alternative conjunction before a live clause', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6283,6 +6299,17 @@ test('repository fit rejects the broader negation vocabulary before a fixture cu
       body: `${BASE_ISSUE.body}
 
 Avoid negative fixture; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves negation across cue-label punctuation', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nAvoid: negative fixture: this task requires production dashboard credentials.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
@@ -7286,6 +7313,17 @@ test('repository fit preserves lexical abbreviations before capitalized services
     } as Context);
     assert.equal(result.pass, false, abbreviation);
   }
+});
+
+test('repository fit treats an uppercase sentence after a lexical abbreviation as a boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: this documents the behavior, etc. This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('duplicate check detects a URL-form duplicate declaration', () => {
