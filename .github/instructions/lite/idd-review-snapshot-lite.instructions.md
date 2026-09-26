@@ -188,24 +188,20 @@ counts as new activity, forcing a fresh E1 snapshot before F2.
 From the raw Step 1 set, select into **ReviewItems_snapshot** and
 record each item's source URL:
 
-- **Unresolved review threads** (`isResolved=false`) — exclude only
-  when the latest substantive reply is from an IDD agent or the PR
-  author with no reviewer reply since; keep it active anyway when the
-  reviewer reopened it after that reply (even with no new text), or an
-  agent reply starts with `**Awaiting maintainer decision**` (blocks
-  regardless of reply).
+- **Unresolved review threads** (`isResolved=false`) — exclude when the
+  last substantive reply is by an IDD agent or PR author with no reviewer
+  reply; keep reopened threads and `**Awaiting maintainer decision**`
+  replies active.
 - **Review bodies** whose reviewer's latest state is
   `CHANGES_REQUESTED` — exclude any already replied-to and
   re-review-requested in a prior E13/E14 pass.
 - **Embedded CodeRabbit findings:** add one PATH B item per
   `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
   reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
-  findings.
-- **Regular comments** where the last speaker isn't an IDD agent and
-  you haven't replied since, or whose latest IDD-agent reply starts
-  with `**Awaiting maintainer decision**` — exclude periodic bots. Keep
-  Copilot/CI comments; they route through PATH B in E4-E7, including
-  non-review notices under E6.
+  findings. See the [#2197/#2559 rationale](../../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
+- **Regular comments** without an IDD-agent reply since the comment, or
+  with `**Awaiting maintainer decision**` — exclude periodic bots;
+  keep Copilot/CI comments for PATH B, including E6 non-review notices.
 
 Also carry a light **resolved-thread index** (`isResolved=true`) with
 file/area, claim, source URL, and any disposition marker. Never re-add
