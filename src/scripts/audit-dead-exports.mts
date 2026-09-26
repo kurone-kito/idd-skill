@@ -290,6 +290,16 @@ interface BracedItem {
    * not just `line`, so a genuine, unrelated usage sharing this item's
    * physical line is never discarded along with it. */
   offset: number;
+  /** Absolute `strippedText` offset of `alias`'s own first character, or
+   * `null` when there is no `as` clause (Codex C1 finding, round-16: a
+   * REDUNDANT self-alias, `export { helper as helper };`, textually
+   * mentions the same word TWICE on one item -- excluding only `offset`
+   * left the alias token counted as a separate, genuine self-reference,
+   * masking an otherwise-unimported export as `production`). Harmless to
+   * record even when `alias` differs from `name`: `hasSelfReference`
+   * only ever matches offsets against occurrences of ONE specific word,
+   * so an unrelated alias's offset is simply never one of those. */
+  aliasOffset: number | null;
   suppressed: boolean;
   reason: string;
 }
@@ -328,10 +338,20 @@ function parseBracedItems(
       continue;
     }
     const name = nameMatch[1];
+    const withoutTypeStart = itemStart + (trimmed.length - withoutType.length);
     const aliasMatch = /^\s+as\s+([A-Za-z_$][\w$]*)/.exec(
       withoutType.slice(nameMatch[0].length),
     );
     const alias = aliasMatch ? aliasMatch[1] : null;
+    // Suffix-length trick (same as every other capture-group-is-the-tail
+    // call site in this file): `aliasMatch[0]` ends exactly where the
+    // alias identifier ends, so its start offset is the match's own
+    // start plus (full match length minus captured identifier length).
+    const aliasOffset = aliasMatch
+      ? withoutTypeStart +
+        nameMatch[0].length +
+        (aliasMatch[0].length - aliasMatch[1].length)
+      : null;
     const line = lineNumberAt(strippedText, itemStart);
     const lineStart = originalText.lastIndexOf('\n', itemStart) + 1;
     const nextNewline = originalText.indexOf('\n', itemStart);
@@ -344,6 +364,7 @@ function parseBracedItems(
       isType,
       line,
       offset: itemStart,
+      aliasOffset,
       suppressed: !!ignoreMatch,
       reason: (ignoreMatch?.[1] ?? '').trim(),
     });
@@ -798,6 +819,17 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
             noFromItemOffsetsByLocalName.set(item.name, offsetSet);
           }
           offsetSet.add(item.offset);
+          // #3498 (Codex C1 finding, round 16): a REDUNDANT self-alias
+          // (`export { helper as helper };`) textually mentions the same
+          // word TWICE in this one item -- also exclude the alias
+          // token's own offset, not just the original name's, or the
+          // alias occurrence registers as a separate, genuine
+          // self-reference. Harmless to add unconditionally even when
+          // the alias is a different word (see `BracedItem.aliasOffset`
+          // doc comment).
+          if (item.aliasOffset !== null) {
+            offsetSet.add(item.aliasOffset);
+          }
           if (
             !declared.has(exposedName) &&
             !claimedNoFromExposedNames.has(exposedName)

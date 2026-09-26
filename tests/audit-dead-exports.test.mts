@@ -869,6 +869,34 @@ test('a function parameter sharing the exact same name as the function itself is
   }
 });
 
+test('a REDUNDANT self-alias no-`from` item (`export { helper as helper };`) is still classified unused, not masked by its own alias token counting as a self-reference (Codex C1 finding, round-16, offset redesign)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {}',
+        '',
+        'export { helper as helper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      'a redundant self-alias textually mentions the same word TWICE ' +
+        "in one item -- excluding only the ORIGINAL name's own offset " +
+        'left the ALIAS token counted as a separate, genuine ' +
+        'self-reference, masking a genuinely unimported export as ' +
+        'production',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(
