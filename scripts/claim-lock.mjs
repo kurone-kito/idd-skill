@@ -176,6 +176,7 @@ import {
   linkSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -314,18 +315,38 @@ function resolveWorktreeAdminDir(cwd) {
   return gitRevParse(cwd, ['--absolute-git-dir']);
 }
 /**
+ * Resolve `path` to a canonical directory when it exists. `git rev-parse`
+ * and `path.resolve` can disagree across a symlinked worktree path
+ * (one side stays on the symlink, the other is the real directory),
+ * which would hide a primary worktree and allow the create this check
+ * exists to refuse.
+ */
+function canonicalizeExistingDir(path) {
+  const resolved = resolve(path);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+/**
  * True when `worktree` is the repository's primary working tree rather
  * than a linked one. `git rev-parse --git-common-dir` and
- * `--absolute-git-dir` resolve to the same directory only for the
- * primary worktree; a linked worktree's admin directory lives under
+ * `--absolute-git-dir` name the same directory only for the primary
+ * worktree; a linked worktree's admin directory lives under
  * `worktrees/` and differs from the common dir. `--git-common-dir` is
- * often relative (`.git`) on the primary worktree, so compare resolved
- * paths rather than the raw strings.
+ * often the relative path `.git` on the primary worktree, and a
+ * symlinked worktree path can make one side canonical and the other
+ * not, so compare real paths rather than the raw strings.
  */
 function isPrimaryWorktree(worktree) {
   const cwd = resolve(worktree);
-  const commonDir = resolve(cwd, gitRevParse(cwd, ['--git-common-dir']));
-  const adminDir = resolve(cwd, gitRevParse(cwd, ['--absolute-git-dir']));
+  const commonDir = canonicalizeExistingDir(
+    resolve(cwd, gitRevParse(cwd, ['--git-common-dir'])),
+  );
+  const adminDir = canonicalizeExistingDir(
+    resolve(cwd, gitRevParse(cwd, ['--absolute-git-dir'])),
+  );
   return commonDir === adminDir;
 }
 /**

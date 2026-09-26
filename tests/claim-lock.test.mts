@@ -8,6 +8,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -249,6 +250,36 @@ test('acquire: primary worktree refuses a new lock; a linked worktree still acqu
       'claim-b',
     );
   } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: a symlinked path to the primary worktree still refuses a new lock', () => {
+  const fixture = setupLinkedWorktree();
+  const primaryLink = join(
+    fixture.primary,
+    '..',
+    `${basename(fixture.primary)}-primary-link`,
+  );
+  const linkedLink = join(
+    fixture.primary,
+    '..',
+    `${basename(fixture.primary)}-linked-link`,
+  );
+  try {
+    symlinkSync(fixture.primary, primaryLink);
+    symlinkSync(fixture.worktree, linkedLink);
+
+    const refused = acquireClaimLock(primaryLink, 'agent-a', 'claim-a', false);
+    assert.equal(refused.mode, 'primary-worktree-refused');
+    assert.equal(existsSync(resolveClaimLockPath(fixture.primary)), false);
+
+    const acquired = acquireClaimLock(linkedLink, 'agent-a', 'claim-a', false);
+    assert.equal(acquired.mode, 'acquired');
+    assert.equal(checkClaimLock(fixture.worktree).present, true);
+  } finally {
+    rmSync(primaryLink, { force: true });
+    rmSync(linkedLink, { force: true });
     teardown(fixture);
   }
 });
