@@ -312,14 +312,18 @@ function collectUnaddressedComments(
     ...comments
       .filter(
         (comment) =>
-          isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+          isIdd(authorLogin(comment)) &&
+          classifyCommentEditState(comment) === 'unedited' &&
+          isDispositionBody(comment.body),
       )
       .map(commentTimestamp),
     ...threads.flatMap((thread) =>
       (thread.comments?.nodes ?? [])
         .filter(
           (comment) =>
-            isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+            isIdd(authorLogin(comment)) &&
+            classifyCommentEditState(comment) === 'unedited' &&
+            isDispositionBody(comment.body),
         )
         .map((comment) => comment.updatedAt ?? comment.createdAt ?? null),
     ),

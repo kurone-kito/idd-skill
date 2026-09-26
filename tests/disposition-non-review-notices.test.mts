@@ -233,10 +233,11 @@ function notice(
   body: string,
   createdAt = `2026-05-12T00:00:0${id}Z`,
   updatedAt?: string,
+  lastEditedAt: string | null = null,
 ): NoticeComment {
   return updatedAt === undefined
-    ? { id, login, body, createdAt }
-    : { id, login, body, createdAt, updatedAt };
+    ? { id, login, body, createdAt, lastEditedAt }
+    : { id, login, body, createdAt, updatedAt, lastEditedAt };
 }
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -836,6 +837,75 @@ test('buildDispositionPlan is idempotent: a notice already dispositioned for its
     plan.skipped.map((entry) => entry.botLogin),
     [CODEX],
   );
+});
+
+test('buildDispositionPlan re-plans edited or unknown notice dispositions', () => {
+  const editedPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE),
+        notice(
+          2,
+          'kurone-kito',
+          '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (rate limit)',
+          '2026-05-12T01:00:00Z',
+          undefined,
+          '2026-05-12T02:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    editedPlan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+
+  const unknownPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE),
+        {
+          id: 2,
+          login: 'kurone-kito',
+          body: '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (rate limit)',
+          createdAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    unknownPlan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+});
+
+test('buildDispositionPlan re-plans edited summary dispositions', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_SUMMARY),
+        notice(
+          2,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+          undefined,
+          '2026-05-12T02:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+  assert.equal(plan.planned[0]?.body.startsWith('**Accepted**'), true);
 });
 
 test('buildDispositionPlan attributes a disposition only to the bot it names (author-scoped)', () => {

@@ -49,6 +49,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import { appendReviewReplyStamp } from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   compareIsoTimestamps,
   DEFAULT_ADVISORY_BOT_LOGINS,
@@ -201,6 +202,7 @@ export function buildDispositionPlan(input, options = {}) {
       // and its dispositions through `effectiveRegularCommentActivityAt`,
       // matching the gate's updatedAt-aware pairing.
       updatedAt: String(comment.updatedAt ?? ''),
+      lastEditedAt: comment.lastEditedAt,
     }))
     .sort((left, right) => {
       // Oldest-first, with a deterministic tie-breaker so the oldest-first
@@ -225,6 +227,7 @@ export function buildDispositionPlan(input, options = {}) {
   for (const comment of comments) {
     if (
       !trustedMarkerLogins.has(comment.login) ||
+      classifyCommentEditState(comment) !== 'unedited' ||
       !isNonReviewNoticeDisposition({ body: comment.body })
     ) {
       continue;
@@ -302,6 +305,7 @@ export function buildDispositionPlan(input, options = {}) {
     .filter(
       (comment) =>
         trustedMarkerLogins.has(comment.login) &&
+        classifyCommentEditState(comment) === 'unedited' &&
         isReviewSummaryDisposition({ body: comment.body }),
     )
     .map((comment) => ({
@@ -904,6 +908,13 @@ function main() {
       'api',
       `repos/${owner}/${repo}/issues/${pr}/comments`,
     ]);
+    const nodeIds = rawComments.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((nodeId) => nodeId === '')) {
+      throw new Error(
+        `disposition-non-review-notices: PR #${pr} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
     const comments = rawComments.map((comment) => ({
       id: comment.id,
       login: comment.user?.login ?? '',
@@ -913,6 +924,7 @@ function main() {
       // its summary); the summary path scores it through the gate's
       // updatedAt-aware activity.
       updatedAt: comment.updated_at ?? '',
+      lastEditedAt: lastEditedAtByNodeId.get(String(comment.node_id)),
     }));
     const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(

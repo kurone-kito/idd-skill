@@ -281,6 +281,7 @@ test('excludes a comment addressed by a later IDD disposition', () => {
         {
           body: '**Rejected** — covered.',
           createdAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: null,
           author: { login: 'kurone-kito' },
         },
       ],
@@ -323,7 +324,7 @@ test('a later thread-level IDD disposition addresses a top-level comment', () =>
   assert.equal(result.prs.length, 0);
 });
 
-test('prefers updatedAt when ordering an edited IDD disposition', () => {
+test('prefers updatedAt when ordering an unedited IDD disposition', () => {
   const prs: MergedPrInput[] = [
     {
       number: 17,
@@ -339,6 +340,7 @@ test('prefers updatedAt when ordering an edited IDD disposition', () => {
           body: '**Rejected** — not applicable.',
           createdAt: '2026-06-09T00:00:00Z',
           updatedAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: null,
           author: { login: 'kurone-kito' },
         },
       ],
@@ -346,6 +348,30 @@ test('prefers updatedAt when ordering an edited IDD disposition', () => {
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+test('does not let an edited IDD disposition address merged feedback', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 18,
+      comments: [
+        {
+          body: 'concern',
+          createdAt: '2026-06-09T01:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          body: '**Rejected** — not applicable.',
+          createdAt: '2026-06-09T00:00:00Z',
+          updatedAt: '2026-06-09T02:00:00Z',
+          lastEditedAt: '2026-06-09T02:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
 });
 
 test('surfaces a non-IDD comment that opens with a disposition marker', () => {
