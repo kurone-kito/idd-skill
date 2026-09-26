@@ -68,7 +68,8 @@ re-signs through primary signing and stalls non-interactively.
 
 Failed write (observed 2026-09-26, issue `#3491`): rebase still in
 progress, the index holds the replay, and the branch tip is still the
-pre-rebase commit, so no commit object was written. Abort with
+pre-rebase commit, so no commit object was written. No staged content
+conflict: use this path; use wrapper's `--continue` for one. Abort with
 `git rebase --abort` to restore the pre-rebase branch tip, then restart
 the **full** rebase from that branch through the same configured
 fallback wrapper's `rebase origin/{development-branch}` form. The
@@ -77,8 +78,7 @@ replays the
 complete pre-rebase commit range, including every earlier commit in a
 stack; do not replace it with a cherry-pick of only one commit. Do not
 run `git commit --amend -S` or `git commit --amend '-S'`, including
-when Git prints that hint. Wrapper `--continue` stays for a staged
-content conflict. Post-rebase verification below covers a finished
+when Git prints that hint. Post-rebase verification below covers a finished
 rebase with HEAD detached at the upstream tip.
 
 ### Post-rebase verification
