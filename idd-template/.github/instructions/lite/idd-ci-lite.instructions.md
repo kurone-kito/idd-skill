@@ -155,12 +155,12 @@ CI-polling shared helper file), never this one. Read
   non-bot PR-linked run for that HEAD instead of dispatching a new one;
   never rerun a gated bot run.
 - If same-HEAD `CANCELLED` siblings remain, rerun only those the plan
-  marks `rerun-eligible`. Plan holds `action_required`,
-  `pending`, `unresolved`, `awaiting-fresh-review`, and
-  `rerun-budget-held`. When all withheld are live-coverage recoveries
-  with spent `rerun-once` budget (see `#3504`), run
-  `--refresh-latest --apply` once; poll; hold policy or mixed cases stay
-  held.
+  marks `rerun-eligible`.
+  Ordinary plans hold `action_required`, `pending`, `unresolved`,
+  `awaiting-fresh-review`, `rerun-budget-held`. If all withheld are not
+  promoted live-coverage recoveries with used `rerun-once` budget
+  (#3504), run `--refresh-latest --apply` once; poll; `hold` or mixed
+  cases hold.
 - Helper-first diagnosis (read-only): `node
   scripts/rerun-advisory-convergence.mjs --pr <n>`. Resolve the
   package-manager equivalent from `docs/idd-helper-scripts.md`.
