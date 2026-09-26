@@ -458,6 +458,20 @@ const NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN =
 // to find the link's own boundaries. Same TDZ hazard as
 // NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN immediately above.
 const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
+// Matches a Markdown reference-style link's opening usage at the start of
+// a string -- `[label][ref]` (the `ref` itself is defined elsewhere in
+// the body, e.g. `[ref]: https://...`, which this per-line function has
+// no access to; only the label is checked here, same limitation as
+// MARKDOWN_LINK_START_PATTERN's inline-link form above). Deliberately
+// does not require the `ref` to be non-empty, unlike
+// REFERENCE_STYLE_LINK_USAGE_PATTERN elsewhere in this file (which
+// excludes the shortcut `[text][]`/bare `[text]` forms for its own,
+// different purpose of resolving a real definition) -- here, any
+// bracketed second segment (including empty) still reads as "shaped like
+// a reference-style link", which is all this near-miss check needs to
+// decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
+// hazard as MARKDOWN_LINK_START_PATTERN immediately above.
+const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[[^\]\n]*\]/;
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
   // a stack. Catch that tagged throw here. Call main() directly on the
@@ -1327,15 +1341,23 @@ function checkDependencyMarkerRule(text, rawText, markerPrefix, shape) {
  * "Markdown-link reference list" near-miss shape the issue describes
  * (`Blocked by [#12](https://github.com/owner/repo/issues/12)`), which
  * `hasDependencyReferenceListStart` alone does not recognize (its
- * `TOKEN_START` grammar has no Markdown-link alternative).
+ * `TOKEN_START` grammar has no Markdown-link alternative). Also
+ * recognizes the reference-style form `[#12][ref]` by the same
+ * label-contains-`#N` heuristic (`idd-skill#3285` final review round,
+ * CodeRabbit): `Blocked by [#12][ref]` resolves no dependency under the
+ * shared grammar either, so it must be caught here too, not only the
+ * inline-link form.
  */
 function looksLikeIssueMarkdownLink(text) {
-  const match = text.match(MARKDOWN_LINK_START_PATTERN);
-  if (!match) {
-    return false;
+  const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
+  if (inlineMatch) {
+    const [, label, target] = inlineMatch;
+    if (/#\d+/.test(label) || /\/(?:issues|pull)\/\d+/.test(target)) {
+      return true;
+    }
   }
-  const [, label, target] = match;
-  return /#\d+/.test(label) || /\/(?:issues|pull)\/\d+/.test(target);
+  const referenceMatch = text.match(MARKDOWN_REFERENCE_LINK_START_PATTERN);
+  return referenceMatch !== null && /#\d+/.test(referenceMatch[1]);
 }
 /**
  * Strip, in any order and up to a few repeats, the decoration that can
@@ -1379,8 +1401,17 @@ function findDependencyKeywordMisuse(line) {
   for (const match of line.matchAll(NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN)) {
     const after = line.slice((match.index ?? 0) + match[0].length);
     const stripped = stripDependencyLineDecoration(after);
+    // A leading `<` opens a CommonMark autolink (`<https://...>`) --
+    // strip it before testing `hasDependencyReferenceListStart`, whose
+    // own token grammar has no autolink-wrapper alternative and would
+    // otherwise never recognize `Blocked by <https://github.com/owner/
+    // repo/issues/12>` as reference-shaped (`idd-skill#3285` final
+    // review round, CodeRabbit). The loose `TOKEN_START` test this
+    // delegates to only checks what the text STARTS WITH, so the
+    // autolink's own trailing `>` needs no separate handling here.
+    const unwrapped = stripped.replace(/^</, '');
     if (
-      hasDependencyReferenceListStart(stripped) ||
+      hasDependencyReferenceListStart(unwrapped) ||
       looksLikeIssueMarkdownLink(stripped)
     ) {
       return match[0].trim();

@@ -1416,6 +1416,29 @@ test('dependency-line-grammar fails on an invalid-only continuation line, not ju
   assert.match(finding.detail, /"#0"/);
 });
 
+test('dependency-line-grammar fails on a reference-style Markdown-link mention (final review round, CodeRabbit: "Blocked by [#12][ref]")', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [#12][ref]\n\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.equal(report.passed, false);
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {
