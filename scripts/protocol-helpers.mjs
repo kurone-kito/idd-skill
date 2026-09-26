@@ -7351,7 +7351,7 @@ export function summarizeRequiredChecks(
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
 // real run conclusions instead.
-function resolvePresentRunConclusion(
+export function resolvePresentRunConclusion(
   normalizedChecks,
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
   // check NAMES this collection pass could not fully resolve real
@@ -8315,7 +8315,14 @@ export function summarizeClaimValidationForWriteGate(
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
-function isPreMergeCiAllPassing(ci) {
+/**
+ * Whether pre-merge readiness treats this CI summary as all-passing.
+ * #3465: the `--from-pr` watermark gate calls this function rather than
+ * growing a second definition of green. `protectionReadsUnreadable` and
+ * a source-pinned downgrade (status other than `success`,
+ * `requiredChecksPassing` false) already decide the result here.
+ */
+export function isPreMergeCiAllPassing(ci) {
   // #1377: an unreadable protection/ruleset read means the required-check
   // set this report computed may be incomplete -- a masked 404 can hide
   // additional required checks the readable source(s) never surfaced. Block
@@ -11506,7 +11513,7 @@ function hasUnresolvedKnownBotThreads(threads) {
     });
   });
 }
-function isCompletedCiTimestamp(value) {
+export function isCompletedCiTimestamp(value) {
   const timestamp = String(value ?? '');
   return timestamp !== '0001-01-01T00:00:00Z' && isValidIsoTimestamp(timestamp);
 }
