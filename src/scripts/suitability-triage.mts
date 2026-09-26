@@ -344,7 +344,7 @@ const UNSAFE_PATTERNS = [
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\be\.g)\.(?=[ \t])|(?<=\bi\.e)\.(?=[ \t]))`;
+const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\b[A-Za-z]\.[A-Za-z])\.(?=[ \t]))`;
 const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
   String.raw`\b(requires?|need(?:s)?|must|depends on)\b${EXTERNAL_SYSTEM_ACCESS_GAP}{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b`,
   'i',
@@ -2271,6 +2271,21 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     ) {
       return null;
     }
+    const interveningLines = normalizedBody
+      .slice(currentItem.start, lineStart)
+      .split('\n')
+      .slice(1);
+    if (
+      interveningLines.some((line) => {
+        if (line.trim() === '') {
+          return false;
+        }
+        const lineIndent = indentationColumns(line.match(/^[ \t]*/)?.[0] ?? '');
+        return lineIndent < currentItem.contentIndent;
+      })
+    ) {
+      return null;
+    }
     const lineIndent = indentationColumns(
       normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0] ?? '',
     );
@@ -2288,7 +2303,9 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         start: currentItem.start,
         end: nextItem?.start ?? normalizedBody.length,
       },
-      allowLooseContinuation: !isMarkerLine,
+      allowLooseContinuation:
+        !isMarkerLine &&
+        /\n[ \t]*\n/.test(normalizedBody.slice(currentItem.start, lineStart)),
     };
   };
   const contextSpanFor = (matchIndex: number) => {
@@ -2351,7 +2368,18 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   const hasIndependentRequirementClause = (matchText: string) => {
     const requirementPattern = /\b(?:requires?|needs?|must|depends\s+on)\b/gi;
     const requirementMatches = [...matchText.matchAll(requirementPattern)];
-    return requirementMatches.length > 1;
+    if (requirementMatches.length <= 1) {
+      return false;
+    }
+    const firstMatch = requirementMatches[0];
+    const secondMatch = requirementMatches[1];
+    const betweenRequirements = matchText.slice(
+      (firstMatch?.index ?? 0) + (firstMatch?.[0].length ?? 0),
+      secondMatch?.index ?? matchText.length,
+    );
+    return !/\bfail(?:s|ed|ure)?\b[\s\S]{0,40}\b(?:because|when|if|that)\b/i.test(
+      betweenRequirements,
+    );
   };
   const sameContext = (
     left: { start: number; end: number },

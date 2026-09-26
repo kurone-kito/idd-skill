@@ -6090,6 +6090,36 @@ Negative fixture: a task requires a maintainer to supply protected material befo
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects a live prerequisite after an intervening list-closing paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the production access requirement below is descriptive.
+
+Ordinary prose closes the list.
+
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps a repeated requirement verb inside one fixture clause descriptive', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: this task must fail because it requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit rejects separate same-item sentences on a marker line', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6223,6 +6253,20 @@ test('repository fit keeps a loose-list continuation in the same fixture context
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('repository fit does not treat a same-line continuation as a loose-list paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: production access is descriptive.
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit measures tab-indented loose-list continuations by columns', () => {
@@ -6736,15 +6780,17 @@ test('repository fit still flags a real external-access requirement', () => {
 });
 
 test('repository fit preserves abbreviations inside access requirements', () => {
-  const result = checkRepositoryFit({
-    issue: {
-      ...BASE_ISSUE,
-      body: `${BASE_ISSUE.body}
-This task requires e.g. production dashboard credentials.`,
-    },
-    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
-  } as Context);
-  assert.equal(result.pass, false);
+  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}
+This task requires ${abbreviation} production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
 });
 
 test('duplicate check detects a URL-form duplicate declaration', () => {
