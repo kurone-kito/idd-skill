@@ -5944,6 +5944,19 @@ test('repository fit fails when external system appears before access terms', ()
   assert.equal(result.pass, false);
 });
 
+test('repository fit still detects dotted and single-line-wrapped access phrases', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This task requires production.example.com dashboard\ncredentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit accepts an explicitly framed #3522 negative fixture', () => {
   const body = `${BASE_ISSUE.body}
 
@@ -5964,6 +5977,19 @@ test('repository fit accepts an explicitly framed #3522 negative fixture', () =>
   assert.equal(result.passed, true);
   assert.equal(result.outcome, 'ready');
   assert.equal(result.failedCheck, null);
+});
+
+test('repository fit accepts the documented hyphenated expected-rejection cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Expected-rejection: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
 });
 
 test('repository fit remains fail-closed when the fixture cue is in another paragraph', () => {
@@ -5997,6 +6023,32 @@ This task requires production dashboard credentials to verify the result.`;
   assert.equal(result.passed, false);
   assert.equal(result.outcome, 'out-of-scope');
   assert.equal(result.failedCheck, 'repository_fit');
+});
+
+test('repository fit rejects a same-paragraph fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires a maintainer to supply protected material before implementation continues. This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects separate same-item sentences on a marker line', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: a task requires a maintainer to supply protected material before implementation continues. This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit rejects an unrelated should-fail sentence beside a live prerequisite', () => {

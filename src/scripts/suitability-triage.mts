@@ -343,14 +343,17 @@ const UNSAFE_PATTERNS = [
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_PATTERN =
-  /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
+const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S])`;
+const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
+  String.raw`\b(requires?|need(?:s)?|must|depends on)\b${EXTERNAL_SYSTEM_ACCESS_GAP}{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b`,
+  'i',
+);
 // #3522: an external-access phrase can be a deliberately negative
 // regression fixture rather than the issue's own prerequisite. Keep the
 // exception explicit and local; generic or negated wording remains
 // fail-closed.
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
-  /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected\s+(?:rejection|failure)\b/i;
+  /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|never|no|without|isn['’]?t|doesn['’]?t)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
@@ -2193,7 +2196,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       contentIndent: (listItemMatch[0] ?? '').length,
     }),
   );
-  const listItemSpanFor = (matchIndex: number) => {
+  const listItemContextFor = (matchIndex: number) => {
     const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
     let currentItem: (typeof listItems)[number] | null = null;
     for (const listItem of listItems) {
@@ -2217,19 +2220,23 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         listItem.indent <= currentItem.indent,
     );
     return {
-      start: currentItem.start,
-      end: nextItem?.start ?? normalizedBody.length,
+      span: {
+        start: currentItem.start,
+        end: nextItem?.start ?? normalizedBody.length,
+      },
+      allowLooseContinuation: !isMarkerLine,
     };
   };
   const contextSpanFor = (matchIndex: number) => {
     const paragraphSpan = paragraphSpans.find(
       (span) => matchIndex >= span.start && matchIndex < span.end,
     ) ?? { start: 0, end: normalizedBody.length };
-    return listItemSpanFor(matchIndex) ?? paragraphSpan;
+    return listItemContextFor(matchIndex)?.span ?? paragraphSpan;
   };
   const hasPositiveFixtureCue = (
     context: string,
     externalMatchOffset: number,
+    allowLooseContinuation: boolean,
   ) => {
     const cuePattern = new RegExp(
       REPOSITORY_FIT_FIXTURE_CUE_PATTERN.source,
@@ -2255,7 +2262,9 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
           context.slice(cueEnd, externalMatchOffset),
-        )
+        ) ||
+        (!allowLooseContinuation &&
+          /[.!?]/.test(context.slice(cueEnd, externalMatchOffset)))
       ) {
         continue;
       }
@@ -2267,11 +2276,16 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     left: { start: number; end: number },
     right: { start: number; end: number },
   ) => left.start === right.start && left.end === right.end;
-  const contextSpans = externalAccessMatches.map((match) => ({
-    match,
-    span: contextSpanFor(match.index ?? 0),
-  }));
-  for (const { match, span } of contextSpans) {
+  const contextSpans = externalAccessMatches.map((match) => {
+    const matchIndex = match.index ?? 0;
+    const listItemContext = listItemContextFor(matchIndex);
+    return {
+      match,
+      span: listItemContext?.span ?? contextSpanFor(matchIndex),
+      allowLooseContinuation: listItemContext?.allowLooseContinuation ?? false,
+    };
+  });
+  for (const { match, span, allowLooseContinuation } of contextSpans) {
     const matchIndex = match.index ?? 0;
     const matchText = match[0] ?? '';
     const matchEnd = matchIndex + matchText.length;
@@ -2311,6 +2325,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       hasPositiveFixtureCue(
         maskedBody.slice(span.start, span.end),
         matchIndex - span.start,
+        allowLooseContinuation,
       )
     ) {
       continue;

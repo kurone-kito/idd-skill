@@ -47,11 +47,13 @@ Does the issue describe work scoped to this repository?
 - A negative regression fixture or expected-rejection example is descriptive
   context, not a live prerequisite, only when an explicit, positively framed
   fixture/rejection cue precedes the external-access phrase in the same
-  Markdown paragraph or list item. A loose-list item's indented continuation
-  paragraphs remain part of that list item. A separate live prerequisite still
-  fails this check, while unrelated or negated cues, a cue after the access
-  phrase, a cue in another paragraph, and ambiguous wording remain fail-closed.
-  This boundary follows the observed false positive in issue #3522.
+  Markdown paragraph or list item. On a list marker line, the cue and phrase
+  must remain in the same sentence; a separate sentence is part of the same
+  context only when it is a correctly indented loose-list continuation
+  paragraph. A separate live prerequisite still fails this check, while
+  unrelated or negated cues, a cue after the access phrase, a cue in another
+  paragraph, and ambiguous wording remain fail-closed. This boundary follows
+  the observed false positive in issue #3522.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence
