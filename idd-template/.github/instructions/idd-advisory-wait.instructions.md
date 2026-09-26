@@ -269,11 +269,11 @@ AW1-AW2 plus the terminal contract's remaining budget (trusted bound
 `advisory-wait-recovery:` markers only). For the non-pending entry,
 `AW2`'s `SAME_HEAD_REQUEST_MARKER_PRESENT` is required — a same-head
 marker that is only the recovery form must never itself satisfy this
-check (a prior cycle's own marker is not proof a request was
-requested). The non-pending entry reuses `SETTLED_WINDOW_MINUTES` as
-its re-check budget (no new config value); before it elapses the
-classifier stays `"not-applicable"`/`recheck-budget-unspent` —
-ordinary lag, not failure.
+check (a prior cycle's own marker doesn't count). The non-pending
+entry reuses `SETTLED_WINDOW_MINUTES` as its re-check budget; before it
+elapses the classifier stays
+`"not-applicable"`/`recheck-budget-unspent` — ordinary lag, not
+failure.
 
 **Bounded cycle** (only when `"attempt"`). Before each mutating step,
 re-verify the active claim
@@ -287,8 +287,9 @@ pattern as E14's **Primary advisory bot**):
 1. **Remove** the stale request. Skip this step for a non-pending entry
    (`#2327` — `COPILOT_PENDING` was already `false`, so nothing is
    pending to remove) and start at step 3 instead. Otherwise, if removal
-   fails because the bot is no longer pending, re-run AW1-AW3 and
-   re-evaluate `staleRequestRecovery`; any other failure posts the `AW4`
+   fails because the bot is no longer pending or the DELETE can't
+   resolve a User node, re-run AW1-AW3 and re-evaluate
+   `staleRequestRecovery`; any other failure posts the `AW4`
    pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
 3. **Request** Copilot again, same fallback pattern.
