@@ -2097,6 +2097,7 @@ export function checkRepositoryFit(context) {
     externalMatchOffset,
     allowLooseContinuation,
     contextStart,
+    minimumCueOffset = 0,
   ) => {
     const cuePattern = new RegExp(
       REPOSITORY_FIT_FIXTURE_CUE_PATTERN.source,
@@ -2108,6 +2109,9 @@ export function checkRepositoryFit(context) {
         continue;
       }
       const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
+      if (cueEnd <= minimumCueOffset) {
+        continue;
+      }
       const cueGlobalStart = contextStart + cueIndex;
       const cueGlobalEnd = contextStart + cueEnd;
       if (
@@ -2136,7 +2140,7 @@ export function checkRepositoryFit(context) {
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
         (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
-        /\b(?:but|however|although|while|whereas)\b/i.test(cueToMatch)
+        /\b(?:and|but|however|although|while|whereas)\b/i.test(cueToMatch)
       ) {
         continue;
       }
@@ -2195,6 +2199,25 @@ export function checkRepositoryFit(context) {
     ) {
       continue;
     }
+    const previousMatchEnd = allowLooseContinuation
+      ? contextSpans
+          .filter(
+            (candidate) =>
+              candidate.span.start === span.start &&
+              candidate.span.end === span.end &&
+              (candidate.match.index ?? 0) < matchIndex,
+          )
+          .reduce(
+            (latestEnd, candidate) =>
+              Math.max(
+                latestEnd,
+                (candidate.match.index ?? 0) +
+                  (candidate.match[0]?.length ?? 0) -
+                  span.start,
+              ),
+            0,
+          )
+      : 0;
     if (
       matchEnd <= span.end &&
       !hasIndependentRequirementClause(matchText) &&
@@ -2203,6 +2226,7 @@ export function checkRepositoryFit(context) {
         matchIndex - span.start,
         allowLooseContinuation,
         span.start,
+        previousMatchEnd,
       )
     ) {
       continue;
