@@ -25,6 +25,7 @@ import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
@@ -443,7 +444,7 @@ export async function main(): Promise<HelperCliResult> {
 function parsePositiveInteger(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${raw}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${raw}`));
   }
   return Number(raw);
 }

@@ -22,6 +22,7 @@ import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -342,7 +343,7 @@ export async function main() {
 function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${raw}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${raw}`));
   }
   return Number(raw);
 }
