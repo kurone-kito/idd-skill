@@ -383,34 +383,59 @@ function canonicalizeExistingDir(path) {
  * their own independent spawn -- this helper is `acquireClaimLock`'s own
  * internal fast path, not a replacement for that exported entry point.
  *
- * Fails closed on a malformed response (not exactly two non-empty
- * lines): throws rather than guessing which line is which, or silently
- * treating an unresolved worktree as safely linked.
+ * A worktree path containing a literal newline byte (rare, but valid on
+ * POSIX) makes the combined query's own line count ambiguous: git prints
+ * that byte verbatim with no escaping for this query family -- neither
+ * `--path-format` nor `--sq` affects `--absolute-git-dir`/
+ * `--git-common-dir` output (checked directly against this repository's
+ * own git version) -- so more or fewer than two non-empty lines does not
+ * necessarily mean malformed output, only that this combined spawn
+ * cannot safely tell which lines belong to which value (#3526 review,
+ * Copilot). Falls back to two separate single-flag queries in that case
+ * -- each response is exactly one value, however many literal newlines
+ * it contains, matching the pre-#3526 behavior exactly -- rather than
+ * guessing a split point or rejecting a perfectly valid worktree. That
+ * fallback never fires for an ordinary path (the overwhelming common
+ * case, including every worktree this repository's own tooling ever
+ * creates), so it does not reintroduce the spawn-count regression this
+ * function exists to fix. Still fails closed (throws) when either
+ * resolved value is empty -- neither query ever legitimately returns
+ * nothing for a worktree git itself already accepted.
  */
 function resolveAcquireWorktreeFacts(worktree) {
   // Reuse gitRevParse (not a fresh execFileSync call) so the #3434
   // stderr-non-leak `stdio` setting and sanitizedGitEnvironment() apply
   // here automatically instead of needing to stay duplicated in sync by
   // hand.
-  const output = gitRevParse(worktree, [
+  const combined = gitRevParse(worktree, [
     '--absolute-git-dir',
     '--git-common-dir',
   ]);
   // Split on a bare `\n` and `.trim()` each line: a `\r` left over from a
   // `\r\n` line ending is whitespace, so `.trim()` strips it the same as
-  // any other line, and the final trailing-newline-produced empty
-  // element is dropped by the length filter below -- CRLF and LF output
-  // parse identically.
-  const lines = output
+  // any other line, and a trailing-newline-produced empty element is
+  // dropped by the length filter below -- CRLF and LF output parse
+  // identically. Any embedded newline inside either value can only ever
+  // *add* lines beyond the ordinary two (never remove one), so exactly
+  // two surviving non-empty lines reliably means neither value contains
+  // one -- see the function doc comment above for the fallback this
+  // exists to gate.
+  const combinedLines = combined
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  if (lines.length !== 2) {
+  const [adminDirRaw, commonDirRaw] =
+    combinedLines.length === 2
+      ? combinedLines
+      : [
+          gitRevParse(worktree, ['--absolute-git-dir']),
+          gitRevParse(worktree, ['--git-common-dir']),
+        ];
+  if (adminDirRaw.length === 0 || commonDirRaw.length === 0) {
     throw new Error(
-      `unexpected 'git rev-parse --absolute-git-dir --git-common-dir' output for worktree ${JSON.stringify(worktree)}: ${JSON.stringify(output)}`,
+      `unexpected empty 'git rev-parse --absolute-git-dir'/'--git-common-dir' output for worktree ${JSON.stringify(worktree)}`,
     );
   }
-  const [adminDirRaw, commonDirRaw] = lines;
   const cwd = canonicalizeExistingDir(worktree);
   const commonDir = canonicalizeExistingDir(resolve(cwd, commonDirRaw));
   const adminDir = canonicalizeExistingDir(resolve(cwd, adminDirRaw));
