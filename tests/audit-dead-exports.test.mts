@@ -1221,6 +1221,37 @@ test('a no-`from` export list re-exporting a binding from a COMBINED default + n
   }
 });
 
+test('a suppression comment on the line PRECEDING a named import is honored for a no-`from` re-export resolving to that import (Codex C1 round-8 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export function helper(): void {}\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      '// audit:ignore-dead-export: kept for a planned public API\n' +
+        "import { helper } from './origin.mts';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.suppressed,
+      true,
+      'the documented contract (docs/idd-helper-scripts.md) allows the ' +
+        "marker on the import's own line OR immediately above it -- " +
+        'only the own-line form was previously honored for named imports',
+    );
+    assert.equal(entry.suppressionReason, 'kept for a planned public API');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

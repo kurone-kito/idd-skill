@@ -685,14 +685,25 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         // way a declaration's is tracked.
         const localAlias = item.alias ?? item.name;
         addDeclarationLine(localAlias, item.line);
-        // #3498 (Codex C1 finding, round 3): `parseBracedItems` already
-        // recognizes a suppression comment on this import item's own
-        // line -- record it here too, so a no-`from` item resolving to
-        // this import line can also be suppressed there.
+        // #3498 (Codex C1 finding, rounds 3 and 8): `parseBracedItems`
+        // already recognizes a suppression comment on this import item's
+        // own physical line -- ALSO recognize one on the line immediately
+        // PRECEDING the import statement (the same own-or-preceding-line
+        // check the default/namespace import branches already use),
+        // matching the documented contract (`docs/idd-helper-scripts.md`)
+        // that the marker may sit on the declaration's own line or
+        // immediately above it.
         if (!declarationSuppressionByLocalName.has(localAlias)) {
+          const precedingIgnoreMatch = checkOwnOrPrecedingLineSuppression(
+            originalText,
+            lineStarts,
+            item.line,
+          );
           declarationSuppressionByLocalName.set(localAlias, {
-            suppressed: item.suppressed,
-            reason: item.reason,
+            suppressed: item.suppressed || !!precedingIgnoreMatch,
+            reason: item.suppressed
+              ? item.reason
+              : (precedingIgnoreMatch?.[1] ?? '').trim(),
           });
         }
       }
