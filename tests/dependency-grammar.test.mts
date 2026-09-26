@@ -171,6 +171,32 @@ test('extractDependencyReferences: "Depends on" uses the same grammar', () => {
   );
 });
 
+test("extractDependencyReferences: a same-repo qualified reference with an invalid number still reports unresolvable, preserving Discover's fail-safe block (final review round, Copilot regression catch)", () => {
+  // Direct regression guard at the entry point discover-readiness-check.mts
+  // and discover-orphan-filter.mts actually call: `unresolvable` must
+  // still surface this token so those consumers keep treating the issue
+  // as blocked/non-orphan, not silently reading it as having no
+  // dependency at all.
+  assert.deepEqual(
+    extractDependencyReferences(
+      'Blocked by kurone-kito/idd-skill#0',
+      'Blocked by',
+      {
+        currentRepo: CURRENT_REPO,
+      },
+    ),
+    {
+      numbers: [],
+      unresolvable: [
+        {
+          token: 'kurone-kito/idd-skill#0',
+          reason: 'cross_repository_reference',
+        },
+      ],
+    },
+  );
+});
+
 // Lower-level helpers, exercised directly.
 
 test('consumeDependencyReferenceList stops at the first non-token, non-separator text', () => {
@@ -355,17 +381,29 @@ test('consumeDependencyReferenceList records an invalid bare token without dropp
   });
 });
 
-test('consumeDependencyReferenceList validates a qualified token\'s number independently of repo resolution (final review round, Copilot: "kurone-kito/idd-skill#0")', () => {
+test('consumeDependencyReferenceList validates a qualified token\'s number ADDITIVELY (final review round, Copilot: "kurone-kito/idd-skill#0" -- a regression caught only after landing)', () => {
   // A non-positive number on an otherwise same-repo-matching qualified
-  // token must land in invalidTokens, not be folded into unresolvable
-  // under the misleading "cross_repository_reference" reason.
+  // token lands in invalidTokens (for the audit-time linter's precise
+  // reporting) WITHOUT being removed from unresolvable: Discover's own
+  // readiness-check/orphan-filter consumers read unresolvable directly
+  // to add a real blocking reason for any reference they cannot confirm
+  // resolves locally, and never read invalidTokens -- an earlier version
+  // of this fix routed the token to invalidTokens INSTEAD of
+  // unresolvable, silently dropping Discover's own fail-safe block for
+  // it (a genuine regression, caught by a fresh Copilot review round
+  // after this branch had already pushed the first version of this fix).
   assert.deepEqual(
     consumeDependencyReferenceList('kurone-kito/idd-skill#0', {
       currentRepo: CURRENT_REPO,
     }),
     {
       numbers: [],
-      unresolvable: [],
+      unresolvable: [
+        {
+          token: 'kurone-kito/idd-skill#0',
+          reason: 'cross_repository_reference',
+        },
+      ],
       remaining: '',
       consumedTokenEnd: 23,
       invalidTokens: ['kurone-kito/idd-skill#0'],
@@ -373,7 +411,7 @@ test('consumeDependencyReferenceList validates a qualified token\'s number indep
   );
 });
 
-test("consumeDependencyReferenceList validates a URL token's number independently of repo resolution", () => {
+test("consumeDependencyReferenceList validates a URL token's number ADDITIVELY, same as a qualified token", () => {
   assert.deepEqual(
     consumeDependencyReferenceList(
       'https://github.com/kurone-kito/idd-skill/issues/0',
@@ -381,7 +419,12 @@ test("consumeDependencyReferenceList validates a URL token's number independentl
     ),
     {
       numbers: [],
-      unresolvable: [],
+      unresolvable: [
+        {
+          token: 'https://github.com/kurone-kito/idd-skill/issues/0',
+          reason: 'cross_repository_reference',
+        },
+      ],
       remaining: '',
       consumedTokenEnd: 49,
       invalidTokens: ['https://github.com/kurone-kito/idd-skill/issues/0'],

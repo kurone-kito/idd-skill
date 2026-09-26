@@ -1862,6 +1862,19 @@ function checkDependencyLineGrammar(
       }
       const lineNo = index + 1;
       acceptedRemainingLength.set(lineNo, result.remaining.length);
+      // A qualified/URL token with an invalid number lands in BOTH
+      // `unresolvable` (dependency-grammar.mts preserves this for
+      // Discover's own runtime consumers, which read it directly and
+      // never read `invalidTokens`) and `invalidTokens` (added so this
+      // audit-time check can name the real problem). Report each
+      // distinct token exactly once, preferring the more specific
+      // "invalid number" message over the generic "names another
+      // repository" one when both apply to the same token string --
+      // the latter is actively misleading for a same-repo token whose
+      // only real defect is its number (#3285 final review round,
+      // Copilot: a same-repo invalid-number token was previously
+      // reported as if it named a different repository).
+      const invalidTokenSet = new Set(result.invalidTokens);
       // Cross-repository design decision (#3285): unlike the advisory
       // prose-dependency check (which can afford to lean toward flagging
       // when currentRepo is unknown, since a false positive there only
@@ -1876,6 +1889,9 @@ function checkDependencyLineGrammar(
       // happened to pass.
       if (result.unresolvable.length > 0 && currentRepo !== undefined) {
         for (const token of result.unresolvable) {
+          if (invalidTokenSet.has(token.token)) {
+            continue;
+          }
           issues.push(
             `line ${lineNo}: "${token.token}" names another repository and cannot be resolved locally -- Discover will keep this issue blocked until the line is fixed`,
           );
