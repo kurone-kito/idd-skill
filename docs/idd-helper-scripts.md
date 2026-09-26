@@ -1876,7 +1876,16 @@ Interpretation rules:
   `edited` bucket even when every other check (author, HEAD, claim,
   expiry) passes -- `updated_at` is not a substitute, since GitHub's
   `minimizeComment` advances it without touching `lastEditedAt`
-  (kurone-kito/idd-skill#3173).
+  (kurone-kito/idd-skill#3173). kurone-kito/idd-skill#3249 generalizes
+  this same edited-comment rejection to every other trust-bearing marker
+  and IDD disposition reader (`review-watermark`/`review-baseline`,
+  `advisory-wait`/`advisory-wait-recovery`, `review-ack`,
+  `idd-provider-outage-declaration`/`idd-provider-outage-advanced`,
+  `idd-local-validation-evidence`, and disposition replies), with the
+  same three deliberate exceptions named in
+  [Approval Labels vs Trusted Marker Actors](permissions.md#approval-labels-vs-trusted-marker-actors)
+  (`idd-provider-outage-park`, `advisory-reroll`, and a suitability-
+  rejection record all still count an edited comment unchanged).
 - `claim-id` accepts the case-insensitive literal sentinel `none`
   (#1905) alongside an arbitrary claim id, declaring a deliberately
   claimless waiver. It satisfies the claim-binding check only when no
@@ -2393,6 +2402,9 @@ still fails closed:
   merge gate or `idd-advisory-convergence` check consumes this helper's
   output -- see the provider outage declaration helper below for the
   decoupling this implies for `providerOutage`.
+- An edited `advisory-wait:` request marker never registers a request
+  either (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt`
+  check as the external-check waiver above.
 
 ### Provider outage declaration helper
 
@@ -2459,6 +2471,11 @@ still fails closed:
   Declare with that exact service name (`--service
   idd-advisory-convergence`) for either gate to honor it; a declaration
   for any other service name relieves nothing here.
+- An edited declaration or advancement marker relieves nothing either
+  (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt` check as
+  the external-check waiver, checked after authority and before the
+  timestamp/validity checks -- reported in its own `edited` bucket,
+  distinct from `unauthorized` and `malformed`.
 
 ### Provider outage park helper
 
@@ -2535,6 +2552,11 @@ still fails closed:
 - Read-only by construction in list mode and `--parked-issues`: exposes
   no field named or shaped as a merge-readiness or CI-gate result,
   mirroring the provider-health helper above.
+- Unlike every reader above, `idd-provider-outage-park` is a deliberate
+  restrict-only exception (kurone-kito/idd-skill#3249): an edited marker
+  still counts toward `providerOutage.maxParkedChanges` exactly like an
+  unedited one, since ignoring an edit would lower the count and could
+  lift the bound instead of tightening it.
 
 ### Local validation evidence helper
 
@@ -2587,6 +2609,10 @@ still fails closed:
   `headSha` (`evaluateLocalValidationEvidenceRecovery`): a pull request
   whose HEAD advanced past the recorded evidence is re-validated, never
   merged on the stale record.
+- An edited evidence marker is never counted as a pass either
+  (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt` check as
+  the external-check waiver, reported in its own `edited` bucket even
+  when the trusted author, HEAD, and outcome all otherwise check out.
 
 ### A4 viability gate
 
@@ -3579,7 +3605,11 @@ author is a trusted marker actor; the body
 parses as the bound five-field shape; the embedded agent id and claim
 id match the active claim; the embedded HEAD SHA matches current PR
 HEAD; the comment's GitHub `created_at` is a valid ISO 8601 UTC
-timestamp. The clock anchor is the GitHub `created_at` of the
+timestamp; the comment's GraphQL `lastEditedAt` is an explicit `null`
+(kurone-kito/idd-skill#3249) -- an edited or edit-state-unresolved
+marker never counts toward the cycle or the clock anchor, the same
+edited-comment rejection the external-check waiver applies. The clock
+anchor is the GitHub `created_at` of the
 _earliest_ qualifying marker (embedded timestamps are diagnostics
 only, mirroring the `review-watermark`/claim-heartbeat clock rule); the
 completed-cycle count is qualifying-marker _presence_, never the
@@ -4552,16 +4582,16 @@ evidence, purely additively: `converged` / `waived` / `ready` are
 computed with **no reference to it at all**, so it can never let the
 gate pass on anything but the primary bot's own real signal.
 
-| Field               | Meaning                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eligible`          | `matchesHead: true`, `itemCount` known AND (`itemCount > 0` OR `suppressedCount > 0`, #1880), every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
-| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                                                                                      |
-| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                                                                              |
-| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                                                                         |
-| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                                                                        |
-| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                                                                           |
-| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.                                                          |
-| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                                                                                    |
+| Field               | Meaning                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eligible`          | `matchesHead: true`, `itemCount` known AND (`itemCount > 0` OR `suppressedCount > 0`, #1880), every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding.             |
+| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                                                                                                  |
+| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over). `advisory-reroll:` is a deliberate restrict-only exception to the edited-comment rejection elsewhere in this issue (kurone-kito/idd-skill#3249): an edited marker still counts, since ignoring an edit would lower the count and could wrongly lift an exhausted budget. |
+| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                                                                                     |
+| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                                                                                    |
+| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                                                                                       |
+| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.                                                                      |
+| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                                                                                                |
 
 **`ineligibleReasons` tokens (`#1719`)**: one entry per failing term, in
 the same order the `eligible` conjunction is written in
@@ -4722,7 +4752,11 @@ thread does not cover a review that posted two items (Copilot + CodeRabbit
 review, PR #2054). `hasValidReviewAck` is `true` when a trusted
 `review-ack:` marker's OWN `created_at` postdates the latest Copilot
 review's `submittedAt` (never the marker's embedded timestamp), so any
-later review automatically invalidates a pre-existing ack.
+later review automatically invalidates a pre-existing ack. The
+marker's comment must also carry a GraphQL `lastEditedAt` of explicit
+`null` (kurone-kito/idd-skill#3249): an edited or edit-state-unresolved
+`review-ack:` never satisfies this gate, even from a trusted author
+whose HEAD and timing otherwise check out.
 
 The `review-ack:` marker matches `advisory-reroll:`'s field shape and
 posting path exactly (see
@@ -5112,7 +5146,10 @@ same as `AW4`/`AW5`.
     Clause 1 uses) naming that SPECIFIC review's own reviewed commit,
     posted after it, clears the finding; an unrelated later disposition
     comment does not, since a thread-less body-embedded finding has no
-    discrete comment or thread an ordinary disposition reply could address.
+    discrete comment or thread an ordinary disposition reply could
+    address. As with every `hasTrustedReviewAckAfter`/`hasFreshDisposition`
+    caller, an edited or edit-state-unresolved marker or disposition reply
+    never clears anything here either (kurone-kito/idd-skill#3249).
     Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
