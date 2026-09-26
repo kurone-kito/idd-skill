@@ -3528,8 +3528,14 @@ Options:
                                     ready publish or a legacy body)
   --current-repo <owner/repo>      this repository, for the prose-dependency check
                                     to recognize a full-URL issue/PR reference as
-                                    cross-repo (default: $GITHUB_REPOSITORY), and
-                                    for authoring-owner-marker-trail's target match
+                                    cross-repo (default: $GITHUB_REPOSITORY),
+                                    for authoring-owner-marker-trail's target match,
+                                    and for dependency-line-grammar: a qualified/URL
+                                    dependency line naming a different repository
+                                    fails publication only when this is supplied
+                                    and does not match -- omitting it treats a
+                                    qualified reference as unverifiable, not
+                                    malformed
   --issue <number>                 this issue's number, for authoring-owner-marker-trail's
                                     target match (requires --current-repo or
                                     $GITHUB_REPOSITORY to be resolvable)

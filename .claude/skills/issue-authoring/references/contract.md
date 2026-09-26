@@ -674,11 +674,15 @@ Validation expectations:
   full GitHub issue URL as the reference. A mid-line mention, a
   near-miss spelling or shape (an emphasis-wrapped keyword,
   `Blocked-by`/`BlockedBy`/`Depends-on`, a full-width colon, or a
-  Markdown-link reference), and a cross-repository token on an
-  otherwise well-formed line are all rejected by the
+  Markdown-link reference) is rejected unconditionally by the
   `dependency-line-grammar` mechanical check (see
   [Mechanical pre-publish gate](#mechanical-pre-publish-gate)) — none
-  of these produce a dependency Discover can actually resolve.
+  of these produce a dependency Discover can actually resolve. A
+  cross-repository token on an otherwise well-formed line is rejected
+  only when the linter is given `--current-repo` and it does not
+  match; without that context the token is treated as unverifiable,
+  not malformed, since Discover's own live run resolves a same-repo
+  reference correctly regardless.
 - Sequential roadmap dependencies via
   `<!-- <marker-prefix>-blocked-by: ... -->` only when a separate
   roadmap

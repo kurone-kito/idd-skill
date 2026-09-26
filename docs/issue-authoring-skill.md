@@ -1929,13 +1929,17 @@ indentation, blockquote `>` markers, and at most one list marker) with
 the literal keyword `Blocked by` or `Depends on`, an optional `:`, and
 the reference itself — a bare `#123`, a qualified `owner/repo#123`, or
 a full GitHub issue URL. A mid-line mention (the keyword appearing
-after other prose, or hidden inside an HTML comment), a near-miss
+after other prose, or hidden inside an HTML comment) and a near-miss
 spelling or shape (an emphasis-wrapped keyword, `Blocked-by`/
 `BlockedBy`/`Depends-on`, a full-width colon, or a Markdown-link
-reference instead of one of the three plain forms), and a
-cross-repository token on an otherwise well-formed line are all
-rejected by the `dependency-line-grammar` mechanical check below —
-none of these produce a dependency Discover can actually resolve.
+reference instead of one of the three plain forms) are rejected
+unconditionally by the `dependency-line-grammar` mechanical check
+below — none of these produce a dependency Discover can actually
+resolve. A cross-repository token on an otherwise well-formed line is
+rejected only when the linter is given `--current-repo` and it does
+not match; without that context the token is treated as unverifiable,
+not malformed, since Discover's own live run resolves a same-repo
+reference correctly regardless.
 
 ### Sequential roadmap dependency
 
