@@ -3205,6 +3205,11 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * above Step 1 -- the one lite's own "above" wording actually refers
  * to.
  *
+ * Step 1's own span is likewise narrowed to only its *first* invocation
+ * line rather than a union of every match inside the span (Codex review,
+ * #3480) -- the same masking risk, symmetrically, in case a later,
+ * fully-spelled-out example line ever appears in the same span.
+ *
  * "Nearest preceding" excludes a `--fresh-claim-gate` invocation line:
  * `idd-resume-lite.instructions.md`'s real "Always run helpers first"
  * section documents that fresh-claim-gate form on its own line
@@ -3250,7 +3255,13 @@ function parseStepOneOwnClaimFlags(
     .filter(isInvocationLine);
   let invocationLines: readonly string[];
   if (ownSpanInvocationLines.length > 0) {
-    invocationLines = ownSpanInvocationLines;
+    // Use only the first (primary) invocation line Step 1's own span
+    // introduces, not a union of every match in the span: a later,
+    // fully-spelled-out example elsewhere in the same span (e.g. a
+    // forced-handoff retry re-typed in full) could otherwise mask a
+    // dropped flag on the actual primary invocation the same way an
+    // unrelated earlier line could in the fallback branch below.
+    invocationLines = [ownSpanInvocationLines[0]];
   } else {
     const precedingInvocationLines = lines
       .slice(0, stepOneIndex)
