@@ -6829,13 +6829,22 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
     noneText,
     /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
   );
-  assert.match(noneText, /requestReviews/);
-  assert.match(noneText, /botIds/);
-  assert.match(noneText, /union: true/);
-  const evidenceAt = noneText.indexOf('registration evidence');
-  const reviewsAt = noneText.indexOf('requestReviews');
+  assert.match(
+    noneText,
+    /non-empty requested_reviewers node for copilot-pull-request-reviewer\[bot\]/,
+  );
+  assert.match(
+    noneText,
+    /gh api "users\/copilot-pull-request-reviewer\[bot\]" --jq \.node_id/,
+  );
+  assert.match(
+    noneText,
+    /requestReviews\(input:\{pullRequestId:\$id,botIds:\$botIds,union:true\}\)/,
+  );
+  assert.match(noneText, /"botIds":\["\$\{BOT_NODE_ID\}"\]/);
+  const payloadAt = noneText.indexOf('union:true');
   const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
-  assert.ok(evidenceAt >= 0 && reviewsAt > evidenceAt && markerAt > reviewsAt);
+  assert.ok(payloadAt > 0 && markerAt > payloadAt);
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(
     noneText,

@@ -3622,16 +3622,18 @@ export function collectAssertNextActions(verdict) {
       token: T.REQUEST_REVIEW,
       summary:
         `${bot} has not reviewed this PR. Request a review (E14) and post an advisory-wait marker only after registration evidence ` +
-        `(a review_requested timeline event for ${restLogin} that follows the current HEAD commit, or a non-empty requested_reviewers node). Exit status is not evidence:`,
+        `(a review_requested timeline event for ${restLogin} that follows the current HEAD commit, or a non-empty requested_reviewers node for ${restLogin} on this PR). Exit status is not evidence:`,
       pointer: [
         `gh pr edit ${pr} --add-reviewer ${reviewer}`,
-        `# if that leaves evidence absent (GraphQL login-resolution failure included):`,
+        `# if that leaves evidence absent, including a zero exit with no event and no node for ${restLogin}:`,
         `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
-        `# if evidence is still absent, resolve the bot user node id (never hard-code it) and call requestReviews with botIds as a JSON array and union: true. gh api -f sends that array as a string.`,
-        `gh api graphql --input - <<'EOF'`,
-        `{"query":"mutation($id:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){clientMutationId}}","variables":{"id":"<pr-node-id>","botIds":["<resolved-bot-node-id>"]}}`,
+        `# if evidence for ${restLogin} is still absent, resolve ids live. GraphQL user(login:) does not resolve a Bot; use REST. Never hard-code a node id. gh api -f sends botIds as a string.`,
+        `PR_NODE_ID=$(gh pr view ${pr} --json id --jq .id)`,
+        `BOT_NODE_ID=$(gh api "users/${restLogin}" --jq .node_id)`,
+        `gh api graphql --input - <<EOF`,
+        `{"query":"mutation($id:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){clientMutationId}}","variables":{"id":"\${PR_NODE_ID}","botIds":["\${BOT_NODE_ID}"]}}`,
         `EOF`,
-        `# confirm the same evidence, then:`,
+        `# confirm the same evidence for ${restLogin}, then:`,
         `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
       ].join('\n'),
     });

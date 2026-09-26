@@ -227,25 +227,23 @@ and no `review_requested` event was recorded.
 
 ```sh
 gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-# on a GraphQL login-resolution failure ("Could not resolve user ..."):
+# If that leaves registration evidence absent, including a zero exit
+# with no event and no node for this bot (not only a GraphQL
+# login-resolution failure):
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
 ```
 
-Re-read the evidence (AW1's `review_requested` / `requested_reviewers`
-commands). If it is still absent, resolve both node ids live. Do not
-paste a node id; resolve the bot user id again each time.
-`gh api -f` sends `botIds` as a string and fails node-id
-resolution, so pass a JSON body:
+Re-read the evidence. The review-request node counts only when it is
+for `{primary-advisory-bot-rest-login}` on this PR, not some other
+reviewer. If evidence is still absent, resolve both node ids live.
+Do not paste a node id. GraphQL `user(login:)` does not resolve a
+`Bot`; use the REST users endpoint. `gh api -f` sends `botIds` as a
+string and fails node-id resolution, so pass a JSON body:
 
 ```sh
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
-BOT_NODE_ID=$(
-  gh api graphql \
-    -f query='query($login:String!){ user(login:$login){ id } }' \
-    -f login='{primary-advisory-bot-rest-login}' \
-    --jq '.data.user.id'
-)
+BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
 # shell expands the two ids; the GraphQL variables stay a JSON array
 gh api graphql --input - <<EOF
 {"query":"mutation(\$id:ID!,\$botIds:[ID!]!){ requestReviews(input:{pullRequestId:\$id,botIds:\$botIds,union:true}){ clientMutationId } }","variables":{"id":"${PR_NODE_ID}","botIds":["${BOT_NODE_ID}"]}}
