@@ -31,7 +31,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Pass `--claim-id`/`--nonce` once recorded/verified per claim-id, and
+Pass `--claim-id`/`--nonce` once verified per claim-id, and
 `--worktree` once the B1 worktree exists.
 
 Map helper fields to actions below.
@@ -103,8 +103,8 @@ Forced-handoff: pass `new_claim_id` into Step 1. On
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 Retry `already_owned`: STOP if `new_agent_id` is not this
 session or `old_claim_id` is this session's claim (displaced).
-Else adopt the pair; post this session's activation-nonce unless
-recorded for `new_claim_id`; wait settle; confirm the nonce winner;
+Else adopt the pair; unless this session recorded a nonce for
+`new_claim_id`, post one; wait settle; confirm the nonce winner;
 Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
