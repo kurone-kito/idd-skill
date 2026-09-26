@@ -514,17 +514,44 @@ export function buildDispositionPlan(input, options = {}) {
     ) {
       continue;
     }
-    const covered = codexNoFindDispositions.some(
-      ({ comment: dispositionComment, parsed, activityAt }) =>
-        parsed !== null &&
-        parsed.sourceCommentId === String(comment.id) &&
-        parsed.headSha === headSha.toLowerCase() &&
-        compareIsoTimestamps(
-          activityAt,
-          effectiveRegularCommentActivityAt(comment),
-        ) > 0 &&
-        dispositionNamesAdvisoryBot(dispositionComment.body, comment.login),
-    );
+    const coveringDisposition = codexNoFindDispositions
+      .filter(
+        ({ comment: dispositionComment, parsed, activityAt }) =>
+          parsed !== null &&
+          parsed.sourceCommentId === String(comment.id) &&
+          parsed.headSha === headSha.toLowerCase() &&
+          compareIsoTimestamps(
+            activityAt,
+            effectiveRegularCommentActivityAt(comment),
+          ) > 0 &&
+          dispositionNamesAdvisoryBot(dispositionComment.body, comment.login),
+      )
+      .reduce(
+        (latest, candidate) =>
+          latest === null ||
+          compareIsoTimestamps(candidate.activityAt, latest.activityAt) > 0
+            ? candidate
+            : latest,
+        null,
+      );
+    // An edited or edit-state-unknown acceptance that was added after the
+    // latest valid replacement invalidates that replacement's coverage. The
+    // next plan must post one more clean marker so the gate can retire the
+    // edited marker (#411238).
+    const hasLaterEditedDisposition =
+      coveringDisposition !== null &&
+      comments.some((disposition) => {
+        const parsed = parseCodexNoFindDisposition(disposition.body);
+        return Boolean(
+          parsed?.sourceCommentId === String(comment.id) &&
+            classifyCommentEditState(disposition) !== 'unedited' &&
+            compareIsoTimestamps(
+              effectiveRegularCommentActivityAt(disposition),
+              coveringDisposition.activityAt,
+            ) > 0,
+        );
+      });
+    const covered = coveringDisposition !== null && !hasLaterEditedDisposition;
     if (covered) {
       skipped.push({
         noticeId: comment.id,

@@ -1064,6 +1064,42 @@ test('buildDispositionPlan re-plans when a no-find disposition is edited', () =>
   );
 });
 
+test('buildDispositionPlan re-plans when an edited marker follows a replacement', () => {
+  const source = notice(
+    346,
+    CODEX,
+    CODEX_NO_FIND_RESULT,
+    '2026-05-12T00:00:00Z',
+  );
+  const replacement = notice(
+    347,
+    'trusted-agent',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 346),
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+    null,
+  );
+  const editedDisposition = notice(
+    348,
+    'trusted-agent',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 346),
+    '2026-05-12T02:00:00Z',
+    '2026-05-12T03:00:00Z',
+    '2026-05-12T03:00:00Z',
+  );
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [source, replacement, editedDisposition],
+    },
+    { trustedMarkerLogins: ['trusted-agent'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((item) => item.noticeId),
+    [346],
+  );
+});
+
 test('gate retires an edited no-find acceptance after a valid replacement', () => {
   const source = {
     id: 343,
