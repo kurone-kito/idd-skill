@@ -997,6 +997,64 @@ test('does not let possessive approval nouns hide behind credential storage (#35
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('keeps an affirmative credential prerequisite after a negated clause (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 138,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential that must not require maintainer ' +
+      'access but must be supplied by the customer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a negated credential detail mask a required credential (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 141,
+    title: 'document protected material',
+    body:
+      'Implementation requires a credential that must not require maintainer ' +
+      'access. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let possessive approval prerequisites hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 139,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. Implementation requires the ' +
+      "maintainer's approval before implementation. Verification: add unit " +
+      'tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not bind a credential mention to unrelated temporal test wording (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 140,
+    title: 'document credential terminology',
+    body:
+      'Document credential rotation and add necessary tests before merging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('keeps credential handling purpose wording descriptive (#3528)', () => {
   const result = evaluateA4Viability({
     number: 125,

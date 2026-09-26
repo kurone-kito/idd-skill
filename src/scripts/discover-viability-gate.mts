@@ -186,12 +186,14 @@ const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
   '(?:maintainers?|operators?|owners?|teams?|customers?|administrators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
 const CREDENTIAL_NEGATED_REQUIREMENT_PATTERN =
   /\b(?:must|shall|does|do|did|will)\s+not\s+(?:require|need|necessitate)\b/i;
+const CREDENTIAL_NEGATED_REQUIREMENT_CLAUSE_PATTERN =
+  /\b(?:must|shall|does|do|did|will)\s+not\s+(?:require|need|necessitate)\b[^.;:!?—()\n]{0,100}?(?:\s+(?:but|and|however|while)\s+|(?=[.;:!?—()\n]|$))/gi;
 const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
-  String.raw`(?:\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b[^.;:!?—()\n]{0,100}\b(?:before|until|supplied|provided|performed|created)\b|\b(?:approval|access|permission|authorization)\s+(?:(?:is|are|was|were)\s+)?(?:required|necessary|essential|needed)\b|\bawait(?:s|ing)?\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization|credential)\b|\bsubject\s+to\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization)\b|\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:must|will)\s+(?:supply|provide|create|obtain|generate|approve|grant|share|enable)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b)`,
+  String.raw`(?:\b(?:must|require[sd]?|requiring|shall|has\s+to|have\s+to|mandatory|essential|blocked|blocking|pending|waiting)\b[^.;:!?—()\n]{0,100}\b(?:supplied|provided|performed|created)\b|\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b|\b(?:approval|access|permission|authorization)\s+(?:(?:is|are|was|were)\s+)?(?:required|necessary|essential|needed)\b|\bawait(?:s|ing)?\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization|credential)\b|\bsubject\s+to\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization)\b|\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:must|will)\s+(?:supply|provide|create|obtain|generate|approve|grant|share|enable)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b)`,
   'i',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:approval|access|permission|authorization)\b`,
+  String.raw`\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b`,
   'gi',
 );
 // A trigger phrase inside a phrase describing something other than a live,
@@ -861,49 +863,6 @@ function isNearRequirementAssertion(
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
       ? CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN
       : assertionPattern;
-  const descriptivePurpose =
-    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
-      ? CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.exec(forwardText)
-      : null;
-  const hasUnattachedDescriptivePurpose =
-    descriptivePurpose !== null &&
-    !CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN.test(
-      forwardText.slice(descriptivePurpose[0].length),
-    );
-  if (
-    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-    CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(forwardText)
-  ) {
-    return false;
-  }
-  if (
-    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(forwardText)
-  ) {
-    return true;
-  }
-  if (
-    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-    hasUnattachedDescriptivePurpose
-  ) {
-    return false;
-  }
-  if (
-    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-    CREDENTIAL_RELATIVE_ACTOR_ASSERTION_PATTERN.test(forwardText)
-  ) {
-    return true;
-  }
-  if (
-    forwardAssertion.test(forwardText) &&
-    !(
-      assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-      (CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(forwardText) ||
-        hasUnattachedDescriptivePurpose)
-    )
-  ) {
-    return true;
-  }
   const backwardStart = Math.max(
     0,
     matchIndex - REQUIREMENT_ASSERTION_WINDOW_CHARS,
@@ -916,11 +875,65 @@ function isNearRequirementAssertion(
   const backwardText = lastBreak
     ? backwardRaw.slice(lastBreak.index + lastBreak[0].length)
     : backwardRaw;
-  return (
+  const backwardAssertion = (
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
       ? CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN
       : assertionPattern
   ).test(backwardText);
+  if (backwardAssertion) {
+    return true;
+  }
+  const descriptivePurpose =
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.exec(forwardText)
+      : null;
+  const effectiveForwardText =
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? forwardText.replace(CREDENTIAL_NEGATED_REQUIREMENT_CLAUSE_PATTERN, ' ')
+      : forwardText;
+  const hasUnattachedDescriptivePurpose =
+    descriptivePurpose !== null &&
+    !CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN.test(
+      effectiveForwardText.slice(descriptivePurpose[0].length),
+    );
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(forwardText) &&
+    !CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(effectiveForwardText)
+  ) {
+    return false;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(effectiveForwardText)
+  ) {
+    return true;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    hasUnattachedDescriptivePurpose
+  ) {
+    return false;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_RELATIVE_ACTOR_ASSERTION_PATTERN.test(effectiveForwardText)
+  ) {
+    return true;
+  }
+  if (
+    forwardAssertion.test(effectiveForwardText) &&
+    !(
+      assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+      (CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(
+        effectiveForwardText,
+      ) ||
+        hasUnattachedDescriptivePurpose)
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isFollowedByCredentialRequirement(
@@ -945,11 +958,18 @@ function isFollowedByCredentialRequirement(
       firstBoundary[0].length + nextBoundary.length,
     );
   })();
-  if (CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(sameSentence)) {
+  const effectiveSameSentence = sameSentence.replace(
+    CREDENTIAL_NEGATED_REQUIREMENT_CLAUSE_PATTERN,
+    ' ',
+  );
+  if (
+    CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(sameSentence) &&
+    !CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(effectiveSameSentence)
+  ) {
     return false;
   }
   return (
-    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(sameSentence) ||
+    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(effectiveSameSentence) ||
     CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
