@@ -3221,13 +3221,17 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * own "run the command above" prose refers to, and including it in the
  * nearest-preceding candidate pool would silently pick the wrong line.
  *
- * Flag detection itself uses a whole-token match (word-boundary-aware,
- * tolerant of the `[--flag {value}]`/`[--flag <value>]` bracket forms
- * both files use), not a plain substring check (Codex review, #3480):
- * `.includes('--worktree')` would have also matched an unrelated,
- * differently-scoped option such as `--worktree-path`, silently
- * reporting the canonical flag present even when the documented
- * invocation never actually carries it.
+ * Every specific-token check here -- the three own-claim flags, and the
+ * `--issue`/`--fresh-claim-gate` tokens used to select invocation lines
+ * in the first place -- uses the same whole-token match (word-boundary-
+ * aware, tolerant of the `[--flag {value}]`/`[--flag <value>]` bracket
+ * forms both files use), not a plain substring check (Codex review,
+ * #3480, in two rounds): `.includes('--worktree')` would have also
+ * matched an unrelated, differently-scoped option such as
+ * `--worktree-path`, and `.includes('--issue')` would equally have
+ * matched an `--issue-number`-shaped edit, in both cases silently
+ * treating an unsupported option as the canonical one the documented
+ * invocation never actually carries.
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
@@ -3246,10 +3250,20 @@ function parseStepOneOwnClaimFlags(
       break;
     }
   }
+  const hasExactToken = (line: string, token: string): boolean => {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
+  };
+  // Word-boundary-aware, not `.includes()`: an accidental `--issue-number`
+  // or `--fresh-claim-gate-only` edit must not still count as the
+  // required `--issue`/`--fresh-claim-gate` token (Codex review, #3480 --
+  // the same class of false positive already fixed for the three
+  // own-claim flags below, now applied everywhere else this parser
+  // matches a specific CLI token).
   const isInvocationLine = (line: string): boolean =>
-    line.includes('resume-claim-routing.mjs') && line.includes('--issue');
+    line.includes('resume-claim-routing.mjs') && hasExactToken(line, '--issue');
   const isFreshClaimGateLine = (line: string): boolean =>
-    line.includes('--fresh-claim-gate');
+    hasExactToken(line, '--fresh-claim-gate');
   const ownSpanInvocationLines = lines
     .slice(stepOneIndex, sectionEnd)
     .filter(isInvocationLine);
@@ -3270,14 +3284,10 @@ function parseStepOneOwnClaimFlags(
       precedingInvocationLines[precedingInvocationLines.length - 1];
     invocationLines = nearestPreceding === undefined ? [] : [nearestPreceding];
   }
-  const hasFlagToken = (line: string, flag: string): boolean => {
-    const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
-  };
   const found = new Set<StepOneOwnClaimFlag>();
   for (const line of invocationLines) {
     for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
-      if (hasFlagToken(line, flag)) {
+      if (hasExactToken(line, flag)) {
         found.add(flag);
       }
     }
