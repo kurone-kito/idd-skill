@@ -2781,6 +2781,87 @@ export function isCodexNoFindResultDisposition(body: unknown): boolean {
   return parseCodexNoFindDisposition(body) !== null;
 }
 
+// A fresh source-bound no-find disposition supersedes an older marker whose
+// edit state is edited or unresolved. The older marker cannot clear the source
+// itself, but leaving it in the generic review pool after the replacement is
+// accepted would make the same source permanently block the gate (#411228).
+function findSupersededCodexNoFindDispositionIndexes<
+  T extends {
+    id: string;
+    authorLogin: string;
+    body: string;
+    activityAt: string;
+    sortedIndex: number;
+    lastEditedAt?: string | null;
+  },
+>(
+  comments: T[],
+  options: {
+    advisoryBotLogins: Set<string>;
+    trustedMarkerLogins: Set<string>;
+    iddAgentLogins: Set<string>;
+    currentHeadSha: string;
+  },
+): Set<number> {
+  const { advisoryBotLogins, trustedMarkerLogins, iddAgentLogins } = options;
+  const currentHeadSha = options.currentHeadSha.trim().toLowerCase();
+  if (!currentHeadSha) {
+    return new Set();
+  }
+  const isCanonicalCurrentSource = (comment: T): boolean =>
+    isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+    advisoryBotIdentityToken(comment.authorLogin) ===
+      'chatgpt-codex-connector' &&
+    isCodexNoFindResultForHeadSha(comment.body, currentHeadSha);
+  const isEligibleReplacement = (comment: T, source: T): boolean => {
+    const parsed = parseCodexNoFindDisposition(comment.body);
+    return Boolean(
+      (trustedMarkerLogins.has(comment.authorLogin) ||
+        iddAgentLogins.has(comment.authorLogin)) &&
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+          'unedited' &&
+        parsed &&
+        parsed.sourceCommentId === source.id &&
+        currentHeadSha.startsWith(parsed.headSha) &&
+        dispositionNamesAdvisoryBot(comment.body, source.authorLogin) &&
+        compareIsoTimestamps(comment.activityAt, source.activityAt) > 0,
+    );
+  };
+  return new Set(
+    comments
+      .filter(
+        (comment) =>
+          isCodexNoFindResultDisposition(comment.body) &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'unedited',
+      )
+      .filter((staleDisposition) => {
+        const parsed = parseCodexNoFindDisposition(staleDisposition.body);
+        if (!parsed) {
+          return false;
+        }
+        const source = comments.find(
+          (comment) =>
+            comment.id === parsed.sourceCommentId &&
+            isCanonicalCurrentSource(comment),
+        );
+        return Boolean(
+          source &&
+            comments.some(
+              (replacement) =>
+                replacement.sortedIndex !== staleDisposition.sortedIndex &&
+                isEligibleReplacement(replacement, source) &&
+                compareIsoTimestamps(
+                  replacement.activityAt,
+                  staleDisposition.activityAt,
+                ) > 0,
+            ),
+        );
+      })
+      .map((comment) => comment.sortedIndex),
+  );
+}
+
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
 // marker, invocation marker, and "Action not completed" wrapper, but a
@@ -7575,6 +7656,13 @@ export function summarizeRegularCommentsForGate(
     createdAt: comment.createdAt,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const supersededCodexNoFindDispositionIndexes =
+    findSupersededCodexNoFindDispositionIndexes(normalized, {
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
 
   // A source-bound Codex no-find acceptance remains an operational comment
   // after the PR advances to a later HEAD or the source is edited in place.
@@ -7657,6 +7745,7 @@ export function summarizeRegularCommentsForGate(
     .filter(
       (comment) =>
         !isTrustedMachineDisposition(comment) &&
+        !supersededCodexNoFindDispositionIndexes.has(comment.sortedIndex) &&
         !dispositionedStickyIndexes.has(comment.sortedIndex),
     )
     .filter(
@@ -8042,6 +8131,13 @@ export function summarizeDispositionEvidenceForGate(
     createdAt: comment.createdAt,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const supersededCodexNoFindDispositionIndexes =
+    findSupersededCodexNoFindDispositionIndexes(normalizedComments, {
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
 
   // #1182 trusted machine-disposition recognition, scoped to this gate. A
   // trusted-marker actor who authored one of the two machine-generated advisory
@@ -8086,6 +8182,7 @@ export function summarizeDispositionEvidenceForGate(
     .filter(
       (comment) =>
         !iddAgentLogins.has(comment.authorLogin) &&
+        !supersededCodexNoFindDispositionIndexes.has(comment.sortedIndex) &&
         !isTrustedMachineDisposition(
           comment.authorLogin,
           comment.body,

@@ -1064,6 +1064,47 @@ test('buildDispositionPlan re-plans when a no-find disposition is edited', () =>
   );
 });
 
+test('gate retires an edited no-find acceptance after a valid replacement', () => {
+  const source = {
+    id: 343,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const editedDisposition = {
+    id: 344,
+    author: { login: 'trusted-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 343),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T02:00:00Z',
+    lastEditedAt: '2026-05-12T02:00:00Z',
+  };
+  const replacement = {
+    id: 345,
+    author: { login: 'trusted-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 343),
+    createdAt: '2026-05-12T03:00:00Z',
+    updatedAt: '2026-05-12T03:00:00Z',
+    lastEditedAt: null,
+  };
+  const options = {
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['trusted-agent'],
+    prHeadSha: 'abc1234',
+  };
+  const regularSummary = summarizeRegularCommentsForGate(
+    [source, editedDisposition, replacement],
+    options,
+  );
+  assert.equal(regularSummary.count, 0);
+  const dispositionSummary = summarizeDispositionEvidenceForGate(
+    { comments: [source, editedDisposition, replacement], threads: [] },
+    options,
+  );
+  assert.equal(dispositionSummary.missingRegularCommentCount, 0);
+});
+
 test('gate agreement requires the Codex disposition HEAD to match the current source HEAD', () => {
   const source = {
     id: 324,
