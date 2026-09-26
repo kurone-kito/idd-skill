@@ -757,6 +757,34 @@ test('a no-`from` export list re-exporting the SECOND declarator of a bare, sing
   }
 });
 
+test('a no-`from` export list re-exporting the SECOND declarator of an EXPORTED, single-line multi-declarator `const` statement is classified unused (proactive fix, same class as the bare-const finding above, found before Copilot flagged it)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'export const other = 1, helper = 2;',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      '`CONST_DECL_PATTERN` only ever captures the FIRST identifier -- ' +
+        'a SEPARATE no-`from` item re-exporting the SECOND declarator ' +
+        "under an alias must still resolve that declarator's own real " +
+        'line, not fall back to the export-list line and let the ' +
+        'const statement itself register as a false self-reference',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

@@ -621,7 +621,35 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         localName: name,
         selfReferenceExcludeLines: [lineIndex + 1],
       });
-      addDeclarationLine(name, lineIndex + 1);
+      // #3498 (proactive fix, same class as the bare-const findings
+      // above): `export const a = 1, b = 2;` is a genuine direct export
+      // of BOTH `a` and `b` -- `CONST_DECL_PATTERN` itself only captures
+      // the FIRST identifier, so a SEPARATE no-`from` item re-exporting
+      // `b` under an alias (`export { b as PublicB };`) would otherwise
+      // never find `b`'s real declaration line in
+      // `declarationLineByLocalName` and fall back to the export-list
+      // line, letting this const statement's own unexcluded mention of
+      // `b` register as a false self-reference -- the same defect
+      // Copilot found for the BARE case, just on the EXPORTED branch.
+      // Only `declarationLineByLocalName` gets every declarator here;
+      // `declared` above still resolves only the first (a separate,
+      // pre-existing, unrelated gap: a LATER declarator's own direct
+      // export entry is silently missing from the audit entirely, not
+      // something the no-`from` mechanism this issue fixes touches).
+      if (constMatch) {
+        const declaratorListStart =
+          start + (constMatch[0].length - constMatch[1].length);
+        const declarators = scanBareConstDeclarators(
+          strippedText,
+          declaratorListStart,
+          end,
+        );
+        for (const declarator of declarators) {
+          addDeclarationLine(declarator.name, lineIndex + 1);
+        }
+      } else {
+        addDeclarationLine(name, lineIndex + 1);
+      }
       lineIndex += 1;
       continue;
     }
