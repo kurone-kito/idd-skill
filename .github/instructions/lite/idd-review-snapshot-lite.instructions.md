@@ -91,7 +91,8 @@ then continue to Step 1.
    --pr {pr-number} --trusted-marker-logins
    "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
    equivalent — this is
-   Step 2's watermark data source, not a triage tool. The helper emits
+   Step 2's watermark data source and exposes `embeddedFindings` for
+   Step 3; raw triage fetch remains required. The helper emits
    both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
    `{latest-ci-completed-at}` is always the latter — the latest
    _passing_ (or treated-as-passed) completion, never the latest
@@ -199,9 +200,10 @@ record each item's source URL:
   `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
   reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
   findings. See the [#2197/#2559 rationale](../../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
-- **Regular comments** without an IDD-agent reply since the comment, or
-  with `**Awaiting maintainer decision**` — exclude periodic bots;
-  keep Copilot/CI comments for PATH B, including E6 non-review notices.
+- **Regular comments** where the last speaker is not an IDD agent and no
+  reply from **you** exists after the comment, or whose latest IDD-agent
+  reply starts with `**Awaiting maintainer decision**` — exclude periodic
+  bots; keep Copilot/CI comments for PATH B, including E6 notices.
 
 Also carry a light **resolved-thread index** (`isResolved=true`) with
 file/area, claim, source URL, and any disposition marker. Never re-add

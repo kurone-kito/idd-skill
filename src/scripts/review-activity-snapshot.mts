@@ -313,7 +313,7 @@ function printHelp(): void {
 `);
 }
 
-/** One row per CodeRabbit review. Thread coverage is the number of
+/** One row per CodeRabbit COMMENTED review. Thread coverage is the number of
  * review threads whose first comment's `pullRequestReview.id` equals
  * the review's REST `node_id`. An empty `node_id` covers nothing, so
  * a null review id cannot match every thread that also has none. */
