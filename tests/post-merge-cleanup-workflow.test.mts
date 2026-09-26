@@ -245,16 +245,21 @@ test('cleanup step timeout is below the job timeout and evidence still runs afte
     const existingGuard = evidence.indexOf('if [ -n "$EXISTING" ]');
     const ghApi = evidence.indexOf('gh api --paginate');
     const emptyPr = evidence.indexOf('if [ -z "$PR_NUMBER" ]');
-    const timeoutAssign = evidence.indexOf('STATUS="timeout"');
+    const emptyStatus = evidence.indexOf('if [ -z "$STATUS" ]; then');
+    const timeoutAssign = evidence.indexOf('STATUS="timeout"', emptyStatus);
+    const emptyStatusEnd = evidence.indexOf('\n          fi\n', emptyStatus);
     assert.ok(
       emptyPr !== -1 && emptyPr < ghApi,
       `${path} empty PR_NUMBER exit must precede gh api`,
     );
     assert.ok(
-      timeoutAssign !== -1 && timeoutAssign < existingGuard,
-      `${path} STATUS=timeout must precede the duplicate-evidence skip`,
+      emptyStatus !== -1 &&
+        timeoutAssign > emptyStatus &&
+        emptyStatusEnd > timeoutAssign &&
+        emptyStatusEnd < existingGuard,
+      `${path} STATUS=timeout must be assigned inside the empty-status branch, before the duplicate-evidence skip`,
     );
-    const prelude = evidence.slice(0, existingGuard);
+    const emptyStatusBranch = evidence.slice(emptyStatus, emptyStatusEnd);
     for (const token of [
       'APPLIED=0',
       'FAILED=0',
@@ -265,8 +270,8 @@ test('cleanup step timeout is below the job timeout and evidence still runs afte
       'The cleanup step ended without reporting a status. Counts are zero.',
     ]) {
       assert.ok(
-        prelude.includes(token),
-        `${path} timeout prelude must include ${token} before the skip guard`,
+        emptyStatusBranch.includes(token),
+        `${path} empty-status branch must include ${token} before the skip guard`,
       );
     }
   }
