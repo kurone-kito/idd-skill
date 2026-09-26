@@ -98,8 +98,9 @@ Forced-handoff: pass `new_claim_id` into Step 1. On
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 Retry `already_owned`: STOP if `new_agent_id` is not this
 session or `old_claim_id` is this session's claim (displaced).
-Else adopt the pair; post this session's own activation-nonce unless
-already recorded; wait settle; confirm the nonce winner; then Step 2.
+Else adopt the pair; post this session's activation-nonce unless
+recorded for `new_claim_id`; wait settle; confirm the nonce winner;
+Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
