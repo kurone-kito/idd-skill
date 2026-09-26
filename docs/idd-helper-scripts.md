@@ -309,7 +309,8 @@ Issue #3343 moves the 16 discover and claim helpers onto the same
 runner. Argument errors are `usage`. A `gh` failure is `not-found` or
 `transport` the same way as the first batch. A returned non-zero exit
 code is `gate`: `claim-lock.mjs` keeps exit `2` for an `--acquire`
-lock collision and for a `--backfill-tokens` result that is not
+lock collision, exit `4` when `--acquire` refuses the primary
+worktree, and exit `2` for a `--backfill-tokens` result that is not
 `backfilled`; `clone-lock.mjs` keeps exit `3` for an `--exec` acquire
 timeout and passes a wrapped command's own non-zero status through as
 `gate` too; `suitability-close-execute.mjs` keeps exit `1` when the
@@ -322,24 +323,24 @@ other eleven return `0` on success and throw on failure, so they do
 not produce `gate` today. `discover-orphan-filter.mjs` with no
 arguments reaches `gh repo view` and is `transport`, not `usage`.
 
-| Helper                             | `usage`                                                                     | `gate`                                                                         |
-| ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                       |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                     |
-| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                     |
-| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
-| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision or a non-`backfilled` `--backfill-tokens` |
-| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status        |
-| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                     |
-| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
-| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                     |
-| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                     |
-| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`          |
-| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                    |
-| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                    |
-| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                     |
-| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                     |
+| Helper                             | `usage`                                                                     | `gate`                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                                                                |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                                                              |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                                                              |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                                                              |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens` |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                 |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                                                              |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                                                              |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                                                              |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`                                                   |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                                                             |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                                                             |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                                                              |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                                                              |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a
@@ -2699,7 +2700,8 @@ still fails closed:
   after worktree creation.
 - `--acquire` refuses to create `idd-claim.lock` in the primary
   worktree, where `git rev-parse --git-common-dir` and
-  `--absolute-git-dir` resolve to the same directory. The CLI exits
+  `--absolute-git-dir` resolve to the same real directory. The CLI
+  exits
   `4` with `mode` `primary-worktree-refused`. That admin directory is
   never removed by `git worktree remove`, so a lock created there has
   no automatic cleanup path (observed 2026-09-25,
@@ -2737,9 +2739,10 @@ still fails closed:
   invocation's first look. A caller trusting `reacquired: true` as
   evidence the lock predates this call (as the backfill-tokens recovery
   route does) must also require `racedCreate` to be absent/`false`.
-- The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
-  `collision`, so a hook can safely chain installation or another mutation
-  with `&&`; `--check` remains read-only and exits `0` for a reported state.
+- The `--acquire` CLI exits `0` only for `acquired`, exits `2` for
+  `collision`, and exits `4` for `primary-worktree-refused`, so a
+  hook can safely chain installation or another mutation with `&&`;
+  `--check` remains read-only and exits `0` for a reported state.
 - `--check` reports `{ path, present, holder?, malformed? }` read-only,
   never creating, mutating, or deleting the lock; `malformed: true` means
   a lock file exists but could not be parsed as a well-formed lock body
@@ -2747,7 +2750,8 @@ still fails closed:
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.
   The configured GitHub `claim-stale-age` stays the sole staleness
-  authority; this lock only ever reports `collision` or acquires.
+  authority; besides `primary-worktree-refused` on the create path,
+  this lock only ever reports `collision` or acquires.
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
   `git worktree remove` at F4 deletes it together with the worktree
