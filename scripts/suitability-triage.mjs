@@ -324,7 +324,10 @@ function findRepositoryFitHiddenMetadataRanges(text) {
   }
   // A reference definition is metadata rather than rendered prose. Ignore
   // its destination/title, including a cue that appears only in that title.
-  for (const line of text.matchAll(/^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*$/gm)) {
+  // CommonMark also permits a one-line indented title continuation.
+  for (const line of text.matchAll(
+    /^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*(?:\n[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\))[ \t]*)?/gm,
+  )) {
     const start = line.index ?? 0;
     ranges.push({ start, end: start + (line[0] ?? '').length });
   }
@@ -2273,62 +2276,60 @@ export function checkRepositoryFit(context) {
   });
   const listItemContextFor = (matchIndex) => {
     const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
-    let currentItem = null;
-    for (const listItem of listItems) {
-      if (listItem.start > matchIndex) {
-        break;
-      }
-      currentItem = listItem;
-    }
-    if (currentItem === null) {
-      return null;
-    }
-    if (
-      listBlockBoundaries.some(
-        (boundary) =>
-          boundary.start > currentItem.start &&
-          boundary.start < lineStart &&
-          boundary.indent <= currentItem.indent,
-      )
-    ) {
-      return null;
-    }
-    const interveningLines = normalizedBody
-      .slice(currentItem.start, lineStart)
-      .split('\n')
-      .slice(1);
-    if (
-      interveningLines.some((line) => {
-        if (line.trim() === '') {
-          return false;
-        }
-        const lineIndent = indentationColumns(line.match(/^[ \t]*/)?.[0] ?? '');
-        return lineIndent < currentItem.contentIndent;
-      })
-    ) {
-      return null;
-    }
+    const candidates = listItems
+      .filter((listItem) => listItem.start <= matchIndex)
+      .reverse();
     const lineIndent = indentationColumns(
       normalizedBody.slice(lineStart).match(/^[ \t]*/)?.[0] ?? '',
     );
-    const isMarkerLine = lineStart === currentItem.start;
-    if (!isMarkerLine && lineIndent < currentItem.contentIndent) {
-      return null;
+    for (const currentItem of candidates) {
+      if (
+        listBlockBoundaries.some(
+          (boundary) =>
+            boundary.start > currentItem.start &&
+            boundary.start < lineStart &&
+            boundary.indent <= currentItem.indent,
+        )
+      ) {
+        continue;
+      }
+      const interveningLines = normalizedBody
+        .slice(currentItem.start, lineStart)
+        .split('\n')
+        .slice(1);
+      if (
+        interveningLines.some((line) => {
+          if (line.trim() === '') {
+            return false;
+          }
+          const interveningIndent = indentationColumns(
+            line.match(/^[ \t]*/)?.[0] ?? '',
+          );
+          return interveningIndent < currentItem.contentIndent;
+        })
+      ) {
+        continue;
+      }
+      const isMarkerLine = lineStart === currentItem.start;
+      if (!isMarkerLine && lineIndent < currentItem.contentIndent) {
+        continue;
+      }
+      const nextItem = listItems.find(
+        (listItem) =>
+          listItem.start > currentItem.start &&
+          listItem.indent <= currentItem.indent,
+      );
+      return {
+        span: {
+          start: currentItem.start,
+          end: nextItem?.start ?? normalizedBody.length,
+        },
+        allowLooseContinuation:
+          !isMarkerLine &&
+          /\n[ \t]*\n/.test(normalizedBody.slice(currentItem.start, lineStart)),
+      };
     }
-    const nextItem = listItems.find(
-      (listItem) =>
-        listItem.start > currentItem.start &&
-        listItem.indent <= currentItem.indent,
-    );
-    return {
-      span: {
-        start: currentItem.start,
-        end: nextItem?.start ?? normalizedBody.length,
-      },
-      allowLooseContinuation:
-        !isMarkerLine &&
-        /\n[ \t]*\n/.test(normalizedBody.slice(currentItem.start, lineStart)),
-    };
+    return null;
   };
   const contextSpanFor = (matchIndex) => {
     const paragraphSpan = paragraphSpans.find(

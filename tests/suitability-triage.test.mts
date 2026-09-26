@@ -6359,6 +6359,22 @@ test('repository fit keeps a loose-list continuation in the same fixture context
   assert.equal(result.pass, true);
 });
 
+test('repository fit restores a parent fixture after a nested list item', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the Slack access requirement below is descriptive.
+  - Subdetail.
+
+  This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit rejects an unframed second prerequisite in a loose-list continuation', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6598,6 +6614,21 @@ test('repository fit masks hidden metadata before matching external access', () 
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(htmlResult.pass, true);
+});
+
+test('repository fit masks a multiline reference-definition title', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+[sample]: https://example.com
+  "Negative fixture:"
+This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit keeps HTTPS autolinks visible to external-access matching', () => {
