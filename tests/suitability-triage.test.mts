@@ -6420,13 +6420,13 @@ test('repository fit does not bind a loose-list cue to a different external syst
   assert.equal(result.pass, false);
 });
 
-test('repository fit treats a comma-led conjunction clause as independent access', () => {
+test('repository fit treats a subjectless conjunction clause as independent access', () => {
   const result = checkRepositoryFit({
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}
 
-Negative fixture: invalid input should fail, but we need Slack access.`,
+Negative fixture: a task requires setup but requires Slack access.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);

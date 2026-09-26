@@ -199,7 +199,9 @@ const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
-  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code|requires?|needs?|must|depends\s+on)\b)/i;
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b)/i;
+const REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN =
+  /\b(?:but|yet|nor|however|although|while|whereas)\b[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
 const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
   /\b(?:slack|jira|datadog)\b/gi;
 const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
@@ -2171,7 +2173,7 @@ export function checkRepositoryFit(context) {
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
         (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
-        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(cueToMatch) ||
+        hasIndependentConjunctionClause(cueToMatch + externalMatchText) ||
         /,[ \t]*(?:and|or|but|yet|nor)\b/i.test(cueToMatch)
       ) {
         continue;
@@ -2195,13 +2197,18 @@ export function checkRepositoryFit(context) {
       );
       if (
         /[.!?;]/.test(betweenRequirements) ||
-        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(betweenRequirements)
+        hasIndependentConjunctionClause(
+          betweenRequirements + (secondMatch?.[0] ?? ''),
+        )
       ) {
         return true;
       }
     }
     return false;
   };
+  const hasIndependentConjunctionClause = (text) =>
+    REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(text) ||
+    REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN.test(text);
   const contextSpans = externalAccessMatches.map((match) => {
     const matchIndex = match.index ?? 0;
     const listItemContext = listItemContextFor(matchIndex);
