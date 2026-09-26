@@ -157,9 +157,10 @@ CI-polling shared helper file), never this one. Read
 - If same-HEAD `CANCELLED` siblings remain, rerun only those the plan
   marks `rerun-eligible`. Plan holds `action_required`,
   `pending`, `unresolved`, `awaiting-fresh-review`, and
-  `rerun-budget-held`. When every withheld item is a live-coverage
-  recovery with spent `rerun-once` budget, use helper
-  `--refresh-latest --apply` once; poll; `hold` or mixed cases keep hold.
+  `rerun-budget-held`. When all withheld are live-coverage recoveries
+  with spent `rerun-once` budget (see `#3504`), run
+  `--refresh-latest --apply` once; poll; hold policy or mixed cases stay
+  held.
 - Helper-first diagnosis (read-only): `node
   scripts/rerun-advisory-convergence.mjs --pr <n>`. Resolve the
   package-manager equivalent from `docs/idd-helper-scripts.md`.

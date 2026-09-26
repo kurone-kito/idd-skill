@@ -244,10 +244,10 @@ reruns of those instances. Review submissions use
 instance (see `#1745`). If blocked, rerun same-HEAD `CANCELLED`
 siblings marked `rerun-eligible` (`gh run rerun <run-id>`).
 Plan holds `action_required`, `pending`, `unresolved`,
-`awaiting-fresh-review`, and `rerun-budget-held`. When every withheld
-item is a live-coverage recovery with spent `rerun-once` budget, use
-helper with `--refresh-latest --apply` once; poll; `hold` or mixed cases
-keep hold.
+`awaiting-fresh-review`, and `rerun-budget-held`. When all withheld are
+live-coverage recoveries with spent `rerun-once` budget (see `#3504`),
+run `--refresh-latest --apply` once; poll; hold policy or mixed
+cases stay held.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
