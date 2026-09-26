@@ -311,7 +311,9 @@ const GENERIC_MENTION_NOUN_PATTERN =
 const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
 const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
-  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting|supplied|provided|performed)\b/i;
+  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
+const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
+  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)|before|until)\b)/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -319,10 +321,12 @@ const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 const DESCRIPTIVE_SECURITY_VERB_PATTERN =
   /\b(?:concern(?:s|ed)|describ(?:es|ed)|document(?:s|ed)|cover(?:s|ed)|mention(?:s|ed)|refer(?:s|red)|discuss(?:es|ed)|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
 const DESCRIPTIVE_SECURITY_NOUN_PATTERN =
-  /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|pattern)$/i;
+  /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|terminology|pattern)$/i;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
+const CREDENTIAL_FOLLOW_ON_REQUIREMENT_PATTERN =
+  /\b(?:cannot|can't)\b[^.;:\n]{0,80}\buntil\b/i;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -807,6 +811,7 @@ function isNearRequirementAssertion(
   corpus: string,
   matchIndex: number,
   matchEnd: number,
+  assertionPattern = REQUIREMENT_ASSERTION_PATTERN,
 ): boolean {
   const forwardRaw = corpus.slice(
     matchEnd,
@@ -816,7 +821,7 @@ function isNearRequirementAssertion(
   const forwardText = forwardBreak
     ? forwardRaw.slice(0, forwardBreak.index)
     : forwardRaw;
-  if (REQUIREMENT_ASSERTION_PATTERN.test(forwardText)) {
+  if (assertionPattern.test(forwardText)) {
     return true;
   }
   const backwardStart = Math.max(
@@ -831,7 +836,16 @@ function isNearRequirementAssertion(
   const backwardText = lastBreak
     ? backwardRaw.slice(lastBreak.index + lastBreak[0].length)
     : backwardRaw;
-  return REQUIREMENT_ASSERTION_PATTERN.test(backwardText);
+  return assertionPattern.test(backwardText);
+}
+
+function isFollowedByCredentialRequirement(
+  corpus: string,
+  matchEnd: number,
+): boolean {
+  return CREDENTIAL_FOLLOW_ON_REQUIREMENT_PATTERN.test(
+    corpus.slice(matchEnd, matchEnd + 160),
+  );
 }
 
 function isFollowedByGenericMentionNoun(
@@ -851,6 +865,10 @@ function isFollowedByGenericMentionNoun(
     .some((token) => GENERIC_MENTION_NOUN_PATTERN.test(token));
   return (
     namesGenericPattern &&
+    !(
+      corpus.slice(matchIndex, matchEnd).toLowerCase() === 'credential' &&
+      isFollowedByCredentialRequirement(corpus, matchEnd)
+    ) &&
     !isNearRequirementAssertion(corpus, matchIndex, matchEnd)
   );
 }
@@ -863,7 +881,15 @@ function isDescribedSecurityVocabulary(
   if (corpus.slice(matchIndex, matchEnd).toLowerCase() !== 'credential') {
     return false;
   }
-  if (isNearRequirementAssertion(corpus, matchIndex, matchEnd)) {
+  if (
+    isNearRequirementAssertion(
+      corpus,
+      matchIndex,
+      matchEnd,
+      CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN,
+    ) ||
+    isFollowedByCredentialRequirement(corpus, matchEnd)
+  ) {
     return false;
   }
 

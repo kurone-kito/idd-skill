@@ -646,6 +646,48 @@ test('still fails autonomous completion when a credential is supplied by a maint
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a credential mention mask a follow-on prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 78,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation cannot begin until ' +
+      'the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps provided contextual credential text descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 79,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern provided below for context. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps provided contextual external-system text descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 80,
+    title: 'document external-system terminology',
+    body:
+      'This issue describes an external system pattern provided by the ' +
+      'documentation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('does not let a distant descriptive verb mask a later credential request (#3522)', () => {
   const result = evaluateA4Viability({
     number: 71,
