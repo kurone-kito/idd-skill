@@ -321,7 +321,9 @@ const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
 const CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN =
   /^\s+(?:pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)\s+that\s+(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference)\b/i;
 const CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN =
-  /^\s+(?:that\s+)?(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference)\b/i;
+  /^\s+(?:(?:pattern|example|scenario|convention|practice|concept|term|approach|precedent|case|handling|storage|material|content|policy|vocabulary|terminology)\s+)?(?:that\s+)?(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference|secure\s+storage|security|authentication)\b/i;
+const CREDENTIAL_RELATIVE_ACTOR_ASSERTION_PATTERN =
+  /^\s+(?:which|that)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}(?:before|until)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -848,6 +850,12 @@ function isNearRequirementAssertion(
     CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(forwardText)
   ) {
     return false;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_RELATIVE_ACTOR_ASSERTION_PATTERN.test(forwardText)
+  ) {
+    return true;
   }
   if (
     forwardAssertion.test(forwardText) &&

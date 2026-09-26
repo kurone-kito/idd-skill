@@ -997,6 +997,34 @@ test('does not let possessive approval nouns hide behind credential storage (#35
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('keeps credential handling purpose wording descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 125,
+    title: 'document credential terminology',
+    body:
+      'Document credential handling that is necessary for secure storage. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let that-relative credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 126,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential that the maintainer must supply ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let cannot-without credential prerequisites pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 121,
