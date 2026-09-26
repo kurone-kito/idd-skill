@@ -95,7 +95,7 @@ This section's rebase only applies **before the branch's first push**.
    `git ls-remote --exit-code origin "refs/heads/{branch-name}"`
    (the `refs/heads/` prefix matters: a bare branch name also matches a
    same-named tag). Exit 2 means no matching branch — continue with
-   steps 2-8 below. Exit 0 means the branch already exists on the
+   steps 2-9 below. Exit 0 means the branch already exists on the
    remote; stop on any other nonzero exit status. When it already
    exists, do not rebase it — instead check for an open PR:
    `gh pr list --head {branch-name} --state open --json number --jq
@@ -139,25 +139,24 @@ This section's rebase only applies **before the branch's first push**.
    and ask before running the rebase at all — replaying even one commit
    needs to re-sign it, and a hostile signing path with no wrapper has
    no safe non-interactive way to do that, conflict or not.
-5. Rebase onto it. On a signed-commit repo where primary signing **is**
-   non-interactive-hostile but the repository **does** provide a
-   fallback wrapper for arbitrary git subcommands (for example `-c
-   gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
-   passed to `git` before the subcommand, or a repo alias that wraps any
-   subcommand — a commit-only alias will not run `rebase`), run the
-   rebase **through that wrapper from the start**: `git -c
-   gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true
-   rebase origin/main` (or the repo's wrapper alias), not the plain
-   `git rebase origin/main`. Otherwise (signing is not hostile, or is
-   hostile with a wrapper already covering it transparently), run the
-   plain `git rebase origin/main`.
+5. Rebase onto `origin/main`. When primary signing is
+   non-interactive-hostile and a subcommand wrapper exists, run the
+   rebase through it from the start: `git -c gpg.format=ssh -c
+   user.signingkey=<abs-path> -c commit.gpgsign=true rebase origin/main`
+   (or a repo alias; a commit-only alias will not run `rebase`).
+   Otherwise run plain `git rebase origin/main`.
 6. If the rebase hits a content conflict, resolve it and continue the
    rebase. On the signed-commit repo case in step 5, continue with the
    **wrapper's own** `--continue` form, not plain `git rebase
    --continue` — the plain form re-signs through the configured primary
    signing and stalls non-interactively right after the conflict is
    already resolved.
-7. After the **entire** rebase completes (not per-conflict, mid-rebase):
+7. Failed write — rebase in progress, index holds the replay, tip
+   still the pre-rebase commit: `git rebase --abort`, then replay
+   through the SSH `-c` wrapper (`rebase` or `cherry-pick`). Do not
+   run `git commit --amend -S` or `git commit --amend '-S'`. Step 6
+   `--continue` stays for a staged content conflict.
+8. After the **entire** rebase completes (not per-conflict, mid-rebase):
    if any file was hand-edited during conflict resolution, run
    **fix-validate** now, against the final rebased state, and commit
    any resulting changes before continuing. Then verify both:
@@ -165,11 +164,11 @@ This section's rebase only applies **before the branch's first push**.
    - The expected local commit appears in `git log --oneline
      origin/main..HEAD` (not local `main`, which this file never
      fast-forwards and so can be stale).
-8. If HEAD is detached, re-attach once with `git checkout {branch-name}`,
-   repeat this D1 rebase (through the same signing wrapper on a
-   signed-commit repo), then re-verify both checks in step 7. If
-   recovery still fails, stop and post a hold note naming the branch
-   state.
+9. If a finished rebase left HEAD detached, re-attach once with
+   `git checkout {branch-name}`, repeat this D1 rebase (through the
+   same signing wrapper on a signed-commit repo), then re-verify both
+   checks in step 8. If recovery still fails, stop and post a hold
+   note naming the branch state.
 
 Once the branch is pushed, treat it as published review history: a
 later resync merges `main` into the branch through the E-phase review
