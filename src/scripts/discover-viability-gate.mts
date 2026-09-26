@@ -182,6 +182,18 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/gi;
+const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
+  '(?:maintainers?|operators?|owners?|teams?|customers?|administrators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
+const CREDENTIAL_NEGATED_REQUIREMENT_PATTERN =
+  /\b(?:must|shall|does|do|did|will)\s+not\s+(?:require|need|necessitate)\b/i;
+const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
+  String.raw`(?:\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b[^.;:!?—()\n]{0,100}\b(?:before|until|supplied|provided|performed|created)\b|\b(?:approval|access|permission|authorization)\s+(?:(?:is|are|was|were)\s+)?(?:required|necessary|essential|needed)\b|\bawait(?:s|ing)?\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization|credential)\b|\bsubject\s+to\b[^.;:!?—()\n]{0,100}\b(?:approval|access|permission|authorization)\b|\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:must|will)\s+(?:supply|provide|create|obtain|generate|approve|grant|share|enable)\b[^.;:!?—()\n]{0,100}\b(?:before|until)\b)`,
+  'i',
+);
+const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
+  String.raw`\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+(?:approval|access|permission|authorization)\b`,
+  'gi',
+);
 // A trigger phrase inside a phrase describing something other than a live,
 // remaining completion blocker should not count (#2738), mirroring
 // findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
@@ -860,6 +872,18 @@ function isNearRequirementAssertion(
     );
   if (
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(forwardText)
+  ) {
+    return false;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(forwardText)
+  ) {
+    return true;
+  }
+  if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
     hasUnattachedDescriptivePurpose
   ) {
     return false;
@@ -909,19 +933,24 @@ function isFollowedByCredentialRequirement(
     ? tail.slice(0, paragraphBreak.index)
     : tail;
   const sameSentence = sameParagraph.split(/[.!?]/, 1)[0] ?? sameParagraph;
-  const firstBoundary = /^[^.;:!?\n]*[.;:!?\n]/.exec(sameParagraph);
+  const firstBoundary = /^[^.;:!?—\n]*(?:--|[.;:!?—\n]|\()/.exec(sameParagraph);
   const firstFollowOnSentence = (() => {
     if (!firstBoundary) {
       return '';
     }
     const rest = sameParagraph.slice(firstBoundary[0].length);
-    const nextBoundary = /^[^.;:!?]*(?:[.;:!?]|$)/.exec(rest)?.[0] ?? rest;
+    const nextBoundary = /^[^.;:!?—)]*(?:[.;:!?—)]|$)/.exec(rest)?.[0] ?? rest;
     return sameParagraph.slice(
       firstBoundary[0].length - 1,
       firstBoundary[0].length + nextBoundary.length,
     );
   })();
+  if (CREDENTIAL_NEGATED_REQUIREMENT_PATTERN.test(sameSentence)) {
+    return false;
+  }
   return (
+    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(sameSentence) ||
+    CREDENTIAL_REQUIREMENT_SHAPE_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
@@ -1073,6 +1102,21 @@ function findUnexcludedExternalCoordinationMatch(
   rawCorpus: string,
 ): string | null {
   const resolvedDecisionSpans = findInlineResolvedDecisionSpans(rawCorpus);
+  for (const match of corpus.matchAll(
+    INDEPENDENT_EXTERNAL_COORDINATION_PATTERN,
+  )) {
+    const index = match.index;
+    const end = index + match[0].length;
+    if (
+      isInsideQuotedExample(corpus, index, end) ||
+      isGovernedByNegation(corpus, index) ||
+      isDescribedByPastInvestigation(corpus, index, end) ||
+      isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
+    ) {
+      continue;
+    }
+    return match[0];
+  }
   for (const match of corpus.matchAll(EXTERNAL_COORDINATION_PATTERN)) {
     const index = match.index;
     const end = index + match[0].length;
