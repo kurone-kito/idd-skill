@@ -604,6 +604,48 @@ test('does not treat a distant noun as a credential description (#3528)', () => 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion when discussing a credential is imperative (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 75,
+    title: 'document external credential coordination',
+    body:
+      'Discuss a credential with the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a credential will be performed by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 76,
+    title: 'document external credential handling',
+    body:
+      'Credential handling will be performed by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a credential is supplied by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 77,
+    title: 'document external credential access',
+    body:
+      'Document a credential supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let a distant descriptive verb mask a later credential request (#3522)', () => {
   const result = evaluateA4Viability({
     number: 71,

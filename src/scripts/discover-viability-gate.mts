@@ -311,13 +311,13 @@ const GENERIC_MENTION_NOUN_PATTERN =
 const GENERIC_MENTION_LOOKAHEAD_CHARS = 40;
 const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
-  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
+  /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting|supplied|provided|performed)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
 // descriptive context and let requirement language win below.
 const DESCRIPTIVE_SECURITY_VERB_PATTERN =
-  /\b(?:concern(?:s|ed)?|describ(?:e|es|ed)|document(?:s|ed)?|cover(?:s|ed)?|mention(?:s|ed)?|refer(?:s|red)?|discuss(?:es|ed)?|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
+  /\b(?:concern(?:s|ed)|describ(?:es|ed)|document(?:s|ed)|cover(?:s|ed)|mention(?:s|ed)|refer(?:s|red)|discuss(?:es|ed)|protect(?:s|ed))\b(?:\s+(?:a|an|the|existing|protected|security|authentication|material|handling|disclosure|current|underlying)){0,4}\s*$/i;
 const DESCRIPTIVE_SECURITY_NOUN_PATTERN =
   /^(?:material|content|handling|disclosure|policy|storage|rotation|redaction|management|vocabulary|term|pattern)$/i;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
