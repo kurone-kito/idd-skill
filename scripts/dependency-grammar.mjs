@@ -160,6 +160,17 @@ export function consumeDependencyContinuationRefLines(
       invalidTokens: lineInvalidTokens,
     } = consumeDependencyReferenceList(trimmed, options);
     if (lineNumbers.length === 0 && lineUnresolvable.length === 0) {
+      // Distinguishes an invalid-only continuation line (e.g. a lone
+      // `#0`) from genuinely unrelated prose that merely starts the
+      // sweep's stop condition the same way (`idd-skill#3285` review,
+      // Copilot): a non-empty `lineInvalidTokens` here proves at least
+      // one recognized-but-rejected token was seen, so this line WAS an
+      // attempted continuation of the wrapped list, just with a bad
+      // number -- report it before stopping the sweep, rather than
+      // silently discarding the only record of it. An empty
+      // `lineInvalidTokens` here means nothing token-shaped matched at
+      // all (ordinary unrelated text), so there is nothing to add.
+      invalidTokens.push(...lineInvalidTokens);
       break;
     }
     if (remaining.trim().length > 0) {

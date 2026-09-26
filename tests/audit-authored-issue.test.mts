@@ -1403,6 +1403,19 @@ test('dependency-line-grammar fails on an invalid token in a GitHub-wrapped cont
   assert.match(finding.detail, /"#0"/);
 });
 
+test('dependency-line-grammar fails on an invalid-only continuation line, not just a mixed one (final review round, Copilot: "Blocked by #12,\\n#0")', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #12,\n#0',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, /"#0"/);
+});
+
 // --- candidate-files-not-empty (#3191) ---
 
 test('candidate-files-not-empty fails for a child issue with no ## Candidate files heading at all', () => {
