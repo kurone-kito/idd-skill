@@ -6051,6 +6051,19 @@ test('repository fit rejects separate same-item sentences on a marker line', () 
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects a semicolon-separated fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the access wording is descriptive; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit rejects an unrelated should-fail sentence beside a live prerequisite', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6071,6 +6084,19 @@ test('repository fit rejects a negated fixture cue beside a live prerequisite', 
       body: `${BASE_ISSUE.body}
 
 This is not a negative fixture; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects the broader negation vocabulary before a fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Avoid negative fixture; this task requires production dashboard credentials.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);

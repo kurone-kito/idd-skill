@@ -355,7 +355,7 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
   /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
-  /\b(?:not|never|no|without|isn['’]?t|doesn['’]?t)\b/i;
+  /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -2264,7 +2264,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
           context.slice(cueEnd, externalMatchOffset),
         ) ||
         (!allowLooseContinuation &&
-          /[.!?]/.test(context.slice(cueEnd, externalMatchOffset)))
+          /[.!?;]/.test(context.slice(cueEnd, externalMatchOffset)))
       ) {
         continue;
       }
