@@ -1030,6 +1030,7 @@ function claimComment(
     body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
     createdAt,
     author: { login: author },
+    lastEditedAt: null,
   };
 }
 

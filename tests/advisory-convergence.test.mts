@@ -81,16 +81,21 @@ const ADVISORY_CONVERGENCE_WAIVABLE = [
 function baseInputs(
   overrides: Partial<AdvisoryConvergenceInputs> = {},
 ): AdvisoryConvergenceInputs {
+  const claimEvents = (overrides.claimEvents ?? []).map((event) =>
+    'lastEditedAt' in event || 'last_edited_at' in event
+      ? event
+      : { ...event, lastEditedAt: null },
+  );
   return {
     prNumber: 1234,
     prHeadSha: HEAD,
     reviews: [],
     threads: [],
     comments: [],
-    claimEvents: [],
     claimMarkerHistoryPresent: false,
     claimCandidateAmbiguous: false,
     ...overrides,
+    claimEvents,
   };
 }
 
@@ -153,6 +158,7 @@ function claimComment(claimId: string = CLAIM_ID) {
     author: { login: TRUSTED },
     body: `<!-- claimed-by: ${AGENT_ID} ${claimId} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
     createdAt: OLD,
+    lastEditedAt: null,
   };
 }
 
@@ -5664,6 +5670,7 @@ test('pickResolvingClaimEvents: a lone candidate trusted only via collaborator-m
       author: { login: COLLABORATOR },
       body: `<!-- claimed-by: ${AGENT_ID} ${CLAIM_ID} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
       createdAt: OLD,
+      lastEditedAt: null,
     },
   ];
 
@@ -5749,16 +5756,19 @@ test('pickResolvingClaimEvents (#3270): a takeover inside a configured 18h stale
       author: { login: TRUSTED },
       body: `<!-- claimed-by: ${AGENT_ID} claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
       createdAt: '2026-05-12T09:00:00Z',
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
       body: `<!-- claimed-by: ${AGENT_ID} ${takeoverClaimId} supersedes: claim-20260512T090000Z-337-old 2026-05-13T04:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
       createdAt: '2026-05-13T04:00:00Z',
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${AGENT_ID} ${takeoverClaimId} 2026-05-13T04:05:00Z -->\n\n_${AGENT_ID}: issue claim released — IDD automation marker._`,
       createdAt: '2026-05-13T04:05:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -5977,6 +5987,7 @@ test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   assert.equal(
@@ -6044,6 +6055,7 @@ test('resolveClaimEvidence: reproduces #1686 path 4 -- a stale/released trusted 
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   assert.deepEqual(resolveClaimEvidence([released], [TRUSTED], false), {
@@ -6105,6 +6117,7 @@ test('resolveClaimEvidence end-to-end: its COMPUTED path-4 output (not hand-supp
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   const evidence = resolveClaimEvidence([released], [TRUSTED], false);

@@ -4085,11 +4085,14 @@ function fetchClaimComments(
   port: ProviderPort,
   issueNumber: number,
 ): IssueCommentPayload[] {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 
 /**

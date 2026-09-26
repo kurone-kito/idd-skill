@@ -791,6 +791,7 @@ function ownerClaimComment() {
       '_repo-owner: issue claim — IDD automation marker. Do not edit._',
     created_at: '2026-09-25T00:00:00Z',
     user: { login: 'repo-owner' },
+    lastEditedAt: null,
   };
 }
 

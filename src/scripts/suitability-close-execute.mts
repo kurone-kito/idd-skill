@@ -461,12 +461,20 @@ export function runSuitabilityCloseExecute(
 function loadIssueComments(
   port: ProviderPort,
   issueNumber: number,
-): { body: string; createdAt: string; author: { login: string } }[] {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+): {
+  body: string;
+  createdAt: string;
+  author: { login: string };
+  lastEditedAt?: string | null;
+}[] {
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 
 function buildTrustedAuthorPredicate({

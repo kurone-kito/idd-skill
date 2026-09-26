@@ -340,6 +340,7 @@ function fakePortWithComments(
         body: event.body,
         createdAt: event.createdAt,
         authorLogin: event.body.includes('cli-new') ? 'cli-new' : 'cli-old',
+        lastEditedAt: null,
       })),
   } as unknown as ProviderPort;
 }

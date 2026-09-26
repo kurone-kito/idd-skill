@@ -130,6 +130,7 @@ function claimComment(overrides: { claimId?: string; agentId?: string } = {}) {
     }),
     createdAt: '2026-06-26T00:00:00Z',
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   };
 }
 
@@ -1003,6 +1004,7 @@ test('a non-roadmap-audit branch on the roadmap issue does NOT authorize closure
     }),
     createdAt: '2026-06-26T00:00:00Z',
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   };
   const verdict = evaluateRoadmapClaim([executionClaim], {
     roadmapNumber: ROADMAP,
@@ -1084,6 +1086,7 @@ function claimTakeoverComment() {
     }),
     createdAt: '2026-06-26T20:00:00Z',
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   };
 }
 

@@ -37,6 +37,7 @@ import type {
 import {
   buildForcedHandoffEnableGate,
   DEFAULT_STALE_AGE_MS,
+  filterTrustedClaimFamilyEvents,
   isStaleByAge,
   normalizeLinkedPrReference,
   normalizeTrustedMarkerLogins,
@@ -63,6 +64,7 @@ interface IssueCommentPayload {
   body?: string | null;
   created_at?: string | null;
   user?: GhAuthorPayload | null;
+  last_edited_at?: string | null;
 }
 
 /** Raw claim event accepted by `evaluateResumeClaimRouting`. */
@@ -72,6 +74,11 @@ interface RawClaimEventPayload {
   created_at?: unknown;
   author?: { login?: unknown } | null;
   user?: { login?: unknown } | null;
+  /** kurone-kito/idd-skill#3248: see `ProviderComment.lastEditedAt`'s doc
+   * comment (provider-port.mts) for the three-state contract. Either key
+   * is accepted -- whichever shape the caller's fetch carries. */
+  lastEditedAt?: unknown;
+  last_edited_at?: unknown;
 }
 
 /** Normalized trusted claim event consumed by the routing evaluator. */
@@ -79,6 +86,13 @@ interface NormalizedClaimEvent {
   body: string;
   createdAt: string;
   author: { login: string };
+  /** kurone-kito/idd-skill#3248: passthrough of whichever raw key the
+   * caller's fetch carried -- fed straight to `classifyCommentEditState`'s
+   * three-state contract (which itself prefers `lastEditedAt` over
+   * `last_edited_at`) via `filterTrustedClaimFamilyEvents`. `undefined`
+   * when the raw payload carried neither key at all. */
+  lastEditedAt: string | null | undefined;
+  last_edited_at: string | null | undefined;
 }
 
 /** Comment event shape passed to forced-handoff callbacks. */
@@ -86,6 +100,8 @@ interface CommentEventLike {
   body?: string | null;
   createdAt?: string | null;
   author?: GhAuthorPayload | null;
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
 }
 
 /** Inputs accepted by {@link evaluateResumeClaimRouting}. */
@@ -281,8 +297,9 @@ export function evaluateResumeClaimRouting(
       ? options.isAuthorizedForcedHandoff
       : () => false;
 
-  const events = normalizeEvents(input.events).filter((event) =>
-    trustedAuthor(event.author?.login ?? ''),
+  const events = filterTrustedClaimFamilyEvents(
+    normalizeEvents(input.events),
+    trustedAuthor,
   );
   const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
@@ -746,6 +763,7 @@ function runCli(): HelperCliResult {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
+    lastEditedAt: comment.last_edited_at,
   }));
   const routingOptions = {
     isTrustedAuthor: (login: string) =>
@@ -1158,6 +1176,15 @@ function normalizeEvents(events: unknown): NormalizedClaimEvent[] {
       author: {
         login: String(event?.author?.login ?? event?.user?.login ?? ''),
       },
+      lastEditedAt:
+        event?.lastEditedAt === null || typeof event?.lastEditedAt === 'string'
+          ? event.lastEditedAt
+          : undefined,
+      last_edited_at:
+        event?.last_edited_at === null ||
+        typeof event?.last_edited_at === 'string'
+          ? event.last_edited_at
+          : undefined,
     }))
     .filter((event): event is NormalizedClaimEvent => event.createdAt !== null);
 }
@@ -1336,11 +1363,14 @@ function fetchIssueComments(
   // expect (body / created_at / user.login) -- listWorkItemComments's
   // camelCase ProviderComment shape is a port-level convention, not this
   // file's pre-migration contract.
-  return port.listWorkItemComments(issueNumber ?? 0).map((comment) => ({
-    body: comment.body,
-    created_at: comment.createdAt,
-    user: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber ?? 0, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      created_at: comment.createdAt,
+      user: { login: comment.authorLogin },
+      last_edited_at: comment.lastEditedAt,
+    }));
 }
 
 // Read-and-parse failure semantics (explicit path throws; default path

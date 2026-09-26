@@ -45,6 +45,7 @@ function claimStillActiveEvents(): {
   body: string;
   createdAt: string;
   author: { login: string };
+  lastEditedAt: string | null;
 }[] {
   return [
     {
@@ -55,6 +56,7 @@ function claimStillActiveEvents(): {
       ].join('\n'),
       createdAt: '2026-05-12T09:00:00Z',
       author: { login: 'cli-old' },
+      lastEditedAt: null,
     },
     {
       body: [
@@ -64,6 +66,7 @@ function claimStillActiveEvents(): {
       ].join('\n'),
       createdAt: '2026-05-13T05:00:00Z',
       author: { login: 'cli-new' },
+      lastEditedAt: null,
     },
   ];
 }

@@ -72,7 +72,8 @@
         "createdAt": "2026-05-11T23:20:00Z",
         "author": {
           "login": "kurone-kito"
-        }
+        },
+        "lastEditedAt": null
       }
     ],
     "changedFiles": [

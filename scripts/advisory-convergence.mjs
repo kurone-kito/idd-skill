@@ -3175,11 +3175,14 @@ export function collectFromGitHub(
  * imported since it is not exported.
  */
 function fetchClaimComments(port, issueNumber) {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 /**
  * Fetch the claim-issue candidate(s)' raw comment streams -- pure I/O, no

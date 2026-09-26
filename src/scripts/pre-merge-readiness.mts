@@ -809,7 +809,9 @@ export function collectPreMergeReadiness(
     : port
         // Non-null: the earlier `!args.claimless && !args.claimIssueNumber`
         // guard already rejected this branch with a missing claim issue.
-        .listWorkItemComments(args.claimIssueNumber as number)
+        .listWorkItemComments(args.claimIssueNumber as number, {
+          includeEditState: true,
+        })
         .map(toIssueCommentPayload);
   // kurone-kito/idd-skill#3328: hoisted from further below (it used to sit
   // just before `normalizedReviews`) -- `classifyPrLoopMembership` below
@@ -925,7 +927,9 @@ export function collectPreMergeReadiness(
       try {
         closingIssueCommentsByNumber.set(
           issueNumber,
-          port.listWorkItemComments(issueNumber).map(toIssueCommentPayload),
+          port
+            .listWorkItemComments(issueNumber, { includeEditState: true })
+            .map(toIssueCommentPayload),
         );
       } catch {
         closingIssueReadFailed = true;
@@ -1953,15 +1957,19 @@ export function normalizeComment(comment: IssueCommentPayload) {
 /**
  * Normalize a raw claim-issue comment entry into the `CommentLike` shape
  * the claim-validation gate expects. Deliberately narrower than
- * {@link normalizeComment} (no `id`/`updatedAt`): the claim gate only ever
- * reads `body`/`createdAt`/`author.login`. Exported for direct unit
- * testing (#1708), see {@link normalizeComment}'s doc comment.
+ * {@link normalizeComment} (no `id`/`updatedAt`): the claim gate reads
+ * `body`/`createdAt`/`author.login` plus the explicit `lastEditedAt` trust
+ * signal. Exported for direct unit testing (#1708), see
+ * {@link normalizeComment}'s doc comment.
  */
 export function normalizeClaimComment(comment: IssueCommentPayload) {
   return {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
+    // #3248: claim-family markers need the same explicit three-state edit
+    // evidence as PR comments before they can influence claim authority.
+    lastEditedAt: comment.last_edited_at,
   };
 }
 

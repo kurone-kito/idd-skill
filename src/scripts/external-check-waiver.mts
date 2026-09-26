@@ -83,6 +83,7 @@ interface IssueCommentPayload {
   created_at?: string | null;
   user?: GhAuthorPayload | null;
   author?: GhAuthorPayload | null;
+  node_id?: string | null;
 }
 
 /** Status-check rollup entry from `gh pr view --json statusCheckRollup`. */
@@ -2492,7 +2493,7 @@ export function resolveLinkedIssueCandidates({
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
   for (const issue of issueRefs) {
-    const comments = ghJson(
+    const rows = ghJson(
       [
         'api',
         '--paginate',
@@ -2500,6 +2501,22 @@ export function resolveLinkedIssueCandidates({
       ],
       true,
     ) as IssueCommentPayload[];
+    const nodeIds = rows.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((nodeId) => nodeId === '')) {
+      throw new Error(
+        `external-check waiver: issue #${issue.number} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+    const comments = rows.map((comment) => {
+      const nodeId = String(comment.node_id ?? '');
+      if (!lastEditedAtByNodeId.has(nodeId)) {
+        throw new Error(
+          `external-check waiver: missing edit-state resolution for issue #${issue.number} comment ${nodeId}`,
+        );
+      }
+      return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+    });
     const trustedMarkerLogins = trustedLoginsForLinkedIssueClaims({
       viewerLogin,
       config: trustConfig,

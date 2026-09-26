@@ -12874,10 +12874,10 @@ function isTrustedClaimFamilyEvent(
  * `resume-claim-routing.mts`'s top-of-function filter) applies before
  * ordering or reducing over the event stream.
  */
-export function filterTrustedClaimFamilyEvents(
-  events: CommentLike[],
+export function filterTrustedClaimFamilyEvents<T extends CommentLike>(
+  events: T[],
   isTrustedAuthor: (login: string) => boolean,
-): CommentLike[] {
+): T[] {
   return events.filter((event) =>
     isTrustedClaimFamilyEvent(event, isTrustedAuthor),
   );

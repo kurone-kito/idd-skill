@@ -46,6 +46,7 @@ import {
 } from './policy-helpers.mts';
 import {
   DEFAULT_STALE_AGE_MS,
+  filterTrustedClaimFamilyEvents,
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
@@ -545,7 +546,8 @@ export interface ClaimStateResolution {
    * Elements are the raw, untrusted comment entries (GitHub REST/GraphQL
    * shape, or a test fixture); {@link normalizeClaimComments} defensively
    * reads only `body` / `createdAt` (or `created_at`) / `author.login`
-   * (or `user.login`) and tolerates any other element, so the element type
+   * (or `user.login`) plus `lastEditedAt` / `last_edited_at`, and tolerates
+   * any other element, so the element type
    * stays `unknown` rather than over-promising a shape the loader never
    * guarantees.
    */
@@ -1998,20 +2000,24 @@ function hasNewFormatClaim(
     body: string;
     createdAt: string;
     author: { login: string };
+    lastEditedAt?: string | null;
+    last_edited_at?: string | null;
   }[],
   isTrustedAuthor: (login: string) => boolean,
 ): boolean {
-  return comments.some(
-    (comment) =>
-      isTrustedAuthor(comment.author.login) &&
-      parseClaimComment(comment.body, comment.createdAt) !== null,
+  return filterTrustedClaimFamilyEvents([...comments], isTrustedAuthor).some(
+    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
   );
 }
 
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
-function normalizeClaimComments(
-  raw: unknown,
-): { body: string; createdAt: string; author: { login: string } }[] {
+function normalizeClaimComments(raw: unknown): {
+  body: string;
+  createdAt: string;
+  author: { login: string };
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
+}[] {
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -2022,6 +2028,8 @@ function normalizeClaimComments(
       created_at?: unknown;
       author?: { login?: unknown } | null;
       user?: { login?: unknown } | null;
+      lastEditedAt?: unknown;
+      last_edited_at?: unknown;
     };
     return {
       body: String(comment.body ?? ''),
@@ -2029,6 +2037,16 @@ function normalizeClaimComments(
       author: {
         login: String(comment.author?.login ?? comment.user?.login ?? ''),
       },
+      lastEditedAt:
+        comment.lastEditedAt === null ||
+        typeof comment.lastEditedAt === 'string'
+          ? comment.lastEditedAt
+          : undefined,
+      last_edited_at:
+        comment.last_edited_at === null ||
+        typeof comment.last_edited_at === 'string'
+          ? comment.last_edited_at
+          : undefined,
     };
   });
 }
@@ -2374,7 +2392,9 @@ export function buildTrustedAuthorPredicate(policy: {
  */
 export function buildCommentLoader(port: ProviderPort) {
   return (issueNumber: number) =>
-    port.listWorkItemCommentsWithRetryAsync(issueNumber);
+    port.listWorkItemCommentsWithRetryAsync(issueNumber, {
+      includeEditState: true,
+    });
 }
 
 /**

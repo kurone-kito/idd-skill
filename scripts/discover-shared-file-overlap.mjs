@@ -843,10 +843,13 @@ export function toClaimComment(raw) {
     body: raw.body,
     createdAt: raw.createdAt,
     author: { login: raw.authorLogin },
+    lastEditedAt: raw.lastEditedAt,
   };
 }
 function fetchIssueComments(port, number) {
-  return port.listWorkItemComments(number).map(toClaimComment);
+  return port
+    .listWorkItemComments(number, { includeEditState: true })
+    .map(toClaimComment);
 }
 function fetchOpenPrLinkedIssues(port) {
   // Best-effort: `gh pr list` caps at --limit, so a repo with more open PRs

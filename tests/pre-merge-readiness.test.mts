@@ -34,7 +34,7 @@ import {
   attachReviewThreadCommentEditHistories,
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
-  buildPreMergeReadinessSummary,
+  buildPreMergeReadinessSummary as buildPreMergeReadinessSummaryImpl,
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
   CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
@@ -52,14 +52,14 @@ import {
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   readClaimStaleAgeMs,
-  resolveActiveClaimForWriteGate,
+  resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
   summarizeBranchCurrency,
-  summarizeClaimValidation,
+  summarizeClaimValidation as summarizeClaimValidationImpl,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
   summarizeRegularCommentsForGate,
@@ -83,6 +83,52 @@ import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { readJson } from './test-utils.mts';
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
+
+function withClaimEditState(events: unknown): unknown {
+  if (!Array.isArray(events)) return events;
+  return events.map((event) => {
+    if (event === null || typeof event !== 'object') return event;
+    const record = event as Record<string, unknown>;
+    return 'lastEditedAt' in record || 'last_edited_at' in record
+      ? event
+      : { ...record, lastEditedAt: null };
+  });
+}
+
+function buildPreMergeReadinessSummary(
+  input: Parameters<typeof buildPreMergeReadinessSummaryImpl>[0],
+  options: Parameters<typeof buildPreMergeReadinessSummaryImpl>[1],
+): ReturnType<typeof buildPreMergeReadinessSummaryImpl> {
+  return buildPreMergeReadinessSummaryImpl(
+    {
+      ...input,
+      claimEvents: withClaimEditState(
+        input.claimEvents,
+      ) as typeof input.claimEvents,
+    },
+    options,
+  );
+}
+
+function summarizeClaimValidation(
+  events: Parameters<typeof summarizeClaimValidationImpl>[0],
+  options: Parameters<typeof summarizeClaimValidationImpl>[1],
+): ReturnType<typeof summarizeClaimValidationImpl> {
+  return summarizeClaimValidationImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
+}
+
+function resolveActiveClaimForWriteGate(
+  events: Parameters<typeof resolveActiveClaimForWriteGateImpl>[0],
+  options: Parameters<typeof resolveActiveClaimForWriteGateImpl>[1],
+): ReturnType<typeof resolveActiveClaimForWriteGateImpl> {
+  return resolveActiveClaimForWriteGateImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
+}
 
 // kurone-kito/idd-skill#3265: a recognized, clean `ccr-overview-v2` body --
 // mirrors `tests/advisory-convergence.test.mts`'s own `MINIMAL_V2_REVIEW_BODY`
@@ -13363,6 +13409,7 @@ test('collectPreMergeReadiness: --claimless refuses a closing reference whose is
         createdAt: '2026-07-01T00:00:00Z',
         updatedAt: '2026-07-01T00:00:00Z',
         authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
       },
     ],
   });
@@ -13502,6 +13549,7 @@ test('collectPreMergeReadiness: --claimless still refuses when a collaborator-tr
           createdAt: '2026-07-01T00:00:00Z',
           updatedAt: '2026-07-01T00:00:00Z',
           authorLogin: 'collab-user',
+          lastEditedAt: null,
         },
       ],
     },

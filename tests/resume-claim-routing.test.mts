@@ -21,14 +21,14 @@ import {
 } from '../src/scripts/discover-roadmap-graph.mts';
 import {
   DEFAULT_STALE_AGE_MS,
-  resolveActiveClaimForWriteGate,
-  summarizeClaimValidation,
+  resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
+  summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   buildForcedHandoffEnabledGate,
-  evaluateFreshClaimGate,
-  evaluateResumeClaimRouting,
+  evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
+  evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
   loadPolicy,
 } from '../src/scripts/resume-claim-routing.mts';
@@ -37,6 +37,63 @@ import { stubExecutable } from './test-utils.mts';
 function trusted(logins: string[]) {
   const set = new Set(logins);
   return (login: string) => set.has(login);
+}
+
+function withClaimEditState(events: unknown): unknown {
+  if (!Array.isArray(events)) return events;
+  return events.map((event) => {
+    if (event === null || typeof event !== 'object') return event;
+    const record = event as Record<string, unknown>;
+    return 'lastEditedAt' in record || 'last_edited_at' in record
+      ? event
+      : { ...record, lastEditedAt: null };
+  });
+}
+
+function evaluateResumeClaimRouting(
+  input: Parameters<typeof evaluateResumeClaimRoutingImpl>[0],
+  options?: Parameters<typeof evaluateResumeClaimRoutingImpl>[1],
+): ReturnType<typeof evaluateResumeClaimRoutingImpl> {
+  return evaluateResumeClaimRoutingImpl(
+    {
+      ...input,
+      events: withClaimEditState(input.events) as typeof input.events,
+    },
+    options,
+  );
+}
+
+function evaluateFreshClaimGate(
+  input: Parameters<typeof evaluateFreshClaimGateImpl>[0],
+  options?: Parameters<typeof evaluateFreshClaimGateImpl>[1],
+): ReturnType<typeof evaluateFreshClaimGateImpl> {
+  return evaluateFreshClaimGateImpl(
+    {
+      ...input,
+      events: withClaimEditState(input.events) as typeof input.events,
+    },
+    options,
+  );
+}
+
+function summarizeClaimValidation(
+  events: Parameters<typeof summarizeClaimValidationImpl>[0],
+  options: Parameters<typeof summarizeClaimValidationImpl>[1],
+): ReturnType<typeof summarizeClaimValidationImpl> {
+  return summarizeClaimValidationImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
+}
+
+function resolveActiveClaimForWriteGate(
+  events: Parameters<typeof resolveActiveClaimForWriteGateImpl>[0],
+  options: Parameters<typeof resolveActiveClaimForWriteGateImpl>[1],
+): ReturnType<typeof resolveActiveClaimForWriteGateImpl> {
+  return resolveActiveClaimForWriteGateImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
 }
 
 // #3270: before this fix, `loadPolicy`'s own local `parseDurationToMs` was a
@@ -2576,12 +2633,14 @@ function linkedPrLookupFailureCliFixture() {
   const comments = [
     {
       id: 1,
+      node_id: 'IC_linked_claim',
       body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
       created_at: '2026-05-12T10:00:00Z',
       user: { login: 'maintainer' },
     },
     {
       id: 2,
+      node_id: 'IC_linked_handoff',
       body: '<!-- forced-handoff: {"oldAgentId":"copilot","oldClaimId":"claim-old","newAgentId":"copilot","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"maintainer","reason":"handoff","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\\n\\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
       created_at: '2026-05-12T10:01:00Z',
       user: { login: 'maintainer' },
@@ -2592,6 +2651,13 @@ function linkedPrLookupFailureCliFixture() {
     `const args = process.argv.slice(2);
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('maintainer\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
+  process.stdout.write(JSON.stringify({ data: { nodes: [
+    { id: 'IC_linked_claim', lastEditedAt: null },
+    { id: 'IC_linked_handoff', lastEditedAt: null },
+  ] } }));
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql') {
@@ -2775,6 +2841,12 @@ function trustedLadderFixture({
     `const args = process.argv.slice(2);
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('viewer-login\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
+  process.stdout.write(JSON.stringify({ data: { nodes: [
+    { id: 'IC_trust_ladder', lastEditedAt: null },
+  ] } }));
   process.exit(0);
 }
 if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {

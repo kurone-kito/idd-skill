@@ -13,7 +13,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { combineOwnerRepoFlags, ghText } from './gh-exec.mjs';
+import {
+  combineOwnerRepoFlags,
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+} from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
@@ -34,12 +38,14 @@ import {
   isKnownReviewBot,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
   unsafeTextReason,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -1544,22 +1550,40 @@ function assertActiveClaim(
   }
 }
 export function readActiveClaim(owner, repo, issueNumber, options = {}) {
-  const result = JSON.parse(
-    ghText([
-      'issue',
-      'view',
-      String(issueNumber),
-      '--repo',
-      `${owner}/${repo}`,
-      '--json',
-      'comments',
-    ]),
+  const rows = parsePaginatedGhNdjson(
+    ghText(
+      [
+        'api',
+        '--paginate',
+        '--jq',
+        '.[]',
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+      ],
+      { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+    ),
   );
-  const comments = (result.comments ?? []).map((comment) => ({
-    body: comment.body ?? '',
-    createdAt: comment.createdAt ?? '',
-    author: { login: comment.author?.login ?? '' },
-  }));
+  const nodeIds = rows.map((row) => String(row.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `audit-pr-cleanup: issue #${issueNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  const comments = rows.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    const lastEditedAt = lastEditedAtByNodeId.get(nodeId);
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `audit-pr-cleanup: missing edit-state resolution for issue #${issueNumber} comment ${nodeId}`,
+      );
+    }
+    return {
+      body: comment.body ?? '',
+      createdAt: comment.created_at ?? '',
+      author: { login: comment.user?.login ?? '' },
+      lastEditedAt,
+    };
+  });
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call

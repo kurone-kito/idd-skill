@@ -2915,6 +2915,7 @@ function claimComment(
     body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
     createdAt,
     author: { login: author },
+    lastEditedAt: null,
   };
 }
 
@@ -2949,7 +2950,13 @@ function buildClaimState(
     resolution: {
       loadComments: (issueNumber: number) => {
         seen.push(issueNumber);
-        return commentsByIssue.get(issueNumber) ?? [];
+        return (commentsByIssue.get(issueNumber) ?? []).map((comment) => {
+          if (comment === null || typeof comment !== 'object') return comment;
+          const record = comment as Record<string, unknown>;
+          return 'lastEditedAt' in record || 'last_edited_at' in record
+            ? comment
+            : { ...record, lastEditedAt: null };
+        });
       },
       isTrustedAuthor: (login: string) =>
         trusted.has(String(login ?? '').toLowerCase()),

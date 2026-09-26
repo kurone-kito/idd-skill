@@ -33,6 +33,7 @@ import {
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 export function generateSuccessorIds(baseAgentId) {
   return {
     newAgentId: String(baseAgentId || 'idd-agent'),
@@ -173,13 +174,15 @@ export function main(argv = process.argv.slice(2)) {
         '.nameWithOwner',
       ]);
     const { owner, name } = parseOwnerRepo(repoRef);
-    const issueComments = ghJson(
-      [
-        'api',
-        '--paginate',
-        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-      ],
-      true,
+    const issueComments = resolveIssueCommentEditStates(
+      ghJson(
+        [
+          'api',
+          '--paginate',
+          `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+        ],
+        true,
+      ),
     );
     const viewerLogin = safeGhText([
       'api',
@@ -290,13 +293,15 @@ export function main(argv = process.argv.slice(2)) {
       'forced-handoff mode is not human-gated; marker generation is disabled',
     );
   }
-  const issueComments = ghJson(
-    [
-      'api',
-      '--paginate',
-      `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-    ],
-    true,
+  const issueComments = resolveIssueCommentEditStates(
+    ghJson(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+      ],
+      true,
+    ),
   );
   const viewerLogin = safeGhText([
     'api',
@@ -555,7 +560,26 @@ function normalizeIssueComment(comment) {
     author: {
       login: comment.user?.login ?? '',
     },
+    lastEditedAt: comment.lastEditedAt,
   };
+}
+function resolveIssueCommentEditStates(comments) {
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'forced-handoff-marker: issue comment is missing node_id, cannot resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `forced-handoff-marker: missing edit-state resolution for comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
 }
 function splitCsv(value) {
   return String(value ?? '')

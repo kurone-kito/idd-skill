@@ -40,6 +40,7 @@ import {
 } from './policy-helpers.mjs';
 import {
   DEFAULT_STALE_AGE_MS,
+  filterTrustedClaimFamilyEvents,
   isStaleAt,
   parseClaimComment,
   resolveActiveClaimWithForcedHandoffTrace,
@@ -1351,10 +1352,8 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
   };
 }
 function hasNewFormatClaim(comments, isTrustedAuthor) {
-  return comments.some(
-    (comment) =>
-      isTrustedAuthor(comment.author.login) &&
-      parseClaimComment(comment.body, comment.createdAt) !== null,
+  return filterTrustedClaimFamilyEvents([...comments], isTrustedAuthor).some(
+    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
   );
 }
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
@@ -1370,6 +1369,16 @@ function normalizeClaimComments(raw) {
       author: {
         login: String(comment.author?.login ?? comment.user?.login ?? ''),
       },
+      lastEditedAt:
+        comment.lastEditedAt === null ||
+        typeof comment.lastEditedAt === 'string'
+          ? comment.lastEditedAt
+          : undefined,
+      last_edited_at:
+        comment.last_edited_at === null ||
+        typeof comment.last_edited_at === 'string'
+          ? comment.last_edited_at
+          : undefined,
     };
   });
 }
@@ -1664,7 +1673,10 @@ export function buildTrustedAuthorPredicate(policy) {
  * to accommodate exactly this.
  */
 export function buildCommentLoader(port) {
-  return (issueNumber) => port.listWorkItemCommentsWithRetryAsync(issueNumber);
+  return (issueNumber) =>
+    port.listWorkItemCommentsWithRetryAsync(issueNumber, {
+      includeEditState: true,
+    });
 }
 /**
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR

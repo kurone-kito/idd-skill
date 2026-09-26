@@ -49,6 +49,7 @@ const fields = {
 function currentDigestComment(id: number, phase = fields.phase) {
   return {
     id,
+    node_id: `IC_digest_${id}`,
     body: renderLiveStatusDigest({ ...fields, phase }),
   };
 }
@@ -461,7 +462,14 @@ const requestBody = apiArgs.includes('--input')
   ? JSON.parse(fs.readFileSync(0, 'utf8')).body
   : bodyArgument?.slice('body='.length);
 const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
-if (apiArgs[0] === 'user') {
+if (apiArgs[0] === 'graphql') {
+  const ids = apiArgs
+    .filter((value) => value.startsWith('ids[]='))
+    .map((value) => value.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({
+    data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) },
+  }));
+} else if (apiArgs[0] === 'user') {
   process.stdout.write(state.viewer);
 } else if (path.endsWith('/collaborators/maintainer/permission')) {
   process.stdout.write(JSON.stringify({ permission: 'write', role_name: 'maintain' }));
@@ -527,7 +535,14 @@ if (apiArgs[0] === 'user') {
     issueNumber === claimIssueNumber
       ? [...state.comments, ...claimComments]
       : state.comments;
-  for (const comment of comments) process.stdout.write(JSON.stringify(comment) + '\\n');
+  for (const comment of comments) {
+    process.stdout.write(
+      JSON.stringify({
+        ...comment,
+        node_id: comment.node_id ?? ('IC_comment_' + comment.id),
+      }) + '\\n',
+    );
+  }
 } else if (path.endsWith('/issues/123')) {
   process.stdout.write(
     state.invalidTargetState
@@ -1200,7 +1215,14 @@ const requestBody = apiArgs.includes('--input')
   ? JSON.parse(fs.readFileSync(0, 'utf8')).body
   : bodyArgument?.slice('body='.length);
 const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
-if (apiArgs[0] === 'user') {
+if (apiArgs[0] === 'graphql') {
+  const ids = apiArgs
+    .filter((value) => value.startsWith('ids[]='))
+    .map((value) => value.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({
+    data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) },
+  }));
+} else if (apiArgs[0] === 'user') {
   process.stdout.write(state.viewer);
 } else if (path.endsWith('/collaborators/' + state.viewer + '/permission')) {
   process.stdout.write(JSON.stringify({ permission: 'write', role_name: 'maintain' }));
@@ -1228,9 +1250,19 @@ if (apiArgs[0] === 'user') {
 } else if (apiArgs.includes('--paginate')) {
   const issueNumber = path.match(/\\/issues\\/(\\d+)\\/comments$/)?.[1];
   if (issueNumber === String(state.claimIssueNumber)) {
-    for (const c of state.claimComments) process.stdout.write(JSON.stringify(c) + '\\n');
+    for (const c of state.claimComments) {
+      process.stdout.write(
+        JSON.stringify({ ...c, node_id: c.node_id ?? ('IC_comment_' + c.id) }) +
+          '\\n',
+      );
+    }
   } else if (issueNumber === String(state.prNumber)) {
-    for (const c of state.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+    for (const c of state.comments) {
+      process.stdout.write(
+        JSON.stringify({ ...c, node_id: c.node_id ?? ('IC_comment_' + c.id) }) +
+          '\\n',
+      );
+    }
   } else {
     process.exit(1);
   }
@@ -1940,6 +1972,7 @@ function prTargetClaimComment() {
     author: { login: PR_TARGET_TRUSTED },
     body: `<!-- claimed-by: ${PR_TARGET_OLD_AGENT_ID} ${PR_TARGET_OLD_CLAIM_ID} supersedes: none 2026-06-01T00:00:00Z branch: issue/1435-test -->\n\n_${PR_TARGET_OLD_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
     createdAt: '2026-06-01T00:00:00Z',
+    lastEditedAt: null,
   };
 }
 
@@ -1968,6 +2001,7 @@ function prTargetForcedHandoffComment({
     author: { login: PR_TARGET_TRUSTED },
     body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\nForced handoff approved by ${PR_TARGET_TRUSTED}.`,
     createdAt,
+    lastEditedAt: null,
   };
 }
 
@@ -2063,6 +2097,7 @@ function wgOldClaimComment() {
     author: { login: 'cli-old' },
     body: `<!-- claimed-by: cli-old ${WG_OLD_CLAIM_ID} supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_cli-old: issue claim — IDD automation marker._`,
     createdAt: '2026-05-12T09:00:00Z',
+    lastEditedAt: null,
   };
 }
 
@@ -2071,6 +2106,7 @@ function wgTakeoverClaimComment() {
     author: { login: 'cli-new' },
     body: `<!-- claimed-by: cli-new ${WG_TAKEOVER_CLAIM_ID} supersedes: ${WG_OLD_CLAIM_ID} 2026-05-13T05:00:00Z branch: issue/337-feat -->\n\n_cli-new: issue claim — IDD automation marker._`,
     createdAt: '2026-05-13T05:00:00Z',
+    lastEditedAt: null,
   };
 }
 
