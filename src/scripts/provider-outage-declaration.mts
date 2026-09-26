@@ -35,6 +35,14 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
@@ -470,7 +478,7 @@ const PROVIDER_OUTAGE_DECLARATION_FLAG_SPEC = {
 function parsePositiveIntegerFlag(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
@@ -482,7 +490,7 @@ export function parseArgs(argv: string[]): ProviderOutageDeclarationArgs {
   );
   const format = (values.format as string).trim();
   if (format !== 'json' && format !== 'text') {
-    throw new Error(`unsupported --format value: ${format}`);
+    throw markCliUsageError(new Error(`unsupported --format value: ${format}`));
   }
   const modeFlags = [
     values.declare as boolean,
@@ -490,8 +498,10 @@ export function parseArgs(argv: string[]): ProviderOutageDeclarationArgs {
     values['list-advanced'] as boolean,
   ].filter(Boolean);
   if (modeFlags.length > 1) {
-    throw new Error(
-      '--declare, --record-advanced, and --list-advanced are mutually exclusive',
+    throw markCliUsageError(
+      new Error(
+        '--declare, --record-advanced, and --list-advanced are mutually exclusive',
+      ),
     );
   }
   const mode: ProviderOutageDeclarationArgs['mode'] = values.declare
@@ -535,23 +545,29 @@ export function parseArgs(argv: string[]): ProviderOutageDeclarationArgs {
   if (!parsed.help) {
     if (mode === 'resolve' || mode === 'declare') {
       if (!parsed.service) {
-        throw new Error('missing required --service <name> argument');
+        throw markCliUsageError(
+          new Error('missing required --service <name> argument'),
+        );
       }
     }
     if (mode === 'declare') {
       const hasExpiresAt = Boolean(parsed.expiresAt);
       const hasExpiresIn = Boolean(parsed.expiresIn);
       if (hasExpiresAt === hasExpiresIn) {
-        throw new Error('specify exactly one of --expires or --expires-in');
+        throw markCliUsageError(
+          new Error('specify exactly one of --expires or --expires-in'),
+        );
       }
     }
     if (mode === 'record-advanced') {
       if (!parsed.prNumber) {
-        throw new Error('missing required --pr <number> argument');
+        throw markCliUsageError(
+          new Error('missing required --pr <number> argument'),
+        );
       }
       if (!/^[0-9a-f]{40}$/.test(parsed.headSha)) {
-        throw new Error(
-          'missing or invalid required --head-sha <40-hex> argument',
+        throw markCliUsageError(
+          new Error('missing or invalid required --head-sha <40-hex> argument'),
         );
       }
     }
@@ -572,13 +588,17 @@ function resolveExpiryAt({
   if (expiresAt) {
     const parsed = new Date(expiresAt);
     if (!Number.isFinite(parsed.getTime())) {
-      throw new Error(`invalid --expires value: ${expiresAt}`);
+      throw markCliUsageError(
+        new Error(`invalid --expires value: ${expiresAt}`),
+      );
     }
     return toSecondPrecisionIso(parsed);
   }
   const durationMs = parseIsoDurationToMs(expiresIn);
   if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
-    throw new Error(`invalid --expires-in value: ${expiresIn}`);
+    throw markCliUsageError(
+      new Error(`invalid --expires-in value: ${expiresIn}`),
+    );
   }
   return toSecondPrecisionIso(new Date(now.getTime() + (durationMs ?? 0)));
 }
@@ -595,7 +615,9 @@ function parseOwnerRepo(value: unknown): { owner: string; name: string } {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
-    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+    throw markCliUsageError(
+      new Error(`invalid --repo value: ${value} (expected owner/name)`),
+    );
   }
   return { owner: match[1], name: match[2] };
 }
@@ -626,9 +648,14 @@ function fetchIssueComments({
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
     return parsePaginatedGhNdjson(payload) as CommentLike[];
-  } catch {
+  } catch (error) {
+    // #3346: preserve the original gh-exec.mts-tagged error as `.cause` (not
+    // dropped as before) so classifyHelperError's cause-chain walk can still
+    // classify a real gh transport/not-found failure correctly instead of
+    // losing it to the generic `internal` fallback.
     throw new Error(
       `could not read issue #${issueNumber} comments to resolve the provider outage declaration`,
+      { cause: error },
     );
   }
 }
@@ -881,8 +908,23 @@ export async function runProviderOutageDeclaration(
   if (!args.yes) {
     process.stdout.write(`${body}\n`);
     const ask = options.prompt ?? makeReadlinePrompt();
-    const answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
-    ask.close?.();
+    // #3346 review finding ("Close the interactive prompt when outage
+    // declaration fails"): pre-migration, main()'s `main().catch(...)`
+    // called `process.exit(1)` on any error, unconditionally tearing the
+    // whole process (and this readline interface) down regardless of
+    // where the failure occurred. Post-migration, main() returns an
+    // error outcome through runHelperCli/applyHelperCliOutcomeWhenDisabled
+    // instead, so a rejected `ask(...)` call now reaches that catch
+    // without ever running the close below, leaving the readline open
+    // and hanging a real interactive invocation -- the same regression
+    // already fixed for force-handoff.mts and idd-onboard.mts earlier
+    // this PR. Wrap the prompt call itself so ask.close?.() always runs.
+    let answer: string;
+    try {
+      answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
+    } finally {
+      ask.close?.();
+    }
     if (
       String(answer ?? '')
         .trim()
@@ -965,14 +1007,24 @@ Options:
 
 export async function main(
   argv: string[] = process.argv.slice(2),
-): Promise<void> {
-  const result = await runProviderOutageDeclaration({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+): Promise<HelperCliResult> {
+  try {
+    const result = await runProviderOutageDeclaration({
+      args: parseArgs(argv),
+    });
+    return result.exitCode;
+  } catch (error) {
+    process.stderr.write(`Error: ${(error as Error).message}\n`);
+    return { exitCode: 1, ...classifyHelperError(error) };
+  }
 }
 
 if (import.meta.main) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`Error: ${(error as Error).message}\n`);
-    process.exit(1);
-  });
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-outage-declaration', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

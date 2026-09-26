@@ -68,8 +68,20 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { resolveBundleRoot } from './bundle-root.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
-import { NON_TTY_ERROR } from './force-handoff.mts';
 import { safeGhText } from './gh-exec.mts';
+import type {
+  HelperCliResult,
+  IddHelperErrorKind,
+} from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+  writeStderrSync,
+} from './helper-cli-runner.mts';
 import {
   buildCommandCatalog,
   collectHelperRuntimeEvidence,
@@ -809,14 +821,18 @@ export function resolvePlaceholderValues(
   );
   for (const key of Object.keys(overrides)) {
     if (!knownNames.has(key)) {
-      throw new Error(`unknown placeholder override: ${key}`);
+      throw markCliUsageError(
+        new Error(`unknown placeholder override: ${key}`),
+      );
     }
   }
   for (const entry of ONBOARDING_PLACEHOLDERS) {
     const override = overrides[entry.name];
     if (override === 'true' && entry.kind !== 'command') {
-      throw new Error(
-        `the no-op value "true" is only valid for command placeholders, not ${entry.name}`,
+      throw markCliUsageError(
+        new Error(
+          `the no-op value "true" is only valid for command placeholders, not ${entry.name}`,
+        ),
       );
     }
   }
@@ -825,8 +841,10 @@ export function resolvePlaceholderValues(
     markerOverride !== undefined &&
     !MARKER_PREFIX_PATTERN.test(markerOverride)
   ) {
-    throw new Error(
-      `--marker-prefix must match ${MARKER_PREFIX_PATTERN}: ${markerOverride}`,
+    throw markCliUsageError(
+      new Error(
+        `--marker-prefix must match ${MARKER_PREFIX_PATTERN}: ${markerOverride}`,
+      ),
     );
   }
 
@@ -1507,6 +1525,11 @@ export function resolveCoreTemplateFiles(sourceRoot: string): ManifestFile[] {
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SyncManifest;
   } catch (error) {
+    // Not tagged markCliUsageError: this path is reached both with a
+    // user-supplied --source (a real usage error) and with the running
+    // CLI's own resolved bundle root under --substitute (#3291 -- an
+    // internal packaging defect, not caller input), and the throw site
+    // cannot distinguish which caller reached it.
     throw new Error(
       `--source is not a readable idd-skill tree (missing or invalid audit/sync-manifest.json): ${
         error instanceof Error ? error.message : String(error)
@@ -1608,21 +1631,27 @@ export function resolveConfinedDirectory(
 ): string {
   const resolved = resolve(raw);
   if (!statSync(resolved).isDirectory()) {
-    throw new Error(`${flagName} is not a directory: ${raw}`);
+    throw markCliUsageError(
+      new Error(`${flagName} is not a directory: ${raw}`),
+    );
   }
   const realResolved = realpathSync(resolved);
   const boundaries = [process.cwd(), ...allowedRoots].map((root) => {
     try {
       return realpathSync(resolve(root));
     } catch {
-      throw new Error(`--allow-root does not exist: ${root}`);
+      throw markCliUsageError(
+        new Error(`--allow-root does not exist: ${root}`),
+      );
     }
   });
   if (
     !boundaries.some((boundary) => isWithinBoundary(realResolved, boundary))
   ) {
-    throw new Error(
-      `${flagName} resolves outside the confined root(s) (${boundaries.join(', ')}): ${raw} -> ${realResolved}. Pass --allow-root <path> to widen the confined root.`,
+    throw markCliUsageError(
+      new Error(
+        `${flagName} resolves outside the confined root(s) (${boundaries.join(', ')}): ${raw} -> ${realResolved}. Pass --allow-root <path> to widen the confined root.`,
+      ),
     );
   }
   return resolved;
@@ -2135,13 +2164,6 @@ export interface HelperLoadResult {
  * genuine hang trips it, not ordinary process-startup variance. */
 const HELPER_LOAD_TIMEOUT_MS = 15_000;
 
-/** `HELPER_COMMANDS` id of the one cataloged helper that is an
- * interactive-only wizard: it rejects non-TTY stdin with its exported
- * `NON_TTY_ERROR` before parsing any argument (including `--help`), in the
- * source repository too, so its expected "loaded successfully" outcome is
- * exit 1 with that message on stderr, never exit 0 with stdout. */
-const FORCE_HANDOFF_HELPER_ID = 'force-handoff';
-
 /**
  * Whether `targetRoot`/`entryPath`'s REALPATH (symlinks resolved) still
  * resolves inside `targetRoot`'s own realpath. `fileExists`'s `lstatSync`
@@ -2280,10 +2302,13 @@ export function checkHelperLoad(
     }
     probed.push(command.entryPath);
     const probe = spawnHelperHelp(targetRoot, command.entryPath);
-    const loaded =
-      command.id === FORCE_HANDOFF_HELPER_ID
-        ? probe.status === 1 && probe.stderr.includes(NON_TTY_ERROR)
-        : probe.status === 0 && probe.stdout.trim() !== '';
+    // #3346: force-handoff.mjs previously rejected non-TTY stdin with its
+    // NON_TTY_ERROR before parsing any argument (including --help), so its
+    // own "loaded successfully" outcome used to need a special case here
+    // (exit 1 with that message on stderr, never exit 0 with stdout). It
+    // now parses --help before the TTY check (a --help-only flag spec, see
+    // force-handoff.mts), so it loads like every other cataloged helper.
+    const loaded = probe.status === 0 && probe.stdout.trim() !== '';
     if (!loaded) {
       failed.push({
         id: command.id,
@@ -3062,57 +3087,81 @@ export async function runHearWizard(
     throw new Error(HEAR_NON_TTY_ERROR);
   }
   const ask = promptFn ?? makeReadlinePrompt();
-  const views = buildHearCatalogItemViews(
-    catalog.items,
-    targetDir,
-    readers,
-  ).filter((view) => view.kind !== 'check');
-  const byId = new Map(catalog.items.map((item) => [item.id, item]));
-  const answers: HearAnswer[] = [];
-  for (const view of views) {
-    const item = byId.get(view.id);
-    if (!item) {
-      continue;
-    }
-    const effectiveDefault = view.derived ?? view.documentedDefault;
-    process.stdout.write(`\n${view.prompt}\n${view.explanation}\n`);
-    if (view.options && view.options.length > 0) {
-      process.stdout.write(
-        `Options: ${view.options.map((option) => option.value).join(', ')}\n`,
-      );
-    }
-    let value: string | null = null;
-    for (
-      let attempt = 0;
-      value === null && attempt < HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM;
-      attempt += 1
-    ) {
-      const suffix = effectiveDefault !== null ? ` [${effectiveDefault}]` : '';
-      const raw = (await ask(`${view.id}${suffix}: `)).trim();
-      const candidate =
-        raw === '' && effectiveDefault !== null ? effectiveDefault : raw;
-      if (isValidHearAnswerValue(item, candidate)) {
-        value = candidate;
-      } else {
-        process.stdout.write('Invalid answer; please try again.\n');
-      }
-    }
-    if (value === null) {
-      ask.close?.();
-      throw new Error(
-        `no valid answer for ${view.id} after ${HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM} attempts`,
-      );
-    }
-    answers.push({ id: view.id, value });
+  // #3346 review finding ("Close wizard prompt on all failure paths"):
+  // pre-migration, this CLI's own main() called process.exit(2) on any
+  // error, which forcibly tore the whole process (and with it, the
+  // readline interface `ask` opened on stdin) down regardless of where
+  // the wizard failed. Post-migration, main() returns an error outcome
+  // through runHelperCli/applyHelperCliOutcomeWhenDisabled instead of
+  // calling process.exit() itself, so a throw from buildHearCatalogItemViews
+  // or any other step before the loop's own ask.close?.() calls now
+  // leaves that readline interface open, hanging a real interactive
+  // invocation instead of exiting -- the same regression already fixed
+  // in force-handoff.mts's runHandoff. Wrap the whole body so
+  // ask.close?.() always runs, on every exit path; the loop's own
+  // existing ask.close?.() calls stay as an early release once no
+  // further prompt is needed, and are harmless here since readline's
+  // close() is idempotent.
+  try {
+    return await runHearWizardBody();
+  } finally {
+    ask.close?.();
   }
-  ask.close?.();
-  return answers;
+
+  async function runHearWizardBody(): Promise<HearAnswer[]> {
+    const views = buildHearCatalogItemViews(
+      catalog.items,
+      targetDir,
+      readers,
+    ).filter((view) => view.kind !== 'check');
+    const byId = new Map(catalog.items.map((item) => [item.id, item]));
+    const answers: HearAnswer[] = [];
+    for (const view of views) {
+      const item = byId.get(view.id);
+      if (!item) {
+        continue;
+      }
+      const effectiveDefault = view.derived ?? view.documentedDefault;
+      process.stdout.write(`\n${view.prompt}\n${view.explanation}\n`);
+      if (view.options && view.options.length > 0) {
+        process.stdout.write(
+          `Options: ${view.options.map((option) => option.value).join(', ')}\n`,
+        );
+      }
+      let value: string | null = null;
+      for (
+        let attempt = 0;
+        value === null && attempt < HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM;
+        attempt += 1
+      ) {
+        const suffix =
+          effectiveDefault !== null ? ` [${effectiveDefault}]` : '';
+        const raw = (await ask(`${view.id}${suffix}: `)).trim();
+        const candidate =
+          raw === '' && effectiveDefault !== null ? effectiveDefault : raw;
+        if (isValidHearAnswerValue(item, candidate)) {
+          value = candidate;
+        } else {
+          process.stdout.write('Invalid answer; please try again.\n');
+        }
+      }
+      if (value === null) {
+        ask.close?.();
+        throw new Error(
+          `no valid answer for ${view.id} after ${HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM} attempts`,
+        );
+      }
+      answers.push({ id: view.id, value });
+    }
+    ask.close?.();
+    return answers;
+  }
 }
 
 function runHearProposeCli(
   catalog: OnboardingHearingCatalog,
   targetDir: string,
-): void {
+): HelperCliResult {
   const items = buildHearCatalogItemViews(catalog.items, targetDir);
   const gitRemoteHost = deriveGitRemoteHost(targetDir);
   const verdict = {
@@ -3129,27 +3178,31 @@ function runHearProposeCli(
     helperRuntimeEvidence: collectHelperRuntimeEvidence(targetDir),
   };
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
-  process.exit(0);
+  return 0;
 }
 
 function runHearApplyCli(
   catalog: OnboardingHearingCatalog,
   answersPath: string,
-): void {
+): HelperCliResult {
   const raw = readFileSync(resolve(answersPath), 'utf8');
   let answersMap: unknown;
   try {
     answersMap = JSON.parse(raw);
   } catch {
-    throw new Error(`--answers file is not valid JSON: ${answersPath}`);
+    throw markCliUsageError(
+      new Error(`--answers file is not valid JSON: ${answersPath}`),
+    );
   }
   if (
     typeof answersMap !== 'object' ||
     answersMap === null ||
     Array.isArray(answersMap)
   ) {
-    throw new Error(
-      '--answers file must be a JSON object mapping catalog item id to value',
+    throw markCliUsageError(
+      new Error(
+        '--answers file must be a JSON object mapping catalog item id to value',
+      ),
     );
   }
   const result = validateHearAnswers(
@@ -3169,7 +3222,7 @@ function runHearApplyCli(
         2,
       )}\n`,
     );
-    process.exit(1);
+    return 1;
   }
   const transcript = buildHearTranscript(result.answers);
   const schemaErrors = validateHearTranscriptShape(transcript);
@@ -3186,38 +3239,38 @@ function runHearApplyCli(
         2,
       )}\n`,
     );
-    process.exit(1);
+    return 1;
   }
   // Print the transcript document itself (matching the interactive
   // --hear wizard's own output), not a wrapper -- the printed JSON must
   // validate against onboarding-hearing-transcript.schema.json directly
   // (#2304 review).
   process.stdout.write(`${JSON.stringify(transcript, null, 2)}\n`);
-  process.exit(0);
+  return 0;
 }
 
-async function runHearCli(args: ParsedArgs): Promise<void> {
+async function runHearCli(args: ParsedArgs): Promise<HelperCliResult> {
   const targetDir = resolveConfinedDirectory(
     args.target,
     '--target',
     args.allowRoots,
   );
   if (args.propose && args.apply) {
-    throw new Error(
-      '--hear --propose and --hear --apply are mutually exclusive',
+    throw markCliUsageError(
+      new Error('--hear --propose and --hear --apply are mutually exclusive'),
     );
   }
   const catalog = loadOnboardingHearingCatalog();
   if (args.propose) {
-    runHearProposeCli(catalog, targetDir);
-    return;
+    return runHearProposeCli(catalog, targetDir);
   }
   if (args.apply) {
     if (!args.answers) {
-      throw new Error('--hear --apply requires --answers <file>');
+      throw markCliUsageError(
+        new Error('--hear --apply requires --answers <file>'),
+      );
     }
-    runHearApplyCli(catalog, args.answers);
-    return;
+    return runHearApplyCli(catalog, args.answers);
   }
   const answers = await runHearWizard(catalog, targetDir);
   const transcript = buildHearTranscript(answers);
@@ -3228,7 +3281,7 @@ async function runHearCli(args: ParsedArgs): Promise<void> {
     );
   }
   process.stdout.write(`${JSON.stringify(transcript, null, 2)}\n`);
-  process.exit(0);
+  return 0;
 }
 
 /** Confirmed transcript document shape consumed by --from-transcript / --record-policy. */
@@ -3887,6 +3940,35 @@ function isSameExistingFile(pathA: string, pathB: string): boolean {
 }
 
 /**
+ * #3346: `runRecordPolicyCli` is exported and directly imported (in-process,
+ * not subprocess) by `tests/idd-onboard.test.mts`, which stubs
+ * `process.exit` itself and asserts it is called with a specific code --
+ * so this function's own `process.exit(N)` calls stay literal calls (never
+ * converted to `return`, unlike every other CLI-mode function in this
+ * file). Since `process.exit()` never returns to `runHelperCli`'s own
+ * outcome handling, this writes the envelope manually first, matching
+ * `audit-pr-cleanup.mts`'s established `fail(message, error?)` pattern.
+ */
+function exitRecordPolicy(exitCode: number, kind: IddHelperErrorKind): never {
+  // Uses the exported writeStderrSync (a raw synchronous fd write), not
+  // process.stderr.write: process.exit() right below can truncate a
+  // still-pending asynchronous stdio write (#3346 review finding), the
+  // same hazard runHelperCli's own crash path already guards against.
+  if (isHelperErrorEnvelopeEnabled()) {
+    writeStderrSync(
+      `${JSON.stringify(
+        buildHelperErrorEnvelope('idd-onboard', exitCode, {
+          kind,
+          message: `idd-onboard exited with code ${exitCode}`,
+          httpStatus: null,
+        }),
+      )}\n`,
+    );
+  }
+  process.exit(exitCode);
+}
+
+/**
  * Exported (not just called from the CLI dispatcher below) so the
  * `readers` parameter is a genuine injection point unit tests can reach
  * directly, matching {@link OnboardEvidenceReaders.readRemoteBranchExists}'s
@@ -3897,7 +3979,9 @@ export function runRecordPolicyCli(
   readers: OnboardEvidenceReaders = {},
 ): void {
   if (!args.transcript) {
-    throw new Error('--record-policy requires --transcript <file>');
+    throw markCliUsageError(
+      new Error('--record-policy requires --transcript <file>'),
+    );
   }
   const targetDir = resolveConfinedDirectory(
     args.target,
@@ -3933,7 +4017,7 @@ export function runRecordPolicyCli(
         2,
       )}\n`,
     );
-    process.exit(1);
+    exitRecordPolicy(1, 'gate');
   }
   const transcript = result.transcript;
   const catalog = loadOnboardingHearingCatalog();
@@ -3975,7 +4059,7 @@ export function runRecordPolicyCli(
           2,
         )}\n`,
       );
-      process.exit(1);
+      exitRecordPolicy(1, 'gate');
     }
     // Local-git-only (`git ls-remote`, or the injected reader in tests),
     // so this needs no GitHub CLI auth, only the `origin` remote --import
@@ -3997,7 +4081,7 @@ export function runRecordPolicyCli(
           2,
         )}\n`,
       );
-      process.exit(1);
+      exitRecordPolicy(1, 'gate');
     }
   }
   // A syntactically valid config.json can still parse to a non-object root
@@ -4115,19 +4199,27 @@ export function runRecordPolicyCli(
   process.exit(0);
 }
 
-function main(): void {
-  runCli().catch((error: unknown) => {
+async function main(): Promise<HelperCliResult> {
+  try {
+    return await runCli();
+  } catch (error) {
     // Usage/config errors exit 2, keeping exit 1 unambiguous as the
     // residue signal (same split as audit-pr-cleanup's fail()).
     process.stderr.write(
       `idd-onboard: ${error instanceof Error ? error.message : String(error)}\n`,
     );
-    process.exit(2);
-  });
+    return { exitCode: 2, ...classifyHelperError(error) };
+  }
 }
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-onboard', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
 
 interface ParsedArgs {
@@ -4198,7 +4290,9 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     const value = argv[index + 1];
     const requireValue = (): string => {
       if (value === undefined || value.startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
+        throw markCliUsageError(
+          new Error(`missing value for argument: ${token}`),
+        );
       }
       return value;
     };
@@ -4297,7 +4391,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
       index += 1;
       continue;
     }
-    throw new Error(`unknown argument: ${token}`);
+    throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
   return parsed;
 }
@@ -4404,11 +4498,11 @@ function hearForeignFlagsPresent(args: ParsedArgs): string[] {
   ];
 }
 
-async function runCli(): Promise<void> {
+async function runCli(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   const modeCount = [
     args.substitute,
@@ -4418,19 +4512,22 @@ async function runCli(): Promise<void> {
     args.recordPolicy,
   ].filter(Boolean).length;
   if (modeCount > 1) {
-    throw new Error(
-      '--substitute, --import, --verify, --hear, and --record-policy are mutually exclusive',
+    throw markCliUsageError(
+      new Error(
+        '--substitute, --import, --verify, --hear, and --record-policy are mutually exclusive',
+      ),
     );
   }
   if (args.hear) {
     const foreign = hearForeignFlagsPresent(args);
     if (foreign.length > 0) {
-      throw new Error(
-        `--hear does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      throw markCliUsageError(
+        new Error(
+          `--hear does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+        ),
       );
     }
-    await runHearCli(args);
-    return;
+    return await runHearCli(args);
   }
   if (args.recordPolicy) {
     // Not hearOnlyFlagsPresent(args): that set includes bare --apply,
@@ -4447,12 +4544,20 @@ async function runCli(): Promise<void> {
       ...(args.answers !== undefined ? ['--answers'] : []),
     ];
     if (foreign.length > 0) {
-      throw new Error(
-        `--record-policy does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      throw markCliUsageError(
+        new Error(
+          `--record-policy does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+        ),
       );
     }
+    // runRecordPolicyCli is exported and directly imported (in-process, not
+    // subprocess) by tests/idd-onboard.test.mts, which stubs process.exit
+    // and asserts it is called -- it must keep calling process.exit(N)
+    // itself rather than returning a value (#3346). This return is dead
+    // code at runtime (process.exit always fires first); it exists only so
+    // every path through this function returns a HelperCliResult.
     runRecordPolicyCli(args);
-    return;
+    return 0;
   }
   if (args.importMode) {
     // parseArgs collects every known flag regardless of the active stage,
@@ -4464,12 +4569,13 @@ async function runCli(): Promise<void> {
       ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
-      throw new Error(
-        `--import does not accept substitute-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+      throw markCliUsageError(
+        new Error(
+          `--import does not accept substitute-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+        ),
       );
     }
-    runImportCli(args);
-    return;
+    return runImportCli(args);
   }
   if (args.verify) {
     const foreign = [
@@ -4478,16 +4584,19 @@ async function runCli(): Promise<void> {
       ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
-      throw new Error(
-        `--verify does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      throw markCliUsageError(
+        new Error(
+          `--verify does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+        ),
       );
     }
-    runVerifyCli(args);
-    return;
+    return runVerifyCli(args);
   }
   if (!args.substitute) {
-    throw new Error(
-      'pass --substitute, --import, --verify, --hear, or --record-policy to select a stage',
+    throw markCliUsageError(
+      new Error(
+        'pass --substitute, --import, --verify, --hear, or --record-policy to select a stage',
+      ),
     );
   }
   const foreign = [
@@ -4496,8 +4605,10 @@ async function runCli(): Promise<void> {
     ...recordPolicyOnlyFlagsPresent(args),
   ];
   if (foreign.length > 0) {
-    throw new Error(
-      `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+    throw markCliUsageError(
+      new Error(
+        `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+      ),
     );
   }
   const targetDir = resolveConfinedDirectory(
@@ -4522,7 +4633,7 @@ async function runCli(): Promise<void> {
           2,
         )}\n`,
       );
-      process.exit(1);
+      return 1;
     }
     transcriptOverrides = buildTranscriptPlaceholderOverrides(
       loadOnboardingHearingCatalog(),
@@ -4619,12 +4730,14 @@ async function runCli(): Promise<void> {
   // Residue means the replacement pass cannot converge (an onboarding
   // placeholder would survive): signal it in dry-run and apply alike so
   // callers can gate on the exit code. Unknown tokens are informational.
-  process.exit(plan.residue.length > 0 ? 1 : 0);
+  return plan.residue.length > 0 ? 1 : 0;
 }
 
-function runImportCli(args: ParsedArgs): void {
+function runImportCli(args: ParsedArgs): HelperCliResult {
   if (!args.source) {
-    throw new Error('--import requires --source <idd-skill-tree>');
+    throw markCliUsageError(
+      new Error('--import requires --source <idd-skill-tree>'),
+    );
   }
   const sourceDir = resolveConfinedDirectory(
     args.source,
@@ -4682,12 +4795,14 @@ function runImportCli(args: ParsedArgs): void {
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   // Blocking findings signal in dry-run and apply alike so callers can gate
   // on the exit code without needing a separate --dry-run probe first.
-  process.exit(blocking ? 1 : 0);
+  return blocking ? 1 : 0;
 }
 
-function runVerifyCli(args: ParsedArgs): void {
+function runVerifyCli(args: ParsedArgs): HelperCliResult {
   if (!args.source) {
-    throw new Error('--verify requires --source <idd-skill-tree>');
+    throw markCliUsageError(
+      new Error('--verify requires --source <idd-skill-tree>'),
+    );
   }
   const sourceDir = resolveConfinedDirectory(
     args.source,
@@ -4721,7 +4836,7 @@ function runVerifyCli(args: ParsedArgs): void {
   // held-schema drift advisory are informational only and never flip this
   // exit code (see checkStaleImportSignal / checkPackagePinWarning /
   // checkHeldSchemaDrift / runVerify).
-  process.exit(result.blocking ? 1 : 0);
+  return result.blocking ? 1 : 0;
 }
 
 function printHelp(): void {

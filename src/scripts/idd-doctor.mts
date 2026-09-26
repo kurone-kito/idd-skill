@@ -22,6 +22,13 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
@@ -4401,7 +4408,7 @@ function parseArgs(argv: string[]): DoctorCliArgs {
   const repoRoot = values['repo-root'] as string | undefined;
   if (repoRoot !== undefined) {
     if (!repoRoot) {
-      throw new Error('--repo-root requires a value');
+      throw markCliUsageError(new Error('--repo-root requires a value'));
     }
     args.root = repoRoot;
   }
@@ -4415,12 +4422,16 @@ function parseArgs(argv: string[]): DoctorCliArgs {
     | undefined;
   if (windowDaysToken !== undefined) {
     if (!windowDaysToken) {
-      throw new Error('--cleanup-backlog-window-days requires a value');
+      throw markCliUsageError(
+        new Error('--cleanup-backlog-window-days requires a value'),
+      );
     }
     const numeric = Number(windowDaysToken);
     if (!Number.isFinite(numeric) || numeric <= 0) {
-      throw new Error(
-        `--cleanup-backlog-window-days must be a positive finite number (got "${windowDaysToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-window-days must be a positive finite number (got "${windowDaysToken}")`,
+        ),
       );
     }
     args.cleanupBacklogWindowDays = numeric;
@@ -4436,8 +4447,10 @@ function parseArgs(argv: string[]): DoctorCliArgs {
   if (warnThresholdToken !== undefined) {
     const numeric = Number(warnThresholdToken);
     if (!Number.isFinite(numeric) || numeric < 0) {
-      throw new Error(
-        `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${warnThresholdToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${warnThresholdToken}")`,
+        ),
       );
     }
     args.cleanupBacklogWarnThreshold = numeric;
@@ -4457,11 +4470,15 @@ function parseArgs(argv: string[]): DoctorCliArgs {
     | undefined;
   if (bootstrapCutoffToken !== undefined) {
     if (!bootstrapCutoffToken) {
-      throw new Error('--cleanup-backlog-bootstrap-cutoff requires a value');
+      throw markCliUsageError(
+        new Error('--cleanup-backlog-bootstrap-cutoff requires a value'),
+      );
     }
     if (parseStrictCutoffToUtcMs(bootstrapCutoffToken) === null) {
-      throw new Error(
-        `--cleanup-backlog-bootstrap-cutoff must be a strict YYYY-MM-DD date or a Z-suffixed ISO8601 timestamp (got "${bootstrapCutoffToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-bootstrap-cutoff must be a strict YYYY-MM-DD date or a Z-suffixed ISO8601 timestamp (got "${bootstrapCutoffToken}")`,
+        ),
       );
     }
     args.cleanupBacklogBootstrapCutoff = bootstrapCutoffToken;
@@ -4598,11 +4615,19 @@ function sameMembers(left: string[], right: string[]): boolean {
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-doctor', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
 
   const report = runDoctor({
@@ -4621,5 +4646,5 @@ if (import.meta.main) {
     printHumanReport(report);
   }
 
-  process.exit(report.errors.length > 0 ? 1 : 0);
+  return report.errors.length > 0 ? 1 : 0;
 }

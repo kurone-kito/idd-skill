@@ -255,14 +255,14 @@ call-site pattern described above.
 
 ### Migrated helpers (first batch)
 
-The helpers in the tables below are migrated onto `runHelperCli`;
-every other packaged command is unaffected by the variable (it still
-crashes with a raw, unshaped stack trace on failure, exactly as
-before these tracks). For the six first-batch helpers, `exitCode` is
-`0` on success (including `--help`, which exits `0` before
-`runHelperCli` ever sees an outcome) and `1` on any failure; none of
-the six currently returns a non-zero exit code as its own verdict, so
-none of them produces `kind: "gate"` today.
+The helpers in the tables below are migrated onto `runHelperCli`.
+Issues #3342-#3346 moved every packaged bin onto the runner in
+batches (see the per-batch sections that follow); none remain on the
+old raw, unshaped crash-on-failure behavior. For the six first-batch
+helpers, `exitCode` is `0` on success (including `--help`, which
+exits `0` before `runHelperCli` ever sees an outcome) and `1` on any
+failure; none of the six currently returns a non-zero exit code as
+its own verdict, so none of them produces `kind: "gate"` today.
 
 | Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
 | -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
@@ -340,6 +340,60 @@ arguments reaches `gh repo view` and is `transport`, not `usage`.
 | `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                    |
 | `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                     |
 | `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                     |
+
+### Migrated helpers (marker, handoff, provider, and misc batch)
+
+Issue #3346 moves the last 15 packaged bins onto the same runner --
+every `bin/idd-*.mjs` is now migrated; there is no remaining
+not-yet-migrated state (`tests/helper-cli-contract.test.mts` asserts
+the full discovered set, not a partial hand-kept list). Argument
+errors are `usage`; a `gh` failure reached by an uncaught throw is
+`not-found`/`transport` the same way as every earlier batch; `gate`
+is a completed non-zero verdict the helper returns as its own
+result, never a thrown domain refusal (a thrown "not authorized" /
+"no active declaration" / "branch moved" style refusal that never
+reaches a `gh`-tagged cause classifies `internal`, same as any other
+unexpected exception, unless noted otherwise below).
+`minimize-superseded-markers.mjs` is the sole exact-mode
+`idd-template/scripts/` mirror (`audit/sync-manifest.json`) and
+cannot import `helper-cli-runner.mts`; it carries a small local copy
+of the runner with only `usage`/`gate`/`internal` kinds (this file
+never tags a `gh` failure with an HTTP status of its own, so
+`not-found`/`transport` never apply to it). `force-handoff.mjs`
+previously read no CLI flags at all (any argv was silently ignored
+and the interactive TTY flow ran regardless); it now parses a
+`--help`-only spec, so an unrecognized flag reports a proper usage
+error and a non-interactive invocation still reaches its own
+`NON_TTY_ERROR` check (classified `internal`, an environment
+precondition, not an argument mistake) before any `gh` call.
+`idd-onboard.mjs`'s top-level dispatcher reports every uncaught
+error at exit `2` (`usage`/`transport`/`not-found`/`internal` per the
+real cause); its own `--substitute`/`--import`/`--verify` verdicts
+and `--hear`/`--record-policy`'s schema-invalid-transcript verdict
+report `gate` at exit `1` instead. `runRecordPolicyCli` (exported,
+and directly imported by `tests/idd-onboard.test.mts`, which stubs
+`process.exit` itself) keeps calling `process.exit(N)` literally
+rather than returning a value, so it classifies its own envelope
+manually before exiting rather than through `runHelperCli`'s normal
+outcome path.
+
+| Helper                               | `usage`                                                                                                                                                                                                                                | `not-found` / `transport`                                                                                               | `gate`                                                                                                                                      | `internal`                                                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post-idd-marker.mjs`                | missing/invalid `--type`, `--target`, positional number, `--from-pr` combination, `--marker-target`/`--anchor`/`--journal` format, a mode/digest coupling error, or the canonical-body round-trip check, or an unknown flag (exit `1`) | a `gh` failure deriving `--from-pr` fields, resolving the current repository, or fetching `--marker-target`'s live body | refusing to post a watermark whose live HEAD moved past the stored `--expected-head-sha`                                                    | an unexpected exception (e.g. `--marker-target` not found, a digest mismatch)                                                                   |
+| `minimize-superseded-markers.mjs`    | missing/invalid `--classifier`, `--format`, or `--subject-ids`, no trusted marker logins, or an unknown flag (exit `2`)                                                                                                                | —                                                                                                                       | the sweep's own non-zero exit (a candidate failed to minimize)                                                                              | an unexpected exception                                                                                                                         |
+| `sweep-authoring-markers.mjs`        | missing `--issue`, an invalid `--classifier`/`--format`, no trusted marker logins, no marker prefix resolved, an invalid `--issue` token, or an unknown flag (exit `2`)                                                                | a `gh` failure resolving the current repository                                                                         | `computeSweepExitCode`'s own non-zero verdict                                                                                               | an unexpected exception                                                                                                                         |
+| `live-status-digest.mjs`             | missing `--issue`/`--pr`, a conflicting flag combination, or an unknown flag (exit `2`)                                                                                                                                                | a `gh` failure resolving the repository, comments, or applying the digest                                               | the digest report is a duplicate (dry-run or apply alike)                                                                                   | an unexpected exception (e.g. a repair-report invariant violation)                                                                              |
+| `forced-handoff-marker.mjs`          | missing `--issue`/`--forced-by`/`--reason`/`--new-agent-id`/`--new-claim-id`, an invalid `--repo`, or an unknown flag                                                                                                                  | a `gh` failure resolving issue comments or the linked pull request                                                      | —                                                                                                                                           | an unexpected exception (no active claim, `--forced-by` not authorized, branch mismatch)                                                        |
+| `force-handoff.mjs`                  | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | a non-interactive invocation (`NON_TTY_ERROR`), or an unexpected exception                                                                      |
+| `provider-health.mjs`                | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure resolving the repository or classifying health                                                           | —                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `provider-outage-declaration.mjs`    | missing/invalid `--service`, `--expires`/`--expires-in`, `--pr`, `--head-sha`, a conflicting mode combination, an invalid `--repo`, or an unknown flag (exit `1`)                                                                      | a `gh` failure resolving issue comments                                                                                 | —                                                                                                                                           | an unexpected exception (not authorized, no active declaration, actor mismatch)                                                                 |
+| `provider-outage-park.mjs`           | missing `--service`/`--agent-id`/`--claim-id`, an invalid `--pr`/`--issue`, `--park` and `--parked-issues` together, or an unknown flag (exit `1`)                                                                                     | a `gh` failure resolving the repository                                                                                 | `--park` reports an ineligible park (exit `1`)                                                                                              | an unexpected exception                                                                                                                         |
+| `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure reached during a live check                                                                              | the report contains at least one error (exit `1`)                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, an unknown argument, or a missing flag value (exit `2`)                                      | a `gh` failure reached during any stage (exit `2`)                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, or `--hear`/`--record-policy` report a schema-invalid transcript (exit `1`) | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`) |
+| `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
+| `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
+| `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                           | an unexpected exception                                                                                                                         |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a

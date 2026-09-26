@@ -65,6 +65,13 @@
 // targets.
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import { ghTextUnbounded } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   classifyAuthoringMarkerFamily,
@@ -546,18 +553,22 @@ function parseArgs(argv) {
   // execute.mts's own --owner/--repo pairing guard: require both or
   // neither.
   if ((owner === '') !== (repo === '')) {
-    throw new Error(
-      'sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+    throw markCliUsageError(
+      new Error(
+        'sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+      ),
     );
   }
   let deadlineMs;
   if (values['deadline-ms'] !== undefined) {
     if (values['deadline-ms'] === '') {
-      throw new Error('--deadline-ms requires a value');
+      throw markCliUsageError(new Error('--deadline-ms requires a value'));
     }
     if (!/^(?:0|[1-9]\d*)$/.test(values['deadline-ms'])) {
-      throw new Error(
-        '--deadline-ms must be a non-negative integer (milliseconds)',
+      throw markCliUsageError(
+        new Error(
+          '--deadline-ms must be a non-negative integer (milliseconds)',
+        ),
       );
     }
     deadlineMs = Number.parseInt(values['deadline-ms'], 10);
@@ -672,32 +683,39 @@ omit it to keep the default unbounded behavior. Best-effort: a single
 other issues in the same invocation.`);
 }
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('sweep-authoring-markers', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`error: ${error.message}`);
-    process.exit(2);
+    const message = error.message;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, ...classifyHelperError(error) };
   }
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
   if (!ALLOWED_CLASSIFIERS.has(args.classifier)) {
-    console.error(
-      `error: --classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`,
-    );
-    process.exit(2);
+    const message = `--classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   if (!ALLOWED_FORMATS.has(args.format)) {
-    console.error(
-      `error: --format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`,
-    );
-    process.exit(2);
+    const message = `--format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   if (args.issueTokens.length === 0) {
-    console.error('error: --issue must be supplied at least once');
-    process.exit(2);
+    const message = '--issue must be supplied at least once';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   const config = loadIddConfig();
   const { actors: trustedActors, source: trustedMarkerActorsSource } =
@@ -707,10 +725,10 @@ if (import.meta.main) {
       config,
     });
   if (trustedActors.length === 0) {
-    console.error(
-      'error: no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json.',
-    );
-    process.exit(2);
+    const message =
+      'no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json.';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   // Only resolve the current repository when at least one --issue token
   // actually needs it as a default (#2935 review): an invocation sweeping
@@ -727,10 +745,10 @@ if (import.meta.main) {
   const defaultRepo = args.repo || currentRepo?.repo || '';
   const markerPrefix = normalizeMarkerPrefix(args.markerPrefix, config);
   if (markerPrefix.length === 0) {
-    console.error(
-      'error: no marker prefix resolved. Pass --marker-prefix <prefix>, or set the top-level markerPrefix field in .github/idd/config.json -- this command never guesses a prefix (see the issue-authoring contract\'s "prefix-first" rule).',
-    );
-    process.exit(2);
+    const message =
+      'no marker prefix resolved. Pass --marker-prefix <prefix>, or set the top-level markerPrefix field in .github/idd/config.json -- this command never guesses a prefix (see the issue-authoring contract\'s "prefix-first" rule).';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   let issues;
   try {
@@ -738,8 +756,9 @@ if (import.meta.main) {
       parseIssueTargetToken(token, defaultOwner, defaultRepo),
     );
   } catch (error) {
-    console.error(`error: ${error.message}`);
-    process.exit(2);
+    const message = error.message;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
   const report = runAuthoringMarkerSweep({
     issues,
@@ -755,5 +774,5 @@ if (import.meta.main) {
   } else {
     console.log(JSON.stringify(report, null, 2));
   }
-  process.exit(computeSweepExitCode(report));
+  return computeSweepExitCode(report);
 }
