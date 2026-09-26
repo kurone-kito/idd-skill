@@ -5603,6 +5603,7 @@ function matchTrustedAdvisoryStickyDispositions<
   };
   const kinds: {
     isSticky: (body: string) => boolean;
+    isStickyAuthor?: (authorLogin: string) => boolean;
     isDisposition: (body: string) => boolean;
     requireNewerDisposition: boolean;
     allowIddAgentDisposition?: boolean;
@@ -5624,6 +5625,8 @@ function matchTrustedAdvisoryStickyDispositions<
     kinds.push({
       isSticky: (body) =>
         isCodexNoFindResultForHeadSha(body, normalizedCurrentHead),
+      isStickyAuthor: (authorLogin) =>
+        advisoryBotIdentityToken(authorLogin) === 'chatgpt-codex-connector',
       isDisposition: (body) => isCodexNoFindResultDisposition(body),
       requireNewerDisposition: true,
       allowIddAgentDisposition: true,
@@ -5641,7 +5644,8 @@ function matchTrustedAdvisoryStickyDispositions<
     for (const comment of comments) {
       if (
         !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
-        !kind.isSticky(comment.body)
+        !kind.isSticky(comment.body) ||
+        (kind.isStickyAuthor && !kind.isStickyAuthor(comment.authorLogin))
       ) {
         continue;
       }
@@ -7541,6 +7545,8 @@ export function summarizeRegularCommentsForGate(
       (comment) =>
         (normalizedCurrentHead &&
           isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+          advisoryBotIdentityToken(comment.authorLogin) ===
+            'chatgpt-codex-connector' &&
           isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)) ||
         !lastIddReplyAt ||
         compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0,
@@ -7554,6 +7560,8 @@ export function summarizeRegularCommentsForGate(
       // consume it with an unrelated or stale disposition.
       if (
         normalizedCurrentHead &&
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector' &&
         isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
       ) {
         return true;
@@ -7959,6 +7967,9 @@ export function summarizeDispositionEvidenceForGate(
       // unrelated or stale reply.
       if (
         normalizedCurrentHead &&
+        isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector' &&
         isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
       ) {
         return true;
@@ -8150,6 +8161,8 @@ export function summarizeDispositionEvidenceForGate(
     if (
       normalizedCurrentHead &&
       isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      advisoryBotIdentityToken(comment.authorLogin) ===
+        'chatgpt-codex-connector' &&
       isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
     ) {
       missing.push(comment);

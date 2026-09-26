@@ -1116,6 +1116,29 @@ test('regular-comment gate keeps an undispositioned Codex no-find source after a
   );
 });
 
+test('no-find source paths require the canonical Codex advisory identity', () => {
+  const source = {
+    id: 331,
+    author: { login: CODERABBIT },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const regularSummary = summarizeRegularCommentsForGate([source], {
+    advisoryBotLogins: [CODERABBIT],
+    prHeadSha: 'abc1234',
+  });
+  assert.equal(regularSummary.count, 1);
+  const dispositionSummary = summarizeDispositionEvidenceForGate(
+    { comments: [source], threads: [] },
+    {
+      advisoryBotLogins: [CODERABBIT],
+      prHeadSha: 'abc1234',
+    },
+  );
+  assert.equal(dispositionSummary.missingRegularCommentCount, 1);
+});
+
 test('buildDispositionPlan plans a rejection for the current Codex usage-limit wording', () => {
   // #1312 regression: Codex's current wording ("...have been reached...")
   // must still be recognized as a non-review notice and dispositioned.
