@@ -362,14 +362,14 @@ login).
      proceed to E15.
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"` (cap not
      exhausted): try add-reviewer, then REST `requested_reviewers`.
-     Post the marker only after a `review_requested` event after
-     HEAD, or a non-empty review-request node. Exit status is not
-     evidence (observed 2026-09-26 in issue `#3500`). If both leave
-     it absent, resolve its node id — never hard-code one — and
-     call `requestReviews` with `botIds` as a JSON array and
-     `union: true`
+     Post only after a `review_requested` event after HEAD or a
+     non-empty request node; exit status is not evidence (observed
+     2026-09-26 in issue `#3500`). If absent, resolve the node id
+     (never hard-code it) and call `requestReviews` with JSON-array
+     `botIds` and `union: true`
      ([commands](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request)).
-     Still absent: do not post.
+     Still absent: stop and ask maintainer; do not poll or
+     continue to E15.
 
      ```text
      advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
