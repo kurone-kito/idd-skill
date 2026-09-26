@@ -4343,6 +4343,9 @@ function matchTrustedAdvisoryStickyDispositions(
             ? comments.filter(
                 (disposition) =>
                   iddAgentLogins.has(disposition.authorLogin) &&
+                  classifyCommentEditState({
+                    lastEditedAt: disposition.lastEditedAt,
+                  }) === 'unedited' &&
                   kind.isDisposition(disposition.body) &&
                   dispositionNamesAdvisoryBot(disposition.body, botLogin),
               )

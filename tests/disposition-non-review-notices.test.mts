@@ -973,6 +973,7 @@ test('gate agreement: an IDD-agent Codex no-find disposition clears its source c
     body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 323),
     createdAt: '2026-05-12T01:00:00Z',
     updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
   };
   const summary = summarizeDispositionEvidenceForGate(
     { comments: [source, disposition], threads: [] },
@@ -1169,6 +1170,7 @@ test('regular-comment gate clears a current Codex no-find disposition from an ID
     body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 326),
     createdAt: '2026-05-12T01:00:00Z',
     updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
   };
   const summary = summarizeRegularCommentsForGate([source, disposition], {
     iddAgentLogins: ['kurone-kito'],
@@ -1177,6 +1179,35 @@ test('regular-comment gate clears a current Codex no-find disposition from an ID
     prHeadSha: 'abc1234',
   });
   assert.equal(summary.count, 0);
+});
+
+test('regular-comment gate rejects an edited IDD-agent Codex acceptance', () => {
+  const source = {
+    id: 339,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const editedDisposition = {
+    id: 340,
+    author: { login: 'idd-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 339),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: '2026-05-12T02:00:00Z',
+  };
+  const summary = summarizeRegularCommentsForGate([source, editedDisposition], {
+    iddAgentLogins: ['idd-agent'],
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['idd-agent'],
+    prHeadSha: 'abc1234',
+  });
+  assert.equal(summary.count, 1);
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['339'],
+  );
 });
 
 test('regular-comment gate keeps an undispositioned Codex no-find source after a later IDD reply', () => {
@@ -2152,6 +2183,32 @@ test('buildDispositionPlan: a copied Codex no-find body still steals a summary a
       ],
     },
     { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+});
+
+test('buildDispositionPlan treats an unconfigured Codex no-find body as a review', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_NO_FIND_RESULT, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    {
+      advisoryBotLogins: [CODERABBIT],
+      trustedMarkerLogins: ['kurone-kito'],
+    },
   );
   assert.deepEqual(
     plan.planned.map((entry) => entry.noticeId),

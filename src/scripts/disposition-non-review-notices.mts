@@ -417,7 +417,11 @@ export function buildDispositionPlan(
     }));
 
   const isCoveredCodexNoFindSource = (source: NoticeComment) => {
-    if (advisoryBotIdentityToken(source.login) !== 'chatgpt-codex-connector') {
+    const sourceIdentity = advisoryBotIdentityToken(source.login);
+    if (
+      sourceIdentity !== 'chatgpt-codex-connector' ||
+      !advisoryBotIdentities.has(sourceIdentity)
+    ) {
       return false;
     }
     return comments.some((disposition) => {
@@ -440,9 +444,14 @@ export function buildDispositionPlan(
       .filter((comment) => isCoveredCodexNoFindSource(comment))
       .map((comment) => String(comment.id)),
   );
-  const isCanonicalCurrentCodexNoFindSource = (comment: NoticeComment) =>
-    advisoryBotIdentityToken(comment.login) === 'chatgpt-codex-connector' &&
-    isCodexNoFindResultForHeadSha(comment.body, headSha);
+  const isCanonicalCurrentCodexNoFindSource = (comment: NoticeComment) => {
+    const identity = advisoryBotIdentityToken(comment.login);
+    return (
+      identity === 'chatgpt-codex-connector' &&
+      advisoryBotIdentities.has(identity) &&
+      isCodexNoFindResultForHeadSha(comment.body, headSha)
+    );
+  };
 
   // The gate pairs greedily across the GLOBAL outstanding set, so a summary's
   // `**Accepted**` marker can be consumed by an OLDER undispositioned non-agent
