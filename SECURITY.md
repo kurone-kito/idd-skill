@@ -15,14 +15,16 @@
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability within this project, please
-report it through
-[GitHub Security Advisories](https://github.com/kurone-kito/idd-skill/security/advisories/new)
-so the issue can be addressed privately before public disclosure.
+use GitHub Security Advisories or Private vulnerability reporting so the
+report can remain private before public disclosure. Do not post an
+undisclosed vulnerability, credentials, authentication secrets, or
+reproduction steps in a public issue or pull request, even when the
+private route is unavailable. Retry the private route or wait for it to
+recover.
 
-If you are unable to use Security Advisories, you may alternatively
-[open an issue](https://github.com/kurone-kito/idd-skill/issues) with the
-"security" label or submit a
-[pull request with a fix](https://github.com/kurone-kito/idd-skill/pulls).
+Public issues and pull requests remain appropriate only for general
+hardening suggestions that contain no sensitive information and for
+problems that have already been publicly disclosed.
 
 Your contributions to improving the security of this project are greatly
 appreciated.
