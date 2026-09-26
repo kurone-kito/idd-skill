@@ -399,7 +399,23 @@ async function main(): Promise<HelperCliResult> {
   // otherwise be indistinguishable (Copilot review, PR #2305).
   const printBatchHeader = args.format === 'table' && prNumbers.length > 1;
   let anyFailed = false;
-  for (const prNumber of prNumbers) {
+  for (const [index, prNumber] of prNumbers.entries()) {
+    // #3321 (Codex review, PR #3499): re-check the shared invocation-wide
+    // budget before starting each subsequent `--prs` batch member, not
+    // only inside each PR's own apply pass. Without this, a PR earlier in
+    // the batch spending the whole budget would still let every remaining
+    // PR run its own expensive initial buildReport before that PR's own
+    // apply pass ever got a chance to notice -- exactly the unbounded
+    // full-rebuild cost this flag exists to bound, just moved one level
+    // up. A skipped PR is untouched, not failed: it still has its own
+    // candidates and can be re-run (or covered by the same workflow's
+    // next scheduled invocation) from scratch.
+    if (args.apply && index > 0 && timeBudget.exhausted()) {
+      writeStderrSync(
+        `time budget exhausted; skipping remaining PR(s): ${prNumbers.slice(index).join(', ')}\n`,
+      );
+      break;
+    }
     if (printBatchHeader) {
       console.log(`=== PR #${prNumber} ===`);
     }
@@ -708,6 +724,34 @@ function pruneResolvedFromCandidates(report: CleanupAuditReport): void {
 }
 
 /**
+ * Applies this checkpoint's time-budget stop, if the budget is spent
+ * (#3321, Copilot/Codex review PR #3499). Returns `true` whenever
+ * `budget.exhausted()` is true — the caller must always stop right here
+ * in that case (no new candidate, pass, or rescan; unconditional, per the
+ * issue's own design). Separately, `report.timeBudgetExhausted` is set
+ * only when real work remains in `report.candidates` after pruning
+ * already-resolved subjects out of it: a spent budget with nothing left
+ * to do is genuine convergence (`applied`/`clean`), so leaving the flag
+ * unset there lets `computeReportSummary` report the run's true outcome
+ * instead of misleadingly reading `time-budget-exhausted` for an
+ * already-clean run, or one whose last pass/rescan finished every
+ * candidate right as the budget ran out.
+ */
+function applyTimeBudgetStop(
+  report: CleanupAuditReport,
+  budget: TimeBudget,
+): boolean {
+  if (!budget.exhausted()) {
+    return false;
+  }
+  pruneResolvedFromCandidates(report);
+  if (report.candidates.length > 0) {
+    report.timeBudgetExhausted = true;
+  }
+  return true;
+}
+
+/**
  * Retries a whole apply-and-rescan pass, bounded by `maxAttempts`, so a
  * candidate that only becomes eligible after the previous pass finished
  * (e.g. GraphQL read-after-write lag on `minimizeComment`, #2011) still
@@ -723,10 +767,16 @@ function pruneResolvedFromCandidates(report: CleanupAuditReport): void {
  * before each rescan (default: a short linear-ish delay with jitter, so
  * GraphQL read-after-write lag on the pass's own mutations has a moment
  * to settle before re-querying); `budget` (default: unbounded, #3321) is
- * checked immediately after each pass and again immediately before
- * starting the next one — once exhausted, no confirming rescan runs and
- * no further pass starts, matching {@link applyCandidatePass}'s own
- * per-candidate budget check at the finer granularity of a single pass.
+ * checked at four points — before starting a pass, after it finishes,
+ * after the pre-rescan backoff, and after the rescan itself returns
+ * (covering the final attempt, which has no further loop iteration of
+ * its own to catch it) — via {@link applyTimeBudgetStop}, which always
+ * stops once spent (no confirming rescan, no further pass — matching
+ * {@link applyCandidatePass}'s own per-candidate budget check at the
+ * finer granularity of a single pass) but only sets
+ * `report.timeBudgetExhausted` when candidate work actually remains, so
+ * a spent budget with nothing left to do never overrides a genuine
+ * `applied`/`clean` convergence.
  *
  * Stops immediately, without any further rescan, the first time a pass
  * leaves `failed` non-empty (matches the pre-existing fail-fast
@@ -765,9 +815,7 @@ export async function runApplyWithRetry(
     // here too keeps "start no new pass" an invariant of this orchestration
     // function, not something every `applyPass` implementation must
     // independently re-derive.
-    if (budget.exhausted()) {
-      pruneResolvedFromCandidates(report);
-      report.timeBudgetExhausted = true;
+    if (applyTimeBudgetStop(report, budget)) {
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -778,15 +826,8 @@ export async function runApplyWithRetry(
 
     // The apply-mode time budget ran out during (or exactly at the end
     // of) this pass (#3321): stop here, without any rescan -- "no
-    // confirming rescan starts after the budget is spent." `applyPass`
-    // may have left `report.candidates` still listing subjects this pass
-    // already resolved onto `applied`/`skipped` (no rescan will replace
-    // it to exclude them the way the normal convergence path below
-    // does), so prune those first to avoid double-counting the same
-    // subject in two arrays.
-    if (budget.exhausted()) {
-      pruneResolvedFromCandidates(report);
-      report.timeBudgetExhausted = true;
+    // confirming rescan starts after the budget is spent."
+    if (applyTimeBudgetStop(report, budget)) {
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -803,11 +844,8 @@ export async function runApplyWithRetry(
     // instead spent while `backoff` was sleeping, starting `rescan()`
     // anyway would violate "no confirming rescan starts after the
     // budget is spent" and could still overrun the workflow's own
-    // step timeout. `report.candidates` needs the same pruning as the
-    // check above, for the same reason.
-    if (budget.exhausted()) {
-      pruneResolvedFromCandidates(report);
-      report.timeBudgetExhausted = true;
+    // step timeout.
+    if (applyTimeBudgetStop(report, budget)) {
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -849,15 +887,23 @@ export async function runApplyWithRetry(
     if (freshReport.candidates.length === 0) {
       return { report: freshReport, attempts: attempt, boundExhausted: false };
     }
+
+    // The budget may have run out while this rescan itself was in flight,
+    // or exactly as it returned (#3321, Codex/Copilot review PR #3499).
+    // Checked here, before the retry-bound return below, because the
+    // final allowed attempt has no further loop iteration whose
+    // top-of-loop check could otherwise catch it -- without this, a
+    // budget spent on the last attempt's rescan would report
+    // `boundExhausted` (or, on an earlier attempt, silently start another
+    // pass) instead of `time-budget-exhausted`.
+    if (applyTimeBudgetStop(freshReport, budget)) {
+      return { report: freshReport, attempts: attempt, boundExhausted: false };
+    }
+
     if (attempt === totalAttempts) {
       return { report: freshReport, attempts: attempt, boundExhausted: true };
     }
 
-    // A budget spent while this rescan itself was in flight is caught by
-    // the very next iteration's top-of-loop check above -- `freshReport`
-    // is already self-consistent (a fresh, authoritative snapshot already
-    // reconciled against `applied`), so that check finds nothing left to
-    // prune here.
     report = freshReport;
   }
   // Unreachable: totalAttempts is normalized to >= 1 above, so the loop

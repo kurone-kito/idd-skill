@@ -748,8 +748,11 @@ test('runApplyWithRetry + applyCandidatePass: an exhausted time budget stops the
 // `rescan()` -- the first post-pass check alone cannot see a budget that
 // is spent only while `backoff` is sleeping, which would otherwise let a
 // confirming rescan (the same expensive full rebuild the budget exists to
-// bound) start anyway.
-test('runApplyWithRetry: a budget spent during backoff, after the pass itself finished within budget, still skips the confirming rescan (#3321, Copilot/Codex review PR #3499)', async () => {
+// bound) start anyway. c2 is deferred (its `updatedAt` mismatches), not
+// applied, so real work still remains after the pass -- the case where
+// the flag must actually be set (the sibling test below covers the
+// opposite: nothing remains, so the flag must NOT be set).
+test('runApplyWithRetry: a budget spent during backoff, with real work still remaining, skips the confirming rescan (#3321, Copilot/Codex review PR #3499)', async () => {
   const { runApplyWithRetry } = await import(
     '../src/scripts/audit-pr-cleanup.mts'
   );
@@ -782,7 +785,10 @@ test('runApplyWithRetry: a budget spent during backoff, after the pass itself fi
         applyArgs(),
         {},
         {
-          fetchNode: () => fakeSnapshot(),
+          fetchNode: (subjectId) =>
+            subjectId === 'c2'
+              ? fakeSnapshot({ updatedAt: '2026-01-02T00:00:00Z' })
+              : fakeSnapshot(),
           minimize: () => ({ isMinimized: true, minimizedReason: null }),
           budget,
         },
@@ -800,9 +806,69 @@ test('runApplyWithRetry: a budget spent during backoff, after the pass itself fi
 
   assert.equal(backoffCalls, 1);
   assert.equal(rescanCalls, 0);
-  assert.equal(result.report.applied.length, 2);
+  assert.equal(result.report.applied.length, 1);
+  assert.equal(result.report.applied[0].subjectId, 'c1');
   assert.equal(result.report.timeBudgetExhausted, true);
+  assert.deepEqual(
+    result.report.candidates.map((row) => row.subjectId),
+    ['c2'],
+  );
+});
+
+// Copilot/Codex review, PR #3499: the opposite of the test above -- every
+// candidate got applied within budget, so nothing remains by the time the
+// post-backoff check finds the budget spent. The run genuinely converged;
+// the confirming rescan is still correctly skipped (nothing left for it
+// to find), but `timeBudgetExhausted` must NOT be set, so the summary
+// reads the true `applied` outcome instead of misreporting a stopped-early
+// run that actually finished everything.
+test('runApplyWithRetry: a budget spent after every candidate already converged does not misreport time-budget-exhausted (#3321, Copilot/Codex review PR #3499)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let exhaustedCalls = 0;
+  const budget = {
+    exhausted: () => {
+      exhaustedCalls += 1;
+      return exhaustedCalls > 4;
+    },
+  };
+  let rescanCalls = 0;
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: () => ({ isMinimized: true, minimizedReason: null }),
+          budget,
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    noBackoff,
+    budget,
+  );
+
+  assert.equal(rescanCalls, 0);
+  assert.equal(result.report.applied.length, 2);
+  assert.equal(result.report.timeBudgetExhausted, undefined);
   assert.equal(result.report.candidates.length, 0);
+
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'applied');
 });
 
 // Copilot review, PR #3499: the budget clock starts at helper start,
@@ -855,6 +921,107 @@ test('runApplyWithRetry: an already-exhausted budget starts no pass and no resca
     result.report.candidates.map((row) => row.subjectId),
     ['c1', 'c2'],
   );
+});
+
+// Codex review, PR #3499: if the caller's own initial buildReport already
+// consumed the whole budget but found zero candidates (an already-clean
+// PR), the run must report the ordinary `clean` outcome, not
+// `time-budget-exhausted` -- there is no candidate work the budget could
+// possibly have cut short.
+test('runApplyWithRetry: an already-exhausted budget over an already-empty report reports clean, not time-budget-exhausted (#3321, Codex review PR #3499)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let applyPassCalls = 0;
+  let rescanCalls = 0;
+  const budget = { exhausted: () => true };
+  const initial = createAuditReport({ candidates: [] });
+
+  const result = await runApplyWithRetry(
+    initial,
+    async () => {
+      applyPassCalls += 1;
+    },
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    noBackoff,
+    budget,
+  );
+
+  assert.equal(applyPassCalls, 0);
+  assert.equal(rescanCalls, 0);
+  assert.equal(result.report.timeBudgetExhausted, undefined);
+
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'clean');
+});
+
+// Codex/Copilot review, PR #3499: on the final allowed attempt, a rescan
+// that itself finishes right as the budget runs out must report
+// time-budget-exhausted, not the ordinary attempt-bound-exhausted outcome
+// -- there is no further loop iteration whose top-of-loop check could
+// otherwise catch this, since the final attempt returns immediately
+// after the rescan either way.
+test('runApplyWithRetry: a budget spent exactly as the final attempt rescan returns reports time-budget-exhausted, not boundExhausted (#3321, Codex/Copilot review PR #3499)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let exhaustedCalls = 0;
+  // Calls 1-4 (top-of-loop, the lone candidate's check, post-pass,
+  // post-backoff) stay within budget; call 5 (post-rescan, the new
+  // checkpoint) finds it spent.
+  const budget = {
+    exhausted: () => {
+      exhaustedCalls += 1;
+      return exhaustedCalls > 4;
+    },
+  };
+  let rescanCalls = 0;
+  const initial = createAuditReport({ candidates: [createRow('c1')] });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: () => ({ isMinimized: true, minimizedReason: null }),
+          budget,
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      // A cascade/lag effect surfaces a new candidate on the confirming
+      // rescan, so the rescan itself does not converge to zero.
+      return createAuditReport({
+        mode: 'dry-run',
+        candidates: [createRow('c2')],
+      });
+    },
+    1,
+    noBackoff,
+    budget,
+  );
+
+  assert.equal(rescanCalls, 1);
+  assert.equal(result.report.applied.length, 1);
+  assert.equal(result.report.timeBudgetExhausted, true);
+  assert.equal(result.boundExhausted, false);
+  assert.deepEqual(
+    result.report.candidates.map((row) => row.subjectId),
+    ['c2'],
+  );
+
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'time-budget-exhausted');
 });
 
 test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
