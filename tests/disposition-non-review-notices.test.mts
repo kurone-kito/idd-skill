@@ -1039,6 +1039,31 @@ test('buildDispositionPlan re-plans when the no-find source is edited after its 
   );
 });
 
+test('buildDispositionPlan re-plans when a no-find disposition is edited', () => {
+  const source = notice(
+    341,
+    CODEX,
+    CODEX_NO_FIND_RESULT,
+    '2026-05-12T00:00:00Z',
+  );
+  const editedDisposition = notice(
+    342,
+    'kurone-kito',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 341),
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T02:00:00Z',
+  );
+  const plan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source, editedDisposition] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((item) => item.noticeId),
+    [341],
+  );
+});
+
 test('gate agreement requires the Codex disposition HEAD to match the current source HEAD', () => {
   const source = {
     id: 324,

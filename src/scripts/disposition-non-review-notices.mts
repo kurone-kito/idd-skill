@@ -428,6 +428,7 @@ export function buildDispositionPlan(
       const parsed = parseCodexNoFindDisposition(disposition.body);
       return Boolean(
         trustedMarkerLogins.has(disposition.login) &&
+          classifyCommentEditState(disposition) === 'unedited' &&
           parsed?.sourceCommentId === String(source.id) &&
           parsed.headSha &&
           isCodexNoFindResultForHeadSha(source.body, parsed.headSha) &&
@@ -591,7 +592,8 @@ export function buildDispositionPlan(
     .filter(
       (entry) =>
         trustedMarkerLogins.has(entry.comment.login) && entry.parsed !== null,
-    );
+    )
+    .filter((entry) => classifyCommentEditState(entry.comment) === 'unedited');
   for (const comment of comments) {
     if (
       advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
