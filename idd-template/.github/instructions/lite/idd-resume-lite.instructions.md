@@ -26,7 +26,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Pass `--claim-id`/`--nonce` once recorded per claim-id, and
+Pass `--claim-id`/`--nonce` once recorded/verified per claim-id, and
 `--worktree` once the B1 worktree exists.
 
 Map helper fields to actions below.

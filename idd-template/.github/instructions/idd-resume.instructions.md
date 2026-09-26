@@ -129,9 +129,9 @@ When helper runtime is enabled, you may collect Step 1 evidence with:
 node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
 ```
 
-Pass `--claim-id` once this session already recorded one for the
-issue, `--nonce {nonce}` when recorded for that same claim-id, and
-`--worktree {path}` once the B1 worktree exists.
+Pass `--claim-id` once this session already recorded and verified one
+for the issue, `--nonce {nonce}` when recorded for that same claim-id,
+and `--worktree {path}` once the B1 worktree exists.
 
 When the issue is closed or its PR merged, skip every bullet below and
 go directly to the table's first three rows (§MC): the helper's routing
