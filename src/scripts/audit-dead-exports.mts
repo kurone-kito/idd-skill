@@ -919,7 +919,22 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         );
         for (const bareName of bareNames) {
           addDeclarationLine(bareName, lineIndex + 1);
-          if (!declarationSuppressionByLocalName.has(bareName)) {
+          // #3498 (Codex C1 finding, round 13): a bare FUNCTION specifically
+          // can have multiple TypeScript overload signature lines sharing
+          // one name (see `addDeclarationLine`'s own doc comment above) --
+          // a plain `!has(bareName)` guard here means only the FIRST such
+          // line's suppression state is ever recorded, so a genuine
+          // suppression comment above a LATER signature or the
+          // implementation is silently discarded once an earlier,
+          // unsuppressed line has already populated this map. Merge
+          // instead: once ANY declaration line for this name is found
+          // suppressed, that state must stick regardless of line order --
+          // only update while the recorded state is still unsuppressed
+          // (harmless no-op for `const`/`class`, which can only ever
+          // contribute one line per name).
+          const existingBareSuppression =
+            declarationSuppressionByLocalName.get(bareName);
+          if (!existingBareSuppression?.suppressed) {
             declarationSuppressionByLocalName.set(bareName, {
               suppressed: !!bareIgnoreMatch,
               reason: (bareIgnoreMatch?.[1] ?? '').trim(),
