@@ -814,6 +814,48 @@ test('does not let a relative-clause credential prerequisite pass (#3528)', () =
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a credential prerequisite with bounded modifiers pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 100,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential for production that must be supplied ' +
+      'by the maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a customer follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 101,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The customer must create it before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a passive follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 102,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It is required before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let only-after in a later unrelated sentence block descriptive text (#3528)', () => {
   const result = evaluateA4Viability({
     number: 86,
@@ -821,6 +863,20 @@ test('does not let only-after in a later unrelated sentence block descriptive te
     body:
       'This issue documents a credential pattern. Only after reviewing the ' +
       'code did we notice a typo. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a title prerequisite cross the title-body paragraph boundary (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 103,
+    title: 'document credential terminology',
+    body:
+      'Only after the maintainer reviewed the code did we notice a typo. ' +
+      'Verification: add unit tests.',
     state: 'OPEN',
   });
 
@@ -933,6 +989,20 @@ test('does not treat a later test assertion as a credential prerequisite (#3528)
     body:
       'Document credential rotation and add necessary tests. Verification: ' +
       'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat necessary generic context as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 104,
+    title: 'document credential terminology',
+    body:
+      'Document a credential pattern that is necessary for explaining the ' +
+      'current terminology. Verification: add unit tests.',
     state: 'OPEN',
   });
 

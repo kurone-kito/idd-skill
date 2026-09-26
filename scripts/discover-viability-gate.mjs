@@ -234,9 +234,11 @@ const REQUIREMENT_ASSERTION_PATTERN =
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
   /\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed|created)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
 const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
-  /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b)/i;
+  /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b)/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
+const CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN =
+  /^\s+(?:pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)\s+that\s+(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -251,7 +253,7 @@ const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
   /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:]{0,80}\b(?:before|until)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
-  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
+  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s+(?:before|until)\b|[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:\n]{0,80}\b(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -687,7 +689,13 @@ function isNearRequirementAssertion(
     assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
       ? CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN
       : assertionPattern;
-  if (forwardAssertion.test(forwardText)) {
+  if (
+    forwardAssertion.test(forwardText) &&
+    !(
+      assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+      CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(forwardText)
+    )
+  ) {
     return true;
   }
   const backwardStart = Math.max(
@@ -710,7 +718,11 @@ function isNearRequirementAssertion(
 }
 function isFollowedByCredentialRequirement(corpus, matchEnd) {
   const tail = corpus.slice(matchEnd, matchEnd + 160);
-  const sameSentence = tail.split(/[.]/, 1)[0] ?? tail;
+  const paragraphBreak = PARAGRAPH_BREAK_PATTERN.exec(tail);
+  const sameParagraph = paragraphBreak
+    ? tail.slice(0, paragraphBreak.index)
+    : tail;
+  const sameSentence = sameParagraph.split(/[.]/, 1)[0] ?? sameParagraph;
   return (
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(tail)
