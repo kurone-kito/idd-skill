@@ -212,6 +212,7 @@ function main(): HelperCliResult {
       iddAgentLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
       trustedMarkerLogins: activityTrustedMarkerLogins,
+      prHeadSha: headSha,
       prAuthorLogin,
     },
   );

@@ -28,8 +28,11 @@
 // timestamp (not a count carry-forward), so a stale acceptance can never mask a
 // finding folded into a later summary body.
 //
-// It is fail-closed: only classifier-recognized notices and the exact summary
-// marker are dispositioned; real reviews and review threads are never touched.
+// It also handles the separate terminal Codex "no major issues" result from
+// #3520, but only when its exact shape names the current HEAD. It is
+// fail-closed: only classifier-recognized notices, summaries, and that
+// no-find result are dispositioned; real reviews and review threads are never
+// touched.
 
 import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
@@ -63,11 +66,13 @@ import {
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
   isCodeRabbitReviewInProgressSummary,
+  isCodexNoFindResultForHeadSha,
   isCodexReviewSummaryCompleteForHeadSha,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
   normalizeTrustedMarkerLogins,
+  parseCodexNoFindDisposition,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
@@ -207,6 +212,19 @@ export function buildSummaryDispositionBody(
 ): string {
   return appendReviewReplyStamp(
     `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`,
+    markerPrefix,
+  );
+}
+
+/** Build the exact accepted disposition for one terminal Codex no-find result. */
+export function buildCodexNoFindDispositionBody(
+  botLogin: string,
+  headSha: string,
+  noticeId: number,
+  markerPrefix?: string,
+): string {
+  return appendReviewReplyStamp(
+    `**Accepted** — ${botLogin} no-find result at HEAD ${headSha}; no actionable findings were reported (source: #issuecomment-${noticeId})`,
     markerPrefix,
   );
 }
@@ -506,6 +524,54 @@ export function buildDispositionPlan(
       body: buildSummaryDispositionBody(
         comment.login,
         headSha,
+        options.markerPrefix,
+      ),
+    });
+  }
+
+  // #3520: the terminal Codex no-find result is a distinct top-level comment,
+  // not the recurring review-status summary. Bind its accepted disposition to
+  // the source comment id so a second planning pass is independently idempotent
+  // even when both Codex comments coexist on the same PR.
+  const codexNoFindDispositions = comments
+    .map((comment) => ({
+      comment,
+      parsed: parseCodexNoFindDisposition(comment.body),
+    }))
+    .filter(
+      (entry) =>
+        trustedMarkerLogins.has(entry.comment.login) && entry.parsed !== null,
+    );
+  for (const comment of comments) {
+    if (
+      advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
+      !isCodexNoFindResultForHeadSha(comment.body, headSha)
+    ) {
+      continue;
+    }
+    const covered = codexNoFindDispositions.some(
+      ({ comment: dispositionComment, parsed }) =>
+        parsed !== null &&
+        parsed.sourceCommentId === String(comment.id) &&
+        parsed.headSha === headSha.toLowerCase() &&
+        dispositionNamesAdvisoryBot(dispositionComment.body, comment.login),
+    );
+    if (covered) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'already-dispositioned',
+      });
+      continue;
+    }
+    planned.push({
+      noticeId: comment.id,
+      botLogin: comment.login,
+      reason: 'Codex no-find result',
+      body: buildCodexNoFindDispositionBody(
+        comment.login,
+        headSha,
+        comment.id,
         options.markerPrefix,
       ),
     });
@@ -862,6 +928,9 @@ export interface ApplyDispositionPlanDeps {
    * existing non-Codex-focused tests need no change.
    */
   revalidateCodexSummaryStillComplete?: (item: PlannedDisposition) => boolean;
+  /** #3520: re-check a terminal no-find result against the live HEAD before
+   * each post attempt; fetch failures must fail closed. */
+  revalidateCodexNoFindStillCurrent?: (item: PlannedDisposition) => boolean;
 }
 
 export interface ApplyDispositionPlanResult {
@@ -935,6 +1004,9 @@ export function applyDispositionPlan(
     const isCodexSummaryWalkthrough =
       item.reason === 'summary walkthrough' &&
       advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
+    const isCodexNoFindResult =
+      item.reason === 'Codex no-find result' &&
+      advisoryBotIdentityToken(item.botLogin) === 'chatgpt-codex-connector';
     let posted: { id: number } | null = null;
     let lastError: string | null = null;
     let lastThrown: unknown = null;
@@ -963,6 +1035,18 @@ export function applyDispositionPlan(
           break;
         }
       }
+      if (isCodexNoFindResult && deps.revalidateCodexNoFindStillCurrent) {
+        let stillCurrent: boolean;
+        try {
+          stillCurrent = deps.revalidateCodexNoFindStillCurrent(item);
+        } catch {
+          stillCurrent = false;
+        }
+        if (!stillCurrent) {
+          becameStale = true;
+          break;
+        }
+      }
       try {
         posted = deps.postDisposition(item.body);
       } catch (error) {
@@ -986,7 +1070,9 @@ export function applyDispositionPlan(
       staleSkipped.push({
         noticeId: item.noticeId,
         botLogin: item.botLogin,
-        reason: 'codex-review-running-at-post-time',
+        reason: isCodexNoFindResult
+          ? 'codex-no-find-stale-at-post-time'
+          : 'codex-review-running-at-post-time',
       });
     } else if (posted) {
       knownViewerCommentIds.add(posted.id);
@@ -1245,6 +1331,26 @@ function main(): HelperCliResult {
     ]);
     return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
   };
+  const revalidateCodexNoFindStillCurrent = (
+    item: PlannedDisposition,
+  ): boolean => {
+    // Read the source body before the head, matching the summary path above:
+    // a push between the two reads can only make the fetched HEAD newer than
+    // the body it is checked against, never falsely validate stale evidence.
+    const freshBody = ghText([
+      'api',
+      `repos/${owner}/${repo}/issues/comments/${item.noticeId}`,
+      '--jq',
+      '.body',
+    ]);
+    const freshHeadSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
+    ]);
+    return isCodexNoFindResultForHeadSha(freshBody, freshHeadSha);
+  };
   const { applied, failed, staleSkipped, claimLost, postFailure } =
     applyDispositionPlan(plan, {
       revalidateClaim,
@@ -1253,6 +1359,7 @@ function main(): HelperCliResult {
         recoverPostedDisposition(owner, repo, pr, body, viewerLogin, knownIds),
       knownViewerCommentIds,
       revalidateCodexSummaryStillComplete,
+      revalidateCodexNoFindStillCurrent,
     });
 
   const status = failed.length > 0 ? 'failed' : 'applied';

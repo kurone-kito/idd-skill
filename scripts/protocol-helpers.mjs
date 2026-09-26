@@ -1627,6 +1627,66 @@ export function isCodexReviewSummaryCompleteForHeadSha(body, headSha) {
   const boldStatusWord = /\*\*(.+?)\*\*/.exec(latestStatus)?.[1] ?? '';
   return boldStatusWord.trim().toLowerCase() === 'completed';
 }
+// #3520: Codex posts a second, terminal top-level comment when a review finds
+// no major issues. It is separate from the sticky review-status summary above
+// and must be matched against the current HEAD before it can be treated as a
+// completed, no-find result. Keep the body shape narrow: the observed lead,
+// reviewed-commit line, and the standard About Codex details block are the
+// complete comment. A broader "no issues" search could auto-accept ordinary
+// prose or a result carrying findings.
+const CODEX_NO_FIND_RESULT_RE =
+  /^Codex Review: Didn't find any major issues\. You're on a roll\.\s*\n+\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,64})`\s*\n+\s*([\s\S]*)$/i;
+const CODEX_NO_FIND_DETAILS_RE =
+  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>[\s\S]*<\/details>$/i;
+/** Return the abbreviated reviewed commit from a valid no-find result. */
+function codexNoFindReviewedCommit(body) {
+  const match = CODEX_NO_FIND_RESULT_RE.exec(String(body ?? '').trim());
+  if (!match || !CODEX_NO_FIND_DETAILS_RE.test(match[2]?.trim() ?? '')) {
+    return null;
+  }
+  const details = match[2] ?? '';
+  if (
+    !details.includes(
+      'Your team has set up Codex to review pull requests in this repo',
+    ) ||
+    !details.includes('https://chatgpt.com/codex/cloud/settings/general') ||
+    !details.includes('- Open a pull request for review') ||
+    !details.includes('- Mark a draft as ready') ||
+    !details.includes('- Comment "@codex review" or "@codex security review".')
+  ) {
+    return null;
+  }
+  return match[1]?.toLowerCase() ?? null;
+}
+/**
+ * Recognize the observed terminal Codex no-find result for the current HEAD.
+ * Abbreviated commit prefixes are accepted only when they prefix the supplied
+ * current HEAD, matching the existing Codex summary classifier.
+ */
+export function isCodexNoFindResultForHeadSha(body, headSha) {
+  const reviewedCommit = codexNoFindReviewedCommit(body);
+  const currentHead = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  return Boolean(reviewedCommit && currentHead?.startsWith(reviewedCommit));
+}
+const CODEX_NO_FIND_DISPOSITION_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([^\s]+)\s+no-find result at HEAD\s+([0-9a-f]{7,64});\s+no actionable findings were reported\s+\(source: #issuecomment-(\d+)\)(?:\s*\n<!--\s*[a-z0-9][a-z0-9_-]*-review-reply\s*-->)?\s*$/i;
+/** Parse the exact accepted disposition emitted for one no-find result. */
+export function parseCodexNoFindDisposition(body) {
+  const match = CODEX_NO_FIND_DISPOSITION_RE.exec(String(body ?? '').trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    botLogin: match[1] ?? '',
+    headSha: (match[2] ?? '').toLowerCase(),
+    sourceCommentId: match[3] ?? '',
+  };
+}
+export function isCodexNoFindResultDisposition(body) {
+  return parseCodexNoFindDisposition(body) !== null;
+}
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
 // marker, invocation marker, and "Action not completed" wrapper, but a
@@ -3812,6 +3872,8 @@ const REJECTED_NOTICE_LOGIN_SPAN_RE =
   /^\*\*Rejected[.!:]?\*\*\s+—\s+([\s\S]*?)\s+did not review HEAD\b/i;
 const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
   /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+summary walkthrough\b/i;
+const ACCEPTED_CODEX_NO_FIND_LOGIN_SPAN_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+no-find result at HEAD\b/i;
 // True when a non-review-notice or summary-walkthrough disposition body names
 // the given advisory bot's GitHub login, so the gate can attribute a
 // carry-forward to exactly one bot even when several advisory bots are
@@ -3823,8 +3885,7 @@ const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
 // bots in one span (a disposition that improperly covers more than one
 // notice) still matches each of them, matching the existing 1:1 consumption
 // contract at the call sites. Fail-closed: an empty token, or a disposition
-// body that does not structurally match either canonical template, names no
-// bot.
+// body that does not structurally match a canonical template, names no bot.
 // Splits a `dispositionNamesAdvisoryBot` login span into its individual
 // bot-login tokens. The span normally names exactly one bot, but #2475
 // established that a single disposition may structurally name several at
@@ -3858,7 +3919,8 @@ export function dispositionNamesAdvisoryBot(
   const body = String(dispositionBody ?? '').trimStart();
   const span =
     REJECTED_NOTICE_LOGIN_SPAN_RE.exec(body)?.[1] ??
-    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1];
+    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1] ??
+    ACCEPTED_CODEX_NO_FIND_LOGIN_SPAN_RE.exec(body)?.[1];
   if (span === undefined) {
     return false;
   }
@@ -4143,7 +4205,9 @@ export function foldSecondaryAdvisoryReviewSettlements(
 //   - type: a `**Rejected** — {bot} did not review HEAD …` notice disposition
 //     clears only a non-review-notice sticky, and an `**Accepted** — {bot}
 //     summary walkthrough …` disposition clears only a CodeRabbit summary
-//     sticky — the notice/summary paths are disjoint in the helper that posts
+//     sticky, and a `**Accepted** — {bot} no-find result at HEAD …` disposition
+//     clears only the matching terminal Codex no-find sticky — the paths are
+//     disjoint in the helper that posts
 //     them, so a notice rejection must never hide a summary that still needs its
 //     own acceptance (or vice versa);
 //   - count: consumed 1:1, so one disposition cannot clear several stickies.
@@ -4168,6 +4232,7 @@ function matchTrustedAdvisoryStickyDispositions(
   advisoryBotLogins,
   trustedMarkerLogins,
   iddAgentLogins,
+  currentHeadSha,
 ) {
   const dispositionedStickyIndexes = new Set();
   const trustedDispositions = comments.filter(
@@ -4195,6 +4260,19 @@ function matchTrustedAdvisoryStickyDispositions(
       requireNewerDisposition: true,
     },
   ];
+  const normalizedCurrentHead = String(currentHeadSha ?? '').trim();
+  if (normalizedCurrentHead) {
+    kinds.push({
+      isSticky: (body) =>
+        isCodexNoFindResultForHeadSha(body, normalizedCurrentHead),
+      isDisposition: (body) => isCodexNoFindResultDisposition(body),
+      requireNewerDisposition: true,
+      matchesDisposition: (sticky, disposition) => {
+        const parsed = parseCodexNoFindDisposition(disposition.body);
+        return parsed?.sourceCommentId === String(sticky.id);
+      },
+    });
+  }
   for (const kind of kinds) {
     const stickiesByBot = new Map();
     for (const comment of comments) {
@@ -4236,6 +4314,8 @@ function matchTrustedAdvisoryStickyDispositions(
         const match = candidates.find(
           (disposition) =>
             !consumedDispositionIndexes.has(disposition.sortedIndex) &&
+            (!kind.matchesDisposition ||
+              kind.matchesDisposition(sticky, disposition)) &&
             (!kind.requireNewerDisposition ||
               compareIsoTimestamps(disposition.activityAt, sticky.activityAt) >
                 0),
@@ -6167,7 +6247,7 @@ export function summarizeDispositionEvidenceForGate(
   // passed to `summarizeReviewThreadsForGate`, where an IDD-agent's latest
   // thread comment is `awaiting-reviewer` rather than `actionable-blocking`, so
   // a global promotion would let the actor's genuine unresolved review feedback
-  // stop blocking. Recognition stays HERE and covers ONLY the two machine forms
+  // stop blocking. Recognition stays HERE and covers ONLY the three machine forms
   // — never the general `**Accepted**` / `**Rejected**` prefix — so a trusted
   // human's ordinary review disposition is not swallowed. The disposition itself
   // is dropped from the outstanding set (below); the advisory sticky it clears is
@@ -6178,13 +6258,15 @@ export function summarizeDispositionEvidenceForGate(
   const isTrustedMachineDisposition = (authorLogin, body) =>
     trustedMarkerLogins.has(authorLogin) &&
     (isNonReviewNoticeDisposition({ body }) ||
-      isReviewSummaryDisposition({ body }));
+      isReviewSummaryDisposition({ body }) ||
+      isCodexNoFindResultDisposition(body));
   const trustedDispositionedStickyIndexes =
     matchTrustedAdvisoryStickyDispositions(
       normalizedComments,
       advisoryBotLogins,
       trustedMarkerLogins,
       iddAgentLogins,
+      options.prHeadSha,
     );
   const outstandingComments = normalizedComments
     .filter((comment) => !isIddOperationalComment(comment))

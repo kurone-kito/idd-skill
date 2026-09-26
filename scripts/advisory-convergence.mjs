@@ -1056,6 +1056,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       advisoryBotLogins: normalizeTrustedMarkerLogins(
         options.advisoryBotLogins ?? [],
       ),
+      prHeadSha,
       prAuthorLogin: String(options.prAuthorLogin ?? '')
         .trim()
         .toLowerCase(),

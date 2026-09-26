@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   type ApplyDispositionPlanDeps,
   applyDispositionPlan,
+  buildCodexNoFindDispositionBody,
   buildDispositionBody,
   buildDispositionPlan,
   buildSummaryDispositionBody,
@@ -22,6 +23,8 @@ import {
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
+  isCodexNoFindResultDisposition,
+  isCodexNoFindResultForHeadSha,
   isDispositionComment,
   isReviewSummaryComment,
   isTerminalAdvisoryNonReviewNotice,
@@ -223,6 +226,18 @@ const CODEX_SUMMARY_COMPLETED =
   '| --- | --- | --- | --- |\n' +
   '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-05-12T00:00:00Z">' +
   '2026-05-12T00:00:00Z</relative-time> | `abc1234` | PR opened |\n';
+const CODEX_NO_FIND_RESULT =
+  "Codex Review: Didn't find any major issues. You're on a roll.\n\n" +
+  '**Reviewed commit:** `abc1234`\n\n' +
+  '<details> <summary>ℹ️ About Codex in GitHub</summary>\n' +
+  '<br/>\n\n' +
+  '[Your team has set up Codex to review pull requests in this repo]' +
+  '(https://chatgpt.com/codex/cloud/settings/general)\n\n' +
+  'Reviews are triggered when you\n' +
+  '- Open a pull request for review\n' +
+  '- Mark a draft as ready\n' +
+  '- Comment "@codex review" or "@codex security review".\n\n' +
+  '</details>';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -492,6 +507,55 @@ test('dispositionNamesAdvisoryBot returns false for a body matching neither cano
   assert.equal(dispositionNamesAdvisoryBot(null, CODERABBIT), false);
 });
 
+test('Codex no-find classifier accepts only the observed terminal shape for the current HEAD', () => {
+  assert.equal(
+    isCodexNoFindResultForHeadSha(CODEX_NO_FIND_RESULT, 'abc1234'),
+    true,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(CODEX_NO_FIND_RESULT, 'def5678'),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      CODEX_NO_FIND_RESULT.replace(
+        "Didn't find any major issues",
+        'Found a major issue',
+      ),
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      `${CODEX_NO_FIND_RESULT}\n\nI found a major issue.`,
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(CODEX_SUMMARY_RUNNING, 'abc1234'),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      CODEX_NO_FIND_RESULT.replace(
+        'https://chatgpt.com/codex/cloud/settings/general',
+        'https://example.com',
+      ),
+      'abc1234',
+    ),
+    false,
+  );
+});
+
+test('Codex no-find disposition names only the source Codex bot', () => {
+  const body = buildCodexNoFindDispositionBody(CODEX, 'abc1234', 321);
+  assert.equal(isCodexNoFindResultDisposition(body), true);
+  assert.equal(dispositionNamesAdvisoryBot(body, CODEX), true);
+  assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), false);
+});
+
 test('gate agreement: the extended **Rejected** body still clears a notice from missingRegularComments', () => {
   // #1482: the embedded source-notice id must not break the F2/F3 gate's real
   // recognition path (isNonReviewNoticeDisposition + dispositionNamesAdvisoryBot,
@@ -741,6 +805,64 @@ test('buildDispositionPlan plans one disposition per undispositioned notice', ()
     assert.ok(entry.body.startsWith('**Rejected**'));
     assert.match(entry.body, /did not review HEAD abc1234/);
   }
+});
+
+test('buildDispositionPlan plans and then idempotently skips a current Codex no-find result', () => {
+  const source = notice(320, CODEX, CODEX_NO_FIND_RESULT);
+  const firstPlan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(firstPlan.planned.length, 1);
+  assert.equal(firstPlan.planned[0]?.reason, 'Codex no-find result');
+  assert.match(firstPlan.planned[0]?.body ?? '', /source: #issuecomment-320/);
+
+  const disposition = notice(
+    321,
+    'kurone-kito',
+    firstPlan.planned[0]?.body ?? '',
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+  );
+  const secondPlan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source, disposition] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(secondPlan.planned, []);
+  assert.deepEqual(secondPlan.skipped, [
+    {
+      noticeId: 320,
+      botLogin: CODEX,
+      reason: 'already-dispositioned',
+    },
+  ]);
+});
+
+test('gate agreement: a trusted Codex no-find disposition clears the matching source comment', () => {
+  const source = {
+    id: 322,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition = {
+    id: 323,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 322),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [source, disposition], threads: [] },
+    {
+      iddAgentLogins: [],
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['kurone-kito'],
+      prHeadSha: 'abc1234',
+    },
+  );
+  assert.equal(summary.missingRegularCommentCount, 0);
 });
 
 test('buildDispositionPlan plans a rejection for the current Codex usage-limit wording', () => {
@@ -2003,6 +2125,21 @@ function fakeCodexSummaryPlan(noticeId: number): DispositionPlan {
   };
 }
 
+function fakeCodexNoFindPlan(noticeId: number): DispositionPlan {
+  return {
+    headSha: 'abc1234',
+    planned: [
+      {
+        noticeId,
+        botLogin: CODEX,
+        reason: 'Codex no-find result',
+        body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', noticeId),
+      },
+    ],
+    skipped: [],
+  };
+}
+
 test('applyDispositionPlan: skips (not fails) a planned Codex summary that revalidateCodexSummaryStillComplete reports as no longer complete', () => {
   const calls: string[] = [];
   const plan = fakeCodexSummaryPlan(801);
@@ -2060,6 +2197,44 @@ test('applyDispositionPlan: omitting revalidateCodexSummaryStillComplete posts a
   };
   const result = applyDispositionPlan(plan, deps);
   assert.deepEqual(result.applied, [{ noticeId: 803, commentId: 9803 }]);
+  assert.deepEqual(result.staleSkipped, []);
+});
+
+test('applyDispositionPlan: stale Codex no-find results are skipped before posting', () => {
+  const plan = fakeCodexNoFindPlan(850);
+  let postCalled = false;
+  const result = applyDispositionPlan(plan, {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      postCalled = true;
+      return { id: 9850 };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexNoFindStillCurrent: () => false,
+  });
+  assert.equal(postCalled, false);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 850,
+      botLogin: CODEX,
+      reason: 'codex-no-find-stale-at-post-time',
+    },
+  ]);
+});
+
+test('applyDispositionPlan: current Codex no-find results post after revalidation', () => {
+  const plan = fakeCodexNoFindPlan(851);
+  const result = applyDispositionPlan(plan, {
+    revalidateClaim: () => true,
+    postDisposition: () => ({ id: 9851 }),
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+    revalidateCodexNoFindStillCurrent: () => true,
+  });
+  assert.deepEqual(result.applied, [{ noticeId: 851, commentId: 9851 }]);
   assert.deepEqual(result.staleSkipped, []);
 });
 

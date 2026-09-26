@@ -165,6 +165,7 @@ function main() {
       iddAgentLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
       trustedMarkerLogins: activityTrustedMarkerLogins,
+      prHeadSha: headSha,
       prAuthorLogin,
     },
   );
