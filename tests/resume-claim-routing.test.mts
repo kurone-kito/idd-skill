@@ -1492,6 +1492,28 @@ test('edited trusted legacy release is ignored and leaves the claim active', () 
   assert.equal(result.active_claim?.agent_id, 'old-agent');
 });
 
+test('snake_case edit state is accepted for a trusted legacy claim', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-12T09:00:00Z branch: issue/15-task -->',
+          lastEditedAt: undefined,
+          last_edited_at: null,
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.reason, 'legacy-claim-non-stale');
+  assert.equal(result.active_claim?.agent_id, 'old-agent');
+});
+
 test('legacy matching release remains valid after unrelated later unclaim', () => {
   const result = evaluateResumeClaimRouting(
     {

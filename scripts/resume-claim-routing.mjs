@@ -936,7 +936,10 @@ function normalizeEvents(events) {
       lastEditedAt:
         event?.lastEditedAt === null || typeof event?.lastEditedAt === 'string'
           ? event.lastEditedAt
-          : undefined,
+          : event?.last_edited_at === null ||
+              typeof event?.last_edited_at === 'string'
+            ? event.last_edited_at
+            : undefined,
       last_edited_at:
         event?.last_edited_at === null ||
         typeof event?.last_edited_at === 'string'

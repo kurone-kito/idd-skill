@@ -1830,8 +1830,9 @@ export async function annotateLeafClaimState(
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
   });
   const active = claimTrace.activeClaim;
-  const trustedLegacyComments = comments.filter((comment) =>
-    claimState.isTrustedAuthor(comment.author.login),
+  const trustedLegacyComments = filterTrustedClaimFamilyEvents(
+    [...comments],
+    claimState.isTrustedAuthor,
   );
   const hasTrustedNewFormatClaim = hasNewFormatClaim(
     comments,
@@ -2041,7 +2042,10 @@ function normalizeClaimComments(raw: unknown): {
         comment.lastEditedAt === null ||
         typeof comment.lastEditedAt === 'string'
           ? comment.lastEditedAt
-          : undefined,
+          : comment.last_edited_at === null ||
+              typeof comment.last_edited_at === 'string'
+            ? comment.last_edited_at
+            : undefined,
       last_edited_at:
         comment.last_edited_at === null ||
         typeof comment.last_edited_at === 'string'
