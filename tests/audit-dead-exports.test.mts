@@ -961,6 +961,31 @@ test('a bare multi-declarator `const` statement split across multiple physical l
   }
 });
 
+test('an EXPORTED multi-declarator `const` statement (`export const a = 1, b = 2;`) tracks EVERY declarator as its own direct export, not only the first (proactive fix, same class as the bare-const findings)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export const retained = 1, forgotten = 2;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'retained').category,
+      'unused',
+      'the first declarator must still be tracked (unchanged behavior)',
+    );
+    assert.equal(
+      findByName(result, 'forgotten').category,
+      'unused',
+      'the SECOND declarator is a genuine direct export too -- it must ' +
+        'not be silently absent from the audit results entirely',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

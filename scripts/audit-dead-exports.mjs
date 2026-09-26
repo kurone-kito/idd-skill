@@ -445,6 +445,43 @@ function parseFile(absPath, originalText) {
     const classMatch =
       !functionMatch && !constMatch && CLASS_DECL_PATTERN.exec(line);
     const declMatch = functionMatch ?? constMatch ?? classMatch;
+    if (constMatch) {
+      // #3498 (proactive fix, same class as the bare-const findings
+      // above): `export const a = 1, b = 2;` is a genuine direct export
+      // of BOTH `a` and `b` -- `CONST_DECL_PATTERN` itself only captures
+      // the FIRST identifier, so resolve every declarator the same way
+      // the bare branch does (`scanBareConstDeclarators`), creating one
+      // `declared` entry per name at its own real line.
+      const declaratorListStart =
+        start + (constMatch[0].length - constMatch[1].length);
+      const { declarators, endOffset } = scanBareConstDeclarators(
+        strippedText,
+        declaratorListStart,
+      );
+      for (const declarator of declarators) {
+        const realLine = lineNumberAt(strippedText, declarator.offset);
+        const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+          originalText,
+          lineStarts,
+          realLine,
+        );
+        declared.set(declarator.name, {
+          line: realLine,
+          suppressed: !!ignoreMatch,
+          reason: (ignoreMatch?.[1] ?? '').trim(),
+          localName: declarator.name,
+          selfReferenceExcludeLines: [realLine],
+        });
+        declarationLineByLocalName.set(declarator.name, realLine);
+        declarationSuppressionByLocalName.set(declarator.name, {
+          suppressed: !!ignoreMatch,
+          reason: (ignoreMatch?.[1] ?? '').trim(),
+        });
+      }
+      lineIndex = lineNumberAt(strippedText, endOffset) - 1;
+      lineIndex += 1;
+      continue;
+    }
     if (declMatch) {
       const name = declMatch[1];
       // The suppression comment may sit on the declaration's own line, or
@@ -785,7 +822,11 @@ function toPosixRelative(root, absPath) {
  * here means a genuinely dead export is wrongly classified `production`
  * and never surfaced -- accepted as a limitation of the regex/line-based
  * design this audit deliberately uses (see the module header), not
- * something a full scope-aware fix belongs in this issue's scope. */
+ * something a full scope-aware fix belongs in this issue's scope.
+ * `scanBareConstDeclarators`'s quote-tracking (#3498) does not extend
+ * here: that scanner exists only to find declarator BOUNDARIES
+ * correctly, an unrelated concern from scope-aware reference detection,
+ * and does not change this accepted limitation either way. */
 function hasSelfReference(strippedText, name, excludeLines) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
