@@ -5605,6 +5605,7 @@ function matchTrustedAdvisoryStickyDispositions<
     isSticky: (body: string) => boolean;
     isDisposition: (body: string) => boolean;
     requireNewerDisposition: boolean;
+    allowIddAgentDisposition?: boolean;
     matchesDisposition?: (sticky: T, disposition: T) => boolean;
   }[] = [
     {
@@ -5625,6 +5626,7 @@ function matchTrustedAdvisoryStickyDispositions<
         isCodexNoFindResultForHeadSha(body, normalizedCurrentHead),
       isDisposition: (body) => isCodexNoFindResultDisposition(body),
       requireNewerDisposition: true,
+      allowIddAgentDisposition: true,
       matchesDisposition: (sticky, disposition) => {
         const parsed = parseCodexNoFindDisposition(disposition.body);
         return (
@@ -5665,6 +5667,16 @@ function matchTrustedAdvisoryStickyDispositions<
           (disposition) =>
             kind.isDisposition(disposition.body) &&
             dispositionNamesAdvisoryBot(disposition.body, botLogin),
+        )
+        .concat(
+          kind.allowIddAgentDisposition
+            ? comments.filter(
+                (disposition) =>
+                  iddAgentLogins.has(disposition.authorLogin) &&
+                  kind.isDisposition(disposition.body) &&
+                  dispositionNamesAdvisoryBot(disposition.body, botLogin),
+              )
+            : [],
         )
         .sort(byActivityThenIndex);
       // Greedy oldest-first pairing: match each sticky to the earliest unconsumed
@@ -7527,6 +7539,9 @@ export function summarizeRegularCommentsForGate(
     )
     .filter(
       (comment) =>
+        (normalizedCurrentHead &&
+          isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+          isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)) ||
         !lastIddReplyAt ||
         compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0,
     )
@@ -8127,6 +8142,17 @@ export function summarizeDispositionEvidenceForGate(
       carriedNoticeIndexes.has(comment.sortedIndex) ||
       trustedDispositionedStickyIndexes.has(comment.sortedIndex)
     ) {
+      continue;
+    }
+    // A current-head Codex no-find result is cleared only by the
+    // source-comment-id/HEAD matcher above. Never let the generic 1:1 pool
+    // consume an unrelated later IDD-agent disposition.
+    if (
+      normalizedCurrentHead &&
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+    ) {
+      missing.push(comment);
       continue;
     }
     const requiresDispositionPrefix = isGateAdvisoryBotLogin(

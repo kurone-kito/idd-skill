@@ -540,6 +540,16 @@ test('Codex no-find classifier accepts only the observed terminal shape for the 
   assert.equal(
     isCodexNoFindResultForHeadSha(
       CODEX_NO_FIND_RESULT.replace(
+        'Reviews are triggered when you',
+        'I found a major issue.\nReviews are triggered when you',
+      ),
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      CODEX_NO_FIND_RESULT.replace(
         '</details>',
         'I found a major issue.\n\n</details>',
       ),
@@ -945,6 +955,85 @@ test('gate agreement: a trusted Codex no-find disposition clears the matching so
   assert.equal(summary.missingRegularCommentCount, 0);
 });
 
+test('gate agreement: an IDD-agent Codex no-find disposition clears its source comment', () => {
+  const source = {
+    id: 323,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition = {
+    id: 324,
+    author: { login: 'idd-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 323),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [source, disposition], threads: [] },
+    {
+      iddAgentLogins: ['idd-agent'],
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['idd-agent'],
+      prHeadSha: 'abc1234',
+    },
+  );
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
+test('gate agreement: a generic later IDD disposition cannot clear a Codex no-find source', () => {
+  const source = {
+    id: 325,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const unrelatedDisposition = {
+    id: 326,
+    author: { login: 'idd-agent' },
+    body: '**Accepted** — unrelated review feedback is resolved.',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [source, unrelatedDisposition], threads: [] },
+    {
+      iddAgentLogins: ['idd-agent'],
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['idd-agent'],
+      prHeadSha: 'abc1234',
+    },
+  );
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+test('buildDispositionPlan re-plans when the no-find source is edited after its disposition', () => {
+  const source = notice(
+    327,
+    CODEX,
+    CODEX_NO_FIND_RESULT,
+    '2026-05-12T00:00:00Z',
+    '2026-05-12T02:00:00Z',
+  );
+  const disposition = notice(
+    328,
+    'kurone-kito',
+    buildCodexNoFindDispositionBody(CODEX, 'abc1234', 327),
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+  );
+  const plan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source, disposition] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((item) => item.noticeId),
+    [327],
+  );
+});
+
 test('gate agreement requires the Codex disposition HEAD to match the current source HEAD', () => {
   const source = {
     id: 324,
@@ -998,6 +1087,33 @@ test('regular-comment gate clears a current Codex no-find disposition from an ID
     prHeadSha: 'abc1234',
   });
   assert.equal(summary.count, 0);
+});
+
+test('regular-comment gate keeps an undispositioned Codex no-find source after a later IDD reply', () => {
+  const source = {
+    id: 329,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const unrelatedReply = {
+    id: 330,
+    author: { login: 'idd-agent' },
+    body: 'Thanks, fixed the unrelated review feedback.',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeRegularCommentsForGate([source, unrelatedReply], {
+    iddAgentLogins: ['idd-agent'],
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['idd-agent'],
+    prHeadSha: 'abc1234',
+  });
+  assert.deepEqual(
+    summary.items.map((item) => item.id),
+    ['329'],
+  );
 });
 
 test('buildDispositionPlan plans a rejection for the current Codex usage-limit wording', () => {
@@ -2362,15 +2478,44 @@ test('applyDispositionPlan: stale Codex no-find results are skipped before posti
 
 test('applyDispositionPlan: current Codex no-find results post after revalidation', () => {
   const plan = fakeCodexNoFindPlan(851);
+  let plannedHeadSha = '';
   const result = applyDispositionPlan(plan, {
     revalidateClaim: () => true,
     postDisposition: () => ({ id: 9851 }),
     recoverPostedDisposition: () => null,
     knownViewerCommentIds: new Set(),
-    revalidateCodexNoFindStillCurrent: () => true,
+    revalidateCodexNoFindStillCurrent: (_item, headSha) => {
+      plannedHeadSha = headSha;
+      return true;
+    },
   });
   assert.deepEqual(result.applied, [{ noticeId: 851, commentId: 9851 }]);
   assert.deepEqual(result.staleSkipped, []);
+  assert.equal(plannedHeadSha, 'abc1234');
+});
+
+test('applyDispositionPlan: missing Codex no-find revalidation fails closed', () => {
+  const plan = fakeCodexNoFindPlan(852);
+  let postCalled = false;
+  const result = applyDispositionPlan(plan, {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      postCalled = true;
+      return { id: 9852 };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  });
+  assert.equal(postCalled, false);
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.staleSkipped, [
+    {
+      noticeId: 852,
+      botLogin: CODEX,
+      reason: 'codex-no-find-stale-at-post-time',
+    },
+  ]);
 });
 
 test('applyDispositionPlan: revalidateCodexSummaryStillComplete is never consulted for a non-Codex-summary item', () => {

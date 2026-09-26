@@ -296,6 +296,7 @@ export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
 }
 function normalizeComment(comment) {
   return {
+    id: String(comment.id),
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,

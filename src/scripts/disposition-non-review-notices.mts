@@ -538,6 +538,7 @@ export function buildDispositionPlan(
     .map((comment) => ({
       comment,
       parsed: parseCodexNoFindDisposition(comment.body),
+      activityAt: effectiveRegularCommentActivityAt(comment),
     }))
     .filter(
       (entry) =>
@@ -552,10 +553,14 @@ export function buildDispositionPlan(
       continue;
     }
     const covered = codexNoFindDispositions.some(
-      ({ comment: dispositionComment, parsed }) =>
+      ({ comment: dispositionComment, parsed, activityAt }) =>
         parsed !== null &&
         parsed.sourceCommentId === String(comment.id) &&
         parsed.headSha === headSha.toLowerCase() &&
+        compareIsoTimestamps(
+          activityAt,
+          effectiveRegularCommentActivityAt(comment),
+        ) > 0 &&
         dispositionNamesAdvisoryBot(dispositionComment.body, comment.login),
     );
     if (covered) {
@@ -929,10 +934,16 @@ export interface ApplyDispositionPlanDeps {
    * omitting it skips this revalidation entirely (never fails closed) so
    * existing non-Codex-focused tests need no change.
    */
-  revalidateCodexSummaryStillComplete?: (item: PlannedDisposition) => boolean;
+  revalidateCodexSummaryStillComplete?: (
+    item: PlannedDisposition,
+    plannedHeadSha: string,
+  ) => boolean;
   /** #3520: re-check a terminal no-find result against the live HEAD before
-   * each post attempt; fetch failures must fail closed. */
-  revalidateCodexNoFindStillCurrent?: (item: PlannedDisposition) => boolean;
+   * each post attempt; fetch failures or an omitted callback must fail closed. */
+  revalidateCodexNoFindStillCurrent?: (
+    item: PlannedDisposition,
+    plannedHeadSha: string,
+  ) => boolean;
 }
 
 export interface ApplyDispositionPlanResult {
@@ -1028,7 +1039,10 @@ export function applyDispositionPlan(
       ) {
         let stillComplete: boolean;
         try {
-          stillComplete = deps.revalidateCodexSummaryStillComplete(item);
+          stillComplete = deps.revalidateCodexSummaryStillComplete(
+            item,
+            plan.headSha,
+          );
         } catch {
           stillComplete = false;
         }
@@ -1037,12 +1051,19 @@ export function applyDispositionPlan(
           break;
         }
       }
-      if (isCodexNoFindResult && deps.revalidateCodexNoFindStillCurrent) {
+      if (isCodexNoFindResult) {
         let stillCurrent: boolean;
-        try {
-          stillCurrent = deps.revalidateCodexNoFindStillCurrent(item);
-        } catch {
+        if (!deps.revalidateCodexNoFindStillCurrent) {
           stillCurrent = false;
+        } else {
+          try {
+            stillCurrent = deps.revalidateCodexNoFindStillCurrent(
+              item,
+              plan.headSha,
+            );
+          } catch {
+            stillCurrent = false;
+          }
         }
         if (!stillCurrent) {
           becameStale = true;
@@ -1311,6 +1332,7 @@ function main(): HelperCliResult {
   // Running.
   const revalidateCodexSummaryStillComplete = (
     item: PlannedDisposition,
+    plannedHeadSha: string,
   ): boolean => {
     // #2695 (CodeRabbit review): fetch the SOURCE comment body first, THEN
     // the PR head. A push between the two fetches must never let a stale,
@@ -1331,10 +1353,14 @@ function main(): HelperCliResult {
       '--jq',
       '.head.sha',
     ]);
-    return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
+    return (
+      freshHeadSha.toLowerCase() === plannedHeadSha.toLowerCase() &&
+      isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha)
+    );
   };
   const revalidateCodexNoFindStillCurrent = (
     item: PlannedDisposition,
+    plannedHeadSha: string,
   ): boolean => {
     // Read the source body before the head, matching the summary path above:
     // a push between the two reads can only make the fetched HEAD newer than
@@ -1351,7 +1377,10 @@ function main(): HelperCliResult {
       '--jq',
       '.head.sha',
     ]);
-    return isCodexNoFindResultForHeadSha(freshBody, freshHeadSha);
+    return (
+      freshHeadSha.toLowerCase() === plannedHeadSha.toLowerCase() &&
+      isCodexNoFindResultForHeadSha(freshBody, freshHeadSha)
+    );
   };
   const { applied, failed, staleSkipped, claimLost, postFailure } =
     applyDispositionPlan(plan, {

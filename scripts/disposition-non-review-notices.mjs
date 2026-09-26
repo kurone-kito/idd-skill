@@ -453,6 +453,7 @@ export function buildDispositionPlan(input, options = {}) {
     .map((comment) => ({
       comment,
       parsed: parseCodexNoFindDisposition(comment.body),
+      activityAt: effectiveRegularCommentActivityAt(comment),
     }))
     .filter(
       (entry) =>
@@ -467,10 +468,14 @@ export function buildDispositionPlan(input, options = {}) {
       continue;
     }
     const covered = codexNoFindDispositions.some(
-      ({ comment: dispositionComment, parsed }) =>
+      ({ comment: dispositionComment, parsed, activityAt }) =>
         parsed !== null &&
         parsed.sourceCommentId === String(comment.id) &&
         parsed.headSha === headSha.toLowerCase() &&
+        compareIsoTimestamps(
+          activityAt,
+          effectiveRegularCommentActivityAt(comment),
+        ) > 0 &&
         dispositionNamesAdvisoryBot(dispositionComment.body, comment.login),
     );
     if (covered) {
@@ -817,7 +822,10 @@ export function applyDispositionPlan(plan, deps) {
       ) {
         let stillComplete;
         try {
-          stillComplete = deps.revalidateCodexSummaryStillComplete(item);
+          stillComplete = deps.revalidateCodexSummaryStillComplete(
+            item,
+            plan.headSha,
+          );
         } catch {
           stillComplete = false;
         }
@@ -826,12 +834,19 @@ export function applyDispositionPlan(plan, deps) {
           break;
         }
       }
-      if (isCodexNoFindResult && deps.revalidateCodexNoFindStillCurrent) {
+      if (isCodexNoFindResult) {
         let stillCurrent;
-        try {
-          stillCurrent = deps.revalidateCodexNoFindStillCurrent(item);
-        } catch {
+        if (!deps.revalidateCodexNoFindStillCurrent) {
           stillCurrent = false;
+        } else {
+          try {
+            stillCurrent = deps.revalidateCodexNoFindStillCurrent(
+              item,
+              plan.headSha,
+            );
+          } catch {
+            stillCurrent = false;
+          }
         }
         if (!stillCurrent) {
           becameStale = true;
@@ -1077,7 +1092,7 @@ function main() {
   // summary acceptance, closing the window since planNow()'s snapshot where
   // Codex could have re-triggered and flipped its own comment back to
   // Running.
-  const revalidateCodexSummaryStillComplete = (item) => {
+  const revalidateCodexSummaryStillComplete = (item, plannedHeadSha) => {
     // #2695 (CodeRabbit review): fetch the SOURCE comment body first, THEN
     // the PR head. A push between the two fetches must never let a stale,
     // already-superseded headSha validate against a body snapshot taken
@@ -1097,9 +1112,12 @@ function main() {
       '--jq',
       '.head.sha',
     ]);
-    return isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha);
+    return (
+      freshHeadSha.toLowerCase() === plannedHeadSha.toLowerCase() &&
+      isCodexReviewSummaryCompleteForHeadSha(freshBody, freshHeadSha)
+    );
   };
-  const revalidateCodexNoFindStillCurrent = (item) => {
+  const revalidateCodexNoFindStillCurrent = (item, plannedHeadSha) => {
     // Read the source body before the head, matching the summary path above:
     // a push between the two reads can only make the fetched HEAD newer than
     // the body it is checked against, never falsely validate stale evidence.
@@ -1115,7 +1133,10 @@ function main() {
       '--jq',
       '.head.sha',
     ]);
-    return isCodexNoFindResultForHeadSha(freshBody, freshHeadSha);
+    return (
+      freshHeadSha.toLowerCase() === plannedHeadSha.toLowerCase() &&
+      isCodexNoFindResultForHeadSha(freshBody, freshHeadSha)
+    );
   };
   const { applied, failed, staleSkipped, claimLost, postFailure } =
     applyDispositionPlan(plan, {
