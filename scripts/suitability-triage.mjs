@@ -195,6 +195,8 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
 // fail-closed.
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
   /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
+const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
+  /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
@@ -1932,9 +1934,22 @@ export function checkRepositoryFit(context) {
   const body = issue.body;
   const normalizedBody = body.replace(/\r\n/g, '\n');
   const codeRanges = findMarkdownCodeRanges(normalizedBody);
-  const maskedBody = maskMarkdownCodeRegionsPreservingPositions(
-    normalizedBody,
-    [...codeRanges, ...findHtmlCommentRanges(normalizedBody, codeRanges)],
+  const fencedCodeRanges = findFencedCodeRanges(normalizedBody);
+  const nonInlineCodeRanges = [
+    ...fencedCodeRanges,
+    ...findIndentedCodeRanges(normalizedBody, fencedCodeRanges),
+  ];
+  const htmlCommentRanges = findHtmlCommentRanges(normalizedBody, codeRanges);
+  const scanBody = maskMarkdownCodeRegionsPreservingPositions(normalizedBody, [
+    ...nonInlineCodeRanges,
+    ...htmlCommentRanges,
+  ]);
+  const inlineCodeRanges = codeRanges.filter(
+    (range) =>
+      !nonInlineCodeRanges.some(
+        (nonInlineRange) =>
+          range.start < nonInlineRange.end && nonInlineRange.start < range.end,
+      ),
   );
   const paragraphSpans = getParagraphSpans(normalizedBody);
   const crossRepoLinks = [];
@@ -1956,18 +1971,31 @@ export function checkRepositoryFit(context) {
     };
   }
   const externalAccessMatches = [
-    ...maskedBody.matchAll(
+    ...scanBody.matchAll(
       new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
     ),
-  ];
+  ].filter((match) => {
+    const matchStart = match.index ?? 0;
+    const matchEnd = matchStart + (match[0] ?? '').length;
+    return !inlineCodeRanges.some(
+      (range) => matchStart >= range.start && matchEnd <= range.end,
+    );
+  });
   const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
-  const listItems = [...maskedBody.matchAll(listItemPattern)].map(
+  const listItems = [...scanBody.matchAll(listItemPattern)].map(
     (listItemMatch) => ({
       start: listItemMatch.index ?? 0,
       indent: (listItemMatch[0] ?? '').search(/\S/),
       contentIndent: (listItemMatch[0] ?? '').length,
     }),
   );
+  const listBlockBoundaryPattern = /^[ \t]{0,3}#{1,6}(?:[ \t]+|$)/gm;
+  const listBlockBoundaries = [
+    ...scanBody.matchAll(listBlockBoundaryPattern),
+  ].map((boundaryMatch) => ({
+    start: boundaryMatch.index ?? 0,
+    indent: (boundaryMatch[0] ?? '').search(/\S/),
+  }));
   const listItemContextFor = (matchIndex) => {
     const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
     let currentItem = null;
@@ -1978,6 +2006,16 @@ export function checkRepositoryFit(context) {
       currentItem = listItem;
     }
     if (currentItem === null) {
+      return null;
+    }
+    if (
+      listBlockBoundaries.some(
+        (boundary) =>
+          boundary.start > currentItem.start &&
+          boundary.start < lineStart &&
+          boundary.indent <= currentItem.indent,
+      )
+    ) {
       return null;
     }
     const lineIndent =
@@ -2021,22 +2059,20 @@ export function checkRepositoryFit(context) {
       }
       const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
       const cuePrefix = context.slice(Math.max(0, cueIndex - 80), cueIndex);
-      const clauseStart = Math.max(
-        cuePrefix.lastIndexOf('\n'),
-        cuePrefix.lastIndexOf('.'),
-        cuePrefix.lastIndexOf('!'),
-        cuePrefix.lastIndexOf('?'),
-        cuePrefix.lastIndexOf(';'),
-      );
+      const clauseStart = lastRepositoryFitClauseBoundary(cuePrefix);
+      const cueToMatch = context.slice(cueEnd, externalMatchOffset);
+      if (
+        allowLooseContinuation &&
+        !REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN.test(cueToMatch)
+      ) {
+        continue;
+      }
       if (
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
           cuePrefix.slice(clauseStart + 1),
         ) ||
-        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
-          context.slice(cueEnd, externalMatchOffset),
-        ) ||
-        (!allowLooseContinuation &&
-          /[.!?;]/.test(context.slice(cueEnd, externalMatchOffset)))
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
+        (!allowLooseContinuation && /[.!?;]/.test(cueToMatch))
       ) {
         continue;
       }
@@ -2059,17 +2095,12 @@ export function checkRepositoryFit(context) {
     const matchIndex = match.index ?? 0;
     const matchText = match[0] ?? '';
     const matchEnd = matchIndex + matchText.length;
-    const contextBefore = maskedBody.slice(
+    const contextBefore = scanBody.slice(
       Math.max(0, matchIndex - 60),
       matchIndex,
     );
-    const contextBeforeClauseStart = Math.max(
-      contextBefore.lastIndexOf('\n'),
-      contextBefore.lastIndexOf('.'),
-      contextBefore.lastIndexOf('!'),
-      contextBefore.lastIndexOf('?'),
-      contextBefore.lastIndexOf(';'),
-    );
+    const contextBeforeClauseStart =
+      lastRepositoryFitClauseBoundary(contextBefore);
     const contextBeforeClause = contextBefore.slice(
       contextBeforeClauseStart + 1,
     );
@@ -2093,7 +2124,7 @@ export function checkRepositoryFit(context) {
       matchEnd <= span.end &&
       contextMatchCount === 1 &&
       hasPositiveFixtureCue(
-        maskedBody.slice(span.start, span.end),
+        scanBody.slice(span.start, span.end),
         matchIndex - span.start,
         allowLooseContinuation,
       )
@@ -2113,6 +2144,24 @@ export function checkRepositoryFit(context) {
         ? 'Cross-repository links appear contextual; no explicit external coordination signal detected.'
         : 'No out-of-repository scope signals detected.',
   };
+}
+function lastRepositoryFitClauseBoundary(text) {
+  let boundary = Math.max(
+    text.lastIndexOf('.'),
+    text.lastIndexOf('!'),
+    text.lastIndexOf('?'),
+    text.lastIndexOf(';'),
+  );
+  const paragraphBreakPattern = /\n[ \t]*\n/g;
+  let paragraphBreak = paragraphBreakPattern.exec(text);
+  while (paragraphBreak) {
+    boundary = Math.max(
+      boundary,
+      (paragraphBreak.index ?? 0) + paragraphBreak[0].length - 1,
+    );
+    paragraphBreak = paragraphBreakPattern.exec(text);
+  }
+  return boundary;
 }
 export function checkCoherence(context) {
   const { issue } = context;

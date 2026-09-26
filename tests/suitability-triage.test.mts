@@ -5944,6 +5944,28 @@ test('repository fit fails when external system appears before access terms', ()
   assert.equal(result.pass, false);
 });
 
+test('repository fit does not let an unrelated loose-list cue exempt access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Negative fixture: invalid input should be rejected.\n\n  This issue requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit stops a fixture list item at a following heading', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Negative fixture: descriptive example.\n\n## Actual work\n\n  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit still detects dotted and single-line-wrapped access phrases', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6521,6 +6543,39 @@ test('repository fit allows a negated external-access statement', () => {
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\nThis does not require production dashboard credentials; just edit the README.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit preserves negation across a hard-wrapped line', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis does not\nrequire production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit scans inline-code access terms in a live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis task requires \`production dashboard credentials\`.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores an inline-code-only access example', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe check must not use \`production dashboard credentials\` as an example.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);

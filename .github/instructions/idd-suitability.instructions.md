@@ -55,10 +55,13 @@ Does the issue describe work scoped to this repository?
   Markdown paragraph or list item. On a list marker line, the cue and phrase
   must remain in the same sentence; a separate sentence is part of the same
   context only when it is a correctly indented loose-list continuation
-  paragraph. A separate live prerequisite still fails this check, while
-  unrelated or negated cues, a cue after the access phrase, a cue in another
-  paragraph, and ambiguous wording remain fail-closed. This boundary follows
-  the observed false positive in issue #3522.
+  paragraph whose cue text also identifies the external/access context. A
+  heading at the list item's indentation ends that context. Inline-code terms
+  remain scannable when they occur in a live prerequisite, while an
+  inline-code-only example is ignored. A separate live prerequisite still
+  fails this check, while unrelated or negated cues, a cue after the access
+  phrase, a cue in another paragraph, and ambiguous wording remain fail-closed.
+  This boundary follows the observed false positive in issue #3522.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence
