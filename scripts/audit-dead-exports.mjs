@@ -715,10 +715,28 @@ function parseFile(absPath, originalText) {
         selfReferenceExcludeLines: [lineIndex + 1],
       });
       addDeclarationLine(name, lineIndex + 1);
-      declarationSuppressionByLocalName.set(name, {
-        suppressed: !!ignoreMatch,
-        reason: (ignoreMatch?.[1] ?? '').trim(),
-      });
+      // #3498 (Codex C1 finding, round 14): the SAME "first-write-wins
+      // vs. must-merge" issue round 13 fixed for a BARE overloaded
+      // function's suppression bookkeeping also applies to an EXPORTED
+      // one -- each overload signature line independently reaches this
+      // branch and, before this fix, unconditionally overwrote this
+      // map, so a genuine suppression comment above an EARLIER signature
+      // was silently discarded by a later, unsuppressed signature or the
+      // implementation. This map feeds a no-`from` list item's OWN
+      // suppression state (`declarationSuppressionByLocalName.get(
+      // pending.localName)` at finalization), so the alias itself
+      // (`PublicHelper` in the reported repro) stayed an unsuppressed
+      // finding even though the marker was validly adjacent to one of
+      // `helper`'s own signature lines. Merge the same way: once any
+      // line for this name is found suppressed, keep it.
+      const existingExportedSuppression =
+        declarationSuppressionByLocalName.get(name);
+      if (!existingExportedSuppression?.suppressed) {
+        declarationSuppressionByLocalName.set(name, {
+          suppressed: !!ignoreMatch,
+          reason: (ignoreMatch?.[1] ?? '').trim(),
+        });
+      }
       lineIndex += 1;
       continue;
     }

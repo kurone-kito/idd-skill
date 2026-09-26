@@ -1133,6 +1133,44 @@ test('a suppression comment above a LATER TypeScript overload signature (not the
   }
 });
 
+test('a suppression comment above an EARLIER EXPORTED TypeScript overload signature is still honored for a no-`from` re-export resolving to it (Codex C1 round-14 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        '// audit:ignore-dead-export: kept for a planned public API',
+        'export function helper(a: number): void;',
+        'export function helper(a: string): void;',
+        'export function helper(a: number | string): void {',
+        '  console.log(a);',
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.suppressed,
+      true,
+      'the FIRST (EXPORTED) overload signature is genuinely suppressed ' +
+        'via its own preceding line -- a LATER, unsuppressed signature ' +
+        'or the implementation must not overwrite that state away for ' +
+        "the no-`from` alias's own suppression bookkeeping, the same " +
+        'merge fix round 13 applied to the BARE-declaration branch',
+    );
+    assert.ok(
+      !result.findings.some((f) => f.name === 'PublicHelper'),
+      'a suppressed finding must never appear in findings',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a regex literal's own delimiters in a bare `const` initializer are a DOCUMENTED, accepted limitation, but the single-line bound (round 6) keeps the damage confined to that one line -- a LATER export is never lost (Codex/Copilot C1 round-6 findings: regex-vs-division cannot be safely disambiguated without a real parser)", () => {
   const root = makeFixtureRoot();
   try {
