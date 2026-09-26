@@ -562,6 +562,86 @@ test('still fails autonomous completion when a maintainer must supply the creden
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion when credentials must be supplied by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 154,
+    title: 'wire external credential approval',
+    body:
+      'Credentials must be supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when keys are necessary before implementation (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 155,
+    title: 'wire external key approval',
+    body: 'A key is necessary before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let production key wording hide a live prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 159,
+    title: 'document deployment requirements',
+    body: 'The deploy needs production keys from ops. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when token vocabulary is descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 156,
+    title: 'document token terminology',
+    body:
+      'Document token handling and disclosure policy for the existing ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion for actorless application authorization (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 160,
+    title: 'document application authorization',
+    body:
+      'The handler cannot be called without authorization. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not classify application-owner authorization as external coordination (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 161,
+    title: 'document application authorization',
+    body:
+      'The handler cannot be called without owner authorization. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('still fails autonomous completion when a credential is necessary (#3528)', () => {
   const result = evaluateA4Viability({
     number: 91,
@@ -1245,6 +1325,20 @@ test('does not let an unrelated removal verb hide a later approval blocker (#352
     body:
       'Remove the legacy deployment notes while maintainer approval is ' +
       'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an adjective removal cue hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 157,
+    title: 'document deployment requirements',
+    body:
+      'The automated release requires maintainer approval before ' +
+      'implementation. Verification: add unit tests.',
     state: 'OPEN',
   });
 
@@ -2281,6 +2375,20 @@ test('passes autonomous completion when a blockquoted example is not a requireme
     body:
       '> Example: "no production access needed" is the desired end ' +
       'state.\n\nSingle docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when a blockquoted independent requirement is an explicit example (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 158,
+    title: 'fix docs example formatting',
+    body:
+      '> Example: "requires maintainer approval" describes the old ' +
+      'workflow.\n\nSingle docs-only change. Verification: add unit tests.',
     state: 'OPEN',
   });
 
