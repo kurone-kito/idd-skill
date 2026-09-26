@@ -755,14 +755,19 @@ external scheduler to drive the loop.
 
 When a live session still owns its claim but is unsure what to check next
 mid E/F-phase — not after a crash, takeover, or missing review snapshot —
-use the existing gates as a navigation aid. With helper runtime, run
-`pre-merge-readiness` for the current PR and route by its
-`branchCurrency`, `threads` plus `unrepliedComments` plus
-`reviewerStates`, `advisoryWait`, and `ci` sections to the existing
-E-phase or F-phase section that resolves the blocker. Without helper
-runtime, use `idd-resume.instructions.md` Step 3's CI-state × review-state
-table for the same routing. This is a pointer only: it changes no phase
-behavior and creates no new rule.
+use the existing gates as a navigation aid. The observed navigation failure
+is recorded in issue `#3494` (2026-09-26). With helper runtime, use the
+profile-selected `pre-merge-readiness` invocation documented under
+[merge-gate evidence](idd-helper-scripts.md#merge-gate-evidence) for the
+current PR, passing `--pr <n> --claim-issue <n>` and current
+`--claim-id`, `--agent-id`, and `--nonce` flags when available. Route by its
+`ready`/`blockers` verdict and then its `branchCurrency`, `threads`,
+`unrepliedComments`, `reviewerStates`, `advisoryWait`, `ci`,
+`dispositionEvidence`, `secondaryQuietWindow`, `claim`, and `closingSet`
+sections to the existing E-phase or F-phase section that resolves the
+blocker. Without helper runtime, use `idd-resume.instructions.md` Step 3's
+CI-state × review-state table for the same routing. This is a pointer only:
+it changes no phase behavior and creates no new rule.
 
 Treat the **context window as a first-class, exhaustible resource**,
 alongside wall-clock time and token budget. A single session that runs
