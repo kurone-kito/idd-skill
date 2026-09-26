@@ -983,6 +983,20 @@ test('does not let approval nouns hide behind credential storage (#3528)', () =>
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let passive approval blockers hide behind a credential title (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 143,
+    title: 'document credential storage',
+    body:
+      'Maintainer approval is required before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let possessive approval nouns hide behind credential storage (#3528)', () => {
   const result = evaluateA4Viability({
     number: 124,
@@ -1222,6 +1236,57 @@ test('keeps removed approval dependencies from blocking autonomous work (#3528)'
 
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an unrelated removal verb hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 144,
+    title: 'document deployment requirements',
+    body:
+      'Remove the legacy deployment notes while maintainer approval is ' +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a completed investigation hide a remaining approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 145,
+    title: 'document deployment requirements',
+    body:
+      'We already verified that the release requires maintainer approval ' +
+      'before shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not carry independent coordination regex state across issues (#3528)', () => {
+  const first = evaluateA4Viability({
+    number: 146,
+    title: 'x',
+    body:
+      'Implementation requires maintainer approval. Verification: add unit ' +
+      'tests.',
+    state: 'OPEN',
+  });
+  const second = evaluateA4Viability({
+    number: 147,
+    title: 'x',
+    body:
+      'Maintainer approval is required before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(first.passed, false);
+  assert.equal(second.passed, false);
+  assert.ok(second.failedCriteria.includes('autonomous_completion'));
 });
 
 test('does not let vendor credential providers pass (#3528)', () => {

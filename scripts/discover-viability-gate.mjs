@@ -112,11 +112,17 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
   'i',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s)?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b)`,
   'gi',
+);
+const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
+  INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.source,
+  'i',
 );
 const REMOVAL_FRAMING_CUE_PATTERN =
   /\b(?:remove[sd]?|replace[sd]?|eliminate[sd]?|automate[sd]?|retire[sd]?|drop(?:ped|s)?)\b/gi;
+const REMOVAL_FRAMING_CLAUSE_BREAK_PATTERN =
+  /\b(?:and|but|while|although|whereas|however|with|instead|rather|after|once|before|until)\b/i;
 // A trigger phrase inside a phrase describing something other than a live,
 // remaining completion blocker should not count (#2738), mirroring
 // findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
@@ -187,13 +193,14 @@ function isGovernedByBackwardCue(
   return false;
 }
 function isGovernedByRemovalFraming(corpus, matchIndex) {
-  const windowStart = Math.max(0, matchIndex - 100);
+  const windowStart = Math.max(0, matchIndex - 80);
   const windowText = corpus.slice(windowStart, matchIndex);
   for (const cueMatch of windowText.matchAll(REMOVAL_FRAMING_CUE_PATTERN)) {
     const linkText = windowText.slice(cueMatch.index + cueMatch[0].length);
     if (
       CUE_HARD_BREAK_PATTERN.test(linkText) ||
-      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText)
+      CLAUSE_CONTINUATION_COMMA_PATTERN.test(linkText) ||
+      REMOVAL_FRAMING_CLAUSE_BREAK_PATTERN.test(linkText)
     ) {
       continue;
     }
@@ -657,9 +664,8 @@ function findParagraphSpan(corpus, offset) {
   return { start, end };
 }
 function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
-  INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.lastIndex = 0;
   if (
-    INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.test(
+    INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN.test(
       corpus.slice(matchIndex, matchEnd),
     )
   ) {
@@ -985,7 +991,6 @@ function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
       isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
-      isDescribedByPastInvestigation(corpus, index, end) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
       continue;
