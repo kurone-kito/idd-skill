@@ -6600,6 +6600,61 @@ test('repository fit masks hidden metadata before matching external access', () 
   assert.equal(htmlResult.pass, true);
 });
 
+test('repository fit keeps HTTPS autolinks visible to external-access matching', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires <https://production-dashboard.example/access>.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps a Setext heading from extending a fixture paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture:\n================\nThis task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves negation across abbreviation punctuation', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task does not, e.g., require production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit separates fixture and live prerequisites across table rows', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n| Negative fixture: | invalid input |\n| --- | --- |\n| Actual work | This task requires Slack access |`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit detects an independent hard-wrapped conjunction clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail and\n this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit treats a blank blockquote line as a paragraph boundary', () => {
   const result = checkRepositoryFit({
     issue: {

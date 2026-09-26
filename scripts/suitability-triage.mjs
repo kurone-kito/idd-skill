@@ -199,7 +199,7 @@ const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
-  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b)/i;
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b(?:[ \t]+|\r?\n[ \t]+)(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b)/i;
 const REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN =
   /\b(?:but|yet|nor|however|although|while|whereas)\b(?:[ \t]+(?:(?:the|a|an|this|that|our|your|its|their)\b(?:[ \t]+[A-Za-z][\w-]*){0,4}|(?:[A-Za-z][\w-]*)(?:[ \t]+[A-Za-z][\w-]*){0,3}))?[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
 const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
@@ -292,6 +292,12 @@ function findRepositoryFitHiddenMetadataRanges(text) {
     if (text[index] !== '<' || text[index - 1] === '\\') {
       continue;
     }
+    // CommonMark HTTPS autolinks are visible text, not HTML metadata. Keep
+    // them in the dependency scan so a URL that names an external system
+    // cannot hide a live access requirement.
+    if (/^<https?:\/\//i.test(text.slice(index))) {
+      continue;
+    }
     const tagStart = index;
     const tagPrefix = text.slice(tagStart, tagStart + 2);
     if (!/^<\/?[A-Za-z]/u.test(tagPrefix)) {
@@ -328,21 +334,23 @@ function hasRepositoryFitSentenceBoundary(text) {
   let punctuation = punctuationPattern.exec(text);
   while (punctuation !== null) {
     const character = punctuation[0] ?? '';
-    if (character !== '.') {
-      return true;
-    }
-    const suffix = text.slice(punctuation.index + 1);
-    if (suffix.length > 0 && !/^\s/u.test(suffix)) {
-      punctuation = punctuationPattern.exec(text);
-      continue;
-    }
-    const prefix = text.slice(0, punctuation.index + 1);
-    if (!REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix)) {
+    if (
+      character !== '.' ||
+      isRepositoryFitPeriodBoundary(text, punctuation.index)
+    ) {
       return true;
     }
     punctuation = punctuationPattern.exec(text);
   }
   return false;
+}
+function isRepositoryFitPeriodBoundary(text, periodIndex) {
+  const suffix = text.slice(periodIndex + 1);
+  if (suffix.length > 0 && !/^\s/u.test(suffix)) {
+    return false;
+  }
+  const prefix = text.slice(0, periodIndex + 1);
+  return !REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix);
 }
 function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
   const paragraphSpans = getParagraphSpans(scanBody);
@@ -358,10 +366,26 @@ function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
     const start = quoteBlankLineMatch.index ?? 0;
     return { start, end: start + (quoteBlankLineMatch[0] ?? '').length };
   });
+  const setextHeadingRanges = [
+    ...scanBody.matchAll(
+      /^[ \t]{0,3}(?=\S)[^\n]+\n[ \t]{0,3}(?:=+|-+)[ \t]*(?:\n|$)/gm,
+    ),
+  ].map((setextHeadingMatch) => {
+    const start = setextHeadingMatch.index ?? 0;
+    return { start, end: start + (setextHeadingMatch[0] ?? '').length };
+  });
+  const tableRowRanges = [
+    ...scanBody.matchAll(/^[ \t]{0,3}\|[^\n]*(?:\n|$)/gm),
+  ].map((tableRowMatch) => {
+    const start = tableRowMatch.index ?? 0;
+    return { start, end: start + (tableRowMatch[0] ?? '').length };
+  });
   const blockRanges = [
     ...nonInlineCodeRanges,
     ...headingRanges,
     ...quoteBlankLineRanges,
+    ...setextHeadingRanges,
+    ...tableRowRanges,
   ].sort((left, right) => left.start - right.start);
   const spans = [];
   for (const paragraphSpan of paragraphSpans) {
@@ -2462,12 +2486,16 @@ export function checkRepositoryFit(context) {
   };
 }
 function lastRepositoryFitClauseBoundary(text) {
-  let boundary = Math.max(
-    text.lastIndexOf('.'),
-    text.lastIndexOf('!'),
-    text.lastIndexOf('?'),
-    text.lastIndexOf(';'),
-  );
+  let boundary = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '.' && !isRepositoryFitPeriodBoundary(text, index)) {
+      continue;
+    }
+    if (/[.!?;:—–]/u.test(character)) {
+      boundary = index;
+    }
+  }
   const paragraphBreakPattern = /\n[ \t]*\n/g;
   let paragraphBreak = paragraphBreakPattern.exec(text);
   while (paragraphBreak) {
