@@ -6198,6 +6198,19 @@ Negative fixture: invalid input should fail, or this implementation needs Slack 
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects a subject-independent conjunction before a live clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but we need Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit accepts repeated requirement verbs within one fixture subject', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6209,6 +6222,19 @@ Negative fixture: a task requires setup and needs Slack access.`,
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('repository fit rejects an unframed third requirement after a fixture clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires setup and needs Slack access, but this implementation requires Jira access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit exempts each explicitly cued fixture independently', () => {
@@ -6377,6 +6403,21 @@ test('repository fit keeps loose-list fixture vocabulary aligned with access mat
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
   assert.equal(result.pass, true);
+});
+
+test('repository fit does not bind a loose-list cue to a different external system', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the Datadog access below is descriptive.
+
+  This implementation requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('repository fit keeps a Setext heading from extending a fixture list item', () => {

@@ -358,7 +358,9 @@ const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
-  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b/i;
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code|we|you|they|it)\b/i;
+const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
+  /\b(?:slack|jira|datadog)\b/gi;
 const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
   /(?<![\w-])(?:non|not)[ \t-]+(?:negative|regression|expected)(?=[ \t-]|$)/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
@@ -2334,6 +2336,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     externalMatchOffset: number,
     allowLooseContinuation: boolean,
     contextStart: number,
+    externalMatchText: string,
     minimumCueOffset = 0,
   ) => {
     const cuePattern = new RegExp(
@@ -2365,11 +2368,30 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       const cuePrefix = context.slice(0, cueIndex);
       const clauseStart = lastRepositoryFitClauseBoundary(cuePrefix);
       const cueToMatch = context.slice(cueEnd, externalMatchOffset);
-      if (
-        allowLooseContinuation &&
-        !REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN.test(cueToMatch)
-      ) {
-        continue;
+      if (allowLooseContinuation) {
+        if (!REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN.test(cueToMatch)) {
+          continue;
+        }
+        const cueSystems = new Set(
+          [
+            ...cueToMatch.matchAll(
+              REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN,
+            ),
+          ].map((systemMatch) => (systemMatch[0] ?? '').toLowerCase()),
+        );
+        const matchSystems = new Set(
+          [
+            ...externalMatchText.matchAll(
+              REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN,
+            ),
+          ].map((systemMatch) => (systemMatch[0] ?? '').toLowerCase()),
+        );
+        if (
+          cueSystems.size > 0 &&
+          ![...cueSystems].some((system) => matchSystems.has(system))
+        ) {
+          continue;
+        }
       }
       if (
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
@@ -2377,7 +2399,8 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
         (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
-        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(cueToMatch)
+        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(cueToMatch) ||
+        /,[ \t]*(?:and|or|but|yet|nor)\b/i.test(cueToMatch)
       ) {
         continue;
       }
@@ -2391,16 +2414,21 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     if (requirementMatches.length <= 1) {
       return false;
     }
-    const firstMatch = requirementMatches[0];
-    const secondMatch = requirementMatches[1];
-    const betweenRequirements = matchText.slice(
-      (firstMatch?.index ?? 0) + (firstMatch?.[0].length ?? 0),
-      secondMatch?.index ?? matchText.length,
-    );
-    return (
-      /[.!?;]/.test(betweenRequirements) ||
-      REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(betweenRequirements)
-    );
+    for (let index = 0; index < requirementMatches.length - 1; index += 1) {
+      const firstMatch = requirementMatches[index];
+      const secondMatch = requirementMatches[index + 1];
+      const betweenRequirements = matchText.slice(
+        (firstMatch?.index ?? 0) + (firstMatch?.[0].length ?? 0),
+        secondMatch?.index ?? matchText.length,
+      );
+      if (
+        /[.!?;]/.test(betweenRequirements) ||
+        REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(betweenRequirements)
+      ) {
+        return true;
+      }
+    }
+    return false;
   };
   const contextSpans = externalAccessMatches.map((match) => {
     const matchIndex = match.index ?? 0;
@@ -2464,6 +2492,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         matchIndex - span.start,
         allowLooseContinuation,
         span.start,
+        matchText,
         previousMatchEnd,
       )
     ) {
