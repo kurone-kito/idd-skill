@@ -698,6 +698,39 @@ test('two aliases of the same local name are classified independently when only 
   }
 });
 
+test('a no-`from` export list re-exporting a BARE function with multiple TypeScript overload signatures is classified unused, not masked by the other overload lines (Copilot High-severity finding, post-reduction review)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(a: number): void;',
+        'function helper(a: string): void;',
+        'function helper(a: number | string): void {',
+        '  console.log(a);',
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'every overload signature line mentions `helper` -- all of them ' +
+        'must be excluded from the self-reference scan, not only the ' +
+        'last one recorded (a plain overwrite of a single-line map ' +
+        'entry kept only the LAST signature line, so the EARLIER ' +
+        'signature lines registered as false self-references and ' +
+        'masked a genuinely dead export as production)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

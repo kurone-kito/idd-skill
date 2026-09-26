@@ -254,12 +254,35 @@ function parseFile(absPath, originalText) {
   const declared = new Map();
   const reExports = [];
   const imports = [];
-  // #3498: real declaration line for EVERY top-level function/const/class
-  // name in this file, exported or not -- see the bare-pattern comment
-  // above. Populated alongside `declared` below; consulted only when
-  // finalizing a no-`from` export-list item (after the full-file loop
-  // below, not inline) to resolve its `declarationLine`.
+  // #3498: real declaration line(s) for EVERY top-level function/const/
+  // class name in this file, exported or not -- see the bare-pattern
+  // comment above. Populated alongside `declared` below; consulted only
+  // when finalizing a no-`from` export-list item (after the full-file
+  // loop below, not inline) to resolve its `declarationLine`.
+  //
+  // An array, not a single line (Copilot High-severity finding, post-
+  // reduction review): a bare FUNCTION specifically can have multiple
+  // TypeScript overload signature lines sharing one name (`function
+  // helper(a: number): void; function helper(a: string): void; function
+  // helper(a) { ... }`) -- every one of them mentions the name, so a
+  // no-`from` item resolving to only the LAST such line (a plain
+  // overwrite) would still see the earlier overload lines as a false
+  // self-reference, wrongly classifying a genuinely dead export as
+  // `production`. `addDeclarationLine` accumulates every introducing
+  // line per name instead of overwriting (harmless for `const`/`class`,
+  // which can only ever contribute one line per name -- duplicate
+  // top-level bindings are themselves a compile error).
   const declarationLineByLocalName = new Map();
+  function addDeclarationLine(name, line) {
+    const existing = declarationLineByLocalName.get(name);
+    if (existing) {
+      if (!existing.includes(line)) {
+        existing.push(line);
+      }
+    } else {
+      declarationLineByLocalName.set(name, [line]);
+    }
+  }
   // #3498 (C1 finding, both the CodeRabbit delegate and the independent
   // subagent critique): a no-`from` export-list item can textually
   // PRECEDE the declaration it re-exports (valid via function hoisting),
@@ -355,7 +378,7 @@ function parseFile(absPath, originalText) {
         localName: name,
         selfReferenceExcludeLines: [lineIndex + 1],
       });
-      declarationLineByLocalName.set(name, lineIndex + 1);
+      addDeclarationLine(name, lineIndex + 1);
       lineIndex += 1;
       continue;
     }
@@ -374,7 +397,7 @@ function parseFile(absPath, originalText) {
         BARE_CLASS_DECL_PATTERN.exec(line);
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
       if (bareMatch) {
-        declarationLineByLocalName.set(bareMatch[1], lineIndex + 1);
+        addDeclarationLine(bareMatch[1], lineIndex + 1);
       }
     }
     const barrelMatch = BARREL_STAR_PATTERN.exec(line);
@@ -506,11 +529,13 @@ function parseFile(absPath, originalText) {
   // whole file has been scanned -- see the pending-item comment above for
   // why this must happen after the loop, not inline.
   for (const pending of pendingNoFromItems) {
-    const realLine = declarationLineByLocalName.get(pending.localName);
-    const line = realLine ?? pending.itemLine;
+    const realLines = declarationLineByLocalName.get(pending.localName);
+    const line = realLines?.[0] ?? pending.itemLine;
     const excludeLines = new Set();
-    if (realLine !== undefined) {
-      excludeLines.add(realLine);
+    if (realLines) {
+      for (const realLine of realLines) {
+        excludeLines.add(realLine);
+      }
     }
     for (const itemLine of noFromItemLinesByLocalName.get(pending.localName) ??
       []) {
