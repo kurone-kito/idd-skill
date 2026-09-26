@@ -242,12 +242,12 @@ reruns of those instances. Review submissions use
 `--refresh-latest --apply`; comment paths use plain `--apply`.
 `cancel-in-progress` can pin the rollup to a non-gated `CANCELLED`
 instance (see `#1745`). Rerun same-HEAD `CANCELLED`
-siblings marked `rerun-eligible` (`gh run rerun <run-id>`).
+`rerun-eligible` siblings.
 Ordinary plans hold `action_required`, `pending`, `unresolved`,
-`awaiting-fresh-review`, `rerun-budget-held`. If all withheld are not
-promoted live-coverage recoveries with used `rerun-once` budget
-(#3504), run `--refresh-latest --apply` once; poll; `hold` or mixed
-cases hold.
+`awaiting-fresh-review`, `rerun-budget-held`. If every withheld instance
+is a live-coverage recovery that was not promoted with used `rerun-once`
+budget (#3504), run `--refresh-latest --apply` once; poll; `hold` or
+mixed cases hold.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
