@@ -18,7 +18,8 @@ If you discover a security vulnerability within this project, please
 report it through
 [GitHub Security Advisories](https://github.com/kurone-kito/idd-skill/security/advisories/new)
 or GitHub's Private vulnerability reporting so the report can remain
-private before public disclosure. Do not post an
+private before public disclosure. This is preventive guidance: do not
+post an
 undisclosed vulnerability, credentials, authentication secrets, or
 reproduction steps in a public issue or pull request, even when the
 private route is unavailable. Retry the private route or wait for it to
