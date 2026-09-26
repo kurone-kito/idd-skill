@@ -208,6 +208,8 @@ const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
   /(?<![\w-])(?:non|not)[ \t-]+(?:negative|regression|expected)(?=[ \t-]|$)/i;
 const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
+const REPOSITORY_FIT_ABBREVIATION_PATTERN =
+  /\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|e\.g|i\.e|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|u\.s|vs|vol)\.$/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -244,6 +246,138 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
   'i',
 );
+function findRepositoryFitHiddenMetadataRanges(text) {
+  const ranges = [];
+  const pushBalancedLinkDestination = (openIndex) => {
+    let depth = 1;
+    let quote = null;
+    for (let index = openIndex + 1; index < text.length; index += 1) {
+      const character = text[index] ?? '';
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (quote !== null) {
+        if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          ranges.push({ start: openIndex, end: index + 1 });
+          return;
+        }
+      } else if (character === '\n') {
+        return;
+      }
+    }
+  };
+  for (let index = 0; index + 1 < text.length; index += 1) {
+    if (
+      text[index] === ']' &&
+      text[index + 1] === '(' &&
+      text[index - 1] !== '\\'
+    ) {
+      pushBalancedLinkDestination(index + 1);
+    }
+  }
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '<' || text[index - 1] === '\\') {
+      continue;
+    }
+    const tagStart = index;
+    const tagPrefix = text.slice(tagStart, tagStart + 2);
+    if (!/^<\/?[A-Za-z]/u.test(tagPrefix)) {
+      continue;
+    }
+    let quote = null;
+    for (let cursor = tagStart + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor] ?? '';
+      if (quote !== null) {
+        if (character === quote) {
+          quote = null;
+        }
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '>') {
+        ranges.push({ start: tagStart, end: cursor + 1 });
+        index = cursor;
+        break;
+      } else if (character === '\n') {
+        break;
+      }
+    }
+  }
+  // A reference definition is metadata rather than rendered prose. Ignore
+  // its destination/title, including a cue that appears only in that title.
+  for (const line of text.matchAll(/^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*$/gm)) {
+    const start = line.index ?? 0;
+    ranges.push({ start, end: start + (line[0] ?? '').length });
+  }
+  return ranges;
+}
+function hasRepositoryFitSentenceBoundary(text) {
+  const punctuationPattern = /[.!?;]/g;
+  let punctuation = punctuationPattern.exec(text);
+  while (punctuation !== null) {
+    const character = punctuation[0] ?? '';
+    if (character !== '.') {
+      return true;
+    }
+    const suffix = text.slice(punctuation.index + 1);
+    if (suffix.length > 0 && !/^\s/u.test(suffix)) {
+      punctuation = punctuationPattern.exec(text);
+      continue;
+    }
+    const prefix = text.slice(0, punctuation.index + 1);
+    if (!REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix)) {
+      return true;
+    }
+    punctuation = punctuationPattern.exec(text);
+  }
+  return false;
+}
+function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
+  const paragraphSpans = getParagraphSpans(scanBody);
+  const headingRanges = [
+    ...scanBody.matchAll(/^[ \t]{0,3}#{1,6}(?:[ \t]+[^\n]*|[ \t]*)$/gm),
+  ].map((headingMatch) => {
+    const start = headingMatch.index ?? 0;
+    return { start, end: start + (headingMatch[0] ?? '').length };
+  });
+  const blockRanges = [...nonInlineCodeRanges, ...headingRanges].sort(
+    (left, right) => left.start - right.start,
+  );
+  const spans = [];
+  for (const paragraphSpan of paragraphSpans) {
+    const splitPoints = new Set([paragraphSpan.start, paragraphSpan.end]);
+    for (const range of blockRanges) {
+      if (
+        range.end <= paragraphSpan.start ||
+        range.start >= paragraphSpan.end
+      ) {
+        continue;
+      }
+      splitPoints.add(Math.max(paragraphSpan.start, range.start));
+      splitPoints.add(Math.min(paragraphSpan.end, range.end));
+    }
+    const points = [...splitPoints].sort((left, right) => left - right);
+    for (let index = 0; index + 1 < points.length; index += 1) {
+      const start = points[index] ?? paragraphSpan.start;
+      const end = points[index + 1] ?? paragraphSpan.end;
+      if (start < end && /[^\n]/u.test(scanBody.slice(start, end))) {
+        spans.push({ start, end });
+      }
+    }
+  }
+  return spans.length > 0 ? spans : paragraphSpans;
+}
 // #2512: a match landing in a paragraph that also reports on another
 // document's or process's existing behavior ("...paragraph SAYS a later
 // worker session removes the label once a human decision resolves the
@@ -1966,7 +2100,12 @@ export function checkRepositoryFit(context) {
     start: strikeMatch.index ?? 0,
     end: (strikeMatch.index ?? 0) + (strikeMatch[0] ?? '').length,
   }));
-  const paragraphSpans = getParagraphSpans(normalizedBody);
+  const hiddenMetadataRanges =
+    findRepositoryFitHiddenMetadataRanges(normalizedBody);
+  const paragraphSpans = buildRepositoryFitParagraphSpans(
+    scanBody,
+    nonInlineCodeRanges,
+  );
   const crossRepoLinks = [];
   const regex =
     /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
@@ -2008,7 +2147,7 @@ export function checkRepositoryFit(context) {
   ].filter((match) => {
     const matchStart = match.index ?? 0;
     const matchEnd = matchStart + (match[0] ?? '').length;
-    return !inlineCodeRanges.some(
+    return ![...inlineCodeRanges, ...hiddenMetadataRanges].some(
       (range) => matchStart >= range.start && matchEnd <= range.end,
     );
   });
@@ -2129,8 +2268,21 @@ export function checkRepositoryFit(context) {
       const cueGlobalStart = contextStart + cueIndex;
       const cueGlobalEnd = contextStart + cueEnd;
       if (
-        [...inlineCodeRanges, ...strikethroughRanges].some(
+        [
+          ...inlineCodeRanges,
+          ...strikethroughRanges,
+          ...hiddenMetadataRanges,
+        ].some(
           (range) => cueGlobalStart >= range.start && cueGlobalEnd <= range.end,
+        )
+      ) {
+        continue;
+      }
+      if (
+        nonInlineCodeRanges.some(
+          (range) =>
+            range.start >= cueGlobalEnd &&
+            range.end <= contextStart + externalMatchOffset,
         )
       ) {
         continue;
@@ -2172,7 +2324,8 @@ export function checkRepositoryFit(context) {
           cuePrefix.slice(clauseStart + 1),
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
-        (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
+        (!allowLooseContinuation &&
+          hasRepositoryFitSentenceBoundary(cueToMatch)) ||
         hasIndependentConjunctionClause(cueToMatch + externalMatchText) ||
         /,[ \t]*(?:and|or|but|yet|nor)\b/i.test(cueToMatch)
       ) {
@@ -2196,7 +2349,7 @@ export function checkRepositoryFit(context) {
         secondMatch?.index ?? matchText.length,
       );
       if (
-        /[.!?;]/.test(betweenRequirements) ||
+        hasRepositoryFitSentenceBoundary(betweenRequirements) ||
         hasIndependentConjunctionClause(
           betweenRequirements + (secondMatch?.[0] ?? ''),
         )

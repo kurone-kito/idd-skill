@@ -6533,6 +6533,66 @@ test('repository fit does not use a fixture cue or access phrase from Markdown c
   assert.equal(result.pass, true);
 });
 
+test('repository fit does not carry a fixture cue across a fenced block', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        `${BASE_ISSUE.body}\n\nRegression fixture:\n` +
+        '```text\nexample\n```\n' +
+        'This issue requires production dashboard access.',
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not carry a fixture cue from a heading', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n## Negative fixture:\nThis task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores fixture cues in link metadata', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n[sample](https://example.com "negative fixture: hidden") this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores fixture cues in HTML attributes', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n<span title="negative fixture: hidden">sample</span> this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores abbreviation periods inside an explicit fixture cue', () => {
+  for (const abbreviation of ['e.g.', 'i.e.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: ${abbreviation} this task requires production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, true, abbreviation);
+  }
+});
+
 test('check helpers expose deterministic evidence', () => {
   assert.equal(
     checkRepositoryFit({
