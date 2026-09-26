@@ -1289,6 +1289,45 @@ test('a COMBINED default + namespace import wrapped onto a second line right aft
   }
 });
 
+test("a suppression comment on the line PRECEDING a wrapped COMBINED default + namespace import (above the statement's own first line, not adjacent to the namespace identifier's later physical line) is honored (Codex C1 round-11 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      '// audit:ignore-dead-export: kept for a planned public API\n' +
+        "import def,\n  * as origin from './origin.mts';\n" +
+        '\n' +
+        'export { origin as PublicOrigin };\n' +
+        'void def;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicOrigin');
+    assert.equal(
+      entry.category,
+      'unused',
+      'suppression tracking must not change the underlying category',
+    );
+    assert.ok(
+      !result.findings.some((f) => f.name === 'PublicOrigin'),
+      'a suppression comment above the WHOLE wrapped statement (line 1) ' +
+        "must be honored for the namespace identifier's own re-export " +
+        "entry, even though the identifier's own real line (2, after " +
+        'the comma-then-newline wrap) is not adjacent to line 1 -- ' +
+        "checking only the identifier's own-or-preceding line misses " +
+        "it, the same gap round 9's fix already closed for " +
+        '`processNamedImportBraceList`',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a suppression comment on the line PRECEDING a named import is honored for a no-`from` re-export resolving to that import (Codex C1 round-8 finding)', () => {
   const root = makeFixtureRoot();
   try {

@@ -969,17 +969,38 @@ function parseFile(absPath, originalText) {
       const namespaceRealLine = namespaceTailMatch
         ? lineNumberAt(strippedText, start + namespaceIdentOffset)
         : lineIndex + 1;
+      // #3498 (Codex C1 finding, round 11): a suppression comment above
+      // the WHOLE statement's first line (line 1, `import def,`) is not
+      // adjacent to the namespace identifier's own `realLine` once the
+      // wrap moves it to a later physical line -- checking only
+      // `realLine`'s own-or-preceding line misses it, the same gap round
+      // 9 already fixed for `processNamedImportBraceList`'s named-list
+      // items. Check both `realLine` and the statement's own start line
+      // (`lineIndex + 1`) the same way that fix does, skipping the
+      // redundant second check when they coincide (the un-wrapped,
+      // single-line case, where both identifiers already share one
+      // line).
+      const statementStartLine = lineIndex + 1;
       for (const [localName, realLine] of [
-        [combinedNamespaceMatch[1], lineIndex + 1],
+        [combinedNamespaceMatch[1], statementStartLine],
         [combinedNamespaceMatch[2], namespaceRealLine],
       ]) {
         addDeclarationLine(localName, realLine);
         if (!declarationSuppressionByLocalName.has(localName)) {
-          const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+          const ownIgnoreMatch = checkOwnOrPrecedingLineSuppression(
             originalText,
             lineStarts,
             realLine,
           );
+          const statementIgnoreMatch =
+            realLine === statementStartLine
+              ? null
+              : checkOwnOrPrecedingLineSuppression(
+                  originalText,
+                  lineStarts,
+                  statementStartLine,
+                );
+          const ignoreMatch = ownIgnoreMatch ?? statementIgnoreMatch;
           declarationSuppressionByLocalName.set(localName, {
             suppressed: !!ignoreMatch,
             reason: (ignoreMatch?.[1] ?? '').trim(),
