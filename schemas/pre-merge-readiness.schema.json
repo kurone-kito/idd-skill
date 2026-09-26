@@ -1673,7 +1673,7 @@
         },
         "elapsed": {
           "type": "boolean",
-          "description": "True when the configured window has elapsed since anchorAt -- always true when minutes is 0 (off), anchorAt is unavailable, or declined is true."
+          "description": "True when the applied window (minutes) has elapsed since anchorAt. Always true when minutes is 0 (off), anchorAt is unavailable, or declined is true. On the #2544 settled-buffer path minutes is the clamped buffer, so elapsed follows that buffer rather than configuredMinutes."
         },
         "remainingMinutes": {
           "type": ["integer", "null"],
