@@ -1870,6 +1870,34 @@ test('does not let a direct post-boundary credential prerequisite pass (#3528)',
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('keeps application administrator authorization autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 166,
+    title: 'document application authorization',
+    body:
+      'The handler requires administrator authorization. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 167,
+    title: 'document credential handling',
+    body:
+      'No tests exist. We are waiting for a credential. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let a necessary credential prerequisite hide behind generic context (#3528)', () => {
   const result = evaluateA4Viability({
     number: 108,

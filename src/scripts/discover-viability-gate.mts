@@ -191,7 +191,7 @@ const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
 // external handoff, while the broader actor vocabulary above still detects
 // explicit credential-supply requirements.
 const CREDENTIAL_COORDINATION_ACTOR_PATTERN =
-  '(?:maintainers?|operators?|administrators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
+  '(?:maintainers?|operators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
 const CREDENTIAL_NEGATED_REQUIREMENT_PATTERN =
   /\b(?:must|shall|does|do|did|will)\s+not\s+(?:require|need|necessitate)\b/i;
 const CREDENTIAL_NEGATED_REQUIREMENT_CLAUSE_PATTERN =
@@ -1220,11 +1220,27 @@ function isDescribedSecurityVocabulary(
   // that meaning. Do not use singular/plural form as a proxy: `credential`
   // can be descriptive, while `credentials` can still be a live prerequisite
   // (#3522 Copilot review).
+  const localBackwardRaw = corpus.slice(
+    Math.max(0, matchIndex - 120),
+    matchIndex,
+  );
+  const localBackwardBreaks = [
+    ...localBackwardRaw.matchAll(new RegExp(CUE_HARD_BREAK_PATTERN, 'g')),
+  ];
+  const localLastBreak = localBackwardBreaks.at(-1);
+  const localBackwardText = localLastBreak
+    ? localBackwardRaw.slice(localLastBreak.index + localLastBreak[0].length)
+    : localBackwardRaw;
+  const localForwardRaw = corpus.slice(
+    matchEnd,
+    Math.min(corpus.length, matchEnd + 120),
+  );
+  const localForwardBreak = CUE_HARD_BREAK_PATTERN.exec(localForwardRaw);
+  const localForwardText = localForwardBreak
+    ? localForwardRaw.slice(0, localForwardBreak.index)
+    : localForwardRaw;
   return DESCRIPTIVE_SECURITY_CONTEXT_PATTERN.test(
-    `${backwardText} ${purposeTail} ${tail} ${corpus.slice(
-      Math.max(0, matchIndex - 120),
-      Math.min(corpus.length, matchEnd + 120),
-    )}`,
+    `${backwardText} ${purposeTail} ${tail} ${localBackwardText} ${localForwardText}`,
   );
 }
 
