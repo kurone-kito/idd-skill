@@ -226,7 +226,7 @@ const NOT_ONLY_IDIOM_PATTERN = /^\s*only\b/i;
 // deliberately not a break here: #2711's own wrapped quotation shows
 // ordinary prose legitimately continuing a clause across one.
 const CUE_HARD_BREAK_PATTERN =
-  /[.;:—]|--|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
+  /[.;:!?—]|--|\n[ \t]*(?:[-*]\s|\d+[.)]\s)|\n[ \t]*\n/;
 function isGovernedByBackwardCue(
   corpus: string,
   matchIndex: number,
@@ -332,9 +332,11 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
-  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:]{0,80}\b(?:before|until)\b/i;
+  /\b(?:cannot|can't)\b[^.;:!?]{0,80}\buntil\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:before|until)\b|\band\s+(?:it|the\s+credential|a\s+credential)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:supplied|provided|performed|created)\b[^.;:!?]{0,80}\b(?:before|until)\b|\bawaits?\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:approval|decision|input|review|access|credential)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
-  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s+(?:before|until)\b|[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:\n]{0,80}\b(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:\n]{1,40}\s+(?:before|until)\b/i;
+  /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s*(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:!?\n]{1,40}\s*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
+const CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN =
+  /(?:^|[.;:!?\n]\s+)(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))/i;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -874,14 +876,14 @@ function isFollowedByCredentialRequirement(
   const sameParagraph = paragraphBreak
     ? tail.slice(0, paragraphBreak.index)
     : tail;
-  const sameSentence = sameParagraph.split(/[.]/, 1)[0] ?? sameParagraph;
-  const firstBoundary = /^[^.;:\n]*[.;:\n]/.exec(sameParagraph);
+  const sameSentence = sameParagraph.split(/[.!?]/, 1)[0] ?? sameParagraph;
+  const firstBoundary = /^[^.;:!?\n]*[.;:!?\n]/.exec(sameParagraph);
   const firstFollowOnSentence = (() => {
     if (!firstBoundary) {
       return '';
     }
     const rest = sameParagraph.slice(firstBoundary[0].length);
-    const nextBoundary = /^[^.;:\n]*(?:[.;:\n]|$)/.exec(rest)?.[0] ?? rest;
+    const nextBoundary = /^[^.;:!?]*(?:[.;:!?]|$)/.exec(rest)?.[0] ?? rest;
     return sameParagraph.slice(
       firstBoundary[0].length - 1,
       firstBoundary[0].length + nextBoundary.length,
@@ -889,7 +891,12 @@ function isFollowedByCredentialRequirement(
   })();
   return (
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
-    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence)
+    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
+    CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN.test(
+      firstBoundary
+        ? sameParagraph.slice(firstBoundary.index + firstBoundary[0].length)
+        : '',
+    )
   );
 }
 
