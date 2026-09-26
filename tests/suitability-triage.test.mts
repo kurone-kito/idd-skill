@@ -7072,6 +7072,19 @@ This task requires ${abbreviation} production dashboard credentials.`,
   }
 });
 
+test('repository fit preserves dotted initialisms before uppercase access terms', () => {
+  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\nThis task requires ${abbreviation} Production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
+});
+
 test('repository fit treats an uppercase sentence after an abbreviation as a boundary', () => {
   const result = checkRepositoryFit({
     issue: {

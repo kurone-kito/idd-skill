@@ -210,6 +210,7 @@ const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
   /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
 const REPOSITORY_FIT_ABBREVIATION_PATTERN =
   /\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|e\.g|i\.e|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|u\.s|vs|vol)\.$/i;
+const REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN = /^(?:e\.g|i\.e|u\.s)$/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -2143,13 +2144,17 @@ export function checkRepositoryFit(context) {
   // distinguish lowercase abbreviations (such as `prod.`) from a sentence
   // starting with an uppercase word while keeping offsets stable.
   const lowerCaseScanBody = externalAccessScanBody
-    .replace(
-      /(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g,
-      (_whole, word) => `${word}!`,
+    .replace(/(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g, (_whole, word) =>
+      REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN.test(word)
+        ? `${word}.`
+        : `${word}!`,
     )
     .replace(
       /(?<![.\w])([A-Za-z]\.[A-Za-z])\.(?=[ \t]+[A-Z])/g,
-      (_whole, word) => `${word}!`,
+      (_whole, word) =>
+        REPOSITORY_FIT_DOTTED_INITIALISM_PATTERN.test(word)
+          ? `${word}.`
+          : `${word}!`,
     )
     .replace(/[A-Z]/g, (character) => character.toLowerCase());
   const externalAccessMatches = [
