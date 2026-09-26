@@ -6703,6 +6703,39 @@ test('repository fit treats a blank blockquote line as a paragraph boundary', ()
   assert.equal(result.pass, false);
 });
 
+test('repository fit separates a blockquote transition from preceding prose', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input\n> This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit masks multiline HTML attributes', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n<span\n title="negative fixture:">sample</span> this task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps an escaped table pipe inside its cell', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n| Negative fixture: a \\| b requires Slack access. | expected |\n| --- | --- |`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit rejects punctuation-delimited live clauses', () => {
   for (const separator of ['—', ':']) {
     const result = checkRepositoryFit({

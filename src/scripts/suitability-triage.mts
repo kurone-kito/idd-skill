@@ -481,8 +481,6 @@ function findRepositoryFitHiddenMetadataRanges(
         ranges.push({ start: tagStart, end: cursor + 1 });
         index = cursor;
         break;
-      } else if (character === '\n') {
-        break;
       }
     }
   }
@@ -544,6 +542,28 @@ function buildRepositoryFitParagraphSpans(
     const start = quoteBlankLineMatch.index ?? 0;
     return { start, end: start + (quoteBlankLineMatch[0] ?? '').length };
   });
+  const lineRecords = [...scanBody.matchAll(/^[^\n]*(?:\n|$)/gm)].map(
+    (lineMatch) => {
+      const raw = lineMatch[0] ?? '';
+      return {
+        start: lineMatch.index ?? 0,
+        isBlockQuote: /^[ \t]{0,3}>/u.test(raw),
+      };
+    },
+  );
+  const quoteTransitionRanges = lineRecords.flatMap((line, index) => {
+    const previousLine = lineRecords[index - 1];
+    if (
+      previousLine === undefined ||
+      previousLine.isBlockQuote === line.isBlockQuote
+    ) {
+      return [];
+    }
+    // End the preceding block immediately before the new block's line. The
+    // range must not extend into that line: consecutive quote lines belong to
+    // one blockquote paragraph unless a blank quote line separates them.
+    return [{ start: previousLine.start, end: line.start }];
+  });
   const setextHeadingRanges = [
     ...scanBody.matchAll(
       /^[ \t]{0,3}(?=\S)[^\n]+\n[ \t]{0,3}(?:=+|-+)[ \t]*(?:\n|$)/gm,
@@ -557,7 +577,7 @@ function buildRepositoryFitParagraphSpans(
       const raw = lineMatch[0] ?? '';
       const line = raw.replace(/\n$/u, '');
       const content = line.trim();
-      const isTableRow = /^\|?[^|\n]*(?:\|[^|\n]*)+\|?[ \t]*$/u.test(content);
+      const isTableRow = [...content.matchAll(/(?<!\\)\|/g)].length > 0;
       const isTableDelimiter =
         /^\|?[ \t]*(?::?-{1,}:?[ \t]*\|)+[ \t]*:?-{1,}:?[ \t]*\|?[ \t]*$/u.test(
           content,
@@ -597,10 +617,30 @@ function buildRepositoryFitParagraphSpans(
       }
     }
   }
+  const unescapedPipeOffsets = (text: string) => {
+    const offsets: number[] = [];
+    for (let offset = 0; offset < text.length; offset += 1) {
+      if (text[offset] !== '|') {
+        continue;
+      }
+      let backslashCount = 0;
+      for (
+        let cursor = offset - 1;
+        cursor >= 0 && text[cursor] === '\\';
+        cursor -= 1
+      ) {
+        backslashCount += 1;
+      }
+      if (backslashCount % 2 === 0) {
+        offsets.push(offset);
+      }
+    }
+    return offsets;
+  };
   const tableCellRanges = [...tableRows].flatMap((row) => {
     const rowText = scanBody.slice(row.contentStart, row.contentEnd);
-    const pipeOffsets = [...rowText.matchAll(/\|/g)].map(
-      (pipeMatch) => row.contentStart + (pipeMatch.index ?? 0),
+    const pipeOffsets = unescapedPipeOffsets(rowText).map(
+      (offset) => row.contentStart + offset,
     );
     const boundaries = [row.contentStart, ...pipeOffsets, row.contentEnd];
     return boundaries.slice(0, -1).flatMap((start, index) => {
@@ -612,6 +652,7 @@ function buildRepositoryFitParagraphSpans(
     ...nonInlineCodeRanges,
     ...headingRanges,
     ...quoteBlankLineRanges,
+    ...quoteTransitionRanges,
     ...setextHeadingRanges,
     ...tableCellRanges,
   ].sort((left, right) => left.start - right.start);
