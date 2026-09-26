@@ -13938,7 +13938,7 @@ function hasUnresolvedKnownBotThreads(threads: ThreadLike[]): boolean {
   });
 }
 
-function isCompletedCiTimestamp(value: unknown): boolean {
+export function isCompletedCiTimestamp(value: unknown): boolean {
   const timestamp = String(value ?? '');
   return timestamp !== '0001-01-01T00:00:00Z' && isValidIsoTimestamp(timestamp);
 }

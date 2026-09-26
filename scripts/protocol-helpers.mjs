@@ -11316,7 +11316,7 @@ function hasUnresolvedKnownBotThreads(threads) {
     });
   });
 }
-function isCompletedCiTimestamp(value) {
+export function isCompletedCiTimestamp(value) {
   const timestamp = String(value ?? '');
   return timestamp !== '0001-01-01T00:00:00Z' && isValidIsoTimestamp(timestamp);
 }

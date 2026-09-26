@@ -37,6 +37,7 @@ import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   CI_FAILURE_CONCLUSION_STATES,
   classifyCiChecks,
+  isCompletedCiTimestamp,
   isPreMergeCiAllPassing,
   resolvePresentRunConclusion,
   selectLatestCheckInstance,
@@ -983,7 +984,13 @@ export function latestPassingCompletedAt(summary: CiWaitStateSummary): string {
     if (!PASS_EQUIVALENT_STATES.has(check.state.toUpperCase())) {
       continue;
     }
-    if (!check.completedAt || check.completedAt <= latest) {
+    // Same filter as the snapshot field this value is compared with
+    // (`isCompletedCiTimestamp` in protocol-helpers.mts): drop GitHub's
+    // zero-value sentinel and any non-ISO timestamp before the max.
+    if (
+      !isCompletedCiTimestamp(check.completedAt) ||
+      check.completedAt <= latest
+    ) {
       continue;
     }
     latest = check.completedAt;

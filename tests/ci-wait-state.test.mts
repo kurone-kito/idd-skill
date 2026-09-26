@@ -6,6 +6,7 @@ import {
   ciWaitSummaryIsPreMergeCiPassing,
   collectCiWaitState,
   isProtectionReadUnreadable,
+  latestPassingCompletedAt,
   parseArgs,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
@@ -1495,4 +1496,46 @@ test('#3465: collectCiWaitState records a non-target advisory pass and a qualify
     '.github/workflows/idd-advisory-convergence.yml',
   );
   assert.equal(ciWaitSummaryIsPreMergeCiPassing(qualifying), true);
+});
+
+test('#3465: latestPassingCompletedAt ignores sentinel and malformed passing timestamps', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '0001-01-01T00:00:00Z',
+        }),
+        checkRun({
+          name: 'docs',
+          conclusion: 'SUCCESS',
+          completedAt: 'not-a-timestamp',
+        }),
+        checkRun({
+          name: 'build',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-09T00:05:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(latestPassingCompletedAt(summary), '2026-07-09T00:05:00Z');
+
+  const onlyInvalid = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          conclusion: 'SUCCESS',
+          completedAt: '0001-01-01T00:00:00Z',
+        }),
+      ],
+    },
+    {},
+  );
+  assert.equal(latestPassingCompletedAt(onlyInvalid), 'none');
 });
