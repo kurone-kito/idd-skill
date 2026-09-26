@@ -223,7 +223,11 @@ directly — no command block needed here.
 # COPILOT_PENDING was already "false", nothing is pending to remove) and
 # start at Step 3 instead.
 gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
-# on a GraphQL login-resolution failure:
+# on a GraphQL login-resolution failure, this DELETE is an attempt only:
+# a 422 "Could not resolve to a User node" for the default bot (PR #3471)
+# is not a removal result -- retry gh pr edit --remove-reviewer alone
+# (3 attempts) before any AW4 hold; never conclude from this call or an
+# empty requested_reviewers read (#2167, #3503).
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
 
