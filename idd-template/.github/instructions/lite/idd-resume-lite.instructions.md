@@ -52,7 +52,7 @@ Use GitHub **server** timestamps only. Stale age default: **24 h**
 | Issue closed or PR merged                                      | STOP — report; do not remove worktree/branch                      |
 | Valid human-gated forced-handoff matching live claim/branch/PR | Step 1 forced-handoff path (skip stall)                           |
 | Forced-handoff evidence present but mismatches live state      | STOP — report mismatch; do not claim/push                         |
-| Non-owned claim + operator-present (below) + input received    | Operator-present path (below); skip stall                         |
+| Non-owned active claim + operator-present + input received     | Operator-present path (below); skip stall                         |
 | Non-owned active claim, no valid forced-handoff                | `idd-resume-stall-lite.instructions.md`; then Step 1 if unblocked |
 | Otherwise                                                      | Step 1                                                            |
 
@@ -98,8 +98,8 @@ Forced-handoff: pass `new_claim_id` into Step 1. On
 `--claim-id <evidence.forced_handoff.new_claim_id>` before STOP.
 Retry `already_owned`: STOP if `new_agent_id` is not this
 session or `old_claim_id` is this session's claim (displaced).
-Else adopt the pair; post this session's own activation-nonce; wait
-settle; confirm the nonce winner; then Step 2.
+Else adopt the pair; post this session's own activation-nonce unless
+already recorded; wait settle; confirm the nonce winner; then Step 2.
 
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).

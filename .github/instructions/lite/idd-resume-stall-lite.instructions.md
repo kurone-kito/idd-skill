@@ -109,10 +109,10 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 
 ## S5 — Takeover
 
-Route through `idd-claim-lite.instructions.md`: pre-check (c)
-`--fresh-claim-gate`, then Claim execution with
-`supersedes: <prior-claim-id>` (`--record-tokens` before the post and
-the activation-nonce), then Claim verification.
+Route through `idd-claim-lite.instructions.md`: pre-checks (a)-(e) in
+full, then Claim execution with `supersedes: <prior-claim-id>`
+(`--record-tokens` before the post and the activation-nonce), then
+Claim verification.
 
 Lost → STOP. Verified → return to `idd-resume-lite.instructions.md`
 Step 1 with `--claim-id`/`--nonce`.
