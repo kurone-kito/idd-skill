@@ -344,7 +344,7 @@ const UNSAFE_PATTERNS = [
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\b[A-Za-z]\.[A-Za-z])\.(?=[ \t]))`;
+const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\b[A-Za-z]\.[A-Za-z])\.(?=[ \t])|(?<=\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|vs|vol))\.(?=[ \t]+[a-z]))`;
 const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
   String.raw`\b(requires?|need(?:s)?|must|depends on)\b${EXTERNAL_SYSTEM_ACCESS_GAP}{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b`,
   'i',
@@ -2210,9 +2210,15 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,
     };
   }
+  // Match against a lowercase copy so the sentence-boundary exceptions can
+  // distinguish lowercase abbreviations (such as `prod.`) from a sentence
+  // starting with an uppercase word while keeping offsets stable.
+  const lowerCaseScanBody = scanBody.replace(/[A-Z]/g, (character) =>
+    character.toLowerCase(),
+  );
   const externalAccessMatches = [
-    ...scanBody.matchAll(
-      new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
+    ...lowerCaseScanBody.matchAll(
+      new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'g'),
     ),
   ].filter((match) => {
     const matchStart = match.index ?? 0;
@@ -2357,7 +2363,8 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
           cuePrefix.slice(clauseStart + 1),
         ) ||
         REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
-        (!allowLooseContinuation && /[.!?;]/.test(cueToMatch))
+        (!allowLooseContinuation && /[.!?;]/.test(cueToMatch)) ||
+        /\b(?:but|however|although|while|whereas)\b/i.test(cueToMatch)
       ) {
         continue;
       }
@@ -2381,10 +2388,6 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       betweenRequirements,
     );
   };
-  const sameContext = (
-    left: { start: number; end: number },
-    right: { start: number; end: number },
-  ) => left.start === right.start && left.end === right.end;
   const contextSpans = externalAccessMatches.map((match) => {
     const matchIndex = match.index ?? 0;
     const listItemContext = listItemContextFor(matchIndex);
@@ -2420,12 +2423,8 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     ) {
       continue;
     }
-    const contextMatchCount = contextSpans.filter((candidate) =>
-      sameContext(candidate.span, span),
-    ).length;
     if (
       matchEnd <= span.end &&
-      contextMatchCount === 1 &&
       !hasIndependentRequirementClause(matchText) &&
       hasPositiveFixtureCue(
         scanBody.slice(span.start, span.end),

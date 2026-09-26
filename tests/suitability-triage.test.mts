@@ -6159,6 +6159,32 @@ Negative fixture: a task requires protected material, but this implementation ne
   assert.equal(result.pass, false);
 });
 
+test('repository fit rejects a conjunction-separated live clause after a fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit exempts each explicitly cued fixture independently', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires Slack access. Negative fixture: a task requires Jira access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('repository fit rejects an unrelated should-fail sentence beside a live prerequisite', () => {
   const result = checkRepositoryFit({
     issue: {
@@ -6780,7 +6806,7 @@ test('repository fit still flags a real external-access requirement', () => {
 });
 
 test('repository fit preserves abbreviations inside access requirements', () => {
-  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.']) {
+  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.', 'prod.']) {
     const result = checkRepositoryFit({
       issue: {
         ...BASE_ISSUE,
