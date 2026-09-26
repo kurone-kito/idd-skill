@@ -51,20 +51,26 @@ interface GqlAuthorPayload {
   login?: string | null;
 }
 
-/** Minimizable GraphQL node fields shared by every subject type. */
+/**
+ * Minimizable GraphQL node fields shared by every subject type. `updatedAt`
+ * (#3321) backs {@link revalidateCandidate}'s cheap per-subject staleness
+ * check: `IssueComment`, `PullRequestReview`, and `PullRequestReviewComment`
+ * all expose their own `updatedAt`, so it lives on the shared base rather
+ * than each subtype re-declaring it.
+ */
 interface MinimizableNode {
   id: string;
   url: string;
   isMinimized?: boolean | null;
   minimizedReason?: string | null;
   viewerCanMinimize?: boolean | null;
+  updatedAt?: string | null;
 }
 
 /** PR issue-comment node from the comments connection. */
 interface IssueCommentNode extends MinimizableNode {
   body: string;
   createdAt?: string | null;
-  updatedAt?: string | null;
   author?: GqlAuthorPayload | null;
 }
 
@@ -139,6 +145,12 @@ type SubjectInfo = {
   viewerCanMinimize: boolean;
   isMinimized: boolean;
   minimizedReason: string | null;
+  /**
+   * The subject's own `updatedAt` at scan time (#3321), carried onto the
+   * row so {@link revalidateCandidate}'s per-subject re-read can detect a
+   * change since this pass's snapshot without a full report rebuild.
+   */
+  updatedAt: string | null;
 };
 
 /** Report row: a subject plus per-disposition metadata. */
@@ -216,6 +228,7 @@ export interface CleanupArgs {
   claimId?: string;
   agentId?: string;
   skipClaimCheck?: boolean;
+  timeBudgetSeconds?: string;
 }
 
 /**
@@ -245,6 +258,7 @@ const AUDIT_PR_CLEANUP_FLAG_SPEC = {
   '--claim-id': { type: 'string' },
   '--agent-id': { type: 'string' },
   '--skip-claim-check': { type: 'boolean', default: false },
+  '--time-budget-seconds': { type: 'string' },
 } as const;
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
@@ -269,6 +283,7 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
   url
   body
   createdAt
+  updatedAt
   isMinimized
   minimizedReason
   viewerCanMinimize
@@ -286,6 +301,14 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
 // hasNextPage) still fires rather than misreporting a capped thread as
 // complete.
 const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
+
+// No-op apply-mode time budget (#3321) used when `--time-budget-seconds` is
+// absent -- "without the flag, behavior is unchanged." Declared here, above
+// the CLI entry block below, per this file's own module-eval-order
+// contract (`TimeBudget` itself, a type, is declared further down near its
+// other usages -- interface declarations are erased at runtime and exempt,
+// and TypeScript resolves an interface regardless of declaration order).
+const UNBOUNDED_TIME_BUDGET: TimeBudget = { exhausted: () => false };
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -352,6 +375,17 @@ async function main(): Promise<HelperCliResult> {
     );
   }
 
+  // #3321: the apply-mode time budget is measured from helper start (once
+  // for the whole invocation, including a `--prs` batch, not reset per PR)
+  // via the same injectable-clock pattern as the existing `backoff`
+  // parameter. Absent `--time-budget-seconds`, this is the unbounded no-op
+  // budget -- "without the flag, behavior is unchanged."
+  const timeBudget = createTimeBudget(
+    args.timeBudgetSeconds === undefined
+      ? undefined
+      : parsePositiveInteger(args.timeBudgetSeconds, '--time-budget-seconds'),
+  );
+
   // #2224: owner/repo detection above and the module-level trust/permission
   // caches (trustedMarkerAuthorCache, collaboratorPermissionCache,
   // cachedConfiguredTrustedMarkerActorSources, cachedCurrentViewerLogin) are
@@ -369,7 +403,7 @@ async function main(): Promise<HelperCliResult> {
     if (printBatchHeader) {
       console.log(`=== PR #${prNumber} ===`);
     }
-    if (await processOnePr(owner, repo, prNumber, args)) {
+    if (await processOnePr(owner, repo, prNumber, args, timeBudget)) {
       anyFailed = true;
     }
   }
@@ -451,6 +485,7 @@ async function processOnePr(
   repo: string,
   prNumber: number,
   args: CleanupArgs,
+  budget: TimeBudget = UNBOUNDED_TIME_BUDGET,
 ): Promise<boolean> {
   const claimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
@@ -473,11 +508,14 @@ async function processOnePr(
     } = await runApplyWithRetry(
       report,
       (pass) =>
-        applyCandidatePass(owner, repo, prNumber, pass, args, claimContext),
+        applyCandidatePass(owner, repo, pass, args, claimContext, { budget }),
       // throwOnError so a transient GraphQL/gh failure on this confirming
       // rescan is catchable by runApplyWithRetry (which preserves the
       // already-applied work) instead of exiting the process outright.
       () => buildReport(owner, repo, prNumber, { throwOnError: true }),
+      undefined,
+      undefined,
+      budget,
     );
     finalReport.retryAttempts = attempts;
     if (boundExhausted) {
@@ -501,21 +539,73 @@ async function processOnePr(
 }
 
 /**
+ * Injectable elapsed-time gate for apply-mode's `--time-budget-seconds`
+ * (#3321), mirroring the existing injectable `backoff` pattern.
+ */
+export interface TimeBudget {
+  exhausted(): boolean;
+}
+
+/**
+ * Builds a `TimeBudget` measured from the moment this is called ("from
+ * helper start", per the issue design) using an injectable `clock` — the
+ * same fake-timer-friendly shape `defaultApplyRetryBackoff` already uses.
+ * `seconds` of `null`/`undefined` returns the unbounded no-op budget above.
+ */
+export function createTimeBudget(
+  seconds: number | null | undefined,
+  clock: () => number = Date.now,
+): TimeBudget {
+  if (seconds === null || seconds === undefined) {
+    return UNBOUNDED_TIME_BUDGET;
+  }
+  const deadlineMs = clock() + seconds * 1000;
+  return { exhausted: () => clock() >= deadlineMs };
+}
+
+/** Injected dependencies for {@link applyCandidatePass} (#3321); each
+ * defaults to the real implementation, so omitting `deps` entirely
+ * reproduces the exact pre-#3321 behavior. */
+export interface ApplyCandidatePassDeps {
+  fetchNode?: (
+    subjectId: string,
+    options?: GraphqlCallOptions,
+  ) => MinimizableNodeSnapshot | null;
+  minimize?: (subjectId: string, classifier: string) => MinimizedCommentNode;
+  budget?: TimeBudget;
+}
+
+/**
  * Runs one whole apply pass over `report.candidates`, mutating
  * `report.applied` / `report.failed` in place (#2011, extracted verbatim
  * from the previous single-pass `main()` body). Re-validates the active
  * claim before each candidate, and again after `revalidateCandidate`'s
  * fresh per-candidate re-fetch, matching the pre-existing behavior.
+ *
+ * Exported, with an injectable `deps` (#3321), for direct unit testing:
+ * `fetchNode`/`minimize` swap out the real per-subject GraphQL read and
+ * mutation, and `budget` (default: unbounded) is checked before each
+ * candidate — once exhausted, the pass starts no new candidate and stops,
+ * leaving the remainder of `report.candidates` untouched for
+ * {@link runApplyWithRetry}'s own post-pass budget check.
  */
-async function applyCandidatePass(
+export async function applyCandidatePass(
   owner: string,
   repo: string,
-  prNumber: number,
   report: CleanupAuditReport,
   args: CleanupArgs,
   claimContext: ClaimContext,
+  deps: ApplyCandidatePassDeps = {},
 ): Promise<void> {
+  const {
+    fetchNode = fetchMinimizableNode,
+    minimize = minimizeComment,
+    budget = UNBOUNDED_TIME_BUDGET,
+  } = deps;
   for (const candidate of report.candidates) {
+    if (budget.exhausted()) {
+      break;
+    }
     if (!args.skipClaimCheck) {
       try {
         assertActiveClaim(
@@ -536,11 +626,9 @@ async function applyCandidatePass(
     }
     try {
       const freshCandidate = await revalidateCandidate(
-        owner,
-        repo,
-        prNumber,
         candidate,
         report,
+        fetchNode,
       );
       if (!freshCandidate) {
         continue;
@@ -563,7 +651,7 @@ async function applyCandidatePass(
           break;
         }
       }
-      const minimized = minimizeComment(
+      const minimized = minimize(
         freshCandidate.subjectId,
         freshCandidate.classifier,
       );
@@ -598,29 +686,56 @@ export interface ApplyRetryResult {
 }
 
 /**
+ * Removes any subject already present in `applied`/`skipped` from
+ * `report.candidates` (#3321). Needed only on the no-rescan
+ * `time-budget-exhausted` return path below: every other return path
+ * either hands back a fresh rescanned report (whose `candidates`/
+ * `skipped` are already reconciled against `applied` a few lines down)
+ * or a report with `failed` non-empty (checked, and returned on, before
+ * any candidate could reach `applied`/`skipped` in the same pass).
+ * Without this, a subject this pass already resolved would still appear
+ * in the stale, unfiltered `report.candidates` too, double-counting it
+ * in {@link computeReportSummary}'s summary maths.
+ */
+function pruneResolvedFromCandidates(report: CleanupAuditReport): void {
+  const resolved = new Set([
+    ...report.applied.map((row) => row.subjectId),
+    ...report.skipped.map((row) => row.subjectId),
+  ]);
+  report.candidates = report.candidates.filter(
+    (row) => !resolved.has(row.subjectId),
+  );
+}
+
+/**
  * Retries a whole apply-and-rescan pass, bounded by `maxAttempts`, so a
  * candidate that only becomes eligible after the previous pass finished
  * (e.g. GraphQL read-after-write lag on `minimizeComment`, #2011) still
  * converges within one `--apply` invocation instead of requiring a second,
  * manual call.
  *
- * `applyPass`, `rescan`, and `backoff` are injected rather than calling
- * `buildReport` / `gh` / real timers directly, so this orchestration is
- * unit-testable with fakes. `applyPass` must mutate its report argument's
- * `applied` / `failed` arrays in place (matching
+ * `applyPass`, `rescan`, `backoff`, and `budget` are injected rather than
+ * calling `buildReport` / `gh` / real timers directly, so this
+ * orchestration is unit-testable with fakes. `applyPass` must mutate its
+ * report argument's `applied` / `failed` arrays in place (matching
  * {@link applyCandidatePass}); `rescan` must return a fresh
  * dry-run-equivalent report reflecting current state; `backoff` waits
  * before each rescan (default: a short linear-ish delay with jitter, so
  * GraphQL read-after-write lag on the pass's own mutations has a moment
- * to settle before re-querying).
+ * to settle before re-querying); `budget` (default: unbounded, #3321) is
+ * checked immediately after each pass and again immediately before
+ * starting the next one — once exhausted, no confirming rescan runs and
+ * no further pass starts, matching {@link applyCandidatePass}'s own
+ * per-candidate budget check at the finer granularity of a single pass.
  *
  * Stops immediately, without any further rescan, the first time a pass
  * leaves `failed` non-empty (matches the pre-existing fail-fast
- * behavior). Otherwise rescans after every pass: zero candidates means
- * converged; a non-empty rescan below the attempt bound starts another
- * pass, carrying the accumulated `applied` list onto the fresh report;
- * a non-empty rescan at the attempt bound is reported as
- * `boundExhausted` rather than retried further.
+ * behavior) — checked before the budget, so a genuine failure always
+ * outranks a merely-spent budget. Otherwise rescans after every pass:
+ * zero candidates means converged; a non-empty rescan below the attempt
+ * bound starts another pass, carrying the accumulated `applied` list
+ * onto the fresh report; a non-empty rescan at the attempt bound is
+ * reported as `boundExhausted` rather than retried further.
  */
 export async function runApplyWithRetry(
   initialReport: CleanupAuditReport,
@@ -628,6 +743,7 @@ export async function runApplyWithRetry(
   rescan: () => Promise<CleanupAuditReport>,
   maxAttempts: number = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
   backoff: (attempt: number) => Promise<void> = defaultApplyRetryBackoff,
+  budget: TimeBudget = UNBOUNDED_TIME_BUDGET,
 ): Promise<ApplyRetryResult> {
   // A non-finite `maxAttempts` (`Infinity`) would defeat the bounded-retry
   // contract with an unbounded loop; a fractional value (e.g. `2.5`) would
@@ -641,6 +757,20 @@ export async function runApplyWithRetry(
   for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
     await applyPass(report);
     if (report.failed.length > 0) {
+      return { report, attempts: attempt, boundExhausted: false };
+    }
+
+    // The apply-mode time budget ran out during (or exactly at the end
+    // of) this pass (#3321): stop here, without any rescan -- "no
+    // confirming rescan starts after the budget is spent." `applyPass`
+    // may have left `report.candidates` still listing subjects this pass
+    // already resolved onto `applied`/`skipped` (no rescan will replace
+    // it to exclude them the way the normal convergence path below
+    // does), so prune those first to avoid double-counting the same
+    // subject in two arrays.
+    if (budget.exhausted()) {
+      pruneResolvedFromCandidates(report);
+      report.timeBudgetExhausted = true;
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -689,6 +819,17 @@ export async function runApplyWithRetry(
     }
     if (attempt === totalAttempts) {
       return { report: freshReport, attempts: attempt, boundExhausted: true };
+    }
+
+    // The rescan just found remaining candidates for another pass, but
+    // the time budget ran out while the rescan itself was in flight
+    // (#3321): stop here too, without starting another pass. `freshReport`
+    // is already self-consistent (the rescan above is a fresh, authoritative
+    // snapshot, already reconciled against `applied`), so no further pruning
+    // is needed here the way the first budget check above needs it.
+    if (budget.exhausted()) {
+      freshReport.timeBudgetExhausted = true;
+      return { report: freshReport, attempts: attempt, boundExhausted: false };
     }
 
     report = freshReport;
@@ -1170,6 +1311,7 @@ function subjectFromNode(
     viewerCanMinimize: Boolean(node.viewerCanMinimize),
     isMinimized: Boolean(node.isMinimized),
     minimizedReason: node.minimizedReason || null,
+    updatedAt: node.updatedAt ?? null,
   };
 }
 
@@ -1357,6 +1499,7 @@ function fetchReviews(
             body
             state
             submittedAt
+            updatedAt
             isMinimized
             minimizedReason
             viewerCanMinimize
@@ -1614,47 +1757,159 @@ function minimizeComment(
   return minimized;
 }
 
+/** Per-subject Minimizable snapshot returned by {@link fetchMinimizableNode}. */
+export interface MinimizableNodeSnapshot {
+  isMinimized: boolean;
+  minimizedReason: string | null;
+  viewerCanMinimize: boolean;
+  updatedAt: string | null;
+}
+
+/**
+ * Cheap per-subject GraphQL `node(id:)` read of just the Minimizable
+ * fields plus `updatedAt` (#3321), used by {@link revalidateCandidate}
+ * instead of a full {@link buildReport} rebuild: one full snapshot per
+ * apply pass (the pass's own input report) plus one cheap read per
+ * candidate, instead of one full rebuild per candidate. `IssueComment`,
+ * `PullRequestReview`, and `PullRequestReviewComment` are the only
+ * subject types this helper ever minimizes, so the same three inline
+ * fragments cover every candidate regardless of its recorded `type`.
+ * Returns `null` when the node no longer resolves (e.g. deleted between
+ * the pass's snapshot and this candidate's turn).
+ */
+function fetchMinimizableNode(
+  subjectId: string,
+  options: GraphqlCallOptions = {},
+): MinimizableNodeSnapshot | null {
+  const query = `query($id:ID!){
+    node(id:$id){
+      __typename
+      ... on IssueComment{isMinimized minimizedReason viewerCanMinimize updatedAt}
+      ... on PullRequestReview{isMinimized minimizedReason viewerCanMinimize updatedAt}
+      ... on PullRequestReviewComment{isMinimized minimizedReason viewerCanMinimize updatedAt}
+    }
+  }`;
+  const result = ghGraphql(query, { id: subjectId }, options) as {
+    data?: {
+      node?:
+        | (Partial<MinimizableNodeSnapshot> & { __typename?: string | null })
+        | null;
+    } | null;
+    errors?: GraphqlErrorEntry[] | null;
+  };
+  if (result.errors?.length) {
+    handleGraphqlFailure(
+      `GraphQL node query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, { id: subjectId })}`,
+      options,
+    );
+  }
+  const node = result.data?.node;
+  if (!node?.__typename) {
+    return null;
+  }
+  return {
+    isMinimized: Boolean(node.isMinimized),
+    minimizedReason: node.minimizedReason ?? null,
+    viewerCanMinimize: Boolean(node.viewerCanMinimize),
+    updatedAt: node.updatedAt ?? null,
+  };
+}
+
+/**
+ * Re-validates one candidate immediately before minimizing it (#2011,
+ * rewritten for #3321). Previously rebuilt the whole report per candidate
+ * via {@link buildReport}; now reads only this subject's own fresh
+ * Minimizable state via the injectable `fetchNode` (default
+ * {@link fetchMinimizableNode}), so an apply pass over N candidates makes
+ * one full report snapshot (the pass's own input) plus N cheap per-subject
+ * reads, not N+1 full rebuilds.
+ *
+ * Accepted trade-off (Groom-hearing design, kurone-kito/idd-skill#3321):
+ * eligibility that depends on OTHER nodes -- for example a new reply
+ * landing on a sibling thread of a review-parent candidate -- can no
+ * longer be re-derived per candidate the way a full rebuild could. It is
+ * now evaluated once per pass instead of once per item; the window this
+ * opens is bounded by the pass duration and the apply-mode time budget,
+ * and the existing confirming rescan (`runApplyWithRetry`) still re-derives
+ * it fully after every pass.
+ *
+ * Returns the fresh row to minimize, or `null` when this candidate must
+ * not be minimized this pass -- either because it was resolved onto
+ * `report.skipped` (already minimized, or permission-blocked), or because
+ * it is deliberately left untouched as a still-open candidate (its
+ * `updatedAt` moved since the snapshot): the caller's `report.candidates`
+ * still names it, so the confirming rescan -- or, if the apply-mode time
+ * budget runs out first, the next invocation -- picks it up.
+ */
 async function revalidateCandidate(
-  owner: string,
-  repo: string,
-  prNumber: number,
   candidate: ReportRow,
   report: CleanupAuditReport,
+  fetchNode: (
+    subjectId: string,
+    options?: GraphqlCallOptions,
+  ) => MinimizableNodeSnapshot | null = fetchMinimizableNode,
 ): Promise<ReportRow | null> {
-  const freshReport = await buildReport(owner, repo, prNumber, {
-    throwOnError: true,
-  });
-  const freshCandidate = freshReport.candidates.find((current) => {
-    return (
-      current.subjectId === candidate.subjectId &&
-      current.classifier === candidate.classifier
+  const fresh = fetchNode(candidate.subjectId, { throwOnError: true });
+
+  if (!fresh) {
+    addSkipped(
+      report,
+      candidate,
+      'pre-minimize revalidation failed: subject no longer exists',
     );
-  });
-  if (freshCandidate) {
-    return freshCandidate;
+    return null;
   }
 
-  const skipped = freshReport.skipped.find((current) => {
-    return (
-      current.subjectId === candidate.subjectId &&
-      current.classifier === candidate.classifier
-    );
-  });
+  const freshFields = {
+    isMinimized: fresh.isMinimized,
+    minimizedReason: fresh.minimizedReason,
+    viewerCanMinimize: fresh.viewerCanMinimize,
+    updatedAt: fresh.updatedAt,
+  };
+
   // Carry the FRESH state of the candidate (not the stale scan row) so the
-  // summary classifies it correctly: a candidate that was minimized between the
-  // scan and this apply — typically a cascade when its parent was minimized
-  // earlier in the same run — now has `isMinimized: true` and is counted as an
-  // already-minimized (converged) skip, while a candidate that became
-  // permission-blocked keeps `viewerCanMinimize: false` and is counted as a
-  // genuine remainder. Without this, a cascade-minimized child kept the stale
-  // `isMinimized: false`, so the run looked `incomplete` even though it
-  // converged (#1039).
-  addSkipped(
-    report,
-    skipped ?? candidate,
-    `pre-minimize revalidation failed: ${skipped?.skipReason ?? 'candidate is no longer eligible'}`,
-  );
-  return null;
+  // summary classifies it correctly: a candidate that was minimized between
+  // the scan and this apply — typically a cascade when its parent was
+  // minimized earlier in the same run — now has `isMinimized: true` and is
+  // counted as an already-minimized (converged) skip, while a candidate
+  // that became permission-blocked keeps `viewerCanMinimize: false` and is
+  // counted as a genuine remainder. Without this, a cascade-minimized child
+  // kept the stale `isMinimized: false`, so the run looked `incomplete`
+  // even though it converged (#1039).
+  if (fresh.isMinimized) {
+    addSkipped(
+      report,
+      { ...candidate, ...freshFields },
+      'pre-minimize revalidation failed: candidate is already minimized (likely cascade-minimized with a parent)',
+    );
+    return null;
+  }
+
+  if (!fresh.viewerCanMinimize) {
+    addSkipped(
+      report,
+      { ...candidate, ...freshFields },
+      'pre-minimize revalidation failed: viewer cannot minimize this comment',
+    );
+    return null;
+  }
+
+  // The subject changed since this pass's own snapshot -- leave it exactly
+  // as a candidate (do not move it to `skipped`) rather than guess at
+  // eligibility this per-subject read cannot see; the existing confirming
+  // rescan re-derives it fully. Moving it to `skipped` here would also
+  // wrongly exclude it from `report.candidates` on the no-rescan
+  // time-budget-exhausted path (`runApplyWithRetry`), where it must still
+  // be listed as remaining work.
+  if (
+    candidate.updatedAt &&
+    fresh.updatedAt &&
+    fresh.updatedAt !== candidate.updatedAt
+  ) {
+    return null;
+  }
+
+  return { ...candidate, ...freshFields };
 }
 
 function assertActiveClaim(
@@ -2111,6 +2366,10 @@ function parseArgs(argv: string[]): CleanupArgs {
     values['agent-id'] as string | undefined,
     '--agent-id',
   );
+  const timeBudgetSeconds = requireNonEmpty(
+    values['time-budget-seconds'] as string | undefined,
+    '--time-budget-seconds',
+  );
 
   return {
     format,
@@ -2125,6 +2384,7 @@ function parseArgs(argv: string[]): CleanupArgs {
     claimId,
     agentId,
     skipClaimCheck: values['skip-claim-check'] as boolean,
+    timeBudgetSeconds,
   };
 }
 
@@ -2150,6 +2410,13 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
+  --time-budget-seconds <n>         apply mode only: bound total apply-pass
+                                     wall time, measured from helper start;
+                                     once spent, start no new candidate or
+                                     pass, keep every already-applied row,
+                                     and report status
+                                     time-budget-exhausted with no
+                                     confirming rescan (default: unlimited)
   --repo <owner/name>               repository override, combined form
   --owner <owner>                   repository override, split form (use
                                      with --repo <name>, the bare

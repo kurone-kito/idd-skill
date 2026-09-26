@@ -7,16 +7,20 @@ import { test } from 'node:test';
 import type {
   CleanupArgs,
   CleanupAuditReport,
+  MinimizableNodeSnapshot,
   ReviewThreadNode,
 } from '../src/scripts/audit-pr-cleanup.mts';
 import {
+  applyCandidatePass,
   assertBatchApplyClaimScope,
+  createTimeBudget,
   evaluateOperationalComment,
   evaluateReviewComment,
   fetchReviewThreads,
   parsePrNumbers,
   readActiveClaim,
 } from '../src/scripts/audit-pr-cleanup.mts';
+import { computeReportSummary } from '../src/scripts/audit-pr-cleanup-summary.mts';
 import { renderClaimedByMarker } from '../src/scripts/marker-helpers.mts';
 import {
   indexLatestGatingReviewsByAuthor,
@@ -77,6 +81,7 @@ function createRow(subjectId: string) {
     viewerCanMinimize: true,
     isMinimized: false,
     minimizedReason: null,
+    updatedAt: null,
   };
 }
 
@@ -407,6 +412,270 @@ function stubExitOnFail(): () => void {
     console.error = originalError;
   };
 }
+
+// #3321: applyCandidatePass's own tests. `skipClaimCheck: true` bypasses
+// the active-claim gh call entirely, and `fetchNode`/`minimize`/`budget`
+// are injected fakes -- no `gh` stubbing needed anywhere below, unlike the
+// pre-#3321 `revalidateCandidate` (a full `buildReport` rebuild) this
+// replaces.
+function applyArgs(overrides: Partial<CleanupArgs> = {}): CleanupArgs {
+  return cleanupArgs({ apply: true, skipClaimCheck: true, ...overrides });
+}
+
+function fakeSnapshot(
+  overrides: Partial<MinimizableNodeSnapshot> = {},
+): MinimizableNodeSnapshot {
+  return {
+    isMinimized: false,
+    minimizedReason: null,
+    viewerCanMinimize: true,
+    updatedAt: null,
+    ...overrides,
+  };
+}
+
+test('applyCandidatePass: a cascade-minimized candidate ends in skipped with isMinimized true (#1039 regression, #3321)', async () => {
+  const report = createAuditReport({ candidates: [createRow('c1')] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () =>
+        fakeSnapshot({ isMinimized: true, minimizedReason: 'OUTDATED' }),
+    },
+  );
+
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.failed.length, 0);
+  assert.equal(report.skipped.length, 1);
+  assert.equal(report.skipped[0].isMinimized, true);
+  assert.equal(report.skipped[0].minimizedReason, 'OUTDATED');
+});
+
+test('applyCandidatePass: a permission-blocked candidate ends in skipped (#3321)', async () => {
+  const report = createAuditReport({ candidates: [createRow('c1')] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ viewerCanMinimize: false }),
+    },
+  );
+
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.skipped.length, 1);
+  assert.equal(report.skipped[0].viewerCanMinimize, false);
+  assert.equal(report.skipped[0].isMinimized, false);
+});
+
+test('applyCandidatePass: a candidate whose updatedAt changed since the snapshot is left as a candidate, not minimized this pass (#3321)', async () => {
+  const row = { ...createRow('c1'), updatedAt: '2026-01-01T00:00:00Z' };
+  const report = createAuditReport({ candidates: [row] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ updatedAt: '2026-01-02T00:00:00Z' }),
+    },
+  );
+
+  // Deliberately NOT addSkipped: the row must still be reachable as a
+  // candidate (report.candidates is untouched by applyCandidatePass; only
+  // populated/pruned by its callers), never miscounted as resolved.
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.skipped.length, 0);
+  assert.equal(report.failed.length, 0);
+  assert.equal(report.candidates.length, 1);
+});
+
+test('applyCandidatePass: a subject that no longer resolves is skipped defensively (#3321)', async () => {
+  const report = createAuditReport({ candidates: [createRow('c1')] });
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => null,
+    },
+  );
+
+  assert.equal(report.applied.length, 0);
+  assert.equal(report.failed.length, 0);
+  assert.equal(report.skipped.length, 1);
+});
+
+test('applyCandidatePass: an eligible unchanged candidate is minimized (#3321)', async () => {
+  const row = { ...createRow('c1'), updatedAt: '2026-01-01T00:00:00Z' };
+  const report = createAuditReport({ candidates: [row] });
+  const minimizeCalls: [string, string][] = [];
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => fakeSnapshot({ updatedAt: '2026-01-01T00:00:00Z' }),
+      minimize: (subjectId, classifier) => {
+        minimizeCalls.push([subjectId, classifier]);
+        return { isMinimized: true, minimizedReason: 'OUTDATED' };
+      },
+    },
+  );
+
+  assert.equal(report.applied.length, 1);
+  assert.equal(report.applied[0].isMinimized, true);
+  assert.deepEqual(minimizeCalls, [['c1', '']]);
+});
+
+test('applyCandidatePass: the budget is checked before each candidate, ahead of any work (#3321)', async () => {
+  const report = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+  let fetchNodeCalls = 0;
+
+  await applyCandidatePass(
+    'o',
+    'r',
+    report,
+    applyArgs(),
+    {},
+    {
+      fetchNode: () => {
+        fetchNodeCalls += 1;
+        return fakeSnapshot();
+      },
+      minimize: () => ({ isMinimized: true, minimizedReason: null }),
+      budget: { exhausted: () => true },
+    },
+  );
+
+  assert.equal(fetchNodeCalls, 0);
+  assert.equal(report.applied.length, 0);
+  // report.candidates itself is left untouched by applyCandidatePass (its
+  // caller, runApplyWithRetry, is what prunes/replaces it) -- both entries
+  // are still there, unprocessed.
+  assert.equal(report.candidates.length, 2);
+});
+
+// #3321: demonstrates the actual fix -- applyCandidatePass's per-candidate
+// revalidation is one cheap node read each, never a full report rebuild,
+// so a multi-candidate pass makes exactly one "full report build" (the
+// rescan below stands in for it, the same way the pre-existing
+// runApplyWithRetry tests above already treat `rescan` as the equivalent
+// of a `buildReport` call) regardless of candidate count -- not one
+// rebuild per candidate the way the pre-#3321 revalidateCandidate did.
+test('runApplyWithRetry + applyCandidatePass: per-candidate revalidation is cheap, not a full report rebuild, across multiple candidates (#3321)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let fetchNodeCalls = 0;
+  let rescanCalls = 0;
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2'), createRow('c3')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => {
+            fetchNodeCalls += 1;
+            return fakeSnapshot();
+          },
+          minimize: () => ({ isMinimized: true, minimizedReason: null }),
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    noBackoff,
+  );
+
+  assert.equal(fetchNodeCalls, 3);
+  assert.equal(rescanCalls, 1);
+  assert.equal(result.report.applied.length, 3);
+});
+
+test('runApplyWithRetry + applyCandidatePass: an exhausted time budget stops the run, keeps earlier applied rows, and runs no confirming rescan (#3321)', async () => {
+  const { runApplyWithRetry } = await import(
+    '../src/scripts/audit-pr-cleanup.mts'
+  );
+  let clockCalls = 0;
+  // Call 1 computes the deadline at budget-creation time; call 2 is the
+  // per-candidate `exhausted()` check ahead of c1 (still within budget);
+  // call 3 is the same check ahead of c2 (now past the deadline).
+  const budget = createTimeBudget(1, () => {
+    clockCalls += 1;
+    return clockCalls <= 2 ? 0 : 5000;
+  });
+  let rescanCalls = 0;
+  const initial = createAuditReport({
+    candidates: [createRow('c1'), createRow('c2')],
+  });
+
+  const result = await runApplyWithRetry(
+    initial,
+    (report) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        report,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: () => ({ isMinimized: true, minimizedReason: null }),
+          budget,
+        },
+      ),
+    async () => {
+      rescanCalls += 1;
+      return createAuditReport({ mode: 'dry-run', candidates: [] });
+    },
+    undefined,
+    noBackoff,
+    budget,
+  );
+
+  assert.equal(rescanCalls, 0);
+  assert.equal(result.report.applied.length, 1);
+  assert.equal(result.report.applied[0].subjectId, 'c1');
+  assert.equal(result.report.timeBudgetExhausted, true);
+  // c2 is still listed as a remaining candidate -- never silently dropped
+  // nor double-counted alongside `applied`.
+  assert.deepEqual(
+    result.report.candidates.map((row) => row.subjectId),
+    ['c2'],
+  );
+
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'time-budget-exhausted');
+});
 
 test('parsePrNumbers: --pr passes through as a single-element list unchanged', () => {
   assert.deepEqual(parsePrNumbers(cleanupArgs({ pr: '42' })), [42]);

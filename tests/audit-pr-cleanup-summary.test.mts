@@ -251,3 +251,60 @@ test('computeReportSummary emits failed when apply has both applied and failed c
   assert.equal(report.summary?.applied, 1);
   assert.equal(report.summary?.failed, 1);
 });
+
+// #3321: pins the full status precedence for the apply-mode branch --
+// `rescan-failed` > `failed` > `time-budget-exhausted` > the existing
+// statuses (`incomplete`/`applied`/`clean`) -- including that
+// `time-budget-exhausted` never collapses into any of those existing
+// statuses even when it would otherwise qualify for one of them.
+test('computeReportSummary: time-budget-exhausted sits between failed and the existing statuses in precedence', () => {
+  const budgetAlone = createReport({
+    mode: 'apply',
+    candidates: [{ subjectId: 'candidate-1' }],
+    applied: [{ subjectId: 'candidate-2' }],
+    timeBudgetExhausted: true,
+  });
+  computeReportSummary(budgetAlone);
+  assert.equal(budgetAlone.status, 'time-budget-exhausted');
+
+  // `failed` outranks `time-budget-exhausted`.
+  const failedBeatsBudget = createReport({
+    mode: 'apply',
+    failed: [{ subjectId: 'candidate-1', error: 'boom' }],
+    timeBudgetExhausted: true,
+  });
+  computeReportSummary(failedBeatsBudget);
+  assert.equal(failedBeatsBudget.status, 'failed');
+
+  // `rescan-failed` outranks both `failed` and `time-budget-exhausted`.
+  const rescanBeatsAll = createReport({
+    mode: 'apply',
+    failed: [{ subjectId: 'candidate-1', error: 'boom' }],
+    timeBudgetExhausted: true,
+    rescanError: 'GraphQL: transient failure',
+  });
+  computeReportSummary(rescanBeatsAll);
+  assert.equal(rescanBeatsAll.status, 'rescan-failed');
+
+  // `time-budget-exhausted` outranks the existing statuses: it must never
+  // collapse into `incomplete` even when a permission-blocked remainder
+  // (the only thing `incomplete` is reserved for, #1039) is also present.
+  const budgetBeatsIncomplete = createReport({
+    mode: 'apply',
+    skipped: [
+      { subjectId: 'skip-1', isMinimized: false, viewerCanMinimize: false },
+    ],
+    applied: [{ subjectId: 'candidate-1' }],
+    timeBudgetExhausted: true,
+  });
+  computeReportSummary(budgetBeatsIncomplete);
+  assert.equal(budgetBeatsIncomplete.status, 'time-budget-exhausted');
+
+  // Without `timeBudgetExhausted` set, the existing statuses are unaffected.
+  const unaffected = createReport({
+    mode: 'apply',
+    applied: [{ subjectId: 'candidate-1' }],
+  });
+  computeReportSummary(unaffected);
+  assert.equal(unaffected.status, 'applied');
+});
