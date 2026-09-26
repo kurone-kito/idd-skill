@@ -1964,16 +1964,19 @@ export function checkRepositoryFit(context) {
   const crossRepoLinks = [];
   const regex =
     /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
-  let match = regex.exec(body);
+  let match = regex.exec(scanBody);
   while (match) {
     const owner = (match[1] ?? '').toLowerCase();
     const repo = (match[2] ?? '').toLowerCase();
     if (owner !== repository.owner || repo !== repository.repo) {
       crossRepoLinks.push(match[0]);
     }
-    match = regex.exec(body);
+    match = regex.exec(scanBody);
   }
-  if (crossRepoLinks.length > 0 && EXTERNAL_COORDINATION_PATTERN.test(body)) {
+  if (
+    crossRepoLinks.length > 0 &&
+    EXTERNAL_COORDINATION_PATTERN.test(scanBody)
+  ) {
     return {
       pass: false,
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,

@@ -387,6 +387,22 @@ test('repository fit accepts cross-repo links used as context', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit ignores cross-repo examples inside fenced code and comments', () => {
+  for (const example of [
+    '```md\nCross-repo dependency: external repo https://github.com/other-org/other-repo/issues/42\n```',
+    '<!-- Cross-repo dependency: external repo https://github.com/other-org/other-repo/issues/42 -->',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${example}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, true, example);
+  }
+});
+
 test('trust safety allows unsafe string when it is context only', () => {
   const result = checkTrustSafety({
     issue: {
