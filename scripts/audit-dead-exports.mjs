@@ -58,6 +58,24 @@
 // may import only `node:` builtins -- the `typescript` devDependency is
 // unavailable there. This mirrors the existing precedent in
 // `audit-code-span-wrap.mts` and `markdown-link-audit.mts`.
+//
+// #3498 no-`from` `export { a [as b] };` list resolution -- SUPPORTED
+// SYNTAX SET (explicit boundary, added after several C1 review rounds
+// each found one more unhandled form): resolves the real declaration/
+// import line for `a` when it is a bare or exported top-level
+// `function`/`const`/`class` (including TypeScript overload signatures
+// and single-line multi-declarator `const`), or a named, default,
+// namespace, or combined default+named/namespace import (any specifier,
+// relative or bare package). A form OUTSIDE this set -- a multi-line
+// multi-declarator `const`, a regex-literal or generic-angle-bracket
+// initializer confusing the declarator scan, `let`/`var`, a destructuring
+// declarator, or any other syntax this list does not name -- falls back
+// to the ORIGINAL, pre-#3498 behavior (the export statement's own line,
+// which can misclassify the export as `production`): a documented,
+// accepted limitation, not a defect to keep chasing. See
+// `scanBareConstDeclarators`'s own doc comment for the specific
+// AST-ambiguity cases (regex vs. division, generic vs. comparison) that
+// are deliberately rejected rather than guessed at.
 // #3240: side-effect-only import, kept first so an unsupported Node fails
 // loudly before this entry block runs. See node-runtime-guard.mts.
 import './node-runtime-guard.mjs';
