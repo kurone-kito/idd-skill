@@ -736,6 +736,8 @@ export interface AdvisoryWaitMarkerSummary {
   requestMarkerCount: number;
   trustedSameHeadMarkerCount: number;
   untrustedSameHeadMarkerCount: number;
+  /** Trusted-author request markers, including edited/unresolved markers so
+   * editing an old request cannot reopen the bounded request cap. */
   trustedRequestMarkerCount: number;
   untrustedRequestMarkerCount: number;
 }
@@ -6557,12 +6559,13 @@ export function summarizeAdvisoryWaitMarkers(
     const login = String(comment?.author?.login ?? comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
-    // #3249: a trusted login alone is not enough -- an edited (or
-    // edit-state-unresolved) `advisory-wait:` marker must never satisfy or
-    // relax this gate.
+    // #3249: edit state is split by consequence. An edited or unresolved
+    // trusted marker cannot satisfy same-HEAD evidence, but it must still
+    // consume the restrictive request cap so editing an old request cannot
+    // reopen the bounded budget.
+    const trustedAuthor = trustedLogins.has(login);
     const trusted =
-      trustedLogins.has(login) &&
-      classifyCommentEditState(comment) === 'unedited';
+      trustedAuthor && classifyCommentEditState(comment) === 'unedited';
     const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
     const isRequestMarker = advisoryWaitRequestMarker(body);
 
@@ -6588,7 +6591,7 @@ export function summarizeAdvisoryWaitMarkers(
     }
 
     if (isRequestMarker) {
-      if (trusted) {
+      if (trustedAuthor) {
         trustedRequestMarkerCount += 1;
       } else {
         untrustedRequestMarkerCount += 1;

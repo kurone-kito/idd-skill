@@ -232,10 +232,10 @@ test('buildCopilotRecoverySummary counts one valid bound marker and reports reco
 });
 
 // #3249: an edited (or edit-state-unresolved) trusted advisory-wait-recovery
-// marker must never count toward the recovery cycle or contribute a clock
-// anchor -- editing the marker after posting must not let an operator
-// fabricate or backdate recovery-cycle evidence.
-test('buildCopilotRecoverySummary excludes an edited or edit-state-unresolved recovery marker from the cycle count and clock anchor', () => {
+// marker still consumes the bounded cycle budget but cannot contribute a
+// trusted clock anchor -- editing the marker after posting must not reopen
+// an exhausted cap or fabricate terminal timing evidence.
+test('buildCopilotRecoverySummary counts edited or edit-state-unresolved recovery markers only toward the budget', () => {
   const edited = buildCopilotRecoverySummary(
     {
       comments: [
@@ -249,8 +249,8 @@ test('buildCopilotRecoverySummary excludes an edited or edit-state-unresolved re
     },
     BASE_OPTIONS,
   );
-  assert.equal(edited.completedCycleCount, 0);
-  assert.equal(edited.remainingBudget, 2);
+  assert.equal(edited.completedCycleCount, 1);
+  assert.equal(edited.remainingBudget, 1);
   assert.equal(edited.clockAnchor, '');
   assert.equal(edited.reason, 'no-trusted-recovery-markers');
 
@@ -270,7 +270,8 @@ test('buildCopilotRecoverySummary excludes an edited or edit-state-unresolved re
     },
     BASE_OPTIONS,
   );
-  assert.equal(unknownEditState.completedCycleCount, 0);
+  assert.equal(unknownEditState.completedCycleCount, 1);
+  assert.equal(unknownEditState.remainingBudget, 1);
   assert.equal(unknownEditState.clockAnchor, '');
 
   // Minimized shape (`lastEditedAt: null`) is still honored (control case).

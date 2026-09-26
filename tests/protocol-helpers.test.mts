@@ -4627,6 +4627,21 @@ test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted m
     ).sameHeadMarkerPresent,
     false,
   );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
+  );
   // (b) unknown
   assert.equal(
     summarizeAdvisoryWaitMarkers(
@@ -4641,6 +4656,20 @@ test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted m
       ['kurone-kito'],
     ).sameHeadMarkerPresent,
     false,
+  );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
   );
 
   // (c) minimized shape
@@ -4659,6 +4688,22 @@ test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted m
       ['kurone-kito'],
     ).sameHeadMarkerPresent,
     true,
+  );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
   );
 });
 

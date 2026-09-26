@@ -136,10 +136,12 @@ function minutesBetweenIso(start, end) {
  * matching `findActivationNonceWinner`'s and `summarizeAdvisoryWaitMarkers`'s
  * shared "re-read must reconverge" design.
  *
- * A candidate `advisory-wait-recovery:` comment counts as one completed
- * recovery cycle only when ALL of the following hold -- any single failure
- * excludes it from both `completedCycleCount` and `clockAnchor` (fail
- * closed; never a whole-computation abort):
+ * A structurally valid, claim- and HEAD-bound `advisory-wait-recovery:`
+ * comment counts as one completed recovery cycle after the server-created
+ * timestamp validates. Edit state is split deliberately: an edited or
+ * unresolved marker still consumes the restrictive cycle budget so editing
+ * an old marker cannot reopen an exhausted cap, but it never contributes to
+ * the trusted `clockAnchor` (fail closed; never a whole-computation abort):
  *  - the comment author is a trusted marker actor (else: untrusted);
  *  - the body parses as the BOUND form via `parseAdvisoryRecoveryComment`
  *    (a malformed body, or the legacy unbound 3-field form, both parse to
@@ -152,7 +154,9 @@ function minutesBetweenIso(start, end) {
  *    including both an earlier and a later HEAD than the current one);
  *  - the comment's GitHub `created_at` validates as an ISO 8601 UTC
  *    timestamp (else: ambiguous-created-at -- excluded from BOTH counting
- *    and anchoring, never counted with a missing anchor contribution).
+ *    and anchoring, never counted with a missing anchor contribution);
+ *  - `lastEditedAt` is explicitly `null` to contribute the trusted clock
+ *    anchor (otherwise it still consumes budget but contributes no anchor).
  */
 export function buildCopilotRecoverySummary(
   { comments = [], prHeadSha, lastCopilotCommit },
@@ -196,13 +200,6 @@ export function buildCopilotRecoverySummary(
       if (!trustedLogins.has(login)) {
         continue; // untrusted
       }
-      // #3249: an edited (or edit-state-unresolved) `advisory-wait-recovery:`
-      // marker must never count toward the recovery cycle or contribute a
-      // clock anchor -- editing the marker after posting must not let an
-      // operator fabricate or backdate recovery-cycle evidence.
-      if (classifyCommentEditState(comment) !== 'unedited') {
-        continue; // edited or edit-state-unresolved
-      }
       const marker = parseAdvisoryRecoveryComment(
         String(comment?.body ?? ''),
         String(comment?.createdAt ?? ''),
@@ -230,6 +227,12 @@ export function buildCopilotRecoverySummary(
         continue;
       }
       completedCycleCount += 1;
+      // #3249: editing a structurally valid marker must not reopen the
+      // bounded recovery budget, but edited or unresolved content cannot
+      // provide the terminal clock evidence.
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        continue;
+      }
       if (
         !clockAnchor ||
         compareIsoTimestamps(marker.createdAt, clockAnchor) < 0
