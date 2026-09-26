@@ -1045,8 +1045,13 @@ function assertRepairClaimBoundToTarget(
       ]),
     );
   } catch (error) {
+    // #3346 review finding: preserve the original gh-exec.mts-tagged error
+    // as `.cause` so classifyHelperError's cause-chain walk can still
+    // classify a real gh transport/not-found failure correctly instead of
+    // losing it to the generic `internal` fallback.
     throw new Error(
       `could not read closingIssuesReferences for PR #${targetNumber}: ${error.message}`,
+      { cause: error },
     );
   }
   if (!Array.isArray(payload.closingIssuesReferences)) {
@@ -1149,8 +1154,14 @@ function postRepairEvidenceWithReconciliation(
     );
     if (existing) return existing;
   } catch (error) {
+    // #3346 review finding: preserve the reconciliation lookup's own
+    // gh-exec.mts-tagged error as `.cause` so classifyHelperError's
+    // cause-chain walk can still classify a real gh transport/not-found
+    // failure correctly instead of losing it to the generic `internal`
+    // fallback.
     throw new Error(
       `${writeError?.message ?? 'evidence write failed'}; evidence reconciliation failed: ${error.message}; no retry attempted`,
+      { cause: error },
     );
   }
   throw new Error(
