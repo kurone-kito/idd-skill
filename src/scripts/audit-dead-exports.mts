@@ -75,7 +75,12 @@ export interface DeclaredExport {
   name: string;
   /** Repo-relative (posix) path of the file that declares it. */
   file: string;
-  /** 1-based source line of the declaration (or its `export {}` list item). */
+  /** 1-based source line of the real declaration -- for a no-`from`
+   * `export {}` list item, its underlying `function`/`const`/`class`
+   * declaration's own line when one was found in this file, falling back
+   * to the export statement's own list-item line only when no local
+   * declaration exists (e.g. a merely imported binding re-exported by
+   * name; #3498). */
   line: number;
   category: DeadExportCategory;
   /** `true` when a well-formed `audit:ignore-dead-export` comment covers it. */
@@ -133,17 +138,35 @@ interface RawImport {
 }
 
 interface ParsedFile {
-  /** exposedName -> { line, suppressed, reason, localName } for this
-   * file's OWN declared exports (function/const/class, plus any
-   * `export { a, b };` list with no `from` clause). `exposedName` (the
-   * map key) is what a consumer's `import { exposedName }` must match --
-   * the `as` alias when the list item renamed one, else the same as
-   * `localName`. `localName` is the identifier the declaring file's OWN
-   * other code uses (`hasSelfReference` needs this one, not the alias --
-   * `export { a as b };` still reads `a`, never `b`, inside this file). */
+  /** exposedName -> { line, suppressed, reason, localName,
+   * selfReferenceExcludeLines } for this file's OWN declared exports
+   * (function/const/class, plus any `export { a, b };` list with no
+   * `from` clause). `exposedName` (the map key) is what a consumer's
+   * `import { exposedName }` must match -- the `as` alias when the list
+   * item renamed one, else the same as `localName`. `localName` is the
+   * identifier the declaring file's OWN other code uses
+   * (`hasSelfReference` needs this one, not the alias -- `export { a as
+   * b };` still reads `a`, never `b`, inside this file). `line` is the
+   * REAL declaration line when known (#3498): the underlying
+   * `function`/`const`/`class` line for a no-`from` list item, falling
+   * back to the export statement's own line only when no local
+   * declaration for `localName` was found (e.g. a merely imported
+   * binding re-exported with no declaration of its own in this file).
+   * `selfReferenceExcludeLines` is every line that must NOT count as
+   * "elsewhere" for `hasSelfReference` -- normally just `[line]`, but for
+   * a no-`from` list item it also includes the export statement's own
+   * line (a SEPARATE statement from the real declaration; re-exporting a
+   * name necessarily mentions it a second time, which is not itself
+   * "wired into other code"). */
   declared: Map<
     string,
-    { line: number; suppressed: boolean; reason: string; localName: string }
+    {
+      line: number;
+      suppressed: boolean;
+      reason: string;
+      localName: string;
+      selfReferenceExcludeLines: readonly number[];
+    }
   >;
   reExports: ReExportEdge[];
   imports: RawImport[];
@@ -275,6 +298,15 @@ function parseBracedItems(
     if (trimmed === '') {
       continue;
     }
+    // #3498 (CodeRabbit C1 finding): `chunkStart` is the RAW split
+    // boundary -- right after the opening `{` or the previous comma --
+    // which for a multi-line list (each item on its own indented line)
+    // lands on a DIFFERENT physical line than the item's own identifier
+    // (the delimiter's line, not the name's). Skip the chunk's leading
+    // whitespace/newline(s) to land on the identifier's actual first
+    // character before computing its line -- both for `line` itself and
+    // for the own-line suppression-comment lookup below.
+    const itemStart = chunkStart + (chunk.length - chunk.trimStart().length);
     const isType = /^type\s+/.test(trimmed);
     const withoutType = trimmed.replace(/^type\s+/, '');
     const nameMatch = /^([A-Za-z_$][\w$]*)/.exec(withoutType);
@@ -286,9 +318,9 @@ function parseBracedItems(
       withoutType.slice(nameMatch[0].length),
     );
     const alias = aliasMatch ? aliasMatch[1] : null;
-    const line = lineNumberAt(strippedText, chunkStart);
-    const lineStart = originalText.lastIndexOf('\n', chunkStart) + 1;
-    const nextNewline = originalText.indexOf('\n', chunkStart);
+    const line = lineNumberAt(strippedText, itemStart);
+    const lineStart = originalText.lastIndexOf('\n', itemStart) + 1;
+    const nextNewline = originalText.indexOf('\n', itemStart);
     const lineEnd = nextNewline === -1 ? originalText.length : nextNewline;
     const lineText = originalText.slice(lineStart, lineEnd);
     const ignoreMatch = IGNORE_EXPORT_PATTERN.exec(lineText);
@@ -313,6 +345,20 @@ const FUNCTION_DECL_PATTERN =
 const CONST_DECL_PATTERN = /^export\s+const\s+([A-Za-z_$][\w$]*)/;
 const CLASS_DECL_PATTERN =
   /^export\s+(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+// #3498: the no-`from` `export { a [as b] };` list branch below re-exports
+// an already-declared LOCAL binding -- the common/idiomatic shape leaves
+// the underlying `function`/`const`/`class` declaration itself WITHOUT an
+// `export` keyword (the list statement is its only export), so the three
+// patterns above (which all require a leading `export`) never record its
+// real line. These bare variants exist solely to resolve that real
+// declaration line for the no-`from` branch's deferred finalization pass
+// (`declarationLineByLocalName.get(pending.localName)`, after the
+// full-file loop) -- they never feed `declared` directly, so a plain
+// unexported helper never becomes a phantom entry in the audit results.
+const BARE_FUNCTION_DECL_PATTERN =
+  /^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/;
+const BARE_CONST_DECL_PATTERN = /^const\s+([A-Za-z_$][\w$]*)/;
+const BARE_CLASS_DECL_PATTERN = /^(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
 const TYPE_ONLY_STATEMENT_PATTERN = /^export\s+type\b/;
 const INTERFACE_DECL_PATTERN = /^export\s+interface\b/;
 const BARREL_STAR_PATTERN = /^export\s+\*\s+from\s*['"](\.[^'"]+)['"]/;
@@ -334,6 +380,33 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
   const declared: ParsedFile['declared'] = new Map();
   const reExports: ReExportEdge[] = [];
   const imports: RawImport[] = [];
+  // #3498: real declaration line for EVERY top-level function/const/class
+  // name in this file, exported or not -- see the bare-pattern comment
+  // above. Populated alongside `declared` below; consulted only when
+  // finalizing a no-`from` export-list item (after the full-file loop
+  // below, not inline) to resolve its `declarationLine`.
+  const declarationLineByLocalName = new Map<string, number>();
+  // #3498 (C1 finding, both the CodeRabbit delegate and the independent
+  // subagent critique): a no-`from` export-list item can textually
+  // PRECEDE the declaration it re-exports (valid via function hoisting),
+  // and the SAME local name can be re-exported under two or more aliases
+  // from separate items/statements anywhere in the file -- each such
+  // mention is a re-export mechanism, never itself "wired into other
+  // code". Finalizing `declared` entries for no-`from` items only AFTER
+  // the whole file has been scanned (below) lets both maps be complete
+  // first: `declarationLineByLocalName` (regardless of textual order) and
+  // this one, which accumulates EVERY no-`from` item's own line for a
+  // given local name across the entire file.
+  const noFromItemLinesByLocalName = new Map<string, Set<number>>();
+  interface PendingNoFromItem {
+    exposedName: string;
+    localName: string;
+    itemLine: number;
+    suppressed: boolean;
+    reason: string;
+  }
+  const pendingNoFromItems: PendingNoFromItem[] = [];
+  const claimedNoFromExposedNames = new Set<string>();
 
   const lineStarts: number[] = [0];
   for (let i = 0; i < strippedText.length; i += 1) {
@@ -418,9 +491,30 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         suppressed: !!ignoreMatch,
         reason: (ignoreMatch?.[1] ?? '').trim(),
         localName: name,
+        selfReferenceExcludeLines: [lineIndex + 1],
       });
+      declarationLineByLocalName.set(name, lineIndex + 1);
       lineIndex += 1;
       continue;
+    }
+
+    // #3498: a bare (no `export` keyword) top-level function/const/class
+    // declaration -- never added to `declared` itself (it is not exported
+    // under this name), but its real line is recorded so a later no-`from`
+    // `export { a [as b] };` list item re-exporting it can resolve the
+    // TRUE declaration line instead of the export statement's own line.
+    {
+      const bareFunctionMatch = BARE_FUNCTION_DECL_PATTERN.exec(line);
+      const bareConstMatch =
+        !bareFunctionMatch && BARE_CONST_DECL_PATTERN.exec(line);
+      const bareClassMatch =
+        !bareFunctionMatch &&
+        !bareConstMatch &&
+        BARE_CLASS_DECL_PATTERN.exec(line);
+      const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
+      if (bareMatch) {
+        declarationLineByLocalName.set(bareMatch[1], lineIndex + 1);
+      }
     }
 
     const barrelMatch = BARREL_STAR_PATTERN.exec(line);
@@ -473,13 +567,34 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
           // detection still needs `item.name` (`localName` below), since
           // this file's OTHER code reads the local binding, never the
           // alias.
+          //
+          // #3498: do NOT finalize into `declared` here -- defer to the
+          // pending-item finalization after the full-file loop below, so
+          // both `declarationLineByLocalName` (which may not have seen
+          // `item.name`'s declaration yet if it is textually declared
+          // LATER, e.g. via function hoisting) and
+          // `noFromItemLinesByLocalName` (which accumulates every
+          // no-`from` item mentioning this local name anywhere in the
+          // file, including sibling aliases split across lines) are
+          // complete by the time this item's exclude-lines are computed.
           const exposedName = item.alias ?? item.name;
-          if (!declared.has(exposedName)) {
-            declared.set(exposedName, {
-              line: item.line,
+          let lineSet = noFromItemLinesByLocalName.get(item.name);
+          if (!lineSet) {
+            lineSet = new Set();
+            noFromItemLinesByLocalName.set(item.name, lineSet);
+          }
+          lineSet.add(item.line);
+          if (
+            !declared.has(exposedName) &&
+            !claimedNoFromExposedNames.has(exposedName)
+          ) {
+            claimedNoFromExposedNames.add(exposedName);
+            pendingNoFromItems.push({
+              exposedName,
+              localName: item.name,
+              itemLine: item.line,
               suppressed: item.suppressed,
               reason: item.reason,
-              localName: item.name,
             });
           }
         }
@@ -532,6 +647,29 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
     lineIndex += 1;
   }
 
+  // #3498: finalize every deferred no-`from` export-list item now that the
+  // whole file has been scanned -- see the pending-item comment above for
+  // why this must happen after the loop, not inline.
+  for (const pending of pendingNoFromItems) {
+    const realLine = declarationLineByLocalName.get(pending.localName);
+    const line = realLine ?? pending.itemLine;
+    const excludeLines = new Set<number>();
+    if (realLine !== undefined) {
+      excludeLines.add(realLine);
+    }
+    for (const itemLine of noFromItemLinesByLocalName.get(pending.localName) ??
+      []) {
+      excludeLines.add(itemLine);
+    }
+    declared.set(pending.exposedName, {
+      line,
+      suppressed: pending.suppressed,
+      reason: pending.reason,
+      localName: pending.localName,
+      selfReferenceExcludeLines: [...excludeLines],
+    });
+  }
+
   return { declared, reExports, imports };
 }
 
@@ -540,8 +678,14 @@ function toPosixRelative(root: string, absPath: string): string {
 }
 
 /** Whether `name` (as a whole word) appears anywhere in `strippedText`
- * OTHER than on `declarationLine` -- i.e. the export is wired into its own
- * declaring file's other code, not merely declared.
+ * OTHER than on one of `excludeLines` -- i.e. the export is wired into its
+ * own declaring file's other code, not merely declared (and, for a
+ * no-`from` export-list item, not merely re-exported by name). Most
+ * callers pass a single-element array (the declaration's own line); a
+ * no-`from` `export { a [as b] };` list item passes both the real
+ * declaration's line AND the export statement's own line, since
+ * re-exporting a name necessarily mentions it a second time in a SEPARATE
+ * statement, which is not itself "wired into other code" either (#3498).
  *
  * **Known false-negative risk (C1 critique, #3478 review)**: this is a
  * whole-file text match, not a scope-aware reference check, so it can be
@@ -553,27 +697,11 @@ function toPosixRelative(root: string, absPath: string): string {
  * here means a genuinely dead export is wrongly classified `production`
  * and never surfaced -- accepted as a limitation of the regex/line-based
  * design this audit deliberately uses (see the module header), not
- * something a full scope-aware fix belongs in this issue's scope.
- *
- * **Second, narrower known false-positive (independent critique pass,
- * #3478 review, pre-existing -- reproduces identically with no alias
- * involved, so it is a distinct defect from the alias-chain bug this
- * revision fixes, and stays out of THIS fix's scope)**: for the no-`from`
- * `export { a [as b] };` list branch, the caller passes the EXPORT
- * STATEMENT's own line as `declarationLine`, not the underlying
- * `function`/`const`/`class` declaration's real line -- those are always
- * two separate statements, so the real declaration always registers as a
- * match on a line other than `declarationLine` and this function always
- * returns `true`, regardless of whether `a` is genuinely used anywhere
- * else. This masks whether `parseFile`'s `localName` field (used here)
- * is even being exercised for that branch: no fixture can isolate it from
- * this false positive without first fixing this line mismatch, which
- * would need locating the real declaration separately -- left for a
- * follow-up rather than folded into this alias fix. */
+ * something a full scope-aware fix belongs in this issue's scope. */
 function hasSelfReference(
   strippedText: string,
   name: string,
-  declarationLine: number,
+  excludeLines: readonly number[],
 ): boolean {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
@@ -582,7 +710,7 @@ function hasSelfReference(
     const index = match.index ?? 0;
     line += (strippedText.slice(lastIndex, index).match(/\n/g) ?? []).length;
     lastIndex = index;
-    if (line !== declarationLine) {
+    if (!excludeLines.includes(line)) {
       return true;
     }
   }
@@ -805,7 +933,7 @@ export function collectDeadExportAuditResult(
       const selfReferenced = hasSelfReference(
         strippedText,
         info.localName,
-        info.line,
+        info.selfReferenceExcludeLines,
       );
       // Every importer is drawn from `allFiles` (productionFiles ++
       // testFiles, a partition), so "not every importer is a test file"
