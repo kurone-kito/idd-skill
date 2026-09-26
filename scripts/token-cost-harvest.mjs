@@ -31,7 +31,10 @@ import {
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mjs';
-import { filterTrustedClaimFamilyEvents } from './protocol-helpers.mjs';
+import {
+  classifyCommentEditState,
+  filterTrustedClaimFamilyEvents,
+} from './protocol-helpers.mjs';
 import {
   claudeAdapter,
   defaultClaudeProjectDir,
@@ -649,10 +652,11 @@ export function fetchIssueLoopGithubContext(
     isTrusted(login, trustedLogins),
   )
     .filter((comment) => isTrusted(comment.author.login, trustedLogins))
-    .map(({ body, createdAt, author }) => ({
+    .map(({ body, createdAt, author, lastEditedAt }) => ({
       body,
       createdAt,
       login: author.login,
+      lastEditedAt,
     }));
   // closedByPullRequestsReferences already scopes to PRs GitHub recorded
   // as actually CLOSING this issue (the "Closes #N" keyword this
@@ -774,6 +778,9 @@ export function resolveIssueLoopContext(
   }
   let firstWatermarkAtMs = null;
   for (const comment of github.comments) {
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      continue;
+    }
     const watermark = parseReviewWatermarkComment(
       comment.body,
       comment.createdAt,

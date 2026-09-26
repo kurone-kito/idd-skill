@@ -33,7 +33,10 @@ import {
   parseReleaseComment,
   parseReviewWatermarkComment,
 } from './marker-helpers.mts';
-import { filterTrustedClaimFamilyEvents } from './protocol-helpers.mts';
+import {
+  classifyCommentEditState,
+  filterTrustedClaimFamilyEvents,
+} from './protocol-helpers.mts';
 import {
   type ClaudeHarvestInput,
   claudeAdapter,
@@ -765,6 +768,7 @@ interface TrustedComment {
   body: string;
   createdAt: string;
   login: string;
+  lastEditedAt?: string | null;
 }
 
 // GitHub logins are case-insensitive for account identity; compare
@@ -887,10 +891,11 @@ export function fetchIssueLoopGithubContext(
     isTrusted(login, trustedLogins),
   )
     .filter((comment) => isTrusted(comment.author.login, trustedLogins))
-    .map(({ body, createdAt, author }) => ({
+    .map(({ body, createdAt, author, lastEditedAt }) => ({
       body,
       createdAt,
       login: author.login,
+      lastEditedAt,
     }));
 
   // closedByPullRequestsReferences already scopes to PRs GitHub recorded
@@ -1020,6 +1025,9 @@ export function resolveIssueLoopContext(
 
   let firstWatermarkAtMs: number | null = null;
   for (const comment of github.comments) {
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      continue;
+    }
     const watermark = parseReviewWatermarkComment(
       comment.body,
       comment.createdAt,
