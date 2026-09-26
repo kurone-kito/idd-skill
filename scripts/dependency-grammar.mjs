@@ -95,22 +95,32 @@ export function consumeDependencyReferenceList(segment, options = {}) {
         qualified[2],
       );
       const target = Number.parseInt(qualified[3], 10);
-      // Validate the number independently of repo resolution
-      // (`idd-skill#3285` final review round, Copilot): the prior
-      // `else` branch folded a non-positive/non-integer qualified or
-      // URL target (e.g. `owner/repo#0`) into `unresolvable` with
-      // `reason: 'cross_repository_reference'` even when
-      // `qualifiedRepoRef` matched `currentRepoRef` -- reporting an
-      // invalid SAME-repo number as if it named a different repository,
-      // and (when `currentRepoRef` is unknown) hiding the real
-      // "this number is invalid" problem behind the ordinary
-      // fail-safe-unverifiable route every qualified/URL token already
-      // takes without repo context. Only a genuinely valid positive
-      // number ever reaches the cross-repository resolution/
-      // unresolvable decision below.
-      if (!Number.isInteger(target) || target <= 0) {
+      const isValidNumber = Number.isInteger(target) && target > 0;
+      // Record an invalid number ADDITIVELY, never in place of the
+      // `unresolvable` push below (`idd-skill#3285` review, Copilot: a
+      // real regression caught only after landing -- a prior version of
+      // this fix routed an invalid qualified/URL number to
+      // `invalidTokens` INSTEAD of `unresolvable`, but
+      // `discover-readiness-check.mts` and `discover-orphan-filter.mts`
+      // both read `unresolvable` directly off this shared parser to add
+      // a real blocking/non-orphan reason for any reference they cannot
+      // confirm resolves locally -- neither reads `invalidTokens`, which
+      // is authoring-audit-only. Removing the token from `unresolvable`
+      // silently dropped Discover's own fail-safe block for a same-repo
+      // qualified/URL reference with an invalid number, making an issue
+      // with e.g. `Blocked by owner/repo#0` read as having no dependency
+      // at all and become wrongly selectable). `checkDependencyLineGrammar`
+      // (the only `invalidTokens` reader) is responsible for not
+      // double-reporting the same token under both fields -- see its own
+      // skip logic.
+      if (!isValidNumber) {
         invalidTokens.push(match[0]);
-      } else if (currentRepoRef && qualifiedRepoRef === currentRepoRef) {
+      }
+      if (
+        isValidNumber &&
+        currentRepoRef &&
+        qualifiedRepoRef === currentRepoRef
+      ) {
         numbers.push(target);
       } else {
         unresolvable.push({
