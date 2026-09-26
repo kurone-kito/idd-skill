@@ -1114,6 +1114,39 @@ test('regular-comment gate ignores a prior-HEAD Codex no-find acceptance', () =>
   assert.equal(summary.count, 0);
 });
 
+test('regular-comment gate ignores a stale Codex acceptance after the source is edited', () => {
+  const source = {
+    id: 336,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT.replace('abc1234', 'def5678'),
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T02:00:00Z',
+  };
+  const disposition = {
+    id: 337,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 336),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const currentDisposition = {
+    id: 338,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'def5678', 336),
+    createdAt: '2026-05-12T03:00:00Z',
+    updatedAt: '2026-05-12T03:00:00Z',
+  };
+  const summary = summarizeRegularCommentsForGate(
+    [source, disposition, currentDisposition],
+    {
+      advisoryBotLogins: [CODEX],
+      trustedMarkerLogins: ['kurone-kito'],
+      prHeadSha: 'def5678',
+    },
+  );
+  assert.equal(summary.count, 0);
+});
+
 test('regular-comment gate clears a current Codex no-find disposition from an IDD agent', () => {
   const source = {
     id: 326,
@@ -2024,6 +2057,29 @@ test('buildDispositionPlan: an untrusted <!-- idd- shaped comment still counts a
     [2],
   );
   assert.equal(plan.skipped.length, 0);
+});
+
+test('buildDispositionPlan: a copied Codex no-find body still steals a summary acceptance', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, 'reviewer-a', CODEX_NO_FIND_RESULT, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
 });
 
 test('gate agreement: the planned **Accepted** clears the summary from missingRegularComments', () => {

@@ -434,6 +434,9 @@ export function buildDispositionPlan(
       .filter((comment) => isCoveredCodexNoFindSource(comment))
       .map((comment) => String(comment.id)),
   );
+  const isCanonicalCurrentCodexNoFindSource = (comment: NoticeComment) =>
+    advisoryBotIdentityToken(comment.login) === 'chatgpt-codex-connector' &&
+    isCodexNoFindResultForHeadSha(comment.body, headSha);
 
   // The gate pairs greedily across the GLOBAL outstanding set, so a summary's
   // `**Accepted**` marker can be consumed by an OLDER undispositioned non-agent
@@ -462,10 +465,11 @@ export function buildDispositionPlan(
         ) === 'review' &&
         !isAdvisoryNonReviewNotice(other.body) &&
         !isReviewSummaryComment(other.body) &&
-        !isCodexNoFindResultForHeadSha(other.body, headSha) &&
         !(
-          advisoryBotIdentityToken(other.login) === 'chatgpt-codex-connector' &&
-          historicalCodexNoFindSourceIds.has(String(other.id))
+          isCanonicalCurrentCodexNoFindSource(other) ||
+          (advisoryBotIdentityToken(other.login) ===
+            'chatgpt-codex-connector' &&
+            historicalCodexNoFindSourceIds.has(String(other.id)))
         ) &&
         compareIsoTimestamps(
           effectiveRegularCommentActivityAt(other),

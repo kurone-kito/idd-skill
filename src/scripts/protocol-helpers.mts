@@ -7530,10 +7530,11 @@ export function summarizeRegularCommentsForGate(
   }));
 
   // A source-bound Codex no-find acceptance remains an operational comment
-  // after the PR advances to a later HEAD. Keep the historical acceptance out
-  // of the unreplied-comment pool when its source id, recorded HEAD, and
-  // post-source activity still match; the disposition-evidence matcher applies
-  // the same binding to the source comment itself.
+  // after the PR advances to a later HEAD or the source is edited in place.
+  // Keep the machine acceptance out of the unreplied-comment pool when its
+  // source id names a canonical Codex comment and its body names that source
+  // bot. The disposition-evidence matcher separately decides whether the
+  // recorded HEAD and activity still allow it to clear the source.
   const historicalCodexNoFindDispositionIndexes = new Set<number>();
   for (const disposition of normalized) {
     if (
@@ -7550,12 +7551,10 @@ export function summarizeRegularCommentsForGate(
       (comment) =>
         comment.id === parsed.sourceCommentId &&
         advisoryBotIdentityToken(comment.authorLogin) ===
-          'chatgpt-codex-connector' &&
-        isCodexNoFindResultForHeadSha(comment.body, parsed.headSha),
+          'chatgpt-codex-connector',
     );
     if (
       source &&
-      compareIsoTimestamps(disposition.activityAt, source.activityAt) > 0 &&
       dispositionNamesAdvisoryBot(disposition.body, source.authorLogin)
     ) {
       historicalCodexNoFindDispositionIndexes.add(disposition.sortedIndex);
