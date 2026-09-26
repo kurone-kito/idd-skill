@@ -125,9 +125,9 @@ forced-handoff steps:
 node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
-Pass `--nonce` only when already recorded for that `{claim-id}`
-(true after forced-handoff step 5); omit it otherwise. Pass
-`--worktree <path>` once the B1 worktree exists.
+Pass `--nonce` only when this session already recorded one for that
+`{claim-id}` (true after forced-handoff step 5); omit it otherwise.
+Pass `--worktree <path>` once the B1 worktree exists.
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
