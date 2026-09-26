@@ -3070,51 +3070,75 @@ export async function runHearWizard(
     throw new Error(HEAR_NON_TTY_ERROR);
   }
   const ask = promptFn ?? makeReadlinePrompt();
-  const views = buildHearCatalogItemViews(
-    catalog.items,
-    targetDir,
-    readers,
-  ).filter((view) => view.kind !== 'check');
-  const byId = new Map(catalog.items.map((item) => [item.id, item]));
-  const answers: HearAnswer[] = [];
-  for (const view of views) {
-    const item = byId.get(view.id);
-    if (!item) {
-      continue;
-    }
-    const effectiveDefault = view.derived ?? view.documentedDefault;
-    process.stdout.write(`\n${view.prompt}\n${view.explanation}\n`);
-    if (view.options && view.options.length > 0) {
-      process.stdout.write(
-        `Options: ${view.options.map((option) => option.value).join(', ')}\n`,
-      );
-    }
-    let value: string | null = null;
-    for (
-      let attempt = 0;
-      value === null && attempt < HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM;
-      attempt += 1
-    ) {
-      const suffix = effectiveDefault !== null ? ` [${effectiveDefault}]` : '';
-      const raw = (await ask(`${view.id}${suffix}: `)).trim();
-      const candidate =
-        raw === '' && effectiveDefault !== null ? effectiveDefault : raw;
-      if (isValidHearAnswerValue(item, candidate)) {
-        value = candidate;
-      } else {
-        process.stdout.write('Invalid answer; please try again.\n');
-      }
-    }
-    if (value === null) {
-      ask.close?.();
-      throw new Error(
-        `no valid answer for ${view.id} after ${HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM} attempts`,
-      );
-    }
-    answers.push({ id: view.id, value });
+  // #3346 review finding ("Close wizard prompt on all failure paths"):
+  // pre-migration, this CLI's own main() called process.exit(2) on any
+  // error, which forcibly tore the whole process (and with it, the
+  // readline interface `ask` opened on stdin) down regardless of where
+  // the wizard failed. Post-migration, main() returns an error outcome
+  // through runHelperCli/applyHelperCliOutcomeWhenDisabled instead of
+  // calling process.exit() itself, so a throw from buildHearCatalogItemViews
+  // or any other step before the loop's own ask.close?.() calls now
+  // leaves that readline interface open, hanging a real interactive
+  // invocation instead of exiting -- the same regression already fixed
+  // in force-handoff.mts's runHandoff. Wrap the whole body so
+  // ask.close?.() always runs, on every exit path; the loop's own
+  // existing ask.close?.() calls stay as an early release once no
+  // further prompt is needed, and are harmless here since readline's
+  // close() is idempotent.
+  try {
+    return await runHearWizardBody();
+  } finally {
+    ask.close?.();
   }
-  ask.close?.();
-  return answers;
+
+  async function runHearWizardBody(): Promise<HearAnswer[]> {
+    const views = buildHearCatalogItemViews(
+      catalog.items,
+      targetDir,
+      readers,
+    ).filter((view) => view.kind !== 'check');
+    const byId = new Map(catalog.items.map((item) => [item.id, item]));
+    const answers: HearAnswer[] = [];
+    for (const view of views) {
+      const item = byId.get(view.id);
+      if (!item) {
+        continue;
+      }
+      const effectiveDefault = view.derived ?? view.documentedDefault;
+      process.stdout.write(`\n${view.prompt}\n${view.explanation}\n`);
+      if (view.options && view.options.length > 0) {
+        process.stdout.write(
+          `Options: ${view.options.map((option) => option.value).join(', ')}\n`,
+        );
+      }
+      let value: string | null = null;
+      for (
+        let attempt = 0;
+        value === null && attempt < HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM;
+        attempt += 1
+      ) {
+        const suffix =
+          effectiveDefault !== null ? ` [${effectiveDefault}]` : '';
+        const raw = (await ask(`${view.id}${suffix}: `)).trim();
+        const candidate =
+          raw === '' && effectiveDefault !== null ? effectiveDefault : raw;
+        if (isValidHearAnswerValue(item, candidate)) {
+          value = candidate;
+        } else {
+          process.stdout.write('Invalid answer; please try again.\n');
+        }
+      }
+      if (value === null) {
+        ask.close?.();
+        throw new Error(
+          `no valid answer for ${view.id} after ${HEAR_WIZARD_MAX_ATTEMPTS_PER_ITEM} attempts`,
+        );
+      }
+      answers.push({ id: view.id, value });
+    }
+    ask.close?.();
+    return answers;
+  }
 }
 
 function runHearProposeCli(

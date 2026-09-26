@@ -4490,6 +4490,36 @@ test('runHearWizard rejects a non-TTY context with HEAR_NON_TTY_ERROR', async ()
   );
 });
 
+// #3346 review finding ("Close wizard prompt on all failure paths"):
+// pre-migration, this CLI's main() called process.exit(2) on any error,
+// tearing the whole process (and its readline interface) down
+// unconditionally. Post-migration, main() only returns an error outcome,
+// so a throw from a step after the first prompt -- but before the
+// wizard's own inline ask.close?.() calls -- used to leave that readline
+// interface open, which would hang a real CLI invocation reading from a
+// TTY. Assert the prompt is always closed, even on this early-throw path.
+test('runHearWizard closes the prompt even when a prompt call itself rejects', async () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const catalog = loadOnboardingHearingCatalog();
+  let closed = false;
+  const prompt = async (_question: string) => {
+    throw new Error('stdin boom');
+  };
+  prompt.close = () => {
+    closed = true;
+  };
+  await assert.rejects(
+    runHearWizard(catalog, root, { isTTY: true, prompt }),
+    /stdin boom/,
+  );
+  assert.equal(
+    closed,
+    true,
+    'ask.close should run even when a prompt call rejects',
+  );
+});
+
 test('runHearWizard shows each explanation, confirms the shown default on empty input, and produces a schema-valid transcript', async () => {
   const root = makeFixtureDir();
   writeHearFixture(root);
