@@ -2535,18 +2535,18 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   const crossRepoLinks: string[] = [];
   const regex =
     /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
-  let match: RegExpExecArray | null = regex.exec(scanBody);
+  let match: RegExpExecArray | null = regex.exec(externalAccessScanBody);
   while (match) {
     const owner = (match[1] ?? '').toLowerCase();
     const repo = (match[2] ?? '').toLowerCase();
     if (owner !== repository.owner || repo !== repository.repo) {
       crossRepoLinks.push(match[0]);
     }
-    match = regex.exec(scanBody);
+    match = regex.exec(externalAccessScanBody);
   }
   if (
     crossRepoLinks.length > 0 &&
-    EXTERNAL_COORDINATION_PATTERN.test(scanBody)
+    EXTERNAL_COORDINATION_PATTERN.test(externalAccessScanBody)
   ) {
     return {
       pass: false,
