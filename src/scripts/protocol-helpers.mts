@@ -7082,6 +7082,7 @@ export function buildActivitySnapshotSummary(
       .filter(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
+          classifyCommentEditState(comment) === 'unedited' &&
           isDispositionComment(comment),
       )
       .map((comment) => comment.createdAt),
@@ -7090,17 +7091,19 @@ export function buildActivitySnapshotSummary(
         .filter(
           (comment) =>
             isDispositionAuthor(comment.author?.login) &&
+            classifyCommentEditState(comment) === 'unedited' &&
             isDispositionMarkerCommentForThread(
               comment,
               Boolean(thread.isResolved),
             ),
         )
         .map((comment) =>
-          // An edited **Rejection confirmed by maintainer** marker anchors by
-          // its effective (updatedAt-preferring) activity, matching
+          // An unedited **Rejection confirmed by maintainer** marker anchors
+          // by its effective (updatedAt-preferring) activity, matching
           // classifyThreadAckOnlyPostDisposition's choice for the same
-          // marker (#2045); ordinary Accepted/Rejected markers keep the
-          // pre-existing createdAt anchor.
+          // marker (#2045). Edited or edit-state-unknown markers never anchor
+          // this window (#3249); ordinary unedited Accepted/Rejected markers
+          // keep the pre-existing createdAt anchor.
           isRejectionConfirmedDisposition(comment)
             ? effectiveThreadCommentActivityAt(comment, advisoryBotLogins)
             : comment.createdAt,
@@ -7140,6 +7143,7 @@ export function buildActivitySnapshotSummary(
           .filter(
             (comment) =>
               isDispositionAuthor(comment.author?.login) &&
+              classifyCommentEditState(comment) === 'unedited' &&
               isDispositionMarkerCommentForThread(
                 comment,
                 Boolean(thread.isResolved),
@@ -7764,12 +7768,12 @@ export function classifyThreadAckOnlyPostDisposition(
     ),
   );
   const nodes = thread.comments?.nodes ?? [];
-  // Recognize the same dispositions `hasFreshDisposition` accepts on a
-  // resolved thread (the gate that already decided this thread blocks): a
-  // `**Accepted**`/`**Rejected**` marker OR the terminal
-  // `**Rejection confirmed by maintainer**` marker, anchored by effective
-  // activity (`updatedAt`-preferring) so an edited disposition is dated
-  // consistently. The thread is already known resolved here.
+  // Recognize the same unedited dispositions `hasFreshDisposition` accepts
+  // on a resolved thread (the gate that already decided this thread blocks):
+  // a `**Accepted**`/`**Rejected**` marker OR the terminal
+  // `**Rejection confirmed by maintainer**` marker. Edited or edit-state-
+  // unknown markers cannot establish the ack-only window (#3249). The thread
+  // is already known resolved here.
   const threadDispositionAt = maxIsoTimestamp(
     nodes
       .filter(
@@ -7779,6 +7783,7 @@ export function classifyThreadAckOnlyPostDisposition(
               .trim()
               .toLowerCase(),
           ) &&
+          classifyCommentEditState(comment) === 'unedited' &&
           (isDispositionComment({ body: String(comment.body ?? '') }) ||
             isRejectionConfirmedDisposition({
               body: String(comment.body ?? ''),

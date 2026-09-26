@@ -66,6 +66,7 @@ test('reviewCurrency and dispositionEvidence agree a shared advisory/IDD-agent l
           id: 'TC-2',
           author: { login: 'dual-bot' },
           body: '**Accepted** — looks fine.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -146,6 +147,7 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
           id: 'RC-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -278,6 +280,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with no sna
           id: 'F4-2',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -312,6 +315,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a non-advisory trailing reply
           id: 'F4H-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -383,6 +387,7 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
           id: 'F2B-1',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -413,6 +418,51 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
   assert.equal(afterBoundary.ackOnlyPostDisposition, true);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects edited and unknown dispositions (#3249)', () => {
+  const makeThread = (lastEditedAt?: string) => ({
+    id: `thread-edit-state-${lastEditedAt ?? 'unknown'}`,
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'EDIT-1',
+          author: { login: 'reviewer-a' },
+          body: 'please fix this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'EDIT-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'EDIT-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  });
+
+  for (const thread of [makeThread('2026-05-12T01:00:00Z'), makeThread()]) {
+    assert.deepEqual(
+      classifyThreadAckOnlyPostDisposition(thread, {
+        iddAgentLogins: ['idd-bot'],
+        advisoryBotLogins: ['coderabbitai[bot]'],
+      }),
+      { ackOnlyPostDisposition: false, inPlaceEditOnly: false },
+    );
+  }
+});
+
 // #2641: `classifyThreadAckOnlyPostDisposition` now additionally requires
 // the post-disposition reply to match a known courtesy-acknowledgment
 // template (derived from actually-observed CodeRabbit replies in this
@@ -430,6 +480,7 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a known-template cou
           id: 'KT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -468,6 +519,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes "acknowledged" as a courte
           id: 'ACK-1',
           author: { login: 'idd-bot' },
           body: '**Rejected** — reaffirming.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -507,6 +559,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply tha
           id: 'NT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -550,6 +603,7 @@ test('classifyThreadAckOnlyPostDisposition fails closed for a reply with no know
           id: 'UB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -589,6 +643,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply t
           id: 'NC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -632,6 +687,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply t
           id: 'NC2-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -673,6 +729,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with the ma
           id: 'MF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -713,6 +770,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a reply carrying only the �
           id: 'EO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -753,6 +811,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a non-CodeRabbit bot reply th
           id: 'NR-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -792,6 +851,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "I couldn\'t resolve" 
           id: 'RF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -838,6 +898,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... con
           id: 'AC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -872,6 +933,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... fin
           id: 'AF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -922,6 +984,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concer
           id: 'FA-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -973,6 +1036,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'CN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1016,6 +1080,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'CS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1064,6 +1129,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged closure sentence wit
           id: 'HN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1105,6 +1171,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a genuinely new concern in a 
           id: 'CX-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1148,6 +1215,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially addresses
           id: 'HB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1191,6 +1259,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses th
           id: 'BR-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1235,6 +1304,7 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a strong "Review thr
           id: 'SH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1286,6 +1356,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'AU-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1331,6 +1402,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'SC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1370,6 +1442,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'ED-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1410,6 +1483,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'AC5-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1452,6 +1526,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback append
           id: 'TT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1492,6 +1567,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback append
           id: 'TS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1535,6 +1611,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback sandwi
           id: 'TD-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1582,6 +1659,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a coordinating conjunction th
           id: 'BL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1624,6 +1702,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge word hidden inside th
           id: 'HG-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1669,6 +1748,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses th
           id: 'PL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1709,6 +1789,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially  addresse
           id: 'DS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1756,6 +1837,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge adjective inside the 
           id: 'LH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1794,6 +1876,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a second hedge adjective insi
           id: 'LT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1840,6 +1923,7 @@ test('classifyThreadAckOnlyPostDisposition safely rejects a first "addresses the
           id: 'TO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1880,6 +1964,7 @@ test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's disclai
           id: 'TDO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1918,6 +2003,7 @@ test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's marker-
           id: 'TMO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1958,6 +2044,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the lead-in whitelist\'s b
           id: 'PT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1984,6 +2071,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the lead-in whitelist\'s b
           id: 'PI-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2037,6 +2125,7 @@ test('classifyThreadAckOnlyPostDisposition safely rejects the "Thanks for the fi
           id: 'TF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2081,6 +2170,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately
           id: 'NV-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2126,6 +2216,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a "no longer addresses" negat
           id: 'NT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2166,6 +2257,7 @@ test('classifyThreadAckOnlyPostDisposition rejects "seldom" before the closure v
           id: 'SL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2208,6 +2300,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "in no way" and "by no me
           id: `${id}-1`,
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2262,6 +2355,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an epistemic adverb casting d
           id: 'EP-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2307,6 +2401,7 @@ test('classifyThreadAckOnlyPostDisposition rejects "perhaps" and "possibly" as m
           id: `${id}-1`,
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2362,6 +2457,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a compact conjunction-joined 
           id: 'CC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2402,6 +2498,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a 2-token conjunction bypass 
           id: 'CY-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2446,6 +2543,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
           id: 'MB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2489,6 +2587,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge adverb immediately be
           id: 'MH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2532,6 +2631,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a proximity-adverb hedge ("al
           id: 'MA-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2568,6 +2668,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately
           id: 'MN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2612,6 +2713,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a contrastive-adjective varia
           id: 'MC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2656,6 +2758,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unrelated trailing sentenc
           id: 'MT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2698,6 +2801,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a differently-worded trailing
           id: 'MG-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2744,6 +2848,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a second free sentence append
           id: 'MS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2789,6 +2894,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
           id: 'ML-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2844,6 +2950,7 @@ test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the th
           id: 'MX-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2892,6 +2999,7 @@ test("classifyThreadAckOnlyPostDisposition rejects a contrastive adjective insid
           id: 'MW-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2948,6 +3056,7 @@ test('the anchor-set fix honors the [bot]-suffix cross-product (Codex P1, #2014)
             // values below may or may not match this literally.
             author: { login: 'dual-bot[bot]' },
             body: '**Accepted** — looks fine.',
+            lastEditedAt: null,
             createdAt: '2026-05-12T00:30:00Z',
             updatedAt: '2026-05-12T00:30:00Z',
           },
@@ -3033,6 +3142,7 @@ test('the marker-recognition fix only anchors a rejection-confirmed reply on a s
           id: 'RO-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -3092,6 +3202,7 @@ test('a top-level rejection-confirmed comment does not anchor the ack-only windo
     id: 'TL-1',
     author: { login: 'idd-bot' },
     body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+    lastEditedAt: null,
     createdAt: '2026-05-12T00:00:00Z',
     updatedAt: '2026-05-12T00:00:00Z',
   };
@@ -3128,16 +3239,11 @@ test('a top-level rejection-confirmed comment does not anchor the ack-only windo
   );
 });
 
-test('reviewCurrency anchors an edited rejection-confirmed marker by its effective activity, matching dispositionEvidence (#2045)', () => {
+test('reviewCurrency rejects an edited rejection-confirmed marker as an ack-only anchor (#3249)', () => {
   // The maintainer's `**Rejection confirmed by maintainer**` reply is
-  // posted at 00:30 but edited afterward (e.g. a typo fix), so its
-  // updatedAt (01:30) postdates a genuine advisory-bot reply at 01:00 --
-  // between the marker's original createdAt and its edited updatedAt.
-  // dispositionEvidence already anchors the marker by effective
-  // (updatedAt-preferring) activity, so it correctly treats the 01:00
-  // reply as pre-disposition (genuine, not ack-only). Before this fix,
-  // reviewCurrency anchored the same marker by createdAt (00:30) alone,
-  // so it misclassified the 01:00 reply as post-disposition ack-only.
+  // posted at 00:30 but edited afterward (e.g. a typo fix). Its edit state
+  // is explicit, so the marker is not trusted as a disposition anchor even
+  // though its effective activity is later than the advisory-bot reply.
   const thread = {
     id: 'thread-edited-rejection-confirmed',
     isResolved: true,
@@ -3156,6 +3262,7 @@ test('reviewCurrency anchors an edited rejection-confirmed marker by its effecti
           id: 'ERC-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: '2026-05-12T01:30:00Z',
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T01:30:00Z',
         },
@@ -3188,31 +3295,20 @@ test('reviewCurrency anchors an edited rejection-confirmed marker by its effecti
     },
   );
 
-  // dispositionEvidence already treats the 01:00 reply as pre-disposition
-  // (genuine): the thread needs no fresh disposition of its own.
+  // The external finding is at the snapshot boundary, so it is not a
+  // current blocker for the disposition gate. This assertion only confirms
+  // the edited marker does not become the review-currency anchor below.
   assert.equal(dispositionSummary.route, 'proceed');
   assert.equal(dispositionSummary.blockingCount, 0);
-  assert.deepEqual(dispositionSummary.missingThreads, []);
-
-  // reviewCurrency now agrees: the marker's effective activity (01:30)
-  // anchors the disposition, so the 01:00 reply is genuine, not ack-only.
-  assert.equal(
-    activitySummary.ackOnly.latestDispositionAt,
-    '2026-05-12T01:30:00Z',
-  );
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.equal(activitySummary.ackOnly.latestDispositionAt, 'none');
   assert.deepEqual(activitySummary.ackOnly.items, []);
 });
 
-test('reviewCurrency still anchors an edited ordinary Accepted marker by createdAt, not effective activity (#2045)', () => {
-  // The intentional, pre-existing behavior for ordinary
-  // `**Accepted**`/`**Rejected**` markers -- "Dispositions are not
-  // SHA-bound here" (buildActivitySnapshotSummary's own comment) -- must
-  // NOT change as a side effect of this fix, which is scoped only to the
-  // `**Rejection confirmed by maintainer**` marker. Even though this
-  // `**Accepted**` reply is edited afterward (updatedAt 02:00, after the
-  // advisory-bot's 01:00 reply), it must still anchor by its createdAt
-  // (00:30), so the 01:00 reply stays classified as ack-only exactly as
-  // before this fix.
+test('reviewCurrency rejects an edited ordinary Accepted marker as an ack-only anchor (#3249)', () => {
+  // Ordinary `**Accepted**`/`**Rejected**` markers are trust-bearing too.
+  // An explicit edit therefore removes the marker from the ack-only anchor
+  // set rather than falling back to its createdAt.
   const thread = {
     id: 'thread-edited-accepted',
     isResolved: true,
@@ -3231,6 +3327,7 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
           id: 'AC-2',
           author: { login: 'idd-bot' },
           body: '**Accepted** — looks fine.',
+          lastEditedAt: '2026-05-12T02:00:00Z',
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -3255,14 +3352,9 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
     },
   );
 
-  assert.equal(
-    activitySummary.ackOnly.latestDispositionAt,
-    '2026-05-12T00:30:00Z',
-  );
-  assert.deepEqual(
-    activitySummary.ackOnly.items.map((item) => item.id),
-    ['AC-3'],
-  );
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.equal(activitySummary.ackOnly.latestDispositionAt, 'none');
+  assert.deepEqual(activitySummary.ackOnly.items, []);
 });
 
 // Round 36 field feedback (#3194): a live-status digest edit was still
@@ -3764,8 +3856,8 @@ test('disposition evidence hints at an edited-after-disposition notice when the 
           // this disposition's edit state reads as `unknown`, which no
           // longer counts as evidence either.
           body: '**Accepted** — looks correct.',
-          author: { login: 'idd-bot' },
           lastEditedAt: null,
+          author: { login: 'idd-bot' },
         },
       ],
       threads: [],
@@ -3805,8 +3897,8 @@ test('disposition evidence does not hint edited-after-disposition when the dispo
           id: 2,
           createdAt: '2026-05-12T02:00:00Z',
           body: '**Accepted** — looks correct.',
-          author: { login: 'idd-bot' },
           lastEditedAt: null,
+          author: { login: 'idd-bot' },
         },
       ],
       threads: [],
@@ -3846,6 +3938,7 @@ test('disposition evidence does not hint edited-after-disposition when the curre
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -3880,6 +3973,7 @@ test('disposition evidence does not hint edited-after-disposition when the autho
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -4649,9 +4743,9 @@ test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply 
         {
           author: { login: 'idd-bot' },
           body: '**Accepted** — done',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:01:00Z',
           updatedAt: '2026-05-12T00:03:00Z',
-          lastEditedAt: null,
         },
       ],
     },
