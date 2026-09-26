@@ -1252,6 +1252,74 @@ test('a suppression comment on the line PRECEDING a named import is honored for 
   }
 });
 
+test("a suppression comment on the line PRECEDING a MULTI-LINE named import statement is honored, not just above the item's own line (Codex/Copilot C1 round-9 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export function helper(): void {}\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      [
+        '// audit:ignore-dead-export: kept for a planned public API',
+        'import {',
+        '  helper,',
+        "} from './origin.mts';",
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.suppressed,
+      true,
+      "for a multi-line import list, the item's own line (`  helper,`) " +
+        'is NOT adjacent to the comment above `import {` -- the ' +
+        "statement's own opening line must also be checked",
+    );
+    assert.equal(entry.suppressionReason, 'kept for a planned public API');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a genuine recursive self-reference on the SAME PHYSICAL LINE as its own declaration is a DOCUMENTED, PRE-EXISTING limitation of hasSelfReference's line-granularity design -- verified unchanged from before #3498, not a regression (Codex C1 round-9 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export const helper = (): void => { helper(); };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    // Document the actual (pre-existing, accepted-limitation) behavior:
+    // `hasSelfReference` excludes by LINE NUMBER, not character position,
+    // so a genuine reference sharing the declaration's own line is
+    // indistinguishable from the declaration itself and gets excluded
+    // too. Verified (see the issue thread) that this exact fixture
+    // already misclassified identically on `main` before this PR ever
+    // touched the no-`from` resolution this issue is about -- a general
+    // limitation of the whole-file, line-based design (see the module
+    // header and hasSelfReference's own doc comment), not something
+    // #3498 introduced or is scoped to fix.
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      'documents the accepted, pre-existing false negative: a same-line ' +
+        'recursive call is not detected as a self-reference -- if this ' +
+        'ever starts failing, the limitation may have been fixed for ' +
+        'real (update this test and the doc comments together)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

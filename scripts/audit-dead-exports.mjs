@@ -497,9 +497,13 @@ function parseFile(absPath, originalText) {
   // from '...'` form (see `IMPORT_DEFAULT_PLUS_BRACE_PATTERN` below) can
   // reuse the identical named-list processing instead of duplicating it.
   // `braceOffset` is the absolute `strippedText` offset of the `{` that
-  // opens the list; returns the matching `}`'s offset (or -1 if
-  // unbalanced) so the caller can advance `lineIndex` past it.
-  function processNamedImportBraceList(braceOffset) {
+  // opens the list; `statementStartLine` is the import STATEMENT's own
+  // first line (1-based) -- for a multi-line list, this differs from any
+  // individual item's own line, and a suppression comment above the
+  // statement itself (round 9 C1 finding) must be checked there, not just
+  // above each item's own line. Returns the matching `}`'s offset (or -1
+  // if unbalanced) so the caller can advance `lineIndex` past it.
+  function processNamedImportBraceList(braceOffset, statementStartLine) {
     const closeIndex = findMatchingBrace(strippedText, braceOffset);
     if (closeIndex === -1) {
       return -1;
@@ -534,25 +538,38 @@ function parseFile(absPath, originalText) {
         // way a declaration's is tracked.
         const localAlias = item.alias ?? item.name;
         addDeclarationLine(localAlias, item.line);
-        // #3498 (Codex C1 finding, rounds 3 and 8): `parseBracedItems`
-        // already recognizes a suppression comment on this import item's
-        // own physical line -- ALSO recognize one on the line immediately
-        // PRECEDING the import statement (the same own-or-preceding-line
-        // check the default/namespace import branches already use),
-        // matching the documented contract (`docs/idd-helper-scripts.md`)
-        // that the marker may sit on the declaration's own line or
-        // immediately above it.
+        // #3498 (Codex/Copilot C1 findings, rounds 3, 8, and 9):
+        // `parseBracedItems` already recognizes a suppression comment on
+        // this import item's own physical line. ALSO recognize one on
+        // the line immediately preceding the ITEM's own line (matches a
+        // single-line import, where the item and statement share one
+        // line) AND one immediately preceding the IMPORT STATEMENT's own
+        // first line (matches a multi-line list, where a comment above
+        // `import {` is not adjacent to any individual item's own line)
+        // -- matching the documented contract
+        // (`docs/idd-helper-scripts.md`) that the marker may sit on the
+        // declaration's own line or immediately above it, regardless of
+        // how many lines the import statement itself spans.
         if (!declarationSuppressionByLocalName.has(localAlias)) {
-          const precedingIgnoreMatch = checkOwnOrPrecedingLineSuppression(
+          const itemIgnoreMatch = checkOwnOrPrecedingLineSuppression(
             originalText,
             lineStarts,
             item.line,
           );
+          const statementIgnoreMatch =
+            item.line === statementStartLine
+              ? null
+              : checkOwnOrPrecedingLineSuppression(
+                  originalText,
+                  lineStarts,
+                  statementStartLine,
+                );
+          const ignoreMatch = itemIgnoreMatch ?? statementIgnoreMatch;
           declarationSuppressionByLocalName.set(localAlias, {
-            suppressed: item.suppressed || !!precedingIgnoreMatch,
+            suppressed: item.suppressed || !!ignoreMatch,
             reason: item.suppressed
               ? item.reason
-              : (precedingIgnoreMatch?.[1] ?? '').trim(),
+              : (ignoreMatch?.[1] ?? '').trim(),
           });
         }
       }
@@ -937,7 +954,10 @@ function parseFile(absPath, originalText) {
         });
       }
       const braceOffset = strippedText.indexOf('{', start);
-      const closeIndex = processNamedImportBraceList(braceOffset);
+      const closeIndex = processNamedImportBraceList(
+        braceOffset,
+        lineIndex + 1,
+      );
       if (closeIndex === -1) {
         lineIndex += 1;
         continue;
@@ -948,7 +968,10 @@ function parseFile(absPath, originalText) {
     }
     if (IMPORT_BRACE_PATTERN.test(line)) {
       const braceOffset = strippedText.indexOf('{', start);
-      const closeIndex = processNamedImportBraceList(braceOffset);
+      const closeIndex = processNamedImportBraceList(
+        braceOffset,
+        lineIndex + 1,
+      );
       if (closeIndex === -1) {
         lineIndex += 1;
         continue;
@@ -1030,7 +1053,19 @@ function toPosixRelative(root, absPath) {
  * `scanBareConstDeclarators`'s quote-tracking (#3498) does not extend
  * here: that scanner exists only to find declarator BOUNDARIES
  * correctly, an unrelated concern from scope-aware reference detection,
- * and does not change this accepted limitation either way. */
+ * and does not change this accepted limitation either way.
+ *
+ * **The opposite direction (false negative), same root cause (C1
+ * review, #3498 round 9)**: excluding by LINE NUMBER rather than
+ * character position also means a genuine reference sharing the same
+ * physical line as the declaration itself (`const helper = () =>
+ * helper();`, a one-line recursive arrow function) is indistinguishable
+ * from the declaration and gets excluded too, so it is never counted as
+ * a self-reference. Verified pre-existing on `main` before #3498 (this
+ * exact fixture already misclassified identically with the ORIGINAL
+ * single-`declarationLine` signature) -- a general limitation of this
+ * function's line-granularity design, not something #3498's own
+ * no-`from` resolution work introduced or is scoped to fix. */
 function hasSelfReference(strippedText, name, excludeLines) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
   let line = 1;
