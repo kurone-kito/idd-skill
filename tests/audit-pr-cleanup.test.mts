@@ -921,6 +921,12 @@ test('runApplyWithRetry: an already-exhausted budget starts no pass and no resca
   assert.equal(rescanCalls, 0);
   assert.equal(result.report.applied.length, 0);
   assert.equal(result.report.timeBudgetExhausted, true);
+  // Codex review, PR #3499: this attempt's own pass never ran, so it
+  // must not count toward `attempts` (exposed to callers as
+  // `retryAttempts`, published in the workflow's cleanup-evidence
+  // marker) -- reporting 1 here would falsely claim one cleanup pass
+  // ran against this HEAD.
+  assert.equal(result.attempts, 0);
   assert.deepEqual(
     result.report.candidates.map((row) => row.subjectId),
     ['c1', 'c2'],
@@ -958,6 +964,7 @@ test('runApplyWithRetry: an already-exhausted budget over an already-empty repor
   assert.equal(applyPassCalls, 0);
   assert.equal(rescanCalls, 0);
   assert.equal(result.report.timeBudgetExhausted, undefined);
+  assert.equal(result.attempts, 0);
 
   computeReportSummary(result.report);
   assert.equal(result.report.status, 'clean');

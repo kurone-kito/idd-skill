@@ -585,7 +585,13 @@ export async function runApplyWithRetry(
     // function, not something every `applyPass` implementation must
     // independently re-derive.
     if (applyTimeBudgetStop(report, budget)) {
-      return { report, attempts: attempt, boundExhausted: false };
+      // `attempt - 1` (Codex review, PR #3499): this attempt's own pass
+      // never ran, so it must not count toward `attempts` -- `attempts`
+      // is exposed to callers as `retryAttempts` (`processOnePr`) and
+      // published in the workflow's cleanup-evidence marker, where
+      // counting a pass that never started would misreport one cleanup
+      // pass as having run against this HEAD.
+      return { report, attempts: attempt - 1, boundExhausted: false };
     }
     // Captured before `applyPass` mutates `report` (#3321, Codex review
     // PR #3499): once this pass has run, an empty `report.candidates`
