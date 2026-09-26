@@ -315,7 +315,7 @@ const REQUIREMENT_ASSERTION_PATTERN =
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
   /\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed|created)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
 const CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN =
-  /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b))|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b)/i;
+  /^(?:\s+(?:(?:[A-Za-z][\w-]*\s+){0,2}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:[A-Za-z][\w-]*\s+){0,2}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:(?:is|are|was|were)\s+)?(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|(?:for|with|from|using|in|on|at|of|via|through|under)\s+(?:[A-Za-z][\w-]*\s+){0,4}(?:will\s+be\s+)?(?:supplied|provided|performed|created)(?=\s+(?:by\s+[^.;:\n]{1,40}\s+)?(?:before|until)\b)|which\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}(?:before|until)\b)|,\s+which\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:\n]{1,40})?\s+(?:before|until)\b|,\s+which\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:\n]{0,80}(?:before|until)\b)/i;
 const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN =
@@ -332,7 +332,7 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
-  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:]{0,80}\b(?:before|until)\b/i;
+  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:]{0,80}\b(?:before|until)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
   /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s+(?:before|until)\b|[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:\n]{0,80}\b(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:\n]{0,80}\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:\n]{1,40}\s+(?:before|until)\b/i;
 
@@ -875,9 +875,21 @@ function isFollowedByCredentialRequirement(
     ? tail.slice(0, paragraphBreak.index)
     : tail;
   const sameSentence = sameParagraph.split(/[.]/, 1)[0] ?? sameParagraph;
+  const firstBoundary = /^[^.;:\n]*[.;:\n]/.exec(sameParagraph);
+  const firstFollowOnSentence = (() => {
+    if (!firstBoundary) {
+      return '';
+    }
+    const rest = sameParagraph.slice(firstBoundary[0].length);
+    const nextBoundary = /^[^.;:\n]*(?:[.;:\n]|$)/.exec(rest)?.[0] ?? rest;
+    return sameParagraph.slice(
+      firstBoundary[0].length - 1,
+      firstBoundary[0].length + nextBoundary.length,
+    );
+  })();
   return (
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
-    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(sameParagraph)
+    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence)
   );
 }
 
