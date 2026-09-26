@@ -290,16 +290,27 @@ interface BracedItem {
    * not just `line`, so a genuine, unrelated usage sharing this item's
    * physical line is never discarded along with it. */
   offset: number;
-  /** Absolute `strippedText` offset of `alias`'s own first character, or
-   * `null` when there is no `as` clause (Codex C1 finding, round-16: a
-   * REDUNDANT self-alias, `export { helper as helper };`, textually
-   * mentions the same word TWICE on one item -- excluding only `offset`
-   * left the alias token counted as a separate, genuine self-reference,
-   * masking an otherwise-unimported export as `production`). Harmless to
-   * record even when `alias` differs from `name`: `hasSelfReference`
+  /** Absolute `strippedText` offset(s) where `name` (not `alias` itself --
+   * see below) appears as a WHOLE WORD inside the alias identifier's own
+   * text, empty when there is no `as` clause or `name` never occurs
+   * there as a whole word (Codex C1 findings, round 16-17). A REDUNDANT
+   * self-alias, `export { helper as helper };`, textually mentions
+   * `name` a second time as the alias itself (one match, at the alias's
+   * own start). A round-17 finding caught a subtler case this field's
+   * first version got wrong: for `export { helper as $helper };`, the
+   * alias's OWN start offset is the `$` character, but `\bname\b`
+   * matches the substring `helper` ONE CHARACTER LATER (`$` is a
+   * non-word character, so `\b` places a boundary right after it, same
+   * as `hasSelfReference`'s own regex would find) -- excluding the
+   * alias's own start offset therefore excluded the WRONG position,
+   * leaving the real match unexcluded. Scanning for `\bname\b` inside
+   * the alias text directly (mirroring `hasSelfReference`'s own regex)
+   * finds the exact match position(s) instead of assuming they coincide
+   * with the alias's own start. Harmless when empty (no alias, or an
+   * alias where `name` never appears as a whole word): `hasSelfReference`
    * only ever matches offsets against occurrences of ONE specific word,
-   * so an unrelated alias's offset is simply never one of those. */
-  aliasOffset: number | null;
+   * so no offset here is ever wrongly excluded. */
+  aliasNameOffsets: readonly number[];
   suppressed: boolean;
   reason: string;
 }
@@ -343,15 +354,26 @@ function parseBracedItems(
       withoutType.slice(nameMatch[0].length),
     );
     const alias = aliasMatch ? aliasMatch[1] : null;
-    // Suffix-length trick (same as every other capture-group-is-the-tail
-    // call site in this file): `aliasMatch[0]` ends exactly where the
-    // alias identifier ends, so its start offset is the match's own
-    // start plus (full match length minus captured identifier length).
-    const aliasOffset = aliasMatch
-      ? withoutTypeStart +
+    // Round 17: do NOT assume `name`'s only possible occurrence inside
+    // the alias is at the alias's own start offset (true only when
+    // `alias === name` exactly) -- scan the alias text itself for
+    // `\bname\b`, the same pattern `hasSelfReference` uses, and record
+    // every match's real absolute offset. Suffix-length trick (same as
+    // every other capture-group-is-the-tail call site in this file):
+    // `aliasMatch[0]` ends exactly where the alias identifier ends, so
+    // its own start offset is the match's own start plus (full match
+    // length minus captured identifier length).
+    const aliasNameOffsets: number[] = [];
+    if (aliasMatch) {
+      const aliasIdentifierStart =
+        withoutTypeStart +
         nameMatch[0].length +
-        (aliasMatch[0].length - aliasMatch[1].length)
-      : null;
+        (aliasMatch[0].length - aliasMatch[1].length);
+      const nameInAliasPattern = new RegExp(`\\b${name}\\b`, 'g');
+      for (const innerMatch of aliasMatch[1].matchAll(nameInAliasPattern)) {
+        aliasNameOffsets.push(aliasIdentifierStart + (innerMatch.index ?? 0));
+      }
+    }
     const line = lineNumberAt(strippedText, itemStart);
     const lineStart = originalText.lastIndexOf('\n', itemStart) + 1;
     const nextNewline = originalText.indexOf('\n', itemStart);
@@ -364,7 +386,7 @@ function parseBracedItems(
       isType,
       line,
       offset: itemStart,
-      aliasOffset,
+      aliasNameOffsets,
       suppressed: !!ignoreMatch,
       reason: (ignoreMatch?.[1] ?? '').trim(),
     });
@@ -819,16 +841,17 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
             noFromItemOffsetsByLocalName.set(item.name, offsetSet);
           }
           offsetSet.add(item.offset);
-          // #3498 (Codex C1 finding, round 16): a REDUNDANT self-alias
-          // (`export { helper as helper };`) textually mentions the same
-          // word TWICE in this one item -- also exclude the alias
-          // token's own offset, not just the original name's, or the
-          // alias occurrence registers as a separate, genuine
-          // self-reference. Harmless to add unconditionally even when
-          // the alias is a different word (see `BracedItem.aliasOffset`
-          // doc comment).
-          if (item.aliasOffset !== null) {
-            offsetSet.add(item.aliasOffset);
+          // #3498 (Codex C1 findings, rounds 16-17): an alias can ALSO
+          // textually mention `name` -- a REDUNDANT self-alias
+          // (`export { helper as helper };`, one match at the alias's
+          // own start) or `name` appearing as a whole word somewhere
+          // inside a longer alias identifier (`export { helper as
+          // $helper };`, one match one character in, right after the
+          // non-word `$`) -- exclude every such occurrence found by
+          // `aliasNameOffsets` (see `BracedItem`'s own doc comment for
+          // why a naive "alias's own start offset" guess is wrong).
+          for (const aliasNameOffset of item.aliasNameOffsets) {
+            offsetSet.add(aliasNameOffset);
           }
           if (
             !declared.has(exposedName) &&

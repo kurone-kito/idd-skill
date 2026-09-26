@@ -897,6 +897,34 @@ test('a REDUNDANT self-alias no-`from` item (`export { helper as helper };`) is 
   }
 });
 
+test("a no-`from` item whose alias merely CONTAINS the local name as a whole word (`export { helper as $helper };`) is still classified unused (Codex C1 finding, round 17: the alias's own start offset is the `$`, but `\\bhelper\\b` matches one character later)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {}',
+        '',
+        'export { helper as $helper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, '$helper').category,
+      'unused',
+      "excluding the alias's own start offset (the `$` character) does " +
+        'not exclude the actual `\\bhelper\\b` match, which starts one ' +
+        "character later -- the fix must scan the alias's own text for " +
+        'the real match position(s) instead of assuming they coincide ' +
+        "with the alias's own start",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

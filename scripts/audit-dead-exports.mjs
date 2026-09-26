@@ -197,15 +197,26 @@ function parseBracedItems(
       withoutType.slice(nameMatch[0].length),
     );
     const alias = aliasMatch ? aliasMatch[1] : null;
-    // Suffix-length trick (same as every other capture-group-is-the-tail
-    // call site in this file): `aliasMatch[0]` ends exactly where the
-    // alias identifier ends, so its start offset is the match's own
-    // start plus (full match length minus captured identifier length).
-    const aliasOffset = aliasMatch
-      ? withoutTypeStart +
+    // Round 17: do NOT assume `name`'s only possible occurrence inside
+    // the alias is at the alias's own start offset (true only when
+    // `alias === name` exactly) -- scan the alias text itself for
+    // `\bname\b`, the same pattern `hasSelfReference` uses, and record
+    // every match's real absolute offset. Suffix-length trick (same as
+    // every other capture-group-is-the-tail call site in this file):
+    // `aliasMatch[0]` ends exactly where the alias identifier ends, so
+    // its own start offset is the match's own start plus (full match
+    // length minus captured identifier length).
+    const aliasNameOffsets = [];
+    if (aliasMatch) {
+      const aliasIdentifierStart =
+        withoutTypeStart +
         nameMatch[0].length +
-        (aliasMatch[0].length - aliasMatch[1].length)
-      : null;
+        (aliasMatch[0].length - aliasMatch[1].length);
+      const nameInAliasPattern = new RegExp(`\\b${name}\\b`, 'g');
+      for (const innerMatch of aliasMatch[1].matchAll(nameInAliasPattern)) {
+        aliasNameOffsets.push(aliasIdentifierStart + (innerMatch.index ?? 0));
+      }
+    }
     const line = lineNumberAt(strippedText, itemStart);
     const lineStart = originalText.lastIndexOf('\n', itemStart) + 1;
     const nextNewline = originalText.indexOf('\n', itemStart);
@@ -218,7 +229,7 @@ function parseBracedItems(
       isType,
       line,
       offset: itemStart,
-      aliasOffset,
+      aliasNameOffsets,
       suppressed: !!ignoreMatch,
       reason: (ignoreMatch?.[1] ?? '').trim(),
     });
@@ -641,16 +652,17 @@ function parseFile(absPath, originalText) {
             noFromItemOffsetsByLocalName.set(item.name, offsetSet);
           }
           offsetSet.add(item.offset);
-          // #3498 (Codex C1 finding, round 16): a REDUNDANT self-alias
-          // (`export { helper as helper };`) textually mentions the same
-          // word TWICE in this one item -- also exclude the alias
-          // token's own offset, not just the original name's, or the
-          // alias occurrence registers as a separate, genuine
-          // self-reference. Harmless to add unconditionally even when
-          // the alias is a different word (see `BracedItem.aliasOffset`
-          // doc comment).
-          if (item.aliasOffset !== null) {
-            offsetSet.add(item.aliasOffset);
+          // #3498 (Codex C1 findings, rounds 16-17): an alias can ALSO
+          // textually mention `name` -- a REDUNDANT self-alias
+          // (`export { helper as helper };`, one match at the alias's
+          // own start) or `name` appearing as a whole word somewhere
+          // inside a longer alias identifier (`export { helper as
+          // $helper };`, one match one character in, right after the
+          // non-word `$`) -- exclude every such occurrence found by
+          // `aliasNameOffsets` (see `BracedItem`'s own doc comment for
+          // why a naive "alias's own start offset" guess is wrong).
+          for (const aliasNameOffset of item.aliasNameOffsets) {
+            offsetSet.add(aliasNameOffset);
           }
           if (
             !declared.has(exposedName) &&
