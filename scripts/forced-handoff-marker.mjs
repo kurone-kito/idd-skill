@@ -466,7 +466,7 @@ export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, FORCED_HANDOFF_MARKER_FLAG_SPEC);
   const format = values.format;
   if (format !== 'text' && format !== 'json') {
-    throw new Error(`unsupported --format value: ${format}`);
+    throw markCliUsageError(new Error(`unsupported --format value: ${format}`));
   }
   return {
     format,
@@ -569,7 +569,7 @@ function isTruthy(value) {
 export function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
@@ -577,7 +577,9 @@ function parseOwnerRepo(value) {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
-    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+    throw markCliUsageError(
+      new Error(`invalid --repo value: ${value} (expected owner/name)`),
+    );
   }
   return {
     owner: match[1],

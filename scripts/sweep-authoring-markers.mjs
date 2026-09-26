@@ -69,6 +69,7 @@ import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -552,18 +553,22 @@ function parseArgs(argv) {
   // execute.mts's own --owner/--repo pairing guard: require both or
   // neither.
   if ((owner === '') !== (repo === '')) {
-    throw new Error(
-      'sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+    throw markCliUsageError(
+      new Error(
+        'sweep-authoring-markers: --owner and --repo must be provided together or not at all',
+      ),
     );
   }
   let deadlineMs;
   if (values['deadline-ms'] !== undefined) {
     if (values['deadline-ms'] === '') {
-      throw new Error('--deadline-ms requires a value');
+      throw markCliUsageError(new Error('--deadline-ms requires a value'));
     }
     if (!/^(?:0|[1-9]\d*)$/.test(values['deadline-ms'])) {
-      throw new Error(
-        '--deadline-ms must be a non-negative integer (milliseconds)',
+      throw markCliUsageError(
+        new Error(
+          '--deadline-ms must be a non-negative integer (milliseconds)',
+        ),
       );
     }
     deadlineMs = Number.parseInt(values['deadline-ms'], 10);

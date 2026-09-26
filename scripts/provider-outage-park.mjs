@@ -519,8 +519,10 @@ export function buildParkedIssuesSummary(owner, repo, options = {}) {
  */
 export function runParkPullRequest(options) {
   if (!PROVIDER_HEALTH_SERVICES.includes(options.service)) {
-    throw new Error(
-      `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+    throw markCliUsageError(
+      new Error(
+        `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+      ),
     );
   }
   const service = options.service;

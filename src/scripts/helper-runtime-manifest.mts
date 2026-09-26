@@ -13,6 +13,7 @@ import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { inspectHelperRuntimeConfig } from './policy-helpers.mts';
@@ -1304,7 +1305,7 @@ function normalizeProfile(profile: string): string {
     return '';
   }
   if (!PROFILE_NAMES.includes(profile)) {
-    throw new Error(`unsupported profile: ${profile}`);
+    throw markCliUsageError(new Error(`unsupported profile: ${profile}`));
   }
   return profile;
 }
@@ -1322,14 +1323,18 @@ function normalizePackageManager(
 ): string {
   if (!packageManager) {
     if (profile === 'package-manager') {
-      throw new Error(
-        'package-manager profile requires --package-manager <npm|pnpm|yarn> or a detectable package manager in --target-root',
+      throw markCliUsageError(
+        new Error(
+          'package-manager profile requires --package-manager <npm|pnpm|yarn> or a detectable package manager in --target-root',
+        ),
       );
     }
     return '';
   }
   if (!PACKAGE_MANAGERS.includes(packageManager)) {
-    throw new Error(`unsupported package manager: ${packageManager}`);
+    throw markCliUsageError(
+      new Error(`unsupported package manager: ${packageManager}`),
+    );
   }
   return packageManager;
 }
