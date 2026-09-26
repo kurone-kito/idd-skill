@@ -484,3 +484,66 @@ test('CLI: a sibling only in the index-lag window is not a sole member', () => {
     restore();
   }
 });
+
+test('CLI: a repeated comments cursor exits non-zero', {
+  timeout: 5000,
+}, () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }));
+      process.exit(0);
+    }
+    if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    }
+    if (args.includes('graphql')) {
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [],
+                pageInfo: { hasNextPage: true, endCursor: 'CURSOR' }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    }
+    process.stderr.write('unexpected gh ' + joined);
+    process.exit(2);
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+        '--set',
+        SET,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.notEqual(failure.status, 0);
+    assert.match(failure.stderr ?? '', /repeated comments cursor/);
+  } finally {
+    restore();
+  }
+});

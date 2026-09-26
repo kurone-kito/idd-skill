@@ -685,9 +685,11 @@ function graphqlIncompleteEvidence(detail: string): string {
  * Fetch every issue comment via GraphQL, selecting `lastEditedAt` and
  * `databaseId` (this helper's field set, not sweep-authoring-markers's).
  * Paginates to completion. Throws on a failed query, incomplete
- * pagination (including a missing `nodes` array or a non-boolean
- * `pageInfo.hasNextPage`), or an unmappable node -- callers must not
- * fall back to REST `updated_at`.
+ * pagination (including a missing `nodes` array, a non-boolean
+ * `pageInfo.hasNextPage`, or a cursor already requested on an earlier
+ * page), or an unmappable node -- callers must not fall back to REST
+ * `updated_at`. A replayed cursor would otherwise keep `hasNextPage`
+ * true forever.
  */
 export function fetchProvenanceCommentsGraphql(
   owner: string,
@@ -706,8 +708,16 @@ export function fetchProvenanceCommentsGraphql(
 }`;
   const out: AuthoringOwnerProvenanceComment[] = [];
   let cursor: string | null = null;
+  const requestedCursors = new Set<string>();
   const label = `${owner}/${repo}#${issueNumber}`;
   while (true) {
+    const requestKey = cursor ?? '';
+    if (requestedCursors.has(requestKey)) {
+      throw new Error(
+        graphqlIncompleteEvidence(`repeated comments cursor for ${label}`),
+      );
+    }
+    requestedCursors.add(requestKey);
     const args = [
       'api',
       ...resolveGhHostnameArgs(),
