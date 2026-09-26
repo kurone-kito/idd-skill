@@ -217,6 +217,7 @@ function main(): HelperCliResult {
       iddAgentLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
       trustedMarkerLogins: activityTrustedMarkerLogins,
+      prHeadSha: headSha,
       prAuthorLogin,
     },
   );
@@ -322,6 +323,7 @@ function printHelp(): void {
  * `pre-merge-readiness.mts`'s own `normalizeComment`. */
 export function normalizeComment(comment: ProviderComment) {
   return {
+    id: String(comment.id),
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,

@@ -2707,6 +2707,163 @@ export function isCodexReviewSummaryCompleteForHeadSha(
   return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 
+// #3520: Codex posts a second, terminal top-level comment when a review finds
+// no major issues. It is separate from the sticky review-status summary above
+// and must be matched against the current HEAD before it can be treated as a
+// completed, no-find result. Keep the body shape narrow: the observed leads,
+// reviewed-commit line, and the standard About Codex details block are the
+// complete comment. A broader "no issues" search could auto-accept ordinary
+// prose or a result carrying findings.
+const CODEX_NO_FIND_RESULT_RE =
+  /^Codex Review: Didn't find any major issues\. (?:You're on a roll\.|What shall we delve into next\?|:\+1:)\s*\n+\s*\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,64})`\s*\n+\s*([\s\S]*)$/i;
+const CODEX_NO_FIND_DETAILS_RE =
+  /^<details>\s*<summary>ℹ️ About Codex in GitHub<\/summary>\s*<br\/>\s*\[Your team has set up Codex to review pull requests in this repo\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/general\)(?:\.)?\s*Reviews are triggered when you\s*- Open a pull request for review\s*- Mark a draft as ready\s*- Comment "@codex review"(?: or "@codex security review")?\.\s*(?:If Codex has suggestions, it will comment; otherwise it will react with 👍\.\s*)?(?:Codex can also answer questions or update the PR\. Try commenting "@codex address that feedback"\.\s*)?<\/details>$/i;
+
+/** Return the abbreviated reviewed commit from a valid no-find result. */
+function codexNoFindReviewedCommit(body: unknown): string | null {
+  const match = CODEX_NO_FIND_RESULT_RE.exec(String(body ?? '').trim());
+  if (!match || !CODEX_NO_FIND_DETAILS_RE.test(match[2]?.trim() ?? '')) {
+    return null;
+  }
+  const details = match[2] ?? '';
+  if (!CODEX_NO_FIND_DETAILS_RE.test(details.trim())) {
+    return null;
+  }
+  return match[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Recognize the observed terminal Codex no-find result for the current HEAD.
+ * Abbreviated commit prefixes are accepted only when they prefix the supplied
+ * current HEAD, matching the existing Codex summary classifier.
+ */
+export function isCodexNoFindResultForHeadSha(
+  body: unknown,
+  headSha: unknown,
+): boolean {
+  const reviewedCommit = codexNoFindReviewedCommit(body);
+  const currentHead = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  return Boolean(reviewedCommit && currentHead?.startsWith(reviewedCommit));
+}
+
+/** Recognize a terminal Codex no-find result without a HEAD comparison. */
+export function isCodexNoFindResult(body: unknown): boolean {
+  return codexNoFindReviewedCommit(body) !== null;
+}
+
+const CODEX_NO_FIND_DISPOSITION_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([^\s]+)\s+no-find result at HEAD\s+([0-9a-f]{7,64});\s+no actionable findings were reported\s+\(source: #issuecomment-(\d+)\)(?:\s*\n<!--\s*[a-z0-9][a-z0-9_-]*-review-reply\s*-->)?\s*$/i;
+
+export interface CodexNoFindDisposition {
+  botLogin: string;
+  headSha: string;
+  sourceCommentId: string;
+}
+
+/** Parse the exact accepted disposition emitted for one no-find result. */
+export function parseCodexNoFindDisposition(
+  body: unknown,
+): CodexNoFindDisposition | null {
+  const match = CODEX_NO_FIND_DISPOSITION_RE.exec(String(body ?? '').trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    botLogin: match[1] ?? '',
+    headSha: (match[2] ?? '').toLowerCase(),
+    sourceCommentId: match[3] ?? '',
+  };
+}
+
+export function isCodexNoFindResultDisposition(body: unknown): boolean {
+  return parseCodexNoFindDisposition(body) !== null;
+}
+
+// A fresh source-bound no-find disposition supersedes an older marker whose
+// edit state is edited or unresolved. The older marker cannot clear the source
+// itself, but leaving it in the generic review pool after the replacement is
+// accepted would make the same source permanently block the gate (#411228).
+function findSupersededCodexNoFindDispositionIndexes<
+  T extends {
+    id: string;
+    authorLogin: string;
+    body: string;
+    activityAt: string;
+    sortedIndex: number;
+    lastEditedAt?: string | null;
+  },
+>(
+  comments: T[],
+  options: {
+    advisoryBotLogins: Set<string>;
+    trustedMarkerLogins: Set<string>;
+    iddAgentLogins: Set<string>;
+    currentHeadSha: string;
+  },
+): Set<number> {
+  const { advisoryBotLogins, trustedMarkerLogins, iddAgentLogins } = options;
+  const currentHeadSha = options.currentHeadSha.trim().toLowerCase();
+  if (!currentHeadSha) {
+    return new Set();
+  }
+  const isCanonicalCurrentSource = (comment: T): boolean =>
+    isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+    advisoryBotIdentityToken(comment.authorLogin) ===
+      'chatgpt-codex-connector' &&
+    isCodexNoFindResultForHeadSha(comment.body, currentHeadSha);
+  const isEligibleReplacement = (comment: T, source: T): boolean => {
+    const parsed = parseCodexNoFindDisposition(comment.body);
+    return Boolean(
+      (trustedMarkerLogins.has(comment.authorLogin) ||
+        iddAgentLogins.has(comment.authorLogin)) &&
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+          'unedited' &&
+        parsed &&
+        parsed.sourceCommentId === source.id &&
+        currentHeadSha.startsWith(parsed.headSha) &&
+        dispositionNamesAdvisoryBot(comment.body, source.authorLogin) &&
+        compareIsoTimestamps(comment.activityAt, source.activityAt) > 0,
+    );
+  };
+  return new Set(
+    comments
+      .filter(
+        (comment) =>
+          (trustedMarkerLogins.has(comment.authorLogin) ||
+            iddAgentLogins.has(comment.authorLogin)) &&
+          isCodexNoFindResultDisposition(comment.body) &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'unedited',
+      )
+      .filter((staleDisposition) => {
+        const parsed = parseCodexNoFindDisposition(staleDisposition.body);
+        if (!parsed) {
+          return false;
+        }
+        const source = comments.find(
+          (comment) =>
+            comment.id === parsed.sourceCommentId &&
+            isCanonicalCurrentSource(comment),
+        );
+        return Boolean(
+          source &&
+            comments.some(
+              (replacement) =>
+                replacement.sortedIndex !== staleDisposition.sortedIndex &&
+                isEligibleReplacement(replacement, source) &&
+                compareIsoTimestamps(
+                  replacement.activityAt,
+                  staleDisposition.activityAt,
+                ) > 0,
+            ),
+        );
+      })
+      .map((comment) => comment.sortedIndex),
+  );
+}
+
 // #3193 (gist round 35): a second whole-comment CodeRabbit acknowledgement,
 // sibling to CODERABBIT_ALREADY_REVIEWED_ACK_RE above -- the same reply
 // marker, invocation marker, and "Action not completed" wrapper, but a
@@ -4969,6 +5126,10 @@ export const BOT_WORDING_CLASSIFIERS: BotWordingClassifierEntry[] = [
     id: 'advisory-terminal-notice',
     apply: (fixture) => isTerminalAdvisoryNonReviewNotice(fixture.body),
   },
+  {
+    id: 'codex-no-find-result',
+    apply: (fixture) => isCodexNoFindResult(fixture.body),
+  },
 ];
 
 // A trusted IDD disposition of a non-review notice: the canonical
@@ -5132,6 +5293,8 @@ const REJECTED_NOTICE_LOGIN_SPAN_RE =
   /^\*\*Rejected[.!:]?\*\*\s+—\s+([\s\S]*?)\s+did not review HEAD\b/i;
 const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
   /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+summary walkthrough\b/i;
+const ACCEPTED_CODEX_NO_FIND_LOGIN_SPAN_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+no-find result at HEAD\b/i;
 
 // True when a non-review-notice or summary-walkthrough disposition body names
 // the given advisory bot's GitHub login, so the gate can attribute a
@@ -5144,8 +5307,7 @@ const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
 // bots in one span (a disposition that improperly covers more than one
 // notice) still matches each of them, matching the existing 1:1 consumption
 // contract at the call sites. Fail-closed: an empty token, or a disposition
-// body that does not structurally match either canonical template, names no
-// bot.
+// body that does not structurally match a canonical template, names no bot.
 // Splits a `dispositionNamesAdvisoryBot` login span into its individual
 // bot-login tokens. The span normally names exactly one bot, but #2475
 // established that a single disposition may structurally name several at
@@ -5181,7 +5343,8 @@ export function dispositionNamesAdvisoryBot(
   const body = String(dispositionBody ?? '').trimStart();
   const span =
     REJECTED_NOTICE_LOGIN_SPAN_RE.exec(body)?.[1] ??
-    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1];
+    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1] ??
+    ACCEPTED_CODEX_NO_FIND_LOGIN_SPAN_RE.exec(body)?.[1];
   if (span === undefined) {
     return false;
   }
@@ -5487,7 +5650,9 @@ export function foldSecondaryAdvisoryReviewSettlements(
 //   - type: a `**Rejected** — {bot} did not review HEAD …` notice disposition
 //     clears only a non-review-notice sticky, and an `**Accepted** — {bot}
 //     summary walkthrough …` disposition clears only a CodeRabbit summary
-//     sticky — the notice/summary paths are disjoint in the helper that posts
+//     sticky, and a `**Accepted** — {bot} no-find result at HEAD …` disposition
+//     clears only the matching terminal Codex no-find sticky — the paths are
+//     disjoint in the helper that posts
 //     them, so a notice rejection must never hide a summary that still needs its
 //     own acceptance (or vice versa);
 //   - count: consumed 1:1, so one disposition cannot clear several stickies.
@@ -5509,6 +5674,7 @@ export function foldSecondaryAdvisoryReviewSettlements(
 // Returns the set of `sortedIndex` values of the stickies that are dispositioned.
 function matchTrustedAdvisoryStickyDispositions<
   T extends {
+    id: string;
     authorLogin: string;
     body: string;
     activityAt: string;
@@ -5520,6 +5686,7 @@ function matchTrustedAdvisoryStickyDispositions<
   advisoryBotLogins: Set<string>,
   trustedMarkerLogins: Set<string>,
   iddAgentLogins: Set<string>,
+  currentHeadSha?: string | null,
 ): Set<number> {
   const dispositionedStickyIndexes = new Set<number>();
   // #3249: an edited (or edit-state-unresolved) trusted disposition must
@@ -5540,7 +5707,14 @@ function matchTrustedAdvisoryStickyDispositions<
     }
     return left.sortedIndex - right.sortedIndex;
   };
-  const kinds = [
+  const kinds: {
+    isSticky: (body: string) => boolean;
+    isStickyAuthor?: (authorLogin: string) => boolean;
+    isDisposition: (body: string) => boolean;
+    requireNewerDisposition: boolean;
+    allowIddAgentDisposition?: boolean;
+    matchesDisposition?: (sticky: T, disposition: T) => boolean;
+  }[] = [
     {
       isSticky: (body: string) => isAdvisoryNonReviewNotice(body),
       isDisposition: (body: string) => isNonReviewNoticeDisposition({ body }),
@@ -5552,12 +5726,32 @@ function matchTrustedAdvisoryStickyDispositions<
       requireNewerDisposition: true,
     },
   ];
+  const normalizedCurrentHead = String(currentHeadSha ?? '').trim();
+  if (normalizedCurrentHead) {
+    kinds.push({
+      isSticky: (body) =>
+        isCodexNoFindResultForHeadSha(body, normalizedCurrentHead),
+      isStickyAuthor: (authorLogin) =>
+        advisoryBotIdentityToken(authorLogin) === 'chatgpt-codex-connector',
+      isDisposition: (body) => isCodexNoFindResultDisposition(body),
+      requireNewerDisposition: true,
+      allowIddAgentDisposition: true,
+      matchesDisposition: (sticky, disposition) => {
+        const parsed = parseCodexNoFindDisposition(disposition.body);
+        return (
+          parsed?.sourceCommentId === String(sticky.id) &&
+          normalizedCurrentHead.startsWith(parsed.headSha)
+        );
+      },
+    });
+  }
   for (const kind of kinds) {
     const stickiesByBot = new Map<string, T[]>();
     for (const comment of comments) {
       if (
         !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
-        !kind.isSticky(comment.body)
+        !kind.isSticky(comment.body) ||
+        (kind.isStickyAuthor && !kind.isStickyAuthor(comment.authorLogin))
       ) {
         continue;
       }
@@ -5584,6 +5778,19 @@ function matchTrustedAdvisoryStickyDispositions<
             kind.isDisposition(disposition.body) &&
             dispositionNamesAdvisoryBot(disposition.body, botLogin),
         )
+        .concat(
+          kind.allowIddAgentDisposition
+            ? comments.filter(
+                (disposition) =>
+                  iddAgentLogins.has(disposition.authorLogin) &&
+                  classifyCommentEditState({
+                    lastEditedAt: disposition.lastEditedAt,
+                  }) === 'unedited' &&
+                  kind.isDisposition(disposition.body) &&
+                  dispositionNamesAdvisoryBot(disposition.body, botLogin),
+              )
+            : [],
+        )
         .sort(byActivityThenIndex);
       // Greedy oldest-first pairing: match each sticky to the earliest unconsumed
       // matching disposition (that is strictly newer, when the kind requires it),
@@ -5593,6 +5800,8 @@ function matchTrustedAdvisoryStickyDispositions<
         const match = candidates.find(
           (disposition) =>
             !consumedDispositionIndexes.has(disposition.sortedIndex) &&
+            (!kind.matchesDisposition ||
+              kind.matchesDisposition(sticky, disposition)) &&
             (!kind.requireNewerDisposition ||
               compareIsoTimestamps(disposition.activityAt, sticky.activityAt) >
                 0),
@@ -7345,6 +7554,8 @@ export function summarizeRegularCommentsForGate(
     iddAgentLogins?: unknown[] | null;
     advisoryBotLogins?: unknown[] | null;
     trustedMarkerLogins?: unknown[] | null;
+    /** Current PR HEAD, used to validate terminal Codex no-find dispositions. */
+    prHeadSha?: string | null;
     threads?: ThreadLike[] | null;
   } = {},
 ): RegularCommentsGateSummary {
@@ -7357,6 +7568,9 @@ export function summarizeRegularCommentsForGate(
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
+  const normalizedCurrentHead = String(options.prHeadSha ?? '')
+    .trim()
+    .toLowerCase();
   const threads = Array.isArray(options.threads) ? options.threads : [];
   // #3267: trusted set is the union of trustedMarkerLogins and
   // iddAgentLogins -- see classifyIddPrComment's own doc comment for why
@@ -7444,6 +7658,56 @@ export function summarizeRegularCommentsForGate(
     createdAt: comment.createdAt,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const supersededCodexNoFindDispositionIndexes =
+    findSupersededCodexNoFindDispositionIndexes(normalized, {
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
+
+  // A source-bound Codex no-find acceptance remains an operational comment
+  // after the PR advances to a later HEAD or the source is edited in place.
+  // Keep the machine acceptance out of the unreplied-comment pool when its
+  // source id names a canonical Codex comment and its body names that source
+  // bot. The disposition-evidence matcher separately decides whether the
+  // recorded HEAD and activity still allow it to clear the source.
+  const historicalCodexNoFindDispositionIndexes = new Set<number>();
+  for (const disposition of normalized) {
+    if (
+      !trustedMarkerLogins.has(disposition.authorLogin) ||
+      !isCodexNoFindResultDisposition(disposition.body)
+    ) {
+      continue;
+    }
+    const parsed = parseCodexNoFindDisposition(disposition.body);
+    if (!parsed) {
+      continue;
+    }
+    const source = normalized.find(
+      (comment) =>
+        comment.id === parsed.sourceCommentId &&
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector',
+    );
+    if (
+      !source &&
+      advisoryBotIdentityToken(parsed.botLogin) === 'chatgpt-codex-connector'
+    ) {
+      // A trusted, unedited acceptance whose source was deleted is still IDD
+      // bookkeeping, not an unreplied review comment. The disposition gate
+      // cannot clear a missing source, but F2 must not let the orphan marker
+      // block the PR either.
+      historicalCodexNoFindDispositionIndexes.add(disposition.sortedIndex);
+      continue;
+    }
+    if (
+      source &&
+      dispositionNamesAdvisoryBot(disposition.body, source.authorLogin)
+    ) {
+      historicalCodexNoFindDispositionIndexes.add(disposition.sortedIndex);
+    }
+  }
 
   // #1182 A trusted-marker actor's machine-generated advisory disposition — and
   // the advisory-bot sticky it names, matched by bot + type + consumed 1:1 via
@@ -7453,20 +7717,28 @@ export function summarizeRegularCommentsForGate(
   // watermark (which would clear unrelated earlier feedback). Keyed on the two
   // machine forms only, so a trusted human's ordinary `**Accepted**` /
   // `**Rejected**` review disposition stays a genuine comment.
-  const isTrustedMachineDisposition = (
-    authorLogin: string,
-    body: string,
-    lastEditedAt?: string | null,
-  ) =>
-    trustedMarkerLogins.has(authorLogin) &&
-    classifyCommentEditState({ lastEditedAt }) === 'unedited' &&
-    (isNonReviewNoticeDisposition({ body }) ||
-      isReviewSummaryDisposition({ body }));
+  const isTrustedMachineDisposition = (comment: {
+    authorLogin: string;
+    body: string;
+    sortedIndex: number;
+    lastEditedAt?: string | null;
+  }) =>
+    trustedMarkerLogins.has(comment.authorLogin) &&
+    classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+      'unedited' &&
+    (isNonReviewNoticeDisposition({ body: comment.body }) ||
+      isReviewSummaryDisposition({ body: comment.body }) ||
+      (isCodexNoFindResultDisposition(comment.body) &&
+        (normalizedCurrentHead.startsWith(
+          parseCodexNoFindDisposition(comment.body)?.headSha ?? '',
+        ) ||
+          historicalCodexNoFindDispositionIndexes.has(comment.sortedIndex))));
   const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
     normalized,
     advisoryBotLogins,
     trustedMarkerLogins,
     iddAgentLogins,
+    normalizedCurrentHead,
   );
 
   const items = normalized
@@ -7474,19 +7746,31 @@ export function summarizeRegularCommentsForGate(
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter(
       (comment) =>
-        !isTrustedMachineDisposition(
-          comment.authorLogin,
-          comment.body,
-          comment.lastEditedAt,
-        ) && !dispositionedStickyIndexes.has(comment.sortedIndex),
+        !isTrustedMachineDisposition(comment) &&
+        !supersededCodexNoFindDispositionIndexes.has(comment.sortedIndex) &&
+        !dispositionedStickyIndexes.has(comment.sortedIndex),
     )
     .filter(
       (comment) =>
+        (isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+          advisoryBotIdentityToken(comment.authorLogin) ===
+            'chatgpt-codex-connector' &&
+          isCodexNoFindResult(comment.body)) ||
         !lastIddReplyAt ||
         compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0,
     )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      // A terminal Codex no-find result is paired only by its source comment
+      // id and current HEAD. Do not let the generic regular-comment pairing
+      // consume it with an unrelated or stale disposition.
+      if (
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector' &&
+        isCodexNoFindResult(comment.body)
+      ) {
         return true;
       }
       return (
@@ -7761,6 +8045,8 @@ export function summarizeDispositionEvidenceForGate(
     iddAgentLogins?: unknown[] | null;
     advisoryBotLogins?: unknown[] | null;
     trustedMarkerLogins?: unknown[] | null;
+    /** Current PR HEAD, used to validate terminal Codex no-find comments. */
+    prHeadSha?: string | null;
     prAuthorLogin?: string | null;
     snapshotBoundaryAt?: string | null;
     markerPrefix?: string;
@@ -7781,6 +8067,9 @@ export function summarizeDispositionEvidenceForGate(
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
+  const normalizedCurrentHead = String(options.prHeadSha ?? '')
+    .trim()
+    .toLowerCase();
   // #3267: trusted set is the union of trustedMarkerLogins and
   // iddAgentLogins -- see classifyIddPrComment's own doc comment.
   const isIddOperationalComment = (comment: {
@@ -7844,6 +8133,13 @@ export function summarizeDispositionEvidenceForGate(
     createdAt: comment.createdAt,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const supersededCodexNoFindDispositionIndexes =
+    findSupersededCodexNoFindDispositionIndexes(normalizedComments, {
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
 
   // #1182 trusted machine-disposition recognition, scoped to this gate. A
   // trusted-marker actor who authored one of the two machine-generated advisory
@@ -7856,7 +8152,7 @@ export function summarizeDispositionEvidenceForGate(
   // passed to `summarizeReviewThreadsForGate`, where an IDD-agent's latest
   // thread comment is `awaiting-reviewer` rather than `actionable-blocking`, so
   // a global promotion would let the actor's genuine unresolved review feedback
-  // stop blocking. Recognition stays HERE and covers ONLY the two machine forms
+  // stop blocking. Recognition stays HERE and covers ONLY the three machine forms
   // — never the general `**Accepted**` / `**Rejected**` prefix — so a trusted
   // human's ordinary review disposition is not swallowed. The disposition itself
   // is dropped from the outstanding set (below); the advisory sticky it clears is
@@ -7872,13 +8168,15 @@ export function summarizeDispositionEvidenceForGate(
     trustedMarkerLogins.has(authorLogin) &&
     classifyCommentEditState({ lastEditedAt }) === 'unedited' &&
     (isNonReviewNoticeDisposition({ body }) ||
-      isReviewSummaryDisposition({ body }));
+      isReviewSummaryDisposition({ body }) ||
+      isCodexNoFindResultDisposition(body));
   const trustedDispositionedStickyIndexes =
     matchTrustedAdvisoryStickyDispositions(
       normalizedComments,
       advisoryBotLogins,
       trustedMarkerLogins,
       iddAgentLogins,
+      options.prHeadSha,
     );
 
   const outstandingComments = normalizedComments
@@ -7886,6 +8184,7 @@ export function summarizeDispositionEvidenceForGate(
     .filter(
       (comment) =>
         !iddAgentLogins.has(comment.authorLogin) &&
+        !supersededCodexNoFindDispositionIndexes.has(comment.sortedIndex) &&
         !isTrustedMachineDisposition(
           comment.authorLogin,
           comment.body,
@@ -7894,6 +8193,17 @@ export function summarizeDispositionEvidenceForGate(
     )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      // Keep current-head Codex no-find results on the source-specific
+      // disposition path; generic 1:1 pairing could consume them with an
+      // unrelated or stale reply.
+      if (
+        isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector' &&
+        isCodexNoFindResult(comment.body)
+      ) {
         return true;
       }
       return (
@@ -8075,6 +8385,7 @@ export function summarizeDispositionEvidenceForGate(
       (comment) =>
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
+        !isCodexNoFindResultDisposition(comment.body) &&
         isValidIsoTimestamp(comment.activityAt) &&
         !isIddOperationalComment(comment),
     )
@@ -8090,6 +8401,19 @@ export function summarizeDispositionEvidenceForGate(
       carriedNoticeIndexes.has(comment.sortedIndex) ||
       trustedDispositionedStickyIndexes.has(comment.sortedIndex)
     ) {
+      continue;
+    }
+    // A current-head Codex no-find result is cleared only by the
+    // source-comment-id/HEAD matcher above. Never let the generic 1:1 pool
+    // consume an unrelated later IDD-agent disposition.
+    if (
+      normalizedCurrentHead &&
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      advisoryBotIdentityToken(comment.authorLogin) ===
+        'chatgpt-codex-connector' &&
+      isCodexNoFindResultForHeadSha(comment.body, normalizedCurrentHead)
+    ) {
+      missing.push(comment);
       continue;
     }
     const requiresDispositionPrefix = isGateAdvisoryBotLogin(
@@ -11501,6 +11825,7 @@ export function buildPreMergeReadinessSummary(
     advisoryBotLogins,
     trustedMarkerLogins,
     threads,
+    prHeadSha,
   });
   // #1818: `options.primaryBotLogin` (the configured advisory-wait primary
   // bot, e.g. a non-default Copilot form or a wholly different bot) must be
@@ -12285,6 +12610,7 @@ export function buildPreMergeReadinessSummary(
           advisoryBotLogins,
           trustedMarkerLogins,
           prAuthorLogin,
+          prHeadSha,
           snapshotBoundaryAt: watermark?.maxActivityUpdatedAt ?? null,
         },
       )

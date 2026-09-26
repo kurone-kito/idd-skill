@@ -170,6 +170,7 @@ function main() {
       iddAgentLogins: activityTrustedMarkerLogins,
       advisoryBotLogins,
       trustedMarkerLogins: activityTrustedMarkerLogins,
+      prHeadSha: headSha,
       prAuthorLogin,
     },
   );
@@ -265,6 +266,7 @@ function printHelp() {
  * `pre-merge-readiness.mts`'s own `normalizeComment`. */
 export function normalizeComment(comment) {
   return {
+    id: String(comment.id),
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
