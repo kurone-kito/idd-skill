@@ -815,6 +815,100 @@ test("a suppression comment on the import statement's own line suppresses a no-`
   }
 });
 
+test("a no-`from` export list re-exporting a named import from a BARE (non-relative) package specifier is classified unused, not masked by the import statement's own mention (Codex C1 round-4 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import { helper } from 'some-package';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'a bare package specifier (no leading `./`/`../`) must still get ' +
+        'the same local-alias line tracking a relative import gets -- ' +
+        'only cross-file importer crediting is relative-only',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a named import from a relative specifier is still credited as a real cross-file importer (control: the bare-specifier fix above must not affect relative-import crediting)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      "export function renderWidget(): string {\n  return 'widget';\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/widget-consumer.mts',
+      "import { renderWidget } from './widget.mts';\n" + 'renderWidget();\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(findByName(result, 'renderWidget').category, 'production');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a bare (no `export` keyword) multi-declarator `const` statement resolves EVERY declarator name, not only the first (Codex C1 round-4 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/multiconst.mts',
+      'const retained = 1, forgotten = 2;\n' + '\n' + 'export { forgotten };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'forgotten').category,
+      'unused',
+      '`forgotten` is the SECOND declarator on the `const` line -- its ' +
+        'real declaration line must still resolve, not just the first ' +
+        'declarator (`retained`)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a bare multi-declarator `const` statement with an initializer containing a comma does not mis-split declarators (control for the round-4 fix)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/multiconst2.mts',
+      [
+        'function makePair(a: number, b: number): [number, number] {',
+        '  return [a, b];',
+        '}',
+        '',
+        'const pair = makePair(1, 2), lonely = 3;',
+        '',
+        'export { lonely };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'lonely').category,
+      'unused',
+      'the comma inside `makePair(1, 2)` must not be mistaken for a ' +
+        'declarator boundary -- `lonely` must still resolve to its own ' +
+        'real declarator, not a mis-split fragment',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

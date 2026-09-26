@@ -261,6 +261,40 @@ function findMatchingBrace(strippedText: string, openIndex: number): number {
   return -1;
 }
 
+/** #3498 (Codex C1 finding, round 4): extracts every top-level declarator
+ * NAME from `declaratorListText` -- the portion of a bare `const a = 1, b
+ * = 2;` statement's line after the `const ` keyword -- splitting on
+ * commas only at bracket/paren/brace depth 0, so a declarator's own
+ * initializer (`const a = foo(1, 2), b = 3;`) is never mistaken for a
+ * second declarator boundary. Destructuring declarators (`const { a, b }
+ * = obj;`) are out of scope -- `BARE_CONST_DECL_PATTERN` never matches
+ * them at all (no identifier immediately follows `const `), an
+ * accepted, pre-existing limitation this fix does not extend to. */
+function splitBareConstDeclaratorNames(declaratorListText: string): string[] {
+  const names: string[] = [];
+  let depth = 0;
+  let segmentStart = 0;
+  const pushSegment = (raw: string) => {
+    const nameMatch = /^\s*([A-Za-z_$][\w$]*)/.exec(raw);
+    if (nameMatch) {
+      names.push(nameMatch[1]);
+    }
+  };
+  for (let i = 0; i < declaratorListText.length; i += 1) {
+    const char = declaratorListText[i];
+    if (char === '(' || char === '[' || char === '{') {
+      depth += 1;
+    } else if (char === ')' || char === ']' || char === '}') {
+      depth -= 1;
+    } else if (char === ',' && depth === 0) {
+      pushSegment(declaratorListText.slice(segmentStart, i));
+      segmentStart = i + 1;
+    }
+  }
+  pushSegment(declaratorListText.slice(segmentStart));
+  return names;
+}
+
 interface BracedItem {
   /** The ORIGINAL exported/declared name -- e.g. `a` in `a as b` -- since
    * that is what identifies the export on its declaring file (an import's
@@ -373,7 +407,14 @@ const IMPORT_TYPE_ONLY_STATEMENT_PATTERN = /^import\s+type\b/;
 const IMPORT_BRACE_PATTERN = /^import\s*\{/;
 const IMPORT_NAMESPACE_PATTERN =
   /^import\s*\*\s*as\s+[A-Za-z_$][\w$]*\s+from\s*['"](\.[^'"]+)['"]/;
-const IMPORT_FROM_AFTER_BRACE_PATTERN = /^\s*from\s*['"](\.[^'"]+)['"]/;
+// #3498 (Codex C1 finding, round 4): unlike the `export ... from`
+// patterns above (which only ever re-export FROM one of this repo's own
+// relative files, so a leading dot is required), a named import's own
+// local-alias bookkeeping below must run for a BARE package specifier
+// too (`import { helper } from 'some-package';`) -- only the separate
+// `RELATIVE_SPECIFIER_PATTERN` check at the call site decides whether
+// the specifier can also be resolved for cross-file importer crediting.
+const IMPORT_FROM_AFTER_BRACE_PATTERN = /^\s*from\s*['"]([^'"]+)['"]/;
 
 /** Parses one `.mts` file's own top-level export declarations, re-export
  * edges, and import statements. `originalText` is used only for
@@ -536,7 +577,17 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         BARE_CLASS_DECL_PATTERN.exec(line);
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
       if (bareMatch) {
-        declarationLineByLocalName.set(bareMatch[1], lineIndex + 1);
+        // #3498 (Codex C1 finding, round 4): a bare `const` statement can
+        // declare MULTIPLE comma-separated bindings on one line (`const
+        // retained = 1, forgotten = 2;`) -- `BARE_CONST_DECL_PATTERN`
+        // itself only captures the FIRST identifier, so resolve every
+        // declarator name for the const case; function/class
+        // declarations have only one name each. Destructuring
+        // declarators stay an accepted, pre-existing limitation (see
+        // `splitBareConstDeclaratorNames`'s own doc comment).
+        const bareNames = bareConstMatch
+          ? splitBareConstDeclaratorNames(line.replace(/^const\s+/, ''))
+          : [bareMatch[1]];
         // #3498 (Codex C1 finding): same own-line-or-preceding-line
         // suppression check as the exported declaration branch above, so
         // a suppression comment on a BARE declaration's line also takes
@@ -558,10 +609,17 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
             })();
         const bareIgnoreMatch =
           bareOwnLineIgnoreMatch ?? barePrecedingLineIgnoreMatch;
-        declarationSuppressionByLocalName.set(bareMatch[1], {
-          suppressed: !!bareIgnoreMatch,
-          reason: (bareIgnoreMatch?.[1] ?? '').trim(),
-        });
+        for (const bareName of bareNames) {
+          if (!declarationLineByLocalName.has(bareName)) {
+            declarationLineByLocalName.set(bareName, lineIndex + 1);
+          }
+          if (!declarationSuppressionByLocalName.has(bareName)) {
+            declarationSuppressionByLocalName.set(bareName, {
+              suppressed: !!bareIgnoreMatch,
+              reason: (bareIgnoreMatch?.[1] ?? '').trim(),
+            });
+          }
+        }
       }
     }
 
@@ -678,13 +736,32 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
       );
       const afterBrace = strippedText.slice(closeIndex + 1, closeIndex + 200);
       const fromMatch = IMPORT_FROM_AFTER_BRACE_PATTERN.exec(afterBrace);
-      if (fromMatch && RELATIVE_SPECIFIER_PATTERN.test(fromMatch[1])) {
-        const targetFile = resolveSpecifier(absPath, fromMatch[1]);
+      if (fromMatch) {
+        // #3498 (Codex C1 finding, round 4): the local-alias bookkeeping
+        // below must run for EVERY named import, not only a relative
+        // (`./`/`../`) specifier -- `import { helper } from
+        // 'some-package'; export { helper as PublicHelper };` re-exports
+        // a genuinely local binding the same way a relative import does,
+        // even though a BARE package specifier can never be resolved to
+        // one of this repo's own files for cross-file importer crediting.
+        // Only the importer-crediting push below stays relative-only.
+        const isRelativeSpecifier = RELATIVE_SPECIFIER_PATTERN.test(
+          fromMatch[1],
+        );
+        const targetFile = isRelativeSpecifier
+          ? resolveSpecifier(absPath, fromMatch[1])
+          : null;
         for (const item of items) {
           if (item.isType) {
             continue;
           }
-          imports.push({ name: item.name, targetFile, importerFile: absPath });
+          if (targetFile) {
+            imports.push({
+              name: item.name,
+              targetFile,
+              importerFile: absPath,
+            });
+          }
           // #3498 (Copilot C1 finding): a no-`from` list item can
           // re-export a LOCAL name this file only ever IMPORTED, never
           // declared -- `declarationLineByLocalName` has nothing for it,
