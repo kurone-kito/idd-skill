@@ -1151,6 +1151,76 @@ test('a TypeScript generic angle-bracket comma in an exported const arrow functi
   }
 });
 
+test('a no-`from` export list re-exporting a binding from a COMBINED default + named import is classified unused, and the named part is still credited as a real importer (Copilot/Codex C1 round-7 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export function other(): void {}\n' +
+        "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import helper, { other } from './origin.mts';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n' +
+        'void other;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'the default binding of a combined default+named import must get ' +
+        'the same local-alias line tracking a plain default import gets',
+    );
+    assert.equal(
+      findByName(result, 'other').category,
+      'production',
+      'the NAMED part of the same combined import must still be ' +
+        "credited as a real cross-file importer of origin.mts' other",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` export list re-exporting a binding from a COMBINED default + namespace import is classified unused (Copilot/Codex C1 round-7 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      "export function helper(): void {\n  console.log('hi');\n}\n",
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import def, * as origin from './origin.mts';\n" +
+        '\n' +
+        'export { origin as PublicOrigin };\n' +
+        'void def;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicOrigin').category,
+      'unused',
+      'the namespace binding of a combined default+namespace import ' +
+        'must get the same local-alias line tracking a plain namespace ' +
+        'import gets',
+    );
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'the namespace part of the same combined import must still ' +
+        "credit origin.mts's own helper as a real cross-file importer",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

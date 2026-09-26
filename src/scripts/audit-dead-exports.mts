@@ -524,6 +524,23 @@ const IMPORT_NAMESPACE_PATTERN =
 // character class immediately after `import\s+`.
 const IMPORT_DEFAULT_PATTERN =
   /^import\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
+// #3498 (Copilot/Codex C1 finding, round 7): a COMBINED default +
+// namespace import (`import def, * as ns from '...';`) introduces two
+// local bindings on one line -- `IMPORT_DEFAULT_PATTERN` above never
+// matches it (a comma, not `from`, follows the default identifier), and
+// neither does `IMPORT_NAMESPACE_PATTERN` (no leading default identifier
+// before `* as`). Captures the default name (1), namespace name (2), and
+// specifier (3).
+const IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN =
+  /^import\s+([A-Za-z_$][\w$]*)\s*,\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]/;
+// #3498 (Copilot/Codex C1 finding, round 7): a COMBINED default + named
+// import (`import def, { a, b } from '...';`) -- matches only the
+// default-identifier-plus-comma PREFIX (up to and including the opening
+// `{`); the named list itself is parsed separately by
+// `processNamedImportBraceList`, mirroring how the plain brace branch
+// locates its own `{` via `strippedText.indexOf`.
+const IMPORT_DEFAULT_PLUS_BRACE_PATTERN =
+  /^import\s+([A-Za-z_$][\w$]*)\s*,\s*\{/;
 // #3498 (Codex C1 finding, round 4): unlike the `export ... from`
 // patterns above (which only ever re-export FROM one of this repo's own
 // relative files, so a leading dot is required), a named import's own
@@ -607,6 +624,63 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
   }
   const pendingNoFromItems: PendingNoFromItem[] = [];
   const claimedNoFromExposedNames = new Set<string>();
+
+  // #3498 (Copilot/Codex C1 finding, round 7): factored out of the plain
+  // `import { a } from '...'` handling so the combined `import def, { a }
+  // from '...'` form (see `IMPORT_DEFAULT_PLUS_BRACE_PATTERN` below) can
+  // reuse the identical named-list processing instead of duplicating it.
+  // `braceOffset` is the absolute `strippedText` offset of the `{` that
+  // opens the list; returns the matching `}`'s offset (or -1 if
+  // unbalanced) so the caller can advance `lineIndex` past it.
+  function processNamedImportBraceList(braceOffset: number): number {
+    const closeIndex = findMatchingBrace(strippedText, braceOffset);
+    if (closeIndex === -1) {
+      return -1;
+    }
+    const items = parseBracedItems(
+      originalText,
+      strippedText,
+      braceOffset + 1,
+      closeIndex,
+    );
+    const afterBrace = strippedText.slice(closeIndex + 1, closeIndex + 200);
+    const fromMatch = IMPORT_FROM_AFTER_BRACE_PATTERN.exec(afterBrace);
+    if (fromMatch) {
+      // #3498 (Codex C1 finding, round 4): the local-alias bookkeeping
+      // below must run for EVERY named import, not only a relative
+      // (`./`/`../`) specifier -- only cross-file importer crediting
+      // stays relative-only.
+      const isRelativeSpecifier = RELATIVE_SPECIFIER_PATTERN.test(fromMatch[1]);
+      const targetFile = isRelativeSpecifier
+        ? resolveSpecifier(absPath, fromMatch[1])
+        : null;
+      for (const item of items) {
+        if (item.isType) {
+          continue;
+        }
+        if (targetFile) {
+          imports.push({ name: item.name, targetFile, importerFile: absPath });
+        }
+        // #3498 (Copilot C1 finding): a no-`from` list item can
+        // re-export a LOCAL name this file only ever IMPORTED, never
+        // declared -- track the local alias's introducing line the same
+        // way a declaration's is tracked.
+        const localAlias = item.alias ?? item.name;
+        addDeclarationLine(localAlias, item.line);
+        // #3498 (Codex C1 finding, round 3): `parseBracedItems` already
+        // recognizes a suppression comment on this import item's own
+        // line -- record it here too, so a no-`from` item resolving to
+        // this import line can also be suppressed there.
+        if (!declarationSuppressionByLocalName.has(localAlias)) {
+          declarationSuppressionByLocalName.set(localAlias, {
+            suppressed: item.suppressed,
+            reason: item.reason,
+          });
+        }
+      }
+    }
+    return closeIndex;
+  }
 
   const lineStarts: number[] = [0];
   for (let i = 0; i < strippedText.length; i += 1) {
@@ -938,69 +1012,81 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
       continue;
     }
 
-    if (IMPORT_BRACE_PATTERN.test(line)) {
+    // #3498 (Copilot/Codex C1 finding, round 7): a combined default +
+    // namespace import (`import def, * as ns from '...';`) introduces
+    // TWO local bindings on one line -- track both the same way the
+    // plain default and plain namespace branches already do.
+    const combinedNamespaceMatch =
+      IMPORT_DEFAULT_PLUS_NAMESPACE_PATTERN.exec(line);
+    if (combinedNamespaceMatch) {
+      const combinedSpecifier = combinedNamespaceMatch[3];
+      if (RELATIVE_SPECIFIER_PATTERN.test(combinedSpecifier)) {
+        imports.push({
+          name: '*',
+          targetFile: resolveSpecifier(absPath, combinedSpecifier),
+          importerFile: absPath,
+        });
+      }
+      for (const localName of [
+        combinedNamespaceMatch[1],
+        combinedNamespaceMatch[2],
+      ]) {
+        addDeclarationLine(localName, lineIndex + 1);
+        if (!declarationSuppressionByLocalName.has(localName)) {
+          const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+            originalText,
+            lineStarts,
+            lineIndex + 1,
+          );
+          declarationSuppressionByLocalName.set(localName, {
+            suppressed: !!ignoreMatch,
+            reason: (ignoreMatch?.[1] ?? '').trim(),
+          });
+        }
+      }
+      lineIndex += 1;
+      continue;
+    }
+
+    // #3498 (Copilot/Codex C1 finding, round 7): a combined default +
+    // named import (`import def, { a, b } from '...';`) -- neither the
+    // plain default pattern (requires `from` immediately after the
+    // identifier) nor the plain brace pattern (requires `{` immediately
+    // after `import`) matches this form, so it was silently unhandled
+    // entirely. Track the default binding, then reuse the shared named-
+    // list processing (`processNamedImportBraceList`) for the rest.
+    const combinedBraceMatch = IMPORT_DEFAULT_PLUS_BRACE_PATTERN.exec(line);
+    if (combinedBraceMatch) {
+      const combinedDefaultLocalName = combinedBraceMatch[1];
+      addDeclarationLine(combinedDefaultLocalName, lineIndex + 1);
+      if (!declarationSuppressionByLocalName.has(combinedDefaultLocalName)) {
+        const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+          originalText,
+          lineStarts,
+          lineIndex + 1,
+        );
+        declarationSuppressionByLocalName.set(combinedDefaultLocalName, {
+          suppressed: !!ignoreMatch,
+          reason: (ignoreMatch?.[1] ?? '').trim(),
+        });
+      }
       const braceOffset = strippedText.indexOf('{', start);
-      const closeIndex = findMatchingBrace(strippedText, braceOffset);
+      const closeIndex = processNamedImportBraceList(braceOffset);
       if (closeIndex === -1) {
         lineIndex += 1;
         continue;
       }
-      const items = parseBracedItems(
-        originalText,
-        strippedText,
-        braceOffset + 1,
-        closeIndex,
-      );
-      const afterBrace = strippedText.slice(closeIndex + 1, closeIndex + 200);
-      const fromMatch = IMPORT_FROM_AFTER_BRACE_PATTERN.exec(afterBrace);
-      if (fromMatch) {
-        // #3498 (Codex C1 finding, round 4): the local-alias bookkeeping
-        // below must run for EVERY named import, not only a relative
-        // (`./`/`../`) specifier -- `import { helper } from
-        // 'some-package'; export { helper as PublicHelper };` re-exports
-        // a genuinely local binding the same way a relative import does,
-        // even though a BARE package specifier can never be resolved to
-        // one of this repo's own files for cross-file importer crediting.
-        // Only the importer-crediting push below stays relative-only.
-        const isRelativeSpecifier = RELATIVE_SPECIFIER_PATTERN.test(
-          fromMatch[1],
-        );
-        const targetFile = isRelativeSpecifier
-          ? resolveSpecifier(absPath, fromMatch[1])
-          : null;
-        for (const item of items) {
-          if (item.isType) {
-            continue;
-          }
-          if (targetFile) {
-            imports.push({
-              name: item.name,
-              targetFile,
-              importerFile: absPath,
-            });
-          }
-          // #3498 (Copilot C1 finding): a no-`from` list item can
-          // re-export a LOCAL name this file only ever IMPORTED, never
-          // declared -- `declarationLineByLocalName` has nothing for it,
-          // so without this the import statement's own mention of the
-          // local alias registers as a false self-reference. Track the
-          // local alias's introducing line the same way a declaration's
-          // is tracked.
-          const localAlias = item.alias ?? item.name;
-          addDeclarationLine(localAlias, item.line);
-          // #3498 (Codex C1 finding, round 3): `parseBracedItems` already
-          // recognizes a suppression comment on this import item's own
-          // line (the same generic braced-list parsing a no-`from`
-          // export-list item uses) -- record it here too, so a no-`from`
-          // item resolving to this import line can also be suppressed
-          // there, mirroring the declaration case above.
-          if (!declarationSuppressionByLocalName.has(localAlias)) {
-            declarationSuppressionByLocalName.set(localAlias, {
-              suppressed: item.suppressed,
-              reason: item.reason,
-            });
-          }
-        }
+      lineIndex = lineNumberAt(strippedText, closeIndex) - 1;
+      lineIndex += 1;
+      continue;
+    }
+
+    if (IMPORT_BRACE_PATTERN.test(line)) {
+      const braceOffset = strippedText.indexOf('{', start);
+      const closeIndex = processNamedImportBraceList(braceOffset);
+      if (closeIndex === -1) {
+        lineIndex += 1;
+        continue;
       }
       lineIndex = lineNumberAt(strippedText, closeIndex) - 1;
       lineIndex += 1;
