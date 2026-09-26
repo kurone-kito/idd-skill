@@ -520,10 +520,108 @@ function findRepositoryFitHiddenMetadataRanges(
   for (const line of text.matchAll(
     /^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*(?:\n[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\))[ \t]*)?/gm,
   )) {
+    if (!isRepositoryFitReferenceDefinition(line[0] ?? '')) {
+      continue;
+    }
     const start = line.index ?? 0;
     ranges.push({ start, end: start + (line[0] ?? '').length });
   }
   return ranges;
+}
+
+function isRepositoryFitReferenceDefinition(value: string): boolean {
+  const firstLineEnd = value.indexOf('\n');
+  const firstLine = firstLineEnd === -1 ? value : value.slice(0, firstLineEnd);
+  const continuation = firstLineEnd === -1 ? '' : value.slice(firstLineEnd + 1);
+  const match = /^[ \t]{0,3}\[[^\]\n]+\]:(.*)$/u.exec(firstLine);
+  if (match === null) {
+    return false;
+  }
+
+  let rest = (match[1] ?? '').trimStart();
+  if (rest.length === 0) {
+    return false;
+  }
+
+  let destinationEnd = 0;
+  if (rest.startsWith('<')) {
+    let escaped = false;
+    destinationEnd = -1;
+    for (let index = 1; index < rest.length; index += 1) {
+      const character = rest[index] ?? '';
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '>') {
+        destinationEnd = index + 1;
+        break;
+      }
+    }
+    if (destinationEnd === -1) {
+      return false;
+    }
+  } else {
+    let depth = 0;
+    let escaped = false;
+    for (; destinationEnd < rest.length; destinationEnd += 1) {
+      const character = rest[destinationEnd] ?? '';
+      if (/\s/u.test(character)) {
+        break;
+      }
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === '\\') {
+        escaped = true;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        if (depth === 0) {
+          return false;
+        }
+        depth -= 1;
+      }
+    }
+    if (destinationEnd === 0 || depth !== 0 || escaped) {
+      return false;
+    }
+  }
+
+  rest = rest.slice(destinationEnd).trim();
+  if (rest.length === 0) {
+    return (
+      continuation.length === 0 ||
+      isRepositoryFitReferenceTitle(continuation.trim())
+    );
+  }
+  return continuation.length === 0 && isRepositoryFitReferenceTitle(rest);
+}
+
+function isRepositoryFitReferenceTitle(value: string): boolean {
+  const end = findRepositoryFitReferenceTitleEnd(value);
+  return end !== -1 && value.slice(end).trim().length === 0;
+}
+
+function findRepositoryFitReferenceTitleEnd(value: string): number {
+  const opener = value[0] ?? '';
+  const closer = opener === '(' ? ')' : opener;
+  if (opener !== '"' && opener !== "'" && opener !== '(') {
+    return -1;
+  }
+  let escaped = false;
+  for (let index = 1; index < value.length; index += 1) {
+    const character = value[index] ?? '';
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === closer) {
+      return index + 1;
+    }
+  }
+  return -1;
 }
 
 function hasRepositoryFitSentenceBoundary(text: string): boolean {

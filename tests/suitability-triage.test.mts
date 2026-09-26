@@ -6680,6 +6680,19 @@ This task requires Slack access.`,
   assert.equal(result.pass, false);
 });
 
+test('repository fit keeps malformed reference-definition prose visible', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+[context]: This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit keeps HTTPS autolinks visible to external-access matching', () => {
   const result = checkRepositoryFit({
     issue: {
