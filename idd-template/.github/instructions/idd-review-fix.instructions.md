@@ -83,9 +83,9 @@ Convergence guardrails:
 - If the critique pass reports zero issues, proceed to E11.
 
 **No confidence exception.** Fix scope or confidence never excuses
-skipping this pass — run it for every E9 batch before E11. Skipped
+skipping this pass — always run it before E11. Pushed and skipped
 one? Disclose on the PR, name the round(s), run E10 on the
-accumulated diff, then return to E1 before F1.
+accumulated diff to a clean pass, then return to E1.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
