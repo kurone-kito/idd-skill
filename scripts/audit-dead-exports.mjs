@@ -72,8 +72,11 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 // real finding. For a `function`/`const`/`class` declaration, it may sit
 // on the declaration's own line OR, since a multi-line signature makes
 // that cramped, as a standalone comment on the line immediately above the
-// declaration. For an `export { a, b };` list item, it is checked only on
-// that item's own physical line (see `parseBracedItems`).
+// declaration. For an `export { a, b };` no-`from` list item, it is
+// recognized on that item's own physical line (see `parseBracedItems`)
+// AND, since #3498, on the resolved real declaration's own line -- either
+// one suppresses the finding (see `declarationSuppressionByLocalName` in
+// `parseFile`).
 const IGNORE_EXPORT_PATTERN =
   /\/\/\s*audit:ignore-dead-export(?::\s*(.*))?\s*$/;
 const RELATIVE_SPECIFIER_PATTERN = /^\.\.?\//;

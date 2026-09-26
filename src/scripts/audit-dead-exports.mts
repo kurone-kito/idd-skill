@@ -75,12 +75,12 @@ export interface DeclaredExport {
   name: string;
   /** Repo-relative (posix) path of the file that declares it. */
   file: string;
-  /** 1-based source line of the real declaration -- for a no-`from`
-   * `export {}` list item, its underlying `function`/`const`/`class`
-   * declaration's own line when one was found in this file, falling back
-   * to the export statement's own list-item line only when no local
-   * declaration exists (e.g. a merely imported binding re-exported by
-   * name; #3498). */
+  /** 1-based source line of the real INTRODUCING statement -- for a
+   * no-`from` `export {}` list item, its underlying
+   * `function`/`const`/`class` declaration's own line, or a named
+   * import's own line when the re-exported local name is only imported
+   * (never declared) in this file, falling back to the export
+   * statement's own list-item line only when neither was found (#3498). */
   line: number;
   category: DeadExportCategory;
   /** `true` when a well-formed `audit:ignore-dead-export` comment covers it. */
@@ -104,8 +104,11 @@ export interface DeadExportAuditResult {
 // real finding. For a `function`/`const`/`class` declaration, it may sit
 // on the declaration's own line OR, since a multi-line signature makes
 // that cramped, as a standalone comment on the line immediately above the
-// declaration. For an `export { a, b };` list item, it is checked only on
-// that item's own physical line (see `parseBracedItems`).
+// declaration. For an `export { a, b };` no-`from` list item, it is
+// recognized on that item's own physical line (see `parseBracedItems`)
+// AND, since #3498, on the resolved real declaration's own line -- either
+// one suppresses the finding (see `declarationSuppressionByLocalName` in
+// `parseFile`).
 const IGNORE_EXPORT_PATTERN =
   /\/\/\s*audit:ignore-dead-export(?::\s*(.*))?\s*$/;
 
@@ -147,17 +150,18 @@ interface ParsedFile {
    * identifier the declaring file's OWN other code uses
    * (`hasSelfReference` needs this one, not the alias -- `export { a as
    * b };` still reads `a`, never `b`, inside this file). `line` is the
-   * REAL declaration line when known (#3498): the underlying
-   * `function`/`const`/`class` line for a no-`from` list item, falling
-   * back to the export statement's own line only when no local
-   * declaration for `localName` was found (e.g. a merely imported
-   * binding re-exported with no declaration of its own in this file).
-   * `selfReferenceExcludeLines` is every line that must NOT count as
-   * "elsewhere" for `hasSelfReference` -- normally just `[line]`, but for
-   * a no-`from` list item it also includes the export statement's own
-   * line (a SEPARATE statement from the real declaration; re-exporting a
-   * name necessarily mentions it a second time, which is not itself
-   * "wired into other code"). */
+   * REAL introducing line when known (#3498): the underlying
+   * `function`/`const`/`class` line for a no-`from` list item, or a named
+   * import's own line when `localName` is only imported (never declared)
+   * in this file, falling back to the export statement's own line only
+   * when neither was found. `selfReferenceExcludeLines` is every line
+   * that must NOT count as "elsewhere" for `hasSelfReference` -- normally
+   * just `[line]`, but for a no-`from` list item it also includes the
+   * export statement's own line (a SEPARATE statement from the real
+   * declaration/import; re-exporting a name necessarily mentions it a
+   * second time, which is not itself "wired into other code") and every
+   * OTHER no-`from` item re-exporting the same local name elsewhere in
+   * the file. */
   declared: Map<
     string,
     {
