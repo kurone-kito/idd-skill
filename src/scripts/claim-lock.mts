@@ -338,8 +338,8 @@ function resolveWorktreeAdminDir(cwd: string): string {
  * Resolve `path` to a canonical directory when it exists. `git rev-parse`
  * and `path.resolve` can disagree across a symlinked worktree path
  * (one side stays on the symlink, the other is the real directory),
- * which would hide a primary worktree and allow the create this check
- * exists to refuse.
+ * which would hide a primary worktree and let `--acquire` create the
+ * lock this check exists to refuse.
  */
 function canonicalizeExistingDir(path: string): string {
   const resolved = resolve(path);
@@ -359,9 +359,14 @@ function canonicalizeExistingDir(path: string): string {
  * often the relative path `.git` on the primary worktree, and a
  * symlinked worktree path can make one side canonical and the other
  * not, so compare real paths rather than the raw strings.
+ *
+ * Canonicalize `worktree` before resolving a relative common dir.
+ * `path.resolve` applies `..` to an unresolved symlink, so a link to a
+ * subdirectory of the primary worktree would otherwise walk off the
+ * real tree and miss the primary admin directory.
  */
 function isPrimaryWorktree(worktree: string): boolean {
-  const cwd = resolve(worktree);
+  const cwd = canonicalizeExistingDir(worktree);
   const commonDir = canonicalizeExistingDir(
     resolve(cwd, gitRevParse(cwd, ['--git-common-dir'])),
   );

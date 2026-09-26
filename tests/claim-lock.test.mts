@@ -284,6 +284,27 @@ test('acquire: a symlinked path to the primary worktree still refuses a new lock
   }
 });
 
+test('acquire: a symlink to a subdirectory of the primary worktree still refuses a new lock', () => {
+  const fixture = setupLinkedWorktree();
+  const nested = join(fixture.primary, 'nested');
+  const nestedLink = join(
+    fixture.primary,
+    '..',
+    `${basename(fixture.primary)}-nested-link`,
+  );
+  try {
+    mkdirSync(nested);
+    symlinkSync(nested, nestedLink);
+
+    const refused = acquireClaimLock(nestedLink, 'agent-a', 'claim-a', false);
+    assert.equal(refused.mode, 'primary-worktree-refused');
+    assert.equal(existsSync(resolveClaimLockPath(fixture.primary)), false);
+  } finally {
+    rmSync(nestedLink, { force: true });
+    teardown(fixture);
+  }
+});
+
 test('CLI: acquire against the primary worktree exits 4 and creates no lock', async () => {
   const fixture = setupLinkedWorktree();
   try {

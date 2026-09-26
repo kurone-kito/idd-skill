@@ -2762,13 +2762,16 @@ still fails closed:
   well-formed, and its holder matches (`agentId`, `claimId`) →
   re-acquired without writing — this call's own first read found the
   lock already there, mirroring the helper's `reacquired: true` with no
-  `racedCreate`. Before creating a lock that is absent, compare
-  `git -C <worktree> rev-parse --git-common-dir` with
-  `--absolute-git-dir`, resolving both to absolute real paths (the
-  common dir is often the relative `.git` on the primary worktree, and
-  a symlinked worktree path can make one side canonical and the other
-  not). When they are the same directory, the worktree is primary: do
-  not create `idd-claim.lock`. Fail closed instead. An already-present
+  `racedCreate`. Before creating a lock that is absent, canonicalize
+  `<worktree>` to its real directory first, then compare
+  `git -C <real-worktree> rev-parse --git-common-dir` with
+  `--absolute-git-dir`, resolving both to absolute real paths against
+  that real directory (the common dir is often the relative `.git` on
+  the primary worktree). Resolving a relative common dir against an
+  unresolved symlink, including a symlink to a subdirectory, walks
+  `..` on the link and hides the primary worktree. When the two real
+  paths are the same directory, the worktree is primary: do not create
+  `idd-claim.lock`. Fail closed instead. An already-present
   lock still follows the reacquire and collision rules below; this
   refusal only blocks the create (observed 2026-09-25,
   kurone-kito/idd-skill#3486). Absent on a linked worktree → write the
