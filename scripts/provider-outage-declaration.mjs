@@ -737,8 +737,23 @@ export async function runProviderOutageDeclaration(options = {}) {
   if (!args.yes) {
     process.stdout.write(`${body}\n`);
     const ask = options.prompt ?? makeReadlinePrompt();
-    const answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
-    ask.close?.();
+    // #3346 review finding ("Close the interactive prompt when outage
+    // declaration fails"): pre-migration, main()'s `main().catch(...)`
+    // called `process.exit(1)` on any error, unconditionally tearing the
+    // whole process (and this readline interface) down regardless of
+    // where the failure occurred. Post-migration, main() returns an
+    // error outcome through runHelperCli/applyHelperCliOutcomeWhenDisabled
+    // instead, so a rejected `ask(...)` call now reaches that catch
+    // without ever running the close below, leaving the readline open
+    // and hanging a real interactive invocation -- the same regression
+    // already fixed for force-handoff.mts and idd-onboard.mts earlier
+    // this PR. Wrap the prompt call itself so ask.close?.() always runs.
+    let answer;
+    try {
+      answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
+    } finally {
+      ask.close?.();
+    }
     if (
       String(answer ?? '')
         .trim()
