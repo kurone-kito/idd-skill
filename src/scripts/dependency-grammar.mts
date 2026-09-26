@@ -172,12 +172,22 @@ export function consumeDependencyReferenceList(
         qualified[2],
       );
       const target = Number.parseInt(qualified[3], 10);
-      if (
-        currentRepoRef &&
-        qualifiedRepoRef === currentRepoRef &&
-        Number.isInteger(target) &&
-        target > 0
-      ) {
+      // Validate the number independently of repo resolution
+      // (`idd-skill#3285` final review round, Copilot): the prior
+      // `else` branch folded a non-positive/non-integer qualified or
+      // URL target (e.g. `owner/repo#0`) into `unresolvable` with
+      // `reason: 'cross_repository_reference'` even when
+      // `qualifiedRepoRef` matched `currentRepoRef` -- reporting an
+      // invalid SAME-repo number as if it named a different repository,
+      // and (when `currentRepoRef` is unknown) hiding the real
+      // "this number is invalid" problem behind the ordinary
+      // fail-safe-unverifiable route every qualified/URL token already
+      // takes without repo context. Only a genuinely valid positive
+      // number ever reaches the cross-repository resolution/
+      // unresolvable decision below.
+      if (!Number.isInteger(target) || target <= 0) {
+        invalidTokens.push(match[0]);
+      } else if (currentRepoRef && qualifiedRepoRef === currentRepoRef) {
         numbers.push(target);
       } else {
         unresolvable.push({

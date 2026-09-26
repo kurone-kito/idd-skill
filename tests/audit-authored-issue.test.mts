@@ -1416,6 +1416,18 @@ test('dependency-line-grammar fails on an invalid-only continuation line, not ju
   assert.match(finding.detail, /"#0"/);
 });
 
+test('dependency-line-grammar fails on a same-repo qualified reference with a non-positive number (final review round, Copilot: "Blocked by kurone-kito/idd-skill#0, #12" -- must not be misreported as cross-repository)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    'Blocked by kurone-kito/idd-skill#0, #12',
+    { currentRepo: 'kurone-kito/idd-skill' },
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /"kurone-kito\/idd-skill#0"/);
+  assert.doesNotMatch(finding.detail, /names another repository/);
+});
+
 test('dependency-line-grammar fails on a reference-style Markdown-link mention (final review round, CodeRabbit: "Blocked by [#12][ref]")', () => {
   const body = childBody({
     extraMarkers:
