@@ -4503,7 +4503,7 @@ test('runHearWizard closes the prompt even when a prompt call itself rejects', a
   writeHearFixture(root);
   const catalog = loadOnboardingHearingCatalog();
   let closed = false;
-  const prompt = async (_question: string) => {
+  const prompt: PromptFn = async (_question: string) => {
     throw new Error('stdin boom');
   };
   prompt.close = () => {

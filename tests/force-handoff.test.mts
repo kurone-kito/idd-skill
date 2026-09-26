@@ -8,6 +8,7 @@ import {
   runHandoff,
   SAME_SUCCESSOR_WARNING,
 } from '../src/scripts/force-handoff.mts';
+import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 
 type RunHandoffOptions = NonNullable<Parameters<typeof runHandoff>[0]>;
 
@@ -548,7 +549,7 @@ test('runHandoff refuses release when forced-handoff mode is not human-gated', a
 // TTY. Assert the prompt is always closed, even on this early-throw path.
 test('runHandoff closes the prompt even when a later step throws before its own close call', async () => {
   let closed = false;
-  const prompt = async (_question: string) => '497';
+  const prompt: PromptFn = async (_question: string) => '497';
   prompt.close = () => {
     closed = true;
   };
