@@ -222,6 +222,7 @@ test('helper-cli-contract fixture: the first, discover/claim, and review/merge b
     'idd-audit-authored-issue.mjs',
     'idd-audit-pr-cleanup.mjs',
     'idd-authoring-owner-provenance.mjs',
+    'idd-authoring-set-members.mjs',
     'idd-branch-conflict-state.mjs',
     'idd-branch-name.mjs',
     'idd-ci-wait-policy.mjs',
