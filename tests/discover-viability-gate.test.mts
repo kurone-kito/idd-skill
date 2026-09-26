@@ -562,6 +562,20 @@ test('still fails autonomous completion when a maintainer must supply the creden
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('still fails autonomous completion when a credential is necessary (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 91,
+    title: 'wire external credential approval',
+    body:
+      'A credential is necessary before implementation. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('still fails autonomous completion when credential handling is itself required (#3522)', () => {
   const result = evaluateA4Viability({
     number: 70,
@@ -772,6 +786,20 @@ test('keeps internal only-after sequencing descriptive (#3528)', () => {
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('keeps internal cannot-until sequencing descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 92,
+    title: 'document credential terminology',
+    body:
+      'This issue documents credential storage that cannot initialize until ' +
+      'platform encryption loads. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('does not let a soft-wrapped only-after prerequisite pass (#3528)', () => {
   const result = evaluateA4Viability({
     number: 90,
@@ -807,6 +835,20 @@ test('keeps already provided credential material descriptive (#3528)', () => {
     body:
       'This issue documents a credential provided by the maintainer in the ' +
       'current implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat a work assertion as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 93,
+    title: 'document credential terminology',
+    body:
+      'Tests must verify credential rotation behavior. Verification: add ' +
+      'unit tests.',
     state: 'OPEN',
   });
 

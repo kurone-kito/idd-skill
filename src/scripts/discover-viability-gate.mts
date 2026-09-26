@@ -313,7 +313,9 @@ const GENERIC_MENTION_LOOKAHEAD_TOKENS = 2;
 const REQUIREMENT_ASSERTION_PATTERN =
   /\b(must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b/i;
 const CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN =
-  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
+  /\b(?:must|require[sd]?|requiring|needed|needs?|shall|mandatory|essential|necessary|blocked|blocking|pending|waiting)\b|\b(?:supplied|provided|performed)(?=\s+(?:(?:by\s+(?:the\s+)?(?:maintainer|operator|owner|team)\s+)?(?:before|until))\b)/i;
+const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
+  /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -326,7 +328,7 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
-  /\b(?:cannot|can't)\b[^.\n]{0,80}\buntil\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b/i;
+  /\b(?:cannot|can't)\b[^.;:]{0,80}\buntil\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\bonly\s+after\b[^.;:]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
   /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
 
@@ -815,11 +817,15 @@ function isNearRequirementAssertion(
   matchEnd: number,
   assertionPattern = REQUIREMENT_ASSERTION_PATTERN,
 ): boolean {
+  const clauseBreakPattern =
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? CUE_HARD_BREAK_PATTERN
+      : HARD_CLAUSE_BREAK_PATTERN;
   const forwardRaw = corpus.slice(
     matchEnd,
     matchEnd + REQUIREMENT_ASSERTION_WINDOW_CHARS,
   );
-  const forwardBreak = HARD_CLAUSE_BREAK_PATTERN.exec(forwardRaw);
+  const forwardBreak = clauseBreakPattern.exec(forwardRaw);
   const forwardText = forwardBreak
     ? forwardRaw.slice(0, forwardBreak.index)
     : forwardRaw;
@@ -832,13 +838,17 @@ function isNearRequirementAssertion(
   );
   const backwardRaw = corpus.slice(backwardStart, matchIndex);
   const priorBreaks = [
-    ...backwardRaw.matchAll(new RegExp(HARD_CLAUSE_BREAK_PATTERN, 'g')),
+    ...backwardRaw.matchAll(new RegExp(clauseBreakPattern, 'g')),
   ];
   const lastBreak = priorBreaks.at(-1);
   const backwardText = lastBreak
     ? backwardRaw.slice(lastBreak.index + lastBreak[0].length)
     : backwardRaw;
-  return assertionPattern.test(backwardText);
+  return (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN
+      ? CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN
+      : assertionPattern
+  ).test(backwardText);
 }
 
 function isFollowedByCredentialRequirement(
