@@ -207,6 +207,7 @@ function parseBracedItems(
       alias,
       isType,
       line,
+      offset: itemStart,
       suppressed: !!ignoreMatch,
       reason: (ignoreMatch?.[1] ?? '').trim(),
     });
@@ -228,7 +229,7 @@ const CLASS_DECL_PATTERN =
 // patterns above (which all require a leading `export`) never record its
 // real line. These bare variants exist solely to resolve that real
 // declaration line for the no-`from` branch's deferred finalization pass
-// (`declarationLineByLocalName.get(pending.localName)`, after the
+// (`declarationOffsetsByLocalName.get(pending.localName)`, after the
 // full-file loop) -- they never feed `declared` directly, so a plain
 // unexported helper never becomes a phantom entry in the audit results.
 const BARE_FUNCTION_DECL_PATTERN =
@@ -347,33 +348,44 @@ function parseFile(absPath, originalText) {
   const declared = new Map();
   const reExports = [];
   const imports = [];
-  // #3498: real declaration line(s) for EVERY top-level function/const/
+  // #3498: real declaration OFFSET(s) for EVERY top-level function/const/
   // class name in this file, exported or not -- see the bare-pattern
   // comment above. Populated alongside `declared` below; consulted only
   // when finalizing a no-`from` export-list item (after the full-file
   // loop below, not inline) to resolve its `declarationLine`.
   //
-  // An array, not a single line (Copilot High-severity finding, post-
+  // An array, not a single value (Copilot High-severity finding, post-
   // reduction review): a bare FUNCTION specifically can have multiple
   // TypeScript overload signature lines sharing one name (`function
   // helper(a: number): void; function helper(a: string): void; function
   // helper(a) { ... }`) -- every one of them mentions the name, so a
-  // no-`from` item resolving to only the LAST such line (a plain
+  // no-`from` item resolving to only the LAST such occurrence (a plain
   // overwrite) would still see the earlier overload lines as a false
   // self-reference, wrongly classifying a genuinely dead export as
-  // `production`. `addDeclarationLine` accumulates every introducing
-  // line per name instead of overwriting (harmless for `const`/`class`,
-  // which can only ever contribute one line per name -- duplicate
-  // top-level bindings are themselves a compile error).
-  const declarationLineByLocalName = new Map();
-  function addDeclarationLine(name, line) {
-    const existing = declarationLineByLocalName.get(name);
+  // `production`. `addDeclarationOffset` accumulates every introducing
+  // occurrence per name instead of overwriting (harmless for
+  // `const`/`class`, which can only ever contribute one declarator per
+  // name -- duplicate top-level bindings are themselves a compile
+  // error).
+  //
+  // OFFSETS, not lines (round-15 redesign, Codex/Copilot C1 findings):
+  // excluding a whole physical LINE from `hasSelfReference` discarded any
+  // genuine, unrelated usage sharing that line with a declaration
+  // (`const helper = 1; register(helper);`) -- a verified regression
+  // relative to pre-#3498 behavior, since the export statement's own
+  // (correct) line is not the only thing that can share a line with real
+  // code. Tracking the exact character offset of each declaration
+  // identifier's own occurrence instead lets `hasSelfReference` exclude
+  // only that one occurrence, never a sibling statement's genuine usage.
+  const declarationOffsetsByLocalName = new Map();
+  function addDeclarationOffset(name, offset) {
+    const existing = declarationOffsetsByLocalName.get(name);
     if (existing) {
-      if (!existing.includes(line)) {
-        existing.push(line);
+      if (!existing.includes(offset)) {
+        existing.push(offset);
       }
     } else {
-      declarationLineByLocalName.set(name, [line]);
+      declarationOffsetsByLocalName.set(name, [offset]);
     }
   }
   // #3498 (C1 finding, both the CodeRabbit delegate and the independent
@@ -384,10 +396,11 @@ function parseFile(absPath, originalText) {
   // mention is a re-export mechanism, never itself "wired into other
   // code". Finalizing `declared` entries for no-`from` items only AFTER
   // the whole file has been scanned (below) lets both maps be complete
-  // first: `declarationLineByLocalName` (regardless of textual order) and
-  // this one, which accumulates EVERY no-`from` item's own line for a
-  // given local name across the entire file.
-  const noFromItemLinesByLocalName = new Map();
+  // first: `declarationOffsetsByLocalName` (regardless of textual order)
+  // and this one, which accumulates EVERY no-`from` item's own identifier
+  // OFFSET (round-15 redesign, not just its line) for a given local name
+  // across the entire file.
+  const noFromItemOffsetsByLocalName = new Map();
   const pendingNoFromItems = [];
   const claimedNoFromExposedNames = new Set();
   const lineStarts = [0];
@@ -464,28 +477,36 @@ function parseFile(absPath, originalText) {
             );
           })();
       const ignoreMatch = ownLineIgnoreMatch ?? precedingLineIgnoreMatch;
+      // #3498 (round-15 redesign): the identifier's own absolute offset,
+      // via the same suffix-length trick used at every other capture-
+      // group-is-the-tail call site in this file (the capture group is
+      // the LAST thing each of `FUNCTION_DECL_PATTERN`/
+      // `CONST_DECL_PATTERN`/`CLASS_DECL_PATTERN` can match, so the match
+      // always ends exactly where the identifier ends).
+      const nameOffset = start + (declMatch[0].length - declMatch[1].length);
       declared.set(name, {
         line: lineIndex + 1,
         suppressed: !!ignoreMatch,
         reason: (ignoreMatch?.[1] ?? '').trim(),
         localName: name,
-        selfReferenceExcludeLines: [lineIndex + 1],
+        selfReferenceExcludeOffsets: [nameOffset],
       });
       // #3498 (proactive fix, same class as the bare-const findings
       // above): `export const a = 1, b = 2;` is a genuine direct export
       // of BOTH `a` and `b` -- `CONST_DECL_PATTERN` itself only captures
       // the FIRST identifier, so a SEPARATE no-`from` item re-exporting
       // `b` under an alias (`export { b as PublicB };`) would otherwise
-      // never find `b`'s real declaration line in
-      // `declarationLineByLocalName` and fall back to the export-list
-      // line, letting this const statement's own unexcluded mention of
-      // `b` register as a false self-reference -- the same defect
-      // Copilot found for the BARE case, just on the EXPORTED branch.
-      // Only `declarationLineByLocalName` gets every declarator here;
-      // `declared` above still resolves only the first (a separate,
-      // pre-existing, unrelated gap: a LATER declarator's own direct
-      // export entry is silently missing from the audit entirely, not
-      // something the no-`from` mechanism this issue fixes touches).
+      // never find `b`'s real declaration offset in
+      // `declarationOffsetsByLocalName` and fall back to the export-list
+      // item's own offset, letting this const statement's own unexcluded
+      // mention of `b` register as a false self-reference -- the same
+      // defect Copilot found for the BARE case, just on the EXPORTED
+      // branch. Only `declarationOffsetsByLocalName` gets every
+      // declarator here; `declared` above still resolves only the first
+      // (a separate, pre-existing, unrelated gap: a LATER declarator's
+      // own direct export entry is silently missing from the audit
+      // entirely, not something the no-`from` mechanism this issue fixes
+      // touches).
       if (constMatch) {
         const declaratorListStart =
           start + (constMatch[0].length - constMatch[1].length);
@@ -495,10 +516,10 @@ function parseFile(absPath, originalText) {
           end,
         );
         for (const declarator of declarators) {
-          addDeclarationLine(declarator.name, lineIndex + 1);
+          addDeclarationOffset(declarator.name, declarator.offset);
         }
       } else {
-        addDeclarationLine(name, lineIndex + 1);
+        addDeclarationOffset(name, nameOffset);
       }
       lineIndex += 1;
       continue;
@@ -525,15 +546,20 @@ function parseFile(absPath, originalText) {
         // (`BARE_CONST_DECL_PATTERN` itself only ever captures the
         // first identifier). Single-line only -- see
         // `scanBareConstDeclarators`'s own doc comment.
-        const bareNames = bareConstMatch
+        const bareDeclarators = bareConstMatch
           ? scanBareConstDeclarators(
               strippedText,
               start + (bareConstMatch[0].length - bareConstMatch[1].length),
               end,
-            ).map((declarator) => declarator.name)
-          : [bareMatch[1]];
-        for (const bareName of bareNames) {
-          addDeclarationLine(bareName, lineIndex + 1);
+            )
+          : [
+              {
+                name: bareMatch[1],
+                offset: start + (bareMatch[0].length - bareMatch[1].length),
+              },
+            ];
+        for (const declarator of bareDeclarators) {
+          addDeclarationOffset(declarator.name, declarator.offset);
         }
       }
     }
@@ -589,20 +615,21 @@ function parseFile(absPath, originalText) {
           //
           // #3498: do NOT finalize into `declared` here -- defer to the
           // pending-item finalization after the full-file loop below, so
-          // both `declarationLineByLocalName` (which may not have seen
+          // both `declarationOffsetsByLocalName` (which may not have seen
           // `item.name`'s declaration yet if it is textually declared
           // LATER, e.g. via function hoisting) and
-          // `noFromItemLinesByLocalName` (which accumulates every
+          // `noFromItemOffsetsByLocalName` (which accumulates every
           // no-`from` item mentioning this local name anywhere in the
           // file, including sibling aliases split across lines) are
-          // complete by the time this item's exclude-lines are computed.
+          // complete by the time this item's exclude-offsets are
+          // computed.
           const exposedName = item.alias ?? item.name;
-          let lineSet = noFromItemLinesByLocalName.get(item.name);
-          if (!lineSet) {
-            lineSet = new Set();
-            noFromItemLinesByLocalName.set(item.name, lineSet);
+          let offsetSet = noFromItemOffsetsByLocalName.get(item.name);
+          if (!offsetSet) {
+            offsetSet = new Set();
+            noFromItemOffsetsByLocalName.set(item.name, offsetSet);
           }
-          lineSet.add(item.line);
+          offsetSet.add(item.offset);
           if (
             !declared.has(exposedName) &&
             !claimedNoFromExposedNames.has(exposedName)
@@ -612,6 +639,7 @@ function parseFile(absPath, originalText) {
               exposedName,
               localName: item.name,
               itemLine: item.line,
+              itemOffset: item.offset,
               suppressed: item.suppressed,
               reason: item.reason,
             });
@@ -666,24 +694,28 @@ function parseFile(absPath, originalText) {
   // whole file has been scanned -- see the pending-item comment above for
   // why this must happen after the loop, not inline.
   for (const pending of pendingNoFromItems) {
-    const realLines = declarationLineByLocalName.get(pending.localName);
-    const line = realLines?.[0] ?? pending.itemLine;
-    const excludeLines = new Set();
-    if (realLines) {
-      for (const realLine of realLines) {
-        excludeLines.add(realLine);
+    const realOffsets = declarationOffsetsByLocalName.get(pending.localName);
+    const line =
+      realOffsets && realOffsets.length > 0
+        ? lineNumberAt(strippedText, realOffsets[0])
+        : pending.itemLine;
+    const excludeOffsets = new Set();
+    if (realOffsets) {
+      for (const realOffset of realOffsets) {
+        excludeOffsets.add(realOffset);
       }
     }
-    for (const itemLine of noFromItemLinesByLocalName.get(pending.localName) ??
-      []) {
-      excludeLines.add(itemLine);
+    for (const itemOffset of noFromItemOffsetsByLocalName.get(
+      pending.localName,
+    ) ?? []) {
+      excludeOffsets.add(itemOffset);
     }
     declared.set(pending.exposedName, {
       line,
       suppressed: pending.suppressed,
       reason: pending.reason,
       localName: pending.localName,
-      selfReferenceExcludeLines: [...excludeLines],
+      selfReferenceExcludeOffsets: [...excludeOffsets],
     });
   }
   return { declared, reExports, imports };
@@ -692,56 +724,73 @@ function toPosixRelative(root, absPath) {
   return relative(root, absPath).split(sep).join('/');
 }
 /** Whether `name` (as a whole word) appears anywhere in `strippedText`
- * OTHER than on one of `excludeLines` -- i.e. the export is wired into its
- * own declaring file's other code, not merely declared (and, for a
+ * OTHER than at one of `excludeOffsets` -- i.e. the export is wired into
+ * its own declaring file's other code, not merely declared (and, for a
  * no-`from` export-list item, not merely re-exported by name). Most
- * callers pass a single-element array (the declaration's own line); a
- * no-`from` `export { a [as b] };` list item passes both the real
- * declaration's line AND the export statement's own line, since
- * re-exporting a name necessarily mentions it a second time in a SEPARATE
- * statement, which is not itself "wired into other code" either (#3498).
+ * callers pass a single-element array (the declaration identifier's own
+ * offset); a no-`from` `export { a [as b] };` list item passes both the
+ * real declaration's offset AND the export-list item's own identifier
+ * offset, since re-exporting a name necessarily mentions it a second
+ * time in a SEPARATE statement, which is not itself "wired into other
+ * code" either (#3498).
  *
- * **Known false-negative risk (C1 critique, #3478 review)**: this is a
- * whole-file text match, not a scope-aware reference check, so it can be
- * fooled into reporting a self-reference that is not really one -- an
- * unrelated local variable/parameter that happens to share the export's
- * name elsewhere in the same file, or the name appearing only inside a
- * string literal (this function's `strippedText` input has comments
- * blanked out, but string contents are left intact). A false positive
- * here means a genuinely dead export is wrongly classified `production`
- * and never surfaced -- accepted as a limitation of the regex/line-based
- * design this audit deliberately uses (see the module header), not
- * something a full scope-aware fix belongs in this issue's scope.
+ * **Offsets, not lines (round-15 redesign, Codex/Copilot C1 findings).**
+ * An earlier revision excluded a whole PHYSICAL LINE per declaration/
+ * item instead of one exact character offset. That discarded any
+ * genuine, unrelated usage sharing that line with a declaration or
+ * export-list item -- `const helper = 1; register(helper);` or
+ * `export { helper }; helper();` both silently misclassified a
+ * genuinely used export as `unused`, a verified regression relative to
+ * pre-#3498 behavior (reproduced against the pre-#3498 commit: those
+ * exact fixtures correctly read `production` there, for the wrong
+ * reason -- the OLD code's own declarationLine bug left the real
+ * declaration line unexcluded too, so ITS OWN mention masked whether the
+ * real usage was ever separately detected). Matching each occurrence's
+ * absolute character offset instead of its line number closes this
+ * whole class at once: only the exact declaration/item occurrence is
+ * excluded, never a sibling statement that happens to share its line.
+ *
+ * **Known false-negative risk (C1 critique, #3478 review), UNCHANGED by
+ * the above**: this is a whole-file text match, not a scope-aware
+ * reference check, so it can still be fooled into reporting a
+ * self-reference that is not really one -- an unrelated local
+ * variable/parameter that happens to share the export's name elsewhere
+ * in the same file, or the name appearing only inside a string literal
+ * (this function's `strippedText` input has comments blanked out, but
+ * string contents are left intact). A false positive here means a
+ * genuinely dead export is wrongly classified `production` and never
+ * surfaced -- accepted as a limitation of the regex/line-based design
+ * this audit deliberately uses (see the module header), not something a
+ * full scope-aware fix belongs in this issue's scope.
  *
  * **Known limitation, deferred to a follow-up issue (#3498 scope note,
  * post-merge review)**: the fix above resolves `declarationLine`
  * correctly only when the no-`from` list item's local name comes from a
  * bare or exported top-level `function`/`const`/`class` declaration --
- * `declarationLineByLocalName` is populated by two scans, both feeding
- * `addDeclarationLine` directly rather than reading `declared`: the
- * EXPORTED-declaration scan (which also creates that name's own
+ * `declarationOffsetsByLocalName` is populated by two scans, both
+ * feeding `addDeclarationOffset` directly rather than reading `declared`:
+ * the EXPORTED-declaration scan (which also creates that name's own
  * `declared` entry) and the BARE-declaration scan (a name with no
  * `export` keyword of its own, so it is never added to `declared` at
  * all -- only a later no-`from` list item re-exports it). A local name
  * introduced instead by an `import` (named, default, namespace, or any
- * combined form) still falls back to the export statement's own line,
- * the same pre-#3498 mismatch this issue fixed for the declared case,
- * since an import statement feeds neither scan. This was found and
- * fixed on this issue's own PR during E-phase review, but reverted
+ * combined form) still falls back to the export statement's own item
+ * offset, the same pre-#3498 mismatch this issue fixed for the declared
+ * case, since an import statement feeds neither scan. This was found
+ * and fixed on this issue's own PR during E-phase review, but reverted
  * before merge as a genuine scope expansion beyond this issue's own
  * repro and acceptance criteria (which cover only a declared, not
  * imported, local name) -- deliberately left for a narrower follow-up
  * issue instead of folding an open-ended import-syntax surface into
- * this fix. */
-function hasSelfReference(strippedText, name, excludeLines) {
+ * this fix. Destructuring declarators (`const { a, b } = obj;`) stay a
+ * separate, documented, out-of-scope limitation for the same reason --
+ * see `scanBareConstDeclarators`'s own doc comment. */
+function hasSelfReference(strippedText, name, excludeOffsets) {
   const wordPattern = new RegExp(`\\b${name}\\b`, 'g');
-  let line = 1;
-  let lastIndex = 0;
+  const excludeSet = new Set(excludeOffsets);
   for (const match of strippedText.matchAll(wordPattern)) {
     const index = match.index ?? 0;
-    line += (strippedText.slice(lastIndex, index).match(/\n/g) ?? []).length;
-    lastIndex = index;
-    if (!excludeLines.includes(line)) {
+    if (!excludeSet.has(index)) {
       return true;
     }
   }
@@ -944,7 +993,7 @@ export function collectDeadExportAuditResult(root) {
       const selfReferenced = hasSelfReference(
         strippedText,
         info.localName,
-        info.selfReferenceExcludeLines,
+        info.selfReferenceExcludeOffsets,
       );
       // Every importer is drawn from `allFiles` (productionFiles ++
       // testFiles, a partition), so "not every importer is a test file"

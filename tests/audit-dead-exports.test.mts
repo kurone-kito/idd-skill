@@ -785,6 +785,61 @@ test('a no-`from` export list re-exporting the SECOND declarator of an EXPORTED,
   }
 });
 
+test('a genuine same-line usage after a bare declaration is still detected as a self-reference (round-15 redesign: offset-based exclusion, not whole-line, Codex/Copilot C1 findings)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function register(x: unknown): void { console.log(x); }',
+        'const helper = 1; register(helper);',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'production',
+      'excluding the WHOLE declaration line (the earlier, line-based ' +
+        'design) discarded the genuine `register(helper)` call sharing ' +
+        'that line, wrongly classifying a genuinely-used export as ' +
+        'unused -- a verified regression relative to pre-#3498 ' +
+        "behavior; excluding only the declaration identifier's own " +
+        'offset must still let the real usage register',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a genuine same-line usage after a no-`from` export-list statement is still detected as a self-reference (round-15 redesign: offset-based exclusion, not whole-line, Codex/Copilot C1 findings)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      ['function helper(): void {}', 'export { helper }; helper();', ''].join(
+        '\n',
+      ),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'excluding the WHOLE export-list item line (the earlier, ' +
+        'line-based design) discarded the genuine `helper()` call ' +
+        'sharing that line, wrongly classifying a genuinely-used ' +
+        "export as unused; excluding only the export-list item's own " +
+        'offset must still let the real usage register',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(
