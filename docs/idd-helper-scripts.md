@@ -3331,20 +3331,26 @@ still fails closed:
   (exits non-zero, no `gh` call) when passed without `--from-pr`, since manual
   mode already supplies `--head-sha` directly with nothing to compare it
   against.
-- `--from-pr` unaddressed-activity warning (`warnings`, kurone-kito/idd-skill#1833):
+- `--from-pr` unaddressed-activity warning (`warnings`, kurone-kito/idd-skill#1833,
+  kurone-kito/idd-skill#3482):
   the JSON envelope (dry-run and `--apply` alike) carries an optional
-  `warnings` string array, present only when the fresh snapshot's
+  `warnings` string array, present when the fresh snapshot's
   `dispositionEvidence.missingRegularCommentCount` /
   `dispositionEvidence.missingThreadCount` are non-zero — comments or
   threads with **no** disposition reply at all, whose activity this watermark's
   `max-activity-at` / `total-item-count` are about to fold in as if
-  already reviewed. Surfaces the same evidence
-  `missing-disposition-evidence` blocks on at F2, but at watermark-post
-  time instead of only later via the readiness report. Diagnostic-only:
-  never blocks the post or changes `mode` / `body`. Deliberately **not**
-  based on the snapshot's `ackOnly` evidence, which is the carve-out that
-  marks post-disposition advisory-bot courtesy acks safe to fold in —
-  warning on that would fire on the routine, benign path.
+  already reviewed — except when `soleCauseAckOnlyPostDisposition` is
+  exactly true and `missingRegularCommentCount` is 0. That case is a
+  resolved thread whose only outstanding activity is a known courtesy
+  ack. A missing or non-true flag keeps the warning, including a payload
+  that sets the flag while a regular comment is still missing. Surfaces
+  the same evidence `missing-disposition-evidence` blocks on at F2, but
+  at watermark-post time instead of only later via the readiness report.
+  Diagnostic-only: never blocks the post or changes `mode` / `body`.
+  Deliberately **not** based on the snapshot's `ackOnly` evidence, which
+  is the carve-out that marks post-disposition advisory-bot courtesy acks
+  safe to fold in — warning on that would fire on the routine, benign
+  path.
 - **No claim/state gating** (the `emit-marker` philosophy): this is a
   single-marker render+POST primitive, so the calling phase must run its
   claim-revalidation gate before `--apply`, exactly as the manual POST path it
@@ -3798,16 +3804,22 @@ reflexively as any other CLI option.
   on them. The semantic residual stays with the agent per the
   courtesy-ack convergence rule, and the disposition-evidence and
   unreplied-comment gates are unaffected
-- Disposition-evidence counters (kurone-kito/idd-skill#1833): the
-  snapshot also emits `dispositionEvidence` (`missingRegularCommentCount`,
-  `missingThreadCount`) — the same `summarizeDispositionEvidenceForGate`
-  evidence the F2 `missing-disposition-evidence` gate uses, trimmed to
-  its two counters (mirrors `advisory-convergence.mjs`'s own trimmed
-  projection of the same evidence, not `pre-merge-readiness.mjs`'s
-  richer field). A `--from-pr` watermark post
+- Disposition-evidence counters (kurone-kito/idd-skill#1833,
+  kurone-kito/idd-skill#3482): the snapshot also emits
+  `dispositionEvidence` (`missingRegularCommentCount`,
+  `missingThreadCount`, `soleCauseAckOnlyPostDisposition`) — the same
+  `summarizeDispositionEvidenceForGate` evidence the F2
+  `missing-disposition-evidence` gate uses, trimmed to its two counters
+  plus that courtesy-ack flag. The flag is already meaningful with no
+  snapshot boundary: every post-disposition external comment counts, and
+  only a known courtesy-ack template qualifies. The other advisory-only
+  sub-flags stay omitted (this is not `pre-merge-readiness.mjs`'s richer
+  field, and `advisory-convergence.mjs` keeps its counters-only
+  projection). A `--from-pr` watermark post
   (`node scripts/post-idd-marker.mjs`) reads these to warn, in its own
   success output, when the watermark it is about to post already covers
-  comments/threads that were never actually dispositioned
+  comments/threads that were never actually dispositioned, and stays
+  silent for the courtesy-ack flag case above
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own

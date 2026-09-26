@@ -1183,6 +1183,52 @@ test('describeUnaddressedActivity reports threads alone (singular)', () => {
   assert.match(warnings[0], /cover it -- dispose it\b/);
 });
 
+test('describeUnaddressedActivity stays silent for a courtesy-ack-only thread set (#3482)', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      dispositionEvidence: {
+        missingRegularCommentCount: 0,
+        missingThreadCount: 1,
+        soleCauseAckOnlyPostDisposition: true,
+      },
+    }),
+    [],
+  );
+});
+
+test('describeUnaddressedActivity still warns when the courtesy-ack flag is set but a regular comment is missing (#3482)', () => {
+  const warnings = describeUnaddressedActivity({
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 1,
+      soleCauseAckOnlyPostDisposition: true,
+    },
+  });
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /^1 comment and 1 thread have no disposition evidence/,
+  );
+});
+
+test('describeUnaddressedActivity still warns when the courtesy-ack flag is missing or not exactly true (#3482)', () => {
+  const base = {
+    missingRegularCommentCount: 0,
+    missingThreadCount: 1,
+  };
+  const cases: Array<Record<string, unknown>> = [
+    base,
+    { ...base, soleCauseAckOnlyPostDisposition: false },
+    { ...base, soleCauseAckOnlyPostDisposition: 'true' },
+    { ...base, soleCauseAckOnlyPostDisposition: 1 },
+  ];
+  for (const dispositionEvidence of cases) {
+    const warnings = describeUnaddressedActivity({ dispositionEvidence });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^1 thread has no disposition evidence/);
+  }
+});
+
 test('describeUnaddressedActivity fails open on negative/non-numeric counters (never throws)', () => {
   assert.deepEqual(
     describeUnaddressedActivity({

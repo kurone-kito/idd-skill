@@ -174,18 +174,16 @@ function main(): HelperCliResult {
     },
   );
 
-  // #1833: exposed so a `--from-pr` watermark post (post-idd-marker.mts) can
-  // warn, in its own success output, when the fresh snapshot it is about to
-  // become the watermark still has comments/threads lacking disposition
-  // evidence -- instead of that only surfacing later via the readiness
-  // report's `reviewCurrency.comparisonRoute`. Trimmed to the two counters,
-  // mirroring `AdvisoryConvergenceDispositionEvidence`
-  // (advisory-convergence.mts) rather than re-exporting the full
-  // `DispositionEvidenceSummary` shape (`pre-merge-readiness.mjs`'s own
-  // richer `dispositionEvidence` field) -- no `snapshotBoundaryAt` is
-  // available here (no watermark exists yet at snapshot time), so the
-  // advisory-only ack sub-flags this function also returns would be
-  // meaningless; only the two counters are stable to expose.
+  // #1833 / #3482: exposed so a `--from-pr` watermark post
+  // (post-idd-marker.mts) can warn, in its own success output, when the
+  // fresh snapshot it is about to become the watermark still has
+  // comments/threads lacking disposition evidence. The two counters mirror
+  // `AdvisoryConvergenceDispositionEvidence`. This snapshot also forwards
+  // `soleCauseAckOnlyPostDisposition`: `classifyThreadAckOnlyPostDisposition`
+  // already classifies a courtesy ack when no snapshot boundary exists, so
+  // that one flag is meaningful here. The other advisory-only sub-flags
+  // stay omitted; this is not `pre-merge-readiness`'s full
+  // `DispositionEvidenceSummary`.
   const dispositionEvidence = summarizeDispositionEvidenceForGate(
     { comments: normalizedComments, threads: normalizedThreads },
     {
@@ -213,6 +211,8 @@ function main(): HelperCliResult {
           missingRegularCommentCount:
             dispositionEvidence.missingRegularCommentCount,
           missingThreadCount: dispositionEvidence.missingThreadCount,
+          soleCauseAckOnlyPostDisposition:
+            dispositionEvidence.soleCauseAckOnlyPostDisposition,
         },
       },
       null,

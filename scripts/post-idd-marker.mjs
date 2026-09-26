@@ -430,6 +430,13 @@ export function watermarkFieldsFromSnapshot(snapshot) {
  * `missing-disposition-evidence` route (or, if the item happens to look
  * ack-only-shaped, via `reviewCurrency.comparisonRoute`).
  *
+ * #3482: stays silent when `soleCauseAckOnlyPostDisposition` is exactly
+ * `true` and `missingRegularCommentCount` is 0. That is a resolved thread
+ * whose only outstanding activity is a known courtesy ack, which the
+ * pre-merge gate already treats as non-blocking. A missing or non-true
+ * flag keeps today's warning, including a payload that sets the flag while
+ * a regular comment is still missing.
+ *
  * Returns `[]` when the snapshot carries no such evidence, including when
  * `dispositionEvidence` is absent or malformed (diagnostic-only: fails open,
  * never blocks or alters what gets POSTed).
@@ -448,6 +455,12 @@ export function describeUnaddressedActivity(snapshot) {
       : 0;
   const threadCount =
     Number.isInteger(missingThreads) && missingThreads > 0 ? missingThreads : 0;
+  if (
+    snap.dispositionEvidence?.soleCauseAckOnlyPostDisposition === true &&
+    commentCount === 0
+  ) {
+    return [];
+  }
   if (commentCount === 0 && threadCount === 0) {
     return [];
   }
