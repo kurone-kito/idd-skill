@@ -28,11 +28,13 @@ import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   compareIsoTimestamps,
+  filterTrustedClaimFamilyEvents,
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
   toSecondPrecisionIso,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
@@ -168,7 +170,12 @@ function latestTrustedParkMarker(comments, trustedMarkerLogins) {
  */
 function latestTrustedClaimCreatedAt(comments, trustedMarkerLogins) {
   let latest = null;
-  for (const comment of comments) {
+  const trusted = (login) =>
+    trustedMarkerLogins.has(login.trim().toLowerCase());
+  for (const comment of filterTrustedClaimFamilyEvents(
+    [...comments],
+    trusted,
+  )) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
@@ -265,7 +272,21 @@ const defaultFetchComments = (owner, repo, number) => {
   if (!Array.isArray(payload)) {
     throw new Error('malformed comments response');
   }
-  return payload;
+  const comments = payload;
+  if (comments.length === 0) {
+    return comments;
+  }
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'provider-outage-park: comment response is missing node_id required to resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => ({
+    ...comment,
+    lastEditedAt: lastEditedAtByNodeId.get(nodeIds[index]),
+  }));
 };
 /**
  * Collect every open pull request's latest trusted park marker, bounded to

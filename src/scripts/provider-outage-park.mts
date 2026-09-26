@@ -30,12 +30,14 @@ import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   compareIsoTimestamps,
+  filterTrustedClaimFamilyEvents,
   type ParsedProviderOutagePark,
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
   toSecondPrecisionIso,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
@@ -182,9 +184,17 @@ export function buildParkedChangeList(
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
 interface CommentLike {
+  id?: string | number | null;
+  node_id?: string | null;
   body?: string | null;
   created_at?: string | null;
+  createdAt?: string | null;
+  author?: { login?: string | null } | null;
   user?: { login?: string | null } | null;
+  lastEditedAt?: string | null;
+  last_edited_at?: string | null;
+  html_url?: string | null;
+  url?: string | null;
 }
 
 /**
@@ -238,7 +248,12 @@ function latestTrustedClaimCreatedAt(
   trustedMarkerLogins: ReadonlySet<string>,
 ): string | null {
   let latest: string | null = null;
-  for (const comment of comments) {
+  const trusted = (login: string) =>
+    trustedMarkerLogins.has(login.trim().toLowerCase());
+  for (const comment of filterTrustedClaimFamilyEvents(
+    [...comments],
+    trusted,
+  )) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
@@ -376,7 +391,21 @@ const defaultFetchComments: FetchComments = (owner, repo, number) => {
   if (!Array.isArray(payload)) {
     throw new Error('malformed comments response');
   }
-  return payload as CommentLike[];
+  const comments = payload as CommentLike[];
+  if (comments.length === 0) {
+    return comments;
+  }
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'provider-outage-park: comment response is missing node_id required to resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => ({
+    ...comment,
+    lastEditedAt: lastEditedAtByNodeId.get(nodeIds[index]),
+  }));
 };
 
 /**

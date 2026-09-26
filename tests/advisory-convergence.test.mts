@@ -5970,6 +5970,16 @@ test('hasTrustedClaimMarkerHistory: true for a still-active trusted claim (the o
   );
 });
 
+test('hasTrustedClaimMarkerHistory: ignores an edited trusted claim marker', () => {
+  assert.equal(
+    hasTrustedClaimMarkerHistory(
+      [[{ ...claimComment(), lastEditedAt: RECENT }]],
+      [TRUSTED],
+    ),
+    false,
+  );
+});
+
 test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-by marker well past staleAge with no active claim resolving', () => {
   // Ground truth for path 4: `resolveActiveClaim` never expires a claim by
   // elapsed time alone (see this function's own doc comment) -- the
@@ -6029,6 +6039,15 @@ test('resolveClaimEvidence: happy path -- a lone candidate resolves cleanly, una
     claimEvents: claimA,
     claimCandidateAmbiguous: false,
     claimMarkerHistoryPresent: true,
+  });
+});
+
+test('resolveClaimEvidence: an edited-only claim marker is not claim history', () => {
+  const editedClaim = { ...claimComment(), lastEditedAt: RECENT };
+  assert.deepEqual(resolveClaimEvidence([[editedClaim]], [TRUSTED], false), {
+    claimEvents: [],
+    claimCandidateAmbiguous: false,
+    claimMarkerHistoryPresent: false,
   });
 });
 
