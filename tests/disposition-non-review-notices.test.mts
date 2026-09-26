@@ -1262,6 +1262,23 @@ test('regular-comment gate keeps an undispositioned Codex no-find source after a
   );
 });
 
+test('regular-comment gate ignores a trusted orphaned historical Codex acceptance', () => {
+  const orphanedDisposition = {
+    id: 341,
+    author: { login: 'trusted-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 340),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
+  };
+  const summary = summarizeRegularCommentsForGate([orphanedDisposition], {
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['trusted-agent'],
+    prHeadSha: 'def5678',
+  });
+  assert.equal(summary.count, 0);
+});
+
 test('no-find source paths require the canonical Codex advisory identity', () => {
   const source = {
     id: 331,

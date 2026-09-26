@@ -7612,6 +7612,17 @@ export function summarizeRegularCommentsForGate(
           'chatgpt-codex-connector',
     );
     if (
+      !source &&
+      advisoryBotIdentityToken(parsed.botLogin) === 'chatgpt-codex-connector'
+    ) {
+      // A trusted, unedited acceptance whose source was deleted is still IDD
+      // bookkeeping, not an unreplied review comment. The disposition gate
+      // cannot clear a missing source, but F2 must not let the orphan marker
+      // block the PR either.
+      historicalCodexNoFindDispositionIndexes.add(disposition.sortedIndex);
+      continue;
+    }
+    if (
       source &&
       dispositionNamesAdvisoryBot(disposition.body, source.authorLogin)
     ) {
