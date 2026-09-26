@@ -13,6 +13,7 @@ import type {
 import {
   applyCandidatePass,
   assertBatchApplyClaimScope,
+  assertBatchTimeBudgetScope,
   createTimeBudget,
   evaluateOperationalComment,
   evaluateReviewComment,
@@ -815,14 +816,17 @@ test('runApplyWithRetry: a budget spent during backoff, with real work still rem
   );
 });
 
-// Copilot/Codex review, PR #3499: the opposite of the test above -- every
-// candidate got applied within budget, so nothing remains by the time the
-// post-backoff check finds the budget spent. The run genuinely converged;
-// the confirming rescan is still correctly skipped (nothing left for it
-// to find), but `timeBudgetExhausted` must NOT be set, so the summary
-// reads the true `applied` outcome instead of misreporting a stopped-early
-// run that actually finished everything.
-test('runApplyWithRetry: a budget spent after every candidate already converged does not misreport time-budget-exhausted (#3321, Copilot/Codex review PR #3499)', async () => {
+// Codex review, PR #3499 (second pass): the opposite of the "genuinely
+// empty from the start" tests -- this pass had two real candidates and
+// resolved (applied) both of them, so the pre-mutation candidate list
+// was non-empty. Even though pruning now finds nothing left in
+// `report.candidates`, that emptiness is a *post-mutation* artifact, not
+// proof of convergence: the confirming rescan this checkpoint is about
+// to skip is exactly what could still reveal a newly eligible candidate
+// through the same read-after-write/cascade behavior `runApplyWithRetry`
+// exists to catch. So `timeBudgetExhausted` MUST be set here, unlike the
+// genuinely-empty-from-the-start case.
+test('runApplyWithRetry: a budget spent after a mutating pass resolves everything still reports time-budget-exhausted (#3321, Codex review PR #3499)', async () => {
   const { runApplyWithRetry } = await import(
     '../src/scripts/audit-pr-cleanup.mts'
   );
@@ -864,11 +868,11 @@ test('runApplyWithRetry: a budget spent after every candidate already converged 
 
   assert.equal(rescanCalls, 0);
   assert.equal(result.report.applied.length, 2);
-  assert.equal(result.report.timeBudgetExhausted, undefined);
+  assert.equal(result.report.timeBudgetExhausted, true);
   assert.equal(result.report.candidates.length, 0);
 
   computeReportSummary(result.report);
-  assert.equal(result.report.status, 'applied');
+  assert.equal(result.report.status, 'time-budget-exhausted');
 });
 
 // Copilot review, PR #3499: the budget clock starts at helper start,
@@ -1128,6 +1132,36 @@ test('assertBatchApplyClaimScope: --pr with --apply and no --skip-claim-check is
 test('assertBatchApplyClaimScope: dry-run (no --apply) is never gated', () => {
   assert.doesNotThrow(() =>
     assertBatchApplyClaimScope(cleanupArgs({ prs: '1,2' })),
+  );
+});
+
+// #3321 (Copilot review, PR #3499): --prs has no per-PR "skipped for
+// budget" report shape, so --time-budget-seconds is rejected outright
+// together with --prs rather than silently dropping PRs from the batch.
+test('assertBatchTimeBudgetScope: --prs with --time-budget-seconds fails', () => {
+  const restore = stubExitOnFail();
+  try {
+    assert.throws(() =>
+      assertBatchTimeBudgetScope(
+        cleanupArgs({ prs: '1,2', timeBudgetSeconds: '60' }),
+      ),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('assertBatchTimeBudgetScope: --pr with --time-budget-seconds is unaffected', () => {
+  assert.doesNotThrow(() =>
+    assertBatchTimeBudgetScope(
+      cleanupArgs({ pr: '1', timeBudgetSeconds: '60' }),
+    ),
+  );
+});
+
+test('assertBatchTimeBudgetScope: --prs without --time-budget-seconds is unaffected', () => {
+  assert.doesNotThrow(() =>
+    assertBatchTimeBudgetScope(cleanupArgs({ prs: '1,2' })),
   );
 });
 

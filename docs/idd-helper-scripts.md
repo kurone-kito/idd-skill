@@ -1494,13 +1494,13 @@ The adopted helper boundaries are intentionally narrow:
 - an apply pass snapshots the full report once and re-validates each
   candidate with a cheap per-subject read instead of rebuilding the
   whole report per candidate (kurone-kito/idd-skill#3321); apply mode
-  accepts `--time-budget-seconds <n>`, measured from helper start with
-  an injectable clock, to bound total apply-pass wall time -- once
-  spent, the run starts no new candidate or pass, keeps every
-  already-applied row, and reports `status: time-budget-exhausted`
-  (never collapsing into `applied`, `clean`, or `incomplete`) with no
-  confirming rescan; omitting the flag leaves apply-mode behavior
-  unchanged
+  accepts `--time-budget-seconds <n>` (single `--pr` only, rejected
+  together with `--prs`), measured from helper start with an injectable
+  clock, to bound total apply-pass wall time -- once spent, the run
+  starts no new candidate or pass, keeps every already-applied row, and
+  reports `status: time-budget-exhausted` (never collapsing into
+  `applied`, `clean`, or `incomplete`) with no confirming rescan;
+  omitting the flag leaves apply-mode behavior unchanged
 - known review-bot regular comments are considered only after merge and
   only when they match a completed-review or stale-notification signal
 - cleanup remains best-effort and never becomes a merge gate

@@ -358,6 +358,7 @@ async function main(): Promise<HelperCliResult> {
   }
 
   assertBatchApplyClaimScope(args);
+  assertBatchTimeBudgetScope(args);
 
   let repository: string;
   try {
@@ -376,7 +377,7 @@ async function main(): Promise<HelperCliResult> {
   }
 
   // #3321: the apply-mode time budget is measured from helper start (once
-  // for the whole invocation, including a `--prs` batch, not reset per PR)
+  // per invocation; the guard above keeps this to the single-`--pr` case)
   // via the same injectable-clock pattern as the existing `backoff`
   // parameter. Absent `--time-budget-seconds`, this is the unbounded no-op
   // budget -- "without the flag, behavior is unchanged."
@@ -399,23 +400,7 @@ async function main(): Promise<HelperCliResult> {
   // otherwise be indistinguishable (Copilot review, PR #2305).
   const printBatchHeader = args.format === 'table' && prNumbers.length > 1;
   let anyFailed = false;
-  for (const [index, prNumber] of prNumbers.entries()) {
-    // #3321 (Codex review, PR #3499): re-check the shared invocation-wide
-    // budget before starting each subsequent `--prs` batch member, not
-    // only inside each PR's own apply pass. Without this, a PR earlier in
-    // the batch spending the whole budget would still let every remaining
-    // PR run its own expensive initial buildReport before that PR's own
-    // apply pass ever got a chance to notice -- exactly the unbounded
-    // full-rebuild cost this flag exists to bound, just moved one level
-    // up. A skipped PR is untouched, not failed: it still has its own
-    // candidates and can be re-run (or covered by the same workflow's
-    // next scheduled invocation) from scratch.
-    if (args.apply && index > 0 && timeBudget.exhausted()) {
-      writeStderrSync(
-        `time budget exhausted; skipping remaining PR(s): ${prNumbers.slice(index).join(', ')}\n`,
-      );
-      break;
-    }
+  for (const prNumber of prNumbers) {
     if (printBatchHeader) {
       console.log(`=== PR #${prNumber} ===`);
     }
@@ -445,6 +430,23 @@ export function assertBatchApplyClaimScope(args: CleanupArgs): void {
   if (args.apply && args.prs && !args.skipClaimCheck) {
     fail(
       '--prs with --apply requires --skip-claim-check (a single active claim would otherwise authorize --apply across every PR in the batch)',
+    );
+  }
+}
+
+/**
+ * Rejects `--time-budget-seconds` combined with `--prs` (#3321, Copilot
+ * review PR #3499): `--prs` has no way to report a "budget ran out
+ * before this PR's own turn" terminal result per PR -- stopping mid-batch
+ * would either silently drop the remaining PRs from the batch contract's
+ * one-report-per-PR guarantee, or need a whole new report shape this
+ * issue's design never called for. Reject the combination outright
+ * rather than build that; the flag stays single-`--pr` only.
+ */
+export function assertBatchTimeBudgetScope(args: CleanupArgs): void {
+  if (args.prs && args.timeBudgetSeconds !== undefined) {
+    fail(
+      '--time-budget-seconds is not supported with --prs (single --pr only)',
     );
   }
 }
@@ -724,18 +726,21 @@ function pruneResolvedFromCandidates(report: CleanupAuditReport): void {
 }
 
 /**
- * Applies this checkpoint's time-budget stop, if the budget is spent
- * (#3321, Copilot/Codex review PR #3499). Returns `true` whenever
- * `budget.exhausted()` is true — the caller must always stop right here
- * in that case (no new candidate, pass, or rescan; unconditional, per the
- * issue's own design). Separately, `report.timeBudgetExhausted` is set
- * only when real work remains in `report.candidates` after pruning
- * already-resolved subjects out of it: a spent budget with nothing left
- * to do is genuine convergence (`applied`/`clean`), so leaving the flag
- * unset there lets `computeReportSummary` report the run's true outcome
- * instead of misleadingly reading `time-budget-exhausted` for an
- * already-clean run, or one whose last pass/rescan finished every
- * candidate right as the budget ran out.
+ * Applies the top-of-loop and post-rescan time-budget stops, if the
+ * budget is spent (#3321, Copilot/Codex review PR #3499). Returns `true`
+ * whenever `budget.exhausted()` is true — the caller must always stop
+ * right here in that case (no new candidate, pass, or rescan;
+ * unconditional, per the issue's own design). Separately,
+ * `report.timeBudgetExhausted` is set only when real work remains in
+ * `report.candidates` after pruning already-resolved subjects out of it:
+ * a spent budget with nothing left to do is genuine convergence
+ * (`applied`/`clean`). This emptiness check is trustworthy only at these
+ * two checkpoints, where `report` reflects either a genuinely fresh
+ * snapshot with no mutation applied yet (top-of-loop, attempt 1) or an
+ * already rescan-confirmed state (top-of-loop on a later attempt; post-rescan,
+ * where a completed fresh rescan already ran) — see
+ * {@link applyTimeBudgetStopAfterPass} for the two checkpoints where it
+ * is not.
  */
 function applyTimeBudgetStop(
   report: CleanupAuditReport,
@@ -746,6 +751,42 @@ function applyTimeBudgetStop(
   }
   pruneResolvedFromCandidates(report);
   if (report.candidates.length > 0) {
+    report.timeBudgetExhausted = true;
+  }
+  return true;
+}
+
+/**
+ * Applies the post-pass and post-backoff time-budget stops (#3321,
+ * Codex review PR #3499). Same unconditional "always stop" contract as
+ * {@link applyTimeBudgetStop}, but a DIFFERENT rule for
+ * `report.timeBudgetExhausted`: these two checkpoints run after
+ * `applyPass` has already mutated `report` (moved subjects into
+ * `applied`/`skipped`), immediately before the confirming rescan that
+ * checkpoint is about to skip. An empty `report.candidates` after
+ * pruning does NOT prove convergence here the way it does at the other
+ * two checkpoints — the very reason `runApplyWithRetry` reruns a
+ * confirming rescan after every pass is that a mutation can make a new
+ * candidate eligible (GraphQL read-after-write lag, a cascade effect),
+ * so skipping that rescan means genuine convergence was never actually
+ * confirmed, however many of the originally-listed candidates this pass
+ * happened to resolve. The flag is therefore set whenever this pass had
+ * any pending candidate to begin with (`hadPendingWorkBeforePass`,
+ * captured before `applyPass` ran), regardless of the post-mutation
+ * count — only a pass that had NOTHING to do from the start (a
+ * genuinely empty snapshot, so `applyPass` is a trivial no-op) leaves
+ * the flag unset.
+ */
+function applyTimeBudgetStopAfterPass(
+  report: CleanupAuditReport,
+  budget: TimeBudget,
+  hadPendingWorkBeforePass: boolean,
+): boolean {
+  if (!budget.exhausted()) {
+    return false;
+  }
+  pruneResolvedFromCandidates(report);
+  if (hadPendingWorkBeforePass || report.candidates.length > 0) {
     report.timeBudgetExhausted = true;
   }
   return true;
@@ -819,6 +860,12 @@ export async function runApplyWithRetry(
       return { report, attempts: attempt, boundExhausted: false };
     }
 
+    // Captured before `applyPass` mutates `report` (#3321, Codex review
+    // PR #3499): once this pass has run, an empty `report.candidates`
+    // no longer proves convergence on its own -- see
+    // {@link applyTimeBudgetStopAfterPass}.
+    const hadPendingWorkBeforePass = report.candidates.length > 0;
+
     await applyPass(report);
     if (report.failed.length > 0) {
       return { report, attempts: attempt, boundExhausted: false };
@@ -827,7 +874,9 @@ export async function runApplyWithRetry(
     // The apply-mode time budget ran out during (or exactly at the end
     // of) this pass (#3321): stop here, without any rescan -- "no
     // confirming rescan starts after the budget is spent."
-    if (applyTimeBudgetStop(report, budget)) {
+    if (
+      applyTimeBudgetStopAfterPass(report, budget, hadPendingWorkBeforePass)
+    ) {
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -845,7 +894,9 @@ export async function runApplyWithRetry(
     // anyway would violate "no confirming rescan starts after the
     // budget is spent" and could still overrun the workflow's own
     // step timeout.
-    if (applyTimeBudgetStop(report, budget)) {
+    if (
+      applyTimeBudgetStopAfterPass(report, budget, hadPendingWorkBeforePass)
+    ) {
       return { report, attempts: attempt, boundExhausted: false };
     }
 
@@ -2481,7 +2532,8 @@ Options:
   --claim-id <id>                   active claim id required for apply mode
   --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
-  --time-budget-seconds <n>         apply mode only: bound total apply-pass
+  --time-budget-seconds <n>         apply mode only, single --pr only (not
+                                     with --prs): bound total apply-pass
                                      wall time, measured from helper start;
                                      once spent, start no new candidate or
                                      pass, keep every already-applied row,
