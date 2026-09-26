@@ -26,8 +26,8 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Pass `--claim-id`/`--nonce` once verified per claim-id, and
-`--worktree` once the B1 worktree exists.
+Pass `--claim-id` once verified, `--nonce` if this session recorded
+one for that claim-id, and `--worktree` once the B1 worktree exists.
 
 Map helper fields to actions below.
 
@@ -38,9 +38,8 @@ unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced
 claim, branch, PR, URL; mismatches are Step 0 STOP); open PR+HEAD or
 `none`; latest issue/PR activity; PR-HEAD CI; and local worktree/branch/
 status/HEAD. When an open PR backs the claim, the proof must also have
-`contextScope: issue-plus-pr` with `linkedPr` naming that live PR; an
-issue-only handoff is insufficient. Never invent or post forced-handoff
-markers.
+`contextScope: issue-plus-pr` with `linkedPr` naming that live PR.
+Never invent or post forced-handoff markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
 (`claim-stale-age` / `claimTiming.staleAge`).
