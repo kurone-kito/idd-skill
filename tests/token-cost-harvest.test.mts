@@ -4352,6 +4352,31 @@ test('resolveIssueLoopContext: outcome is unclaimed when a matching unclaimed-by
   }
 });
 
+test('resolveIssueLoopContext: an edited matching unclaimed-by marker is ignored', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-unclaimed.json',
+  );
+  const patched = JSON.parse(JSON.stringify(fixture));
+  patched.data.repository.issue.comments.nodes[1].lastEditedAt =
+    '2026-02-01T00:06:00Z';
+  const restore = stubGhReturningJson(patched);
+  try {
+    const ctx = resolveIssueLoopContext(
+      'acme',
+      'repo',
+      9002,
+      ms('2026-02-01T00:00:00Z'),
+      ms('2026-02-01T00:10:00Z'),
+      ['claude-test'],
+    );
+    assert.ok(ctx);
+    assert.equal(ctx?.unclaimedMatched, false);
+    assert.equal(deriveOutcome(ctx as IssueLoopGithubContext), 'aborted');
+  } finally {
+    restore();
+  }
+});
+
 test('resolveIssueLoopContext: a later claimed-by marker superseding this claimId from a different agent is a takeover (human-handoff), regardless of session window', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-takeover.json',

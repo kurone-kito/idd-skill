@@ -262,7 +262,12 @@ const defaultFetchOpenPullRequests = (owner, repo, sampleSize) => {
   }
   return payload;
 };
-const defaultFetchComments = (owner, repo, number) => {
+const defaultFetchComments = (
+  owner,
+  repo,
+  number,
+  resolveClaimEditState = false,
+) => {
   const payload = ghApiJson(
     `repos/${owner}/${repo}/issues/${number}/comments`,
     {
@@ -273,7 +278,7 @@ const defaultFetchComments = (owner, repo, number) => {
     throw new Error('malformed comments response');
   }
   const comments = payload;
-  if (comments.length === 0) {
+  if (!resolveClaimEditState || comments.length === 0) {
     return comments;
   }
   const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
@@ -347,7 +352,7 @@ function collectRawParkMarkers(owner, repo, options) {
     if (cached !== undefined) return cached;
     let result;
     try {
-      const issueComments = fetchComments(owner, repo, issueNumber);
+      const issueComments = fetchComments(owner, repo, issueNumber, true);
       result = latestTrustedClaimCreatedAt(
         issueComments,
         options.trustedMarkerLogins,

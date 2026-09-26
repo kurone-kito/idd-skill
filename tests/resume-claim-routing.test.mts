@@ -1464,6 +1464,34 @@ test('legacy release created_at ordering wins even when its embedded timestamp p
   assert.equal(result.active_claim, null);
 });
 
+test('edited trusted legacy release is ignored and leaves the claim active', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-12T12:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T08:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: old-agent 2026-05-12T08:00:00Z branch: issue/14-task -->',
+          lastEditedAt: null,
+        },
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- unclaimed-by: old-agent 2026-05-12T09:00:00Z -->',
+          lastEditedAt: '2026-05-12T09:05:00Z',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'legacy-claim-non-stale');
+  assert.equal(result.active_claim?.agent_id, 'old-agent');
+});
+
 test('legacy matching release remains valid after unrelated later unclaim', () => {
   const result = evaluateResumeClaimRouting(
     {

@@ -5778,6 +5778,31 @@ test('summarizeClaimValidation follows trusted forced-handoff transitions', () =
   assert.equal(summary.activeClaim.agentId, 'github-copilot-cli-new');
 });
 
+test('summarizeClaimValidation ignores an edited trusted release marker', () => {
+  const claimEvent = {
+    body: '<!-- claimed-by: agent-a claim-1 supersedes: none 2026-05-10T00:00:00Z branch: issue/1-task -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    author: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  };
+  const editedRelease = {
+    body: '<!-- unclaimed-by: agent-a claim-1 2026-05-10T00:01:00Z -->\n\n_agent-a: issue claim released - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:01:00Z',
+    author: { login: 'kurone-kito' },
+    lastEditedAt: '2026-05-10T00:05:00Z',
+  };
+
+  const summary = summarizeClaimValidation([claimEvent, editedRelease], {
+    trustedMarkerLogins: ['kurone-kito'],
+    expectedClaimId: 'claim-1',
+    expectedAgentId: 'agent-a',
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+  assert.equal(summary.activeClaim.claimId, 'claim-1');
+});
+
 test('summarizeClaimValidation rejects forced handoff from unauthorized approver', () => {
   const claimEvents = [
     {

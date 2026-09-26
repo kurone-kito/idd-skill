@@ -603,14 +603,21 @@ test('buildParkedChangeReport: an edited later claimed-by comment does not retir
     timestamp: '2026-09-02T01:00:00Z',
     branch: 'issue/555-resume',
   });
+  const resolveClaimEditStateCalls: boolean[] = [];
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
       ],
-      fetchComments: (_owner, _repo, number: number) =>
-        number === 7
+      fetchComments: (
+        _owner,
+        _repo,
+        number: number,
+        resolveClaimEditState?: boolean,
+      ) => {
+        resolveClaimEditStateCalls.push(resolveClaimEditState === true);
+        return number === 7
           ? [
               {
                 body: markerBody,
@@ -625,12 +632,14 @@ test('buildParkedChangeReport: an edited later claimed-by comment does not retir
                 user: { login: 'kurone-kito' },
                 lastEditedAt: '2026-09-02T03:00:00Z',
               },
-            ],
+            ];
+      },
     }),
   );
   assert.equal(report.count, 1);
   assert.equal(report.retiredCount, 0);
   assert.deepEqual(report.parkedIssues, [555]);
+  assert.deepEqual(resolveClaimEditStateCalls, [false, true]);
 });
 
 test('buildParkedChangeReport: a real claimed-by comment BEFORE the park comment does not retire the marker', () => {

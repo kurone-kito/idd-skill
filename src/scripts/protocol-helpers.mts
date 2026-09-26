@@ -64,6 +64,8 @@ import {
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseLegacyClaimComment,
+  parseLegacyReleaseComment,
   parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -12814,7 +12816,8 @@ export interface ActiveClaimResolution {
  *
  * Untrusted author -> `false` (unchanged from before this issue). Trusted
  * author whose body does not parse as any claim-family marker (`claimed-by`
- * / `unclaimed-by` / `activation-nonce` / `forced-handoff`) -> `true`
+ * / `unclaimed-by` in either new or legacy form / `activation-nonce` /
+ * `forced-handoff`) -> `true`
  * (plain comments are unaffected; edit state is never checked for them).
  * Trusted author, marker-shaped -> `classifyCommentEditState(event)`:
  * `'unedited'` -> `true`; `'edited'` -> `false` (dropped, same treatment as
@@ -12841,7 +12844,9 @@ function isTrustedClaimFamilyEvent(
   const createdAt = event.createdAt ?? event.created_at ?? '';
   const isClaimFamilyMarker =
     parseClaimComment(body, createdAt) !== null ||
+    parseLegacyClaimComment(body, createdAt) !== null ||
     parseReleaseComment(body) !== null ||
+    parseLegacyReleaseComment(body, createdAt) !== null ||
     parseActivationNonceComment(body, createdAt) !== null ||
     parseForcedHandoffComment(body, createdAt) !== null;
   if (!isClaimFamilyMarker) {

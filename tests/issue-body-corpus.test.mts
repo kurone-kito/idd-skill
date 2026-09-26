@@ -10,9 +10,30 @@ import {
   type CorpusIndexEntry,
   computeExpectedVerdict,
   type FetchedIssue,
+  hasTrustedClaimMarker,
   mergedRefusalReason,
   negativeRefusalReason,
 } from '../src/scripts/snapshot-issue-body-corpus.mts';
+
+test('hasTrustedClaimMarker ignores an edited trusted claimed-by marker', () => {
+  const comment = {
+    author: { login: 'kurone-kito' },
+    body: '<!-- claimed-by: agent-a claim-a supersedes: none 2026-05-10T00:00:00Z branch: issue/1-task -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: '2026-05-10T00:05:00Z',
+  };
+  assert.equal(
+    hasTrustedClaimMarker([comment], (login) => login === 'kurone-kito'),
+    false,
+  );
+  assert.equal(
+    hasTrustedClaimMarker(
+      [{ ...comment, lastEditedAt: null }],
+      (login) => login === 'kurone-kito',
+    ),
+    true,
+  );
+});
 
 // #3288: freezes a real (and a fixed set of synthetic-gap) issue-body
 // corpus's A4 (discover-viability-gate.mts) / A4.5 (suitability-triage.mts,
