@@ -2142,6 +2142,20 @@ test('does not let local token features hide provider dependencies (#3522)', () 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let comma-separated test work hide an approval blocker (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 187,
+    title: 'document credential storage',
+    body:
+      'Add unit tests, but implementation requires maintainer approval before ' +
+      'work begins.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,

@@ -852,7 +852,7 @@ function isDescribedExternalCoordinationExample(
 ): boolean {
   const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
   const sameClause = before.split(CUE_HARD_BREAK_PATTERN).at(-1) ?? before;
-  return /\b(?:unit\s+tests?|test(?:ing)?\s+coverage|fixture|assert(?:s|ed|ion)?|render(?:s|ed|ing)?)\b/i.test(
+  return /\b(?:unit\s+tests?|test(?:ing)?\s+coverage|fixture|assert(?:s|ed|ion)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:for|of|that|which|where)\b/i.test(
     sameClause,
   );
 }
