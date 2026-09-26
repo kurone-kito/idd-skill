@@ -320,6 +320,8 @@ const CREDENTIAL_DIRECT_BACKWARD_ASSERTION_PATTERN =
   /\b(?:require[sd]?|requiring|needed|needs?)\s+(?:an?\s+)?$/i;
 const CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN =
   /^\s+(?:pattern|example|scenario|convention|practice|concept|term|approach|precedent|case)\s+that\s+(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference)\b/i;
+const CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN =
+  /^\s+(?:that\s+)?(?:is|are|was|were)\s+(?:necessary|essential|required|needed)\s+for\s+(?:explaining|describing|documenting|understanding|context|reference)\b/i;
 const REQUIREMENT_ASSERTION_WINDOW_CHARS = 80;
 // A security noun can describe the subject matter of a bounded change rather
 // than a live dependency (#3522). Keep this exclusion tied to explicit
@@ -335,6 +337,8 @@ const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
   /\b(?:cannot|can't)\b[^.;:!?]{0,80}\buntil\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b|\b(?:cannot|can't)\b[^.;:!?]{0,80}\b(?:without|unless)\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human|approval|access|permission|authorization)\b|\bonly\s+after\b[^.;:!?]{0,80}\b(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\b|\band\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:before|until)\b|\band\s+(?:it|the\s+credential|a\s+credential)\s+(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?]{0,80}\b(?:supplied|provided|performed|created)\b[^.;:!?]{0,80}\b(?:before|until)\b|\bawaits?\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|vendor|provider|external|third-?party|human)\s+(?:approval|decision|input|review|access|credential)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human))?\s*(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))|[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:it|the credential|a credential)\s+\b(?:will\s+be\s+)?(?:supplied|provided|performed|created)\b\s+by\s+[^.;:!?\n]{1,40}\s*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
+const CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN =
+  /[.;:!?\n]\s*(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\b[^.;:!?\n]*(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 const CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN =
   /(?:^|[.;:!?\n]\s+)(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|(?:^|[.;:!?\n]\s+)(?:the\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
 
@@ -840,10 +844,17 @@ function isNearRequirementAssertion(
       ? CREDENTIAL_DIRECT_FORWARD_ASSERTION_PATTERN
       : assertionPattern;
   if (
+    assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
+    CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(forwardText)
+  ) {
+    return false;
+  }
+  if (
     forwardAssertion.test(forwardText) &&
     !(
       assertionPattern === CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN &&
-      CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(forwardText)
+      (CREDENTIAL_GENERIC_CONTEXTUAL_ASSERTION_PATTERN.test(forwardText) ||
+        CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(forwardText))
     )
   ) {
     return true;
@@ -892,6 +903,7 @@ function isFollowedByCredentialRequirement(
   return (
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
     CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
+    CREDENTIAL_BOUNDARY_DIRECT_FOLLOW_ON_PATTERN.test(firstFollowOnSentence) ||
     CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN.test(
       firstBoundary
         ? sameParagraph.slice(firstBoundary.index + firstBoundary[0].length)
@@ -951,6 +963,18 @@ function isDescribedSecurityVocabulary(
     isFollowedByCredentialRequirement(corpus, matchEnd)
   ) {
     return false;
+  }
+
+  const purposeRawTail = corpus.slice(
+    matchEnd,
+    matchEnd + REQUIREMENT_ASSERTION_WINDOW_CHARS,
+  );
+  const purposeBreak = CUE_HARD_BREAK_PATTERN.exec(purposeRawTail);
+  const purposeTail = purposeBreak
+    ? purposeRawTail.slice(0, purposeBreak.index)
+    : purposeRawTail;
+  if (CREDENTIAL_DESCRIPTIVE_PURPOSE_PATTERN.test(purposeTail)) {
+    return true;
   }
 
   const backwardStart = Math.max(
