@@ -261,38 +261,114 @@ function findMatchingBrace(strippedText: string, openIndex: number): number {
   return -1;
 }
 
-/** #3498 (Codex C1 finding, round 4): extracts every top-level declarator
- * NAME from `declaratorListText` -- the portion of a bare `const a = 1, b
- * = 2;` statement's line after the `const ` keyword -- splitting on
- * commas only at bracket/paren/brace depth 0, so a declarator's own
- * initializer (`const a = foo(1, 2), b = 3;`) is never mistaken for a
- * second declarator boundary. Destructuring declarators (`const { a, b }
- * = obj;`) are out of scope -- `BARE_CONST_DECL_PATTERN` never matches
- * them at all (no identifier immediately follows `const `), an
- * accepted, pre-existing limitation this fix does not extend to. */
-function splitBareConstDeclaratorNames(declaratorListText: string): string[] {
-  const names: string[] = [];
+/** One bare `const` declarator's resolved name and its absolute offset
+ * into the scanned text (for the caller to resolve its real line). */
+interface BareConstDeclarator {
+  name: string;
+  offset: number;
+}
+
+/** #3498 (Codex/Copilot C1 findings, rounds 4-5): scans a bare `const`
+ * statement's full declarator list starting at `declaratorListStart`
+ * (the absolute offset into `strippedText` right after the `const `
+ * keyword), across as many PHYSICAL LINES as needed (`const a = 1,\n  b
+ * = 2;`), tracking bracket/paren/brace depth AND quote state so neither
+ * a declarator's own initializer (`const a = foo(1, 2), b = 3;`) nor a
+ * comma inside a string/template literal (`const text = 'x, helper';`)
+ * is mistaken for a declarator boundary. Stops at the first top-level
+ * (depth 0, unquoted) `;` or the end of `strippedText`. Returns each
+ * declarator's name and absolute offset -- the caller resolves the real
+ * 1-based line via `lineNumberAt`.
+ *
+ * A quoted span (single, double, or backtick) is treated as fully
+ * OPAQUE text, including a template literal's own `${...}` interpolation
+ * -- an accepted simplification (see the module header's "regex/line-
+ * based, not an AST parse" note): only a comma meant as a genuine
+ * declarator separator INSIDE an interpolation expression (an
+ * exceedingly rare construct) would be missed. Destructuring declarators
+ * (`const { a, b } = obj;`) stay out of scope -- `BARE_CONST_DECL_PATTERN`
+ * never matches them at all (no identifier immediately follows `const
+ * `), a separate, pre-existing limitation this scanner does not extend
+ * to. */
+function scanBareConstDeclarators(
+  strippedText: string,
+  declaratorListStart: number,
+): { declarators: BareConstDeclarator[]; endOffset: number } {
+  const declarators: BareConstDeclarator[] = [];
   let depth = 0;
-  let segmentStart = 0;
-  const pushSegment = (raw: string) => {
-    const nameMatch = /^\s*([A-Za-z_$][\w$]*)/.exec(raw);
+  let quote: string | null = null;
+  let segmentStart = declaratorListStart;
+  const pushSegment = (segmentEnd: number) => {
+    const raw = strippedText.slice(segmentStart, segmentEnd);
+    const leading = raw.length - raw.trimStart().length;
+    const nameMatch = /^([A-Za-z_$][\w$]*)/.exec(raw.slice(leading));
     if (nameMatch) {
-      names.push(nameMatch[1]);
+      declarators.push({
+        name: nameMatch[1],
+        offset: segmentStart + leading,
+      });
     }
   };
-  for (let i = 0; i < declaratorListText.length; i += 1) {
-    const char = declaratorListText[i];
-    if (char === '(' || char === '[' || char === '{') {
+  let i = declaratorListStart;
+  for (; i < strippedText.length; i += 1) {
+    const char = strippedText[i];
+    if (quote) {
+      if (char === '\\') {
+        i += 1; // skip the escaped character -- never its own quote/comma
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+    } else if (char === '(' || char === '[' || char === '{') {
       depth += 1;
     } else if (char === ')' || char === ']' || char === '}') {
       depth -= 1;
     } else if (char === ',' && depth === 0) {
-      pushSegment(declaratorListText.slice(segmentStart, i));
+      pushSegment(i);
       segmentStart = i + 1;
+    } else if (char === ';' && depth === 0) {
+      pushSegment(i);
+      return { declarators, endOffset: i };
     }
   }
-  pushSegment(declaratorListText.slice(segmentStart));
-  return names;
+  pushSegment(i);
+  return { declarators, endOffset: i };
+}
+
+/** #3498: same own-line-or-preceding-line suppression check the exported
+ * declaration branch already performs, parameterized to an arbitrary
+ * resolved 1-based `realLineNumber` -- needed because a multi-declarator
+ * `const` statement's declarators can each resolve to a DIFFERENT real
+ * line (or, for a single bare declaration, the caller already knows
+ * which line to check). */
+function checkOwnOrPrecedingLineSuppression(
+  originalText: string,
+  lineStarts: readonly number[],
+  realLineNumber: number,
+): RegExpExecArray | null {
+  const lineIndex = realLineNumber - 1;
+  const ownStart = lineStarts[lineIndex];
+  const ownEnd =
+    lineIndex + 1 < lineStarts.length
+      ? lineStarts[lineIndex + 1] - 1
+      : originalText.length;
+  const ownMatch = IGNORE_EXPORT_PATTERN.exec(
+    originalText.slice(ownStart, ownEnd),
+  );
+  if (ownMatch) {
+    return ownMatch;
+  }
+  if (lineIndex === 0) {
+    return null;
+  }
+  const precedingStart = lineStarts[lineIndex - 1];
+  const precedingEnd = ownStart - 1;
+  return IGNORE_EXPORT_PATTERN.exec(
+    originalText.slice(precedingStart, precedingEnd),
+  );
 }
 
 interface BracedItem {
@@ -576,49 +652,60 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         !bareConstMatch &&
         BARE_CLASS_DECL_PATTERN.exec(line);
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
-      if (bareMatch) {
-        // #3498 (Codex C1 finding, round 4): a bare `const` statement can
-        // declare MULTIPLE comma-separated bindings on one line (`const
-        // retained = 1, forgotten = 2;`) -- `BARE_CONST_DECL_PATTERN`
-        // itself only captures the FIRST identifier, so resolve every
-        // declarator name for the const case; function/class
-        // declarations have only one name each. Destructuring
-        // declarators stay an accepted, pre-existing limitation (see
-        // `splitBareConstDeclaratorNames`'s own doc comment).
-        const bareNames = bareConstMatch
-          ? splitBareConstDeclaratorNames(line.replace(/^const\s+/, ''))
-          : [bareMatch[1]];
+      if (bareMatch && bareConstMatch) {
+        // #3498 (Codex/Copilot C1 findings, rounds 4-5): a bare `const`
+        // statement can declare MULTIPLE comma-separated bindings,
+        // possibly spanning several physical lines (`const retained =
+        // 1,\n  forgotten = 2;`) -- scan the full statement (quote- and
+        // bracket-aware) instead of just this one line, and resolve each
+        // declarator's own real line independently for suppression.
+        const declaratorListStart =
+          start + (bareConstMatch[0].length - bareConstMatch[1].length);
+        const { declarators, endOffset } = scanBareConstDeclarators(
+          strippedText,
+          declaratorListStart,
+        );
+        for (const declarator of declarators) {
+          const realLine = lineNumberAt(strippedText, declarator.offset);
+          if (!declarationLineByLocalName.has(declarator.name)) {
+            declarationLineByLocalName.set(declarator.name, realLine);
+          }
+          if (!declarationSuppressionByLocalName.has(declarator.name)) {
+            const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+              originalText,
+              lineStarts,
+              realLine,
+            );
+            declarationSuppressionByLocalName.set(declarator.name, {
+              suppressed: !!ignoreMatch,
+              reason: (ignoreMatch?.[1] ?? '').trim(),
+            });
+          }
+        }
+        // Advance past every physical line the scanned statement
+        // consumed -- mirroring the export/import brace handling's own
+        // `lineNumberAt(closeIndex) - 1` pattern -- so the main loop
+        // never re-scans a continuation line as if it were fresh.
+        lineIndex = lineNumberAt(strippedText, endOffset) - 1;
+      } else if (bareMatch) {
         // #3498 (Codex C1 finding): same own-line-or-preceding-line
         // suppression check as the exported declaration branch above, so
         // a suppression comment on a BARE declaration's line also takes
         // effect once a no-`from` list item resolves to it.
-        const bareOwnLineIgnoreMatch = IGNORE_EXPORT_PATTERN.exec(
-          originalText.slice(start, end),
-        );
-        const barePrecedingLineIgnoreMatch = bareOwnLineIgnoreMatch
-          ? null
-          : (() => {
-              if (lineIndex === 0) {
-                return null;
-              }
-              const precedingStart = lineStarts[lineIndex - 1];
-              const precedingEnd = start - 1;
-              return IGNORE_EXPORT_PATTERN.exec(
-                originalText.slice(precedingStart, precedingEnd),
-              );
-            })();
-        const bareIgnoreMatch =
-          bareOwnLineIgnoreMatch ?? barePrecedingLineIgnoreMatch;
-        for (const bareName of bareNames) {
-          if (!declarationLineByLocalName.has(bareName)) {
-            declarationLineByLocalName.set(bareName, lineIndex + 1);
-          }
-          if (!declarationSuppressionByLocalName.has(bareName)) {
-            declarationSuppressionByLocalName.set(bareName, {
-              suppressed: !!bareIgnoreMatch,
-              reason: (bareIgnoreMatch?.[1] ?? '').trim(),
-            });
-          }
+        const bareName = bareMatch[1];
+        if (!declarationLineByLocalName.has(bareName)) {
+          declarationLineByLocalName.set(bareName, lineIndex + 1);
+        }
+        if (!declarationSuppressionByLocalName.has(bareName)) {
+          const ignoreMatch = checkOwnOrPrecedingLineSuppression(
+            originalText,
+            lineStarts,
+            lineIndex + 1,
+          );
+          declarationSuppressionByLocalName.set(bareName, {
+            suppressed: !!ignoreMatch,
+            reason: (ignoreMatch?.[1] ?? '').trim(),
+          });
         }
       }
     }

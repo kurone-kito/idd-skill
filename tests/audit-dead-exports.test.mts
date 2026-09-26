@@ -909,6 +909,58 @@ test('a bare multi-declarator `const` statement with an initializer containing a
   }
 });
 
+test('a comma INSIDE a string literal on a bare `const` line is never mistaken for a declarator boundary (Copilot C1 round-5 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        "const text = 'x, helper';",
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export { helper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'helper');
+    assert.equal(
+      entry.line,
+      2,
+      'the comma inside the string literal must not be split as if it ' +
+        'were a second declarator on the `const` line -- `helper` must ' +
+        'still resolve to its own real function declaration line, not ' +
+        'the unrelated `const` line',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a bare multi-declarator `const` statement split across multiple physical lines still resolves every declarator (Codex C1 round-5 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/multiline.mts',
+      'const retained = 1,\n  forgotten = 2;\n\nexport { forgotten };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'forgotten').category,
+      'unused',
+      '`forgotten` is declared on the SECOND physical line of a ' +
+        'multi-line declarator list -- it must still resolve to its ' +
+        "own real line, not fall back to the export statement's line",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(
