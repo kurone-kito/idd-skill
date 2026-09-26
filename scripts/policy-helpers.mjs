@@ -801,42 +801,6 @@ export function parseIsoDurationToMs(value) {
     days * DAY_MS + hours * HOUR_MS + minutes * MINUTE_MS + seconds * SECOND_MS;
   return totalMs > 0 ? totalMs : null;
 }
-export function getReviewEscalationChangesRequestedPolicy(config = {}) {
-  const normalized = normalizePolicyConfig(config);
-  const firstEscalationMs = parseIsoDurationToMs(
-    normalized.reviewEscalation.changesRequestedFirstEscalation,
-  );
-  const secondEscalationMs = parseIsoDurationToMs(
-    normalized.reviewEscalation.changesRequestedSecondEscalation,
-  );
-  const defaultFirstEscalationMs =
-    parseIsoDurationToMs(
-      POLICY_DEFAULTS.reviewEscalation.changesRequestedFirstEscalation,
-    ) ?? 0;
-  const defaultSecondEscalationMs =
-    parseIsoDurationToMs(
-      POLICY_DEFAULTS.reviewEscalation.changesRequestedSecondEscalation,
-    ) ?? 0;
-  const resolvedFirstEscalationMs = isFiniteNumber(firstEscalationMs)
-    ? firstEscalationMs
-    : defaultFirstEscalationMs;
-  const resolvedSecondEscalationMs = isFiniteNumber(secondEscalationMs)
-    ? secondEscalationMs
-    : defaultSecondEscalationMs;
-  const defaultPostEscalationMs =
-    defaultSecondEscalationMs - defaultFirstEscalationMs;
-  const resolvedPostEscalationMs =
-    resolvedSecondEscalationMs > resolvedFirstEscalationMs
-      ? resolvedSecondEscalationMs - resolvedFirstEscalationMs
-      : defaultPostEscalationMs;
-  return {
-    escalateAfterMs: resolvedFirstEscalationMs,
-    releaseAfterEscalationMs: resolvedPostEscalationMs,
-  };
-}
-function isFiniteNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value);
-}
 /**
  * Deterministically pick an index within a same-score tie band for the
  * Discover A4 Step 2 selection desync (`discover.selectionDesync:

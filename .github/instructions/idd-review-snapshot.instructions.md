@@ -209,10 +209,9 @@ regardless of maintainer response).
 re-review-requested in a previous E13/E14 pass. **Embedded-finding
 gap (helper-first, optional):** a `COMMENTED`-state review can still
 carry a file/line-cited finding with no thread of its own, in an
-older collapsible body format some bots use — a helper that parses
-the embedded findings and compares against the threaded-comment count
-(see `docs/idd-design-rationale.md`) detects this; add one PATH B
-item per uncovered finding.
+older collapsible body format some bots use —
+`review-activity-snapshot`'s `embeddedFindings[].uncoveredCount`
+reports this; add one PATH B item per uncovered finding.
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the

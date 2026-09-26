@@ -3,11 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
 import {
+  buildCodeRabbitEmbeddedFindings,
   parseArgs,
   resolveActivitySnapshotTrustedMarkerLogins,
 } from '../src/scripts/review-activity-snapshot.mts';
+import { PR_1897_REVIEW_4863787336 } from './coderabbit-pr-1897-review.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -276,4 +277,80 @@ test('review-activity snapshot keeps the courtesy-ack flag false when a regular 
     report.dispositionEvidence.soleCauseAckOnlyPostDisposition,
     false,
   );
+});
+
+const PR_1897_REVIEW_ID = 'PRR_kwDO_1897_4863787336';
+
+test('embeddedFindings reports uncoveredCount 1 for PR #1897 review 4863787336 when no thread belongs to that review', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'coderabbitai[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+      {
+        node_id: 'PRR_other',
+        user: { login: 'copilot' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, [
+    {
+      reviewId: PR_1897_REVIEW_ID,
+      embeddedFindingCount: 1,
+      uncoveredCount: 1,
+    },
+  ]);
+});
+
+test('embeddedFindings reports uncoveredCount 0 when one thread belongs to PR #1897 review 4863787336', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'CodeRabbitAI[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [
+      {
+        comments: {
+          nodes: [
+            {
+              pullRequestReview: { id: PR_1897_REVIEW_ID },
+            },
+          ],
+        },
+      },
+    ],
+  );
+  assert.equal(findings[0]?.uncoveredCount, 0);
+  assert.equal(findings[0]?.embeddedFindingCount, 1);
+});
+
+test('embeddedFindings does not treat a missing node_id as covering threads with no review id', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: '',
+        user: { login: 'coderabbitai' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'COMMENTED',
+      },
+    ],
+    [
+      {
+        comments: {
+          nodes: [{ pullRequestReview: { id: null } }],
+        },
+      },
+    ],
+  );
+  assert.equal(findings[0]?.uncoveredCount, 1);
 });

@@ -14,6 +14,8 @@ import {
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
+  countUncoveredCodeRabbitEmbeddedFindings,
+  extractCodeRabbitEmbeddedFindings,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -24,6 +26,12 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 
+/** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
+ * logins in that same set are not CodeRabbit reviews. */
+const CODE_RABBIT_REVIEW_LOGINS = new Set([
+  'coderabbitai',
+  'coderabbitai[bot]',
+]);
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -147,6 +155,10 @@ function main() {
   // that one flag is meaningful here. The other advisory-only sub-flags
   // stay omitted; this is not `pre-merge-readiness`'s full
   // `DispositionEvidenceSummary`.
+  const embeddedFindings = buildCodeRabbitEmbeddedFindings(
+    reviews,
+    normalizedThreads,
+  );
   const dispositionEvidence = summarizeDispositionEvidenceForGate(
     { comments: normalizedComments, threads: normalizedThreads },
     {
@@ -176,6 +188,7 @@ function main() {
           soleCauseAckOnlyPostDisposition:
             dispositionEvidence.soleCauseAckOnlyPostDisposition,
         },
+        embeddedFindings,
       },
       null,
       2,
@@ -242,6 +255,40 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/review-activity-snapshot.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>]
 `);
+}
+/** One row per CodeRabbit review. Thread coverage is the number of
+ * review threads whose first comment's `pullRequestReview.id` equals
+ * the review's REST `node_id`. An empty `node_id` covers nothing, so
+ * a null review id cannot match every thread that also has none. */
+export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
+  return reviews.flatMap((review) => {
+    const login = String(review.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!CODE_RABBIT_REVIEW_LOGINS.has(login)) {
+      return [];
+    }
+    const reviewId = String(review.node_id ?? '');
+    const body = review.body ?? '';
+    const embeddedFindingCount = extractCodeRabbitEmbeddedFindings(body).length;
+    const threadedCount =
+      reviewId === ''
+        ? 0
+        : threads.filter((thread) => {
+            const first = thread.comments?.nodes?.[0];
+            return String(first?.pullRequestReview?.id ?? '') === reviewId;
+          }).length;
+    return [
+      {
+        reviewId,
+        embeddedFindingCount,
+        uncoveredCount: countUncoveredCodeRabbitEmbeddedFindings(
+          body,
+          threadedCount,
+        ),
+      },
+    ];
+  });
 }
 function normalizeComment(comment) {
   return {

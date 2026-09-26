@@ -62,7 +62,6 @@ import {
   parseReviewWatermarkComment,
 } from './marker-helpers.mjs';
 import {
-  getReviewEscalationChangesRequestedPolicy,
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
@@ -1805,7 +1804,6 @@ function extractCodeRabbitEmbeddedFindingsFromSection(section) {
  * comparison. Never negative: a review whose threaded comments already
  * meet or exceed its embedded-finding count reports `0`.
  */
-// audit:ignore-dead-export: pending #3341's own expose-via-CLI decision for this export; do not duplicate that fix here
 export function countUncoveredCodeRabbitEmbeddedFindings(
   body,
   threadedCommentCount,
@@ -2104,105 +2102,6 @@ export function indexThreadsByReview(threads, options = {}) {
     }
   }
   return index;
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function routeRejectedChangesRequestedReview(input) {
-  const escalationPolicy = getReviewEscalationChangesRequestedPolicy(
-    input?.policyConfig ?? {},
-  );
-  const firstEscalationWindowMs = escalationPolicy.escalateAfterMs;
-  const postEscalationWindowMs = escalationPolicy.releaseAfterEscalationMs;
-  const totalWindowLabel = formatDurationLabel(
-    firstEscalationWindowMs + postEscalationWindowMs,
-  );
-  const firstWindowLabel = formatDurationLabel(firstEscalationWindowMs);
-  const reviewState = String(input.reviewState ?? '');
-  if (reviewState !== 'CHANGES_REQUESTED') {
-    return {
-      route: 'proceed',
-      reason: 'changes-requested state already cleared',
-    };
-  }
-  const reviewerDisposition = String(input.reviewerDisposition ?? 'none');
-  if (reviewerDisposition === 'disagreed') {
-    return {
-      route: 'return-to-e1',
-      reason:
-        'reviewer disagreed with the rejection and the feedback must return to triage',
-    };
-  }
-  if (reviewerDisposition === 'agreed-state-cleared') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'reviewer agreement alone does not clear a changes-requested state',
-    };
-  }
-  if (reviewerDisposition === 'agreed-state-unchanged') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'reviewer agreement alone does not clear a changes-requested state',
-    };
-  }
-  const maintainerDisposition = String(input.maintainerDisposition ?? 'none');
-  if (maintainerDisposition === 'agreed-state-unchanged') {
-    return {
-      route: 'hold-await-state-clear',
-      reason:
-        'maintainer agreement does not clear the original changes-requested state',
-    };
-  }
-  const elapsedMs =
-    Date.parse(input.now ?? '') -
-    Date.parse(input.rejectionCommentCreatedAt ?? '');
-  if (!Number.isFinite(elapsedMs)) {
-    return {
-      route: 'hold-for-evidence',
-      reason:
-        'elapsed time cannot be computed for the rejected changes-requested review',
-    };
-  }
-  if (elapsedMs < firstEscalationWindowMs) {
-    return {
-      route: 'hold-before-escalation',
-      reason: `still within the first ${firstWindowLabel} after the rejection reply`,
-    };
-  }
-  const escalationElapsedMs =
-    Date.parse(input.now ?? '') -
-    Date.parse(input.escalationCommentCreatedAt ?? '');
-  if (!Number.isFinite(escalationElapsedMs)) {
-    return {
-      route: 'escalate-maintainer',
-      reason: `the changes-requested review is still blocking after ${firstWindowLabel} with no reviewer response`,
-    };
-  }
-  if (escalationElapsedMs < postEscalationWindowMs) {
-    return {
-      route: 'hold-after-escalation',
-      reason: `still within ${formatDurationLabel(postEscalationWindowMs)} of the maintainer escalation comment`,
-    };
-  }
-  return {
-    route: 'label-and-release',
-    reason: `the changes-requested review is still blocking after ${totalWindowLabel} with no escalation response`,
-  };
-}
-function formatDurationLabel(milliseconds) {
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
-    return '0 minutes';
-  }
-  if (milliseconds % (60 * 60 * 1000) === 0) {
-    const hours = milliseconds / (60 * 60 * 1000);
-    return `${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  if (milliseconds % (60 * 1000) === 0) {
-    const minutes = milliseconds / (60 * 1000);
-    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-  }
-  const seconds = milliseconds / 1000;
-  return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 export function diffReviewSnapshot(snapshot, live) {
   if (String(live.headSha ?? '') !== String(snapshot.headSha ?? '')) {
@@ -2696,11 +2595,6 @@ export function isRejectionConfirmedDisposition(comment) {
   return REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
     (comment.body ?? '').trimStart(),
   );
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function isIddDispositionComment(comment) {
-  const author = comment.author?.login ?? '';
-  return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
 // #1018 non-review-notice carry-forward classifiers.
 //
@@ -10577,99 +10471,6 @@ export function normalizeLinkedPrReference(value) {
     // Not a URL-form linked-pr reference.
   }
   return token.toLowerCase();
-}
-// audit:ignore-dead-export: pending #3341's own delete decision for this export; do not duplicate that fix here
-export function classifyResumeRoutingCase(input, options = {}) {
-  const staleHours = Number.isFinite(options.staleHours)
-    ? options.staleHours
-    : 24;
-  const stallMinutes = Number.isFinite(options.stallMinutes)
-    ? options.stallMinutes
-    : 30;
-  const pendingCiStates = new Set(
-    options.pendingCiStates ?? ['queued', 'in_progress', 'waiting', 'pending'],
-  );
-  const terminalSafeCiStates = new Set(
-    options.terminalSafeCiStates ?? ['success', 'none'],
-  );
-  if (input.displacedByForcedHandoff) {
-    return {
-      route: 'claim-lost-stop',
-      reason: 'session was displaced by trusted forced-handoff evidence',
-    };
-  }
-  if (!input.hasActiveClaim) {
-    return {
-      route: 'unclaimed-reclaim-required',
-      reason: 'resume requires a fresh claim before continuation',
-    };
-  }
-  if (input.claimOwnedBySession) {
-    if (input.rebaseInProgress || input.worktreeDirty) {
-      return {
-        route: 'crash-recovery',
-        reason: 'owned claim with interrupted local state',
-      };
-    }
-    return {
-      route: 'ordinary-continuation',
-      reason: 'owned claim with clean local state',
-    };
-  }
-  if (input.hasUsableForcedHandoffEvidence) {
-    return {
-      route: 'forced-handoff-recovery',
-      reason:
-        'trusted forced-handoff evidence takes precedence over stalled-session takeover',
-    };
-  }
-  if (!Number.isFinite(input.claimAgeHours)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'claim age is missing for a non-owned claim',
-    };
-  }
-  if (!Number.isFinite(input.latestActivityAgeMinutes)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'activity age is missing for a non-owned active claim',
-    };
-  }
-  const ciState = String(input.ciState ?? 'none').toLowerCase();
-  if (pendingCiStates.has(ciState)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'CI is still pending for the active non-owned claim',
-    };
-  }
-  if (!terminalSafeCiStates.has(ciState)) {
-    return {
-      route: 'hold-for-evidence',
-      reason: 'CI is not in a terminal-safe state for stalled-claim recovery',
-    };
-  }
-  if (input.claimAgeHours < staleHours) {
-    if (input.latestActivityAgeMinutes >= stallMinutes) {
-      return {
-        route: 'hold-for-evidence',
-        reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
-      };
-    }
-    return {
-      route: 'hold-for-evidence',
-      reason: 'non-owned claim remains non-inheritable until stale',
-    };
-  }
-  if (input.latestActivityAgeMinutes < stallMinutes) {
-    return {
-      route: 'hold-for-evidence',
-      reason: `non-owned claim is stale but quiet-window evidence is < ${stallMinutes}m`,
-    };
-  }
-  return {
-    route: 'stale-claim-takeover',
-    reason: `non-owned claim is stale at >= ${staleHours}h with quiet-window evidence >= ${stallMinutes}m`,
-  };
 }
 function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
   // Default accepts any non-bot human; an IDD-scoped predicate (when supplied)

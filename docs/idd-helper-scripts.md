@@ -3824,6 +3824,15 @@ reflexively as any other CLI option.
   success output, when the watermark it is about to post already covers
   comments/threads that were never actually dispositioned, and stays
   silent for the courtesy-ack flag case above
+- Embedded CodeRabbit findings (kurone-kito/idd-skill#3341): the
+  snapshot also emits `embeddedFindings`, one object per review whose
+  author login is `coderabbitai` or `coderabbitai[bot]`
+  (case-insensitive). Each object is `reviewId` (the review's REST
+  `node_id`), `embeddedFindingCount`, and `uncoveredCount`. The
+  uncovered count subtracts the number of review threads whose first
+  comment's `pullRequestReview.id` equals that `node_id`. An empty
+  `node_id` covers no threads. Add one PATH B item per uncovered
+  finding
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
