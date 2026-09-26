@@ -2831,6 +2831,8 @@ function findSupersededCodexNoFindDispositionIndexes<
     comments
       .filter(
         (comment) =>
+          (trustedMarkerLogins.has(comment.authorLogin) ||
+            iddAgentLogins.has(comment.authorLogin)) &&
           isCodexNoFindResultDisposition(comment.body) &&
           classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
             'unedited',

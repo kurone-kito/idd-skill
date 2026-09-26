@@ -1178,6 +1178,53 @@ test('gate retires an edited no-find acceptance after a valid replacement', () =
   assert.equal(dispositionSummary.missingRegularCommentCount, 0);
 });
 
+test('gate retains an edited copied marker from an untrusted author', () => {
+  const source = {
+    id: 352,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const copiedDisposition = {
+    id: 353,
+    author: { login: 'untrusted-reviewer' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 352),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T02:00:00Z',
+    lastEditedAt: '2026-05-12T02:00:00Z',
+  };
+  const replacement = {
+    id: 354,
+    author: { login: 'trusted-agent' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 352),
+    createdAt: '2026-05-12T03:00:00Z',
+    updatedAt: '2026-05-12T03:00:00Z',
+    lastEditedAt: null,
+  };
+  const options = {
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['trusted-agent'],
+    prHeadSha: 'abc1234',
+  };
+  const regularSummary = summarizeRegularCommentsForGate(
+    [source, copiedDisposition, replacement],
+    options,
+  );
+  assert.deepEqual(
+    regularSummary.items.map((item) => item.id),
+    ['353'],
+  );
+  const dispositionSummary = summarizeDispositionEvidenceForGate(
+    { comments: [source, copiedDisposition, replacement], threads: [] },
+    options,
+  );
+  assert.deepEqual(
+    dispositionSummary.missingRegularComments.map((comment) => comment.id),
+    ['353'],
+  );
+});
+
 test('gate agreement requires the Codex disposition HEAD to match the current source HEAD', () => {
   const source = {
     id: 324,
