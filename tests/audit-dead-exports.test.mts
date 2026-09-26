@@ -698,6 +698,93 @@ test('two aliases of the same local name are classified independently when only 
   }
 });
 
+test("a no-`from` export list re-exporting a merely IMPORTED local binding (never declared in this file) is classified unused, not masked by the import statement's own mention (Copilot C1 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export function helper(): void {\n' + "  console.log('hi');\n" + '}\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import { helper } from './origin.mts';\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      "the import statement's own mention of `helper` must not count as " +
+        'a self-reference for `PublicHelper` -- it is re-export plumbing, ' +
+        'not usage, and PublicHelper has no real cross-file importer',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a suppression comment on the RESOLVED declaration line (not the export-list item's own line) suppresses a no-`from` list item (Codex C1 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        '// audit:ignore-dead-export: kept for a planned public API',
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.suppressed,
+      true,
+      'the reported line is now the real declaration line, so a ' +
+        "suppression comment placed there (per the audit's own " +
+        'remediation message) must actually suppress the finding',
+    );
+    assert.equal(entry.suppressionReason, 'kept for a planned public API');
+    assert.equal(
+      result.findings.some((f) => f.name === 'PublicHelper'),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a suppression comment on the export-list item's own line still suppresses a no-`from` list item (unchanged behavior alongside the declaration-line recognition)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export { helper as PublicHelper }; // audit:ignore-dead-export: legacy export, still public API',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(entry.suppressed, true);
+    assert.equal(entry.suppressionReason, 'legacy export, still public API');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

@@ -380,12 +380,27 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
   const declared: ParsedFile['declared'] = new Map();
   const reExports: ReExportEdge[] = [];
   const imports: RawImport[] = [];
-  // #3498: real declaration line for EVERY top-level function/const/class
-  // name in this file, exported or not -- see the bare-pattern comment
-  // above. Populated alongside `declared` below; consulted only when
-  // finalizing a no-`from` export-list item (after the full-file loop
-  // below, not inline) to resolve its `declarationLine`.
+  // #3498: real INTRODUCING line for every top-level local binding name in
+  // this file -- a `function`/`const`/`class` declaration (exported or
+  // bare; see the bare-pattern comment above), or a named import's local
+  // alias (a no-`from` list item can re-export a name this file only ever
+  // imported, never declared -- Copilot C1 finding). Populated alongside
+  // `declared` below; consulted only when finalizing a no-`from`
+  // export-list item (after the full-file loop below, not inline) to
+  // resolve its `declarationLine`.
   const declarationLineByLocalName = new Map<string, number>();
+  // #3498 (Codex C1 finding): a suppression comment (`// audit:ignore-
+  // dead-export`) on the RESOLVED declaration's own line (or bare
+  // declaration's preceding line) must also suppress a no-`from` list
+  // item reporting that resolved line -- otherwise the audit's own
+  // remediation message ("suppressing it ... on its declaration line")
+  // points at a line the suppression check never actually reads. Tracks
+  // the exported/bare declaration's own suppression state per local name,
+  // merged with the export-list item's own suppression at finalization.
+  const declarationSuppressionByLocalName = new Map<
+    string,
+    { suppressed: boolean; reason: string }
+  >();
   // #3498 (C1 finding, both the CodeRabbit delegate and the independent
   // subagent critique): a no-`from` export-list item can textually
   // PRECEDE the declaration it re-exports (valid via function hoisting),
@@ -494,6 +509,10 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
         selfReferenceExcludeLines: [lineIndex + 1],
       });
       declarationLineByLocalName.set(name, lineIndex + 1);
+      declarationSuppressionByLocalName.set(name, {
+        suppressed: !!ignoreMatch,
+        reason: (ignoreMatch?.[1] ?? '').trim(),
+      });
       lineIndex += 1;
       continue;
     }
@@ -514,6 +533,31 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
       const bareMatch = bareFunctionMatch ?? bareConstMatch ?? bareClassMatch;
       if (bareMatch) {
         declarationLineByLocalName.set(bareMatch[1], lineIndex + 1);
+        // #3498 (Codex C1 finding): same own-line-or-preceding-line
+        // suppression check as the exported declaration branch above, so
+        // a suppression comment on a BARE declaration's line also takes
+        // effect once a no-`from` list item resolves to it.
+        const bareOwnLineIgnoreMatch = IGNORE_EXPORT_PATTERN.exec(
+          originalText.slice(start, end),
+        );
+        const barePrecedingLineIgnoreMatch = bareOwnLineIgnoreMatch
+          ? null
+          : (() => {
+              if (lineIndex === 0) {
+                return null;
+              }
+              const precedingStart = lineStarts[lineIndex - 1];
+              const precedingEnd = start - 1;
+              return IGNORE_EXPORT_PATTERN.exec(
+                originalText.slice(precedingStart, precedingEnd),
+              );
+            })();
+        const bareIgnoreMatch =
+          bareOwnLineIgnoreMatch ?? barePrecedingLineIgnoreMatch;
+        declarationSuppressionByLocalName.set(bareMatch[1], {
+          suppressed: !!bareIgnoreMatch,
+          reason: (bareIgnoreMatch?.[1] ?? '').trim(),
+        });
       }
     }
 
@@ -637,6 +681,20 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
             continue;
           }
           imports.push({ name: item.name, targetFile, importerFile: absPath });
+          // #3498 (Copilot C1 finding): a no-`from` list item can
+          // re-export a LOCAL name this file only ever IMPORTED, never
+          // declared -- `declarationLineByLocalName` has nothing for it,
+          // so without this the import statement's own mention of the
+          // local alias registers as a false self-reference. Track the
+          // local alias's introducing line the same way a declaration's
+          // is tracked (never overwrite an existing declaration line --
+          // impossible in practice, since a module cannot both import and
+          // declare the same top-level binding name, but first-wins keeps
+          // this defensive).
+          const localAlias = item.alias ?? item.name;
+          if (!declarationLineByLocalName.has(localAlias)) {
+            declarationLineByLocalName.set(localAlias, item.line);
+          }
         }
       }
       lineIndex = lineNumberAt(strippedText, closeIndex) - 1;
@@ -661,10 +719,24 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
       []) {
       excludeLines.add(itemLine);
     }
+    // #3498 (Codex C1 finding): a suppression comment on the export-list
+    // item's own line still suppresses it (unchanged); ALSO recognize one
+    // on the resolved declaration's own line -- the line this entry now
+    // actually reports -- so the audit's own remediation message ("place
+    // the comment on its declaration line") is truthful for this branch
+    // too. Either one suppressing is enough.
+    const declarationSuppression = declarationSuppressionByLocalName.get(
+      pending.localName,
+    );
+    const suppressed =
+      pending.suppressed || !!declarationSuppression?.suppressed;
+    const reason = pending.suppressed
+      ? pending.reason
+      : (declarationSuppression?.reason ?? pending.reason);
     declared.set(pending.exposedName, {
       line,
-      suppressed: pending.suppressed,
-      reason: pending.reason,
+      suppressed,
+      reason,
       localName: pending.localName,
       selfReferenceExcludeLines: [...excludeLines],
     });
