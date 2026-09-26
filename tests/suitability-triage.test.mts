@@ -6047,6 +6047,20 @@ This task requires production dashboard credentials to verify the result.`;
   assert.equal(result.failedCheck, 'repository_fit');
 });
 
+test('repository fit keeps blockquote fixture examples fail-closed', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+> - Negative fixture: a descriptive example.
+> - This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit rejects a same-paragraph fixture and live prerequisite', () => {
   const result = checkRepositoryFit({
     issue: {
