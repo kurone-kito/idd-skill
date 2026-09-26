@@ -1,15 +1,13 @@
 # IDD — Merge Execution Phase (F3–F5)
 
-Read only after `idd-merge-handoff.instructions.md` routes the current
-claim to the autonomous merge path. Covers executing the merge (F3),
-cleanup (F4), and looping back to discover (F5).
+Read after `idd-merge-handoff.instructions.md` routes the claim.
+Covers executing the merge (F3), cleanup (F4), and F5.
 
-The final merge-gate timing defaults are named in
-[IDD policy constants](../../docs/policy-constants.md); the merge logic
-itself stays here.
+See [IDD policy constants](../../docs/policy-constants.md).
 
 Before any mutating action in F3, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-development-branch-livelock-under-fast-moving-development-branch).
 
 ## F3 — Merge
 

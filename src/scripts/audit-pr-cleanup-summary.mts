@@ -19,6 +19,14 @@ export interface CleanupReport {
   summary?: Record<string, number> | null;
   status?: string | null;
   rescanError?: string;
+  /**
+   * Set when an apply-mode `--time-budget-seconds` budget ran out before
+   * every candidate could be processed (kurone-kito/idd-skill#3321): the
+   * run stopped starting new candidates/passes, but every already-applied
+   * row is preserved and no confirming rescan ran. Never set outside
+   * apply mode, and never set when the flag is absent.
+   */
+  timeBudgetExhausted?: boolean;
 }
 
 export function computeReportSummary(report: CleanupReport): void {
@@ -66,6 +74,18 @@ export function computeReportSummary(report: CleanupReport): void {
     }
     if (report.failed.length > 0) {
       report.status = 'failed';
+      return;
+    }
+    // The apply-mode time budget ran out before this pass (and every
+    // candidate/pass after it) could finish (#3321): report this distinctly
+    // from the existing statuses below rather than let a stopped-early run
+    // read as a genuine `incomplete` permission-blocked remainder or a
+    // false `applied`/`clean` convergence. Checked after `rescanError`/
+    // `failed` (both take precedence -- a genuine error or an unconfirmed
+    // rescan outranks a merely-incomplete-by-budget run) and before the
+    // existing statuses below.
+    if (report.timeBudgetExhausted) {
+      report.status = 'time-budget-exhausted';
       return;
     }
     // A candidate that ended up minimized is done — whether this run minimized

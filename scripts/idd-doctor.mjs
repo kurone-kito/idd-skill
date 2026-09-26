@@ -21,6 +21,12 @@ import {
 import { parseCliArgs } from './cli-args.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
@@ -3788,7 +3794,7 @@ function parseArgs(argv) {
   const repoRoot = values['repo-root'];
   if (repoRoot !== undefined) {
     if (!repoRoot) {
-      throw new Error('--repo-root requires a value');
+      throw markCliUsageError(new Error('--repo-root requires a value'));
     }
     args.root = repoRoot;
   }
@@ -3799,12 +3805,16 @@ function parseArgs(argv) {
   const windowDaysToken = values['cleanup-backlog-window-days'];
   if (windowDaysToken !== undefined) {
     if (!windowDaysToken) {
-      throw new Error('--cleanup-backlog-window-days requires a value');
+      throw markCliUsageError(
+        new Error('--cleanup-backlog-window-days requires a value'),
+      );
     }
     const numeric = Number(windowDaysToken);
     if (!Number.isFinite(numeric) || numeric <= 0) {
-      throw new Error(
-        `--cleanup-backlog-window-days must be a positive finite number (got "${windowDaysToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-window-days must be a positive finite number (got "${windowDaysToken}")`,
+        ),
       );
     }
     args.cleanupBacklogWindowDays = numeric;
@@ -3817,8 +3827,10 @@ function parseArgs(argv) {
   if (warnThresholdToken !== undefined) {
     const numeric = Number(warnThresholdToken);
     if (!Number.isFinite(numeric) || numeric < 0) {
-      throw new Error(
-        `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${warnThresholdToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${warnThresholdToken}")`,
+        ),
       );
     }
     args.cleanupBacklogWarnThreshold = numeric;
@@ -3835,11 +3847,15 @@ function parseArgs(argv) {
   const bootstrapCutoffToken = values['cleanup-backlog-bootstrap-cutoff'];
   if (bootstrapCutoffToken !== undefined) {
     if (!bootstrapCutoffToken) {
-      throw new Error('--cleanup-backlog-bootstrap-cutoff requires a value');
+      throw markCliUsageError(
+        new Error('--cleanup-backlog-bootstrap-cutoff requires a value'),
+      );
     }
     if (parseStrictCutoffToUtcMs(bootstrapCutoffToken) === null) {
-      throw new Error(
-        `--cleanup-backlog-bootstrap-cutoff must be a strict YYYY-MM-DD date or a Z-suffixed ISO8601 timestamp (got "${bootstrapCutoffToken}")`,
+      throw markCliUsageError(
+        new Error(
+          `--cleanup-backlog-bootstrap-cutoff must be a strict YYYY-MM-DD date or a Z-suffixed ISO8601 timestamp (got "${bootstrapCutoffToken}")`,
+        ),
       );
     }
     args.cleanupBacklogBootstrapCutoff = bootstrapCutoffToken;
@@ -3963,10 +3979,17 @@ function sameMembers(left, right) {
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-doctor', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
   const report = runDoctor({
     root: resolve(args.root),
@@ -3982,5 +4005,5 @@ if (import.meta.main) {
   } else {
     printHumanReport(report);
   }
-  process.exit(report.errors.length > 0 ? 1 : 0);
+  return report.errors.length > 0 ? 1 : 0;
 }

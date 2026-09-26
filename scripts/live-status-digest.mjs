@@ -18,6 +18,14 @@ import {
   ghApiJson,
   ghText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  buildHelperErrorEnvelope,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+  writeStderrSync,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
@@ -76,7 +84,11 @@ const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('live-status-digest', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or
@@ -123,7 +135,7 @@ function main() {
   try {
     repository = combineOwnerRepoFlags(args) ?? detectRepository();
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const [owner, repo] = parseRepository(repository);
   const targetType = args.issue ? 'issue' : 'pr';
@@ -144,7 +156,13 @@ function main() {
       targetType,
       targetNumber,
     });
-    return;
+    // runDuplicateDigestRepair (via writeRepairReportAndStop) signals a
+    // recovery-hold outcome by setting process.exitCode directly rather
+    // than returning a value -- read it back here instead of hardcoding 0,
+    // or a recovery-hold's exit 1 would be silently overwritten by
+    // runHelperCli's own handleOutcome (#3346 regression, caught by
+    // tests/live-status-digest.test.mts's "duplicate repair" CLI tests).
+    return typeof process.exitCode === 'number' ? process.exitCode : 0;
   }
   // `expectedLinkedPrs` is a pure, local computation, so building it
   // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
@@ -190,7 +208,7 @@ function main() {
       isTrustedAuthor: isTrustedDigestAuthor,
     });
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const report = {
     repository: `${owner}/${repo}`,
@@ -210,7 +228,7 @@ function main() {
   };
   if (planned.action === 'duplicate') {
     writeReport(report, args.format);
-    process.exit(1);
+    return 1;
   }
   if (args.apply) {
     // The ordering invariant — re-fetch and re-plan, then revalidate the
@@ -248,13 +266,13 @@ function main() {
           updateIssueComment(owner, repo, commentId, body),
       });
     } catch (error) {
-      fail(error.message);
+      fail(error.message, error);
     }
     planned = outcome.planned;
     updateReportFromPlan(report, planned, args.includeBody);
     if (outcome.outcome === 'duplicate') {
       writeReport(report, args.format);
-      process.exit(1);
+      return 1;
     }
     if (outcome.outcome === 'created' || outcome.outcome === 'updated') {
       report.applied = true;
@@ -263,6 +281,7 @@ function main() {
     }
   }
   writeReport(report, args.format);
+  return 0;
 }
 function runDuplicateDigestRepair(input) {
   const { args, owner, repo, targetType, targetNumber } = input;
@@ -373,9 +392,12 @@ function runDuplicateDigestRepair(input) {
   });
   const repairReport = report.repair;
   if (!repairReport) {
-    fail(
-      'internal error: duplicate repair report is missing its repair section',
-    );
+    // Not a usage error -- an internal invariant violation, so pass a
+    // plain (untagged) Error to fail() so it classifies `internal`
+    // instead of defaulting to `usage`.
+    const message =
+      'internal error: duplicate repair report is missing its repair section';
+    fail(message, new Error(message));
   }
   if (plan.action !== 'ready') {
     writeRepairReportAndStop(report, args.format);
@@ -1023,8 +1045,13 @@ function assertRepairClaimBoundToTarget(
       ]),
     );
   } catch (error) {
+    // #3346 review finding: preserve the original gh-exec.mts-tagged error
+    // as `.cause` so classifyHelperError's cause-chain walk can still
+    // classify a real gh transport/not-found failure correctly instead of
+    // losing it to the generic `internal` fallback.
     throw new Error(
       `could not read closingIssuesReferences for PR #${targetNumber}: ${error.message}`,
+      { cause: error },
     );
   }
   if (!Array.isArray(payload.closingIssuesReferences)) {
@@ -1127,8 +1154,14 @@ function postRepairEvidenceWithReconciliation(
     );
     if (existing) return existing;
   } catch (error) {
+    // #3346 review finding: preserve the reconciliation lookup's own
+    // gh-exec.mts-tagged error as `.cause` so classifyHelperError's
+    // cause-chain walk can still classify a real gh transport/not-found
+    // failure correctly instead of losing it to the generic `internal`
+    // fallback.
     throw new Error(
       `${writeError?.message ?? 'evidence write failed'}; evidence reconciliation failed: ${error.message}; no retry attempted`,
+      { cause: error },
     );
   }
   throw new Error(
@@ -1471,12 +1504,18 @@ function ghJson(commandArgs) {
     const stderr = String(error.stderr ?? '').trim();
     const response = parseJsonOrNull(stdout);
     if (response?.message || response?.errors) {
-      fail(`gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`);
+      fail(
+        `gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`,
+        error,
+      );
     }
     if (response) {
       return response;
     }
-    fail(`gh ${commandArgs.join(' ')} failed: ${stderr || error.message}`);
+    fail(
+      `gh ${commandArgs.join(' ')} failed: ${stderr || error.message}`,
+      error,
+    );
   }
 }
 function parseJsonOrNull(value) {
@@ -1547,7 +1586,7 @@ function parseArgs(argv) {
   try {
     parsed = parseCliArgs(argv, LIVE_STATUS_DIGEST_FLAG_SPEC);
   } catch (error) {
-    fail(error.message);
+    fail(error.message, error);
   }
   const { values, help } = parsed;
   // The pre-migration readValue() used `!value` (not `=== undefined`), so
@@ -1671,7 +1710,36 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
-function fail(message) {
-  console.error(`error: ${message}`);
+function fail(message, error) {
+  // #3346: keep exit 2 for every fail() path. process.exit never returns to
+  // runHelperCli, so classify and write the envelope here -- copies
+  // audit-pr-cleanup.mts's established fail(message, error?) pattern. A
+  // bare message is a usage/argument error; a passed error keeps its real
+  // kind (a gh failure stays transport, not usage).
+  //
+  // #3346 review finding: console.error queues its write on
+  // process.stderr's own internal stream, while writeStderrSync bypasses
+  // that queue with a raw synchronous fd write. Issuing both when the
+  // envelope is enabled -- the human-readable "error: ..." line via
+  // console.error, then the envelope via writeStderrSync -- let the
+  // envelope's synchronous write physically reach the underlying fd
+  // before the still-queued console.error write finished draining under
+  // pipe backpressure, inverting the required "envelope is the last
+  // line" order. Route both lines through the same synchronous writer
+  // when the envelope is enabled, so call order is physical order; keep
+  // plain console.error on the disabled path, matching the "byte-
+  // identical when the envelope is unset" contract.
+  if (isHelperErrorEnvelopeEnabled()) {
+    writeStderrSync(`error: ${message}\n`);
+    const classified =
+      error === undefined
+        ? { kind: 'usage', message, httpStatus: null }
+        : classifyHelperError(error);
+    writeStderrSync(
+      `${JSON.stringify(buildHelperErrorEnvelope('live-status-digest', 2, classified))}\n`,
+    );
+  } else {
+    console.error(`error: ${message}`);
+  }
   process.exit(2);
 }

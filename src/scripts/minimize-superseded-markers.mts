@@ -6,7 +6,7 @@
 // never the generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 
 // Deliberately NOT importing the shared config-loader module (see #1208's
@@ -210,37 +210,171 @@ interface MinimizeArgs {
   deadlineMs?: number;
 }
 
+// ---------------------------------------------------------------------------
+// #3346: local, self-contained mirror of helper-cli-runner.mts's opt-in JSON
+// error envelope (module header there has the full design and the field
+// incidents it exists to fix). This file cannot import that shared module
+// (see the "Deliberately NOT importing..." comment at the top of this file --
+// the idd-template/scripts/ mirror must stay Node-builtins-only), so this
+// duplicates only the minimal surface this file's own CLI needs: no
+// `not-found`/`transport` kinds (this file never tags a `gh` failure with an
+// HTTP status the way gh-exec.mts does -- every thrown error here is
+// reported `internal`), and no `CliUsageError` class (this file's own
+// top-level try/catch around parseMinimizeArgs already knows structurally
+// that a caught error there is a usage error, matching sweep-authoring-
+// markers.mts's identical pattern). Keeps the exported name `runHelperCli`
+// (and the same `runHelperCli(helperName, main)` call shape every other
+// migrated helper uses) so this migration's own acceptance criterion
+// (`git grep -n "runHelperCli(" -- src/scripts/<name>.mts`) is satisfied
+// honestly, not worked around with a differently-named equivalent.
+//
+// Declared as `function` (never `const`) and placed after the
+// `if (import.meta.main)` trigger below, exactly like this file's other
+// helpers (parseMinimizeArgs, printUsage, runMinimize) -- hoisting is what
+// lets the trigger call them before their own declaration is reached during
+// module evaluation; a `const` here would be in the temporal dead zone at
+// that point.
+// ---------------------------------------------------------------------------
+
+type LocalHelperErrorKind = 'usage' | 'gate' | 'internal';
+
+type LocalHelperCliResult =
+  | number
+  | { exitCode: number; kind: LocalHelperErrorKind; message?: string };
+
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('minimize-superseded-markers', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+
+function isHelperErrorEnvelopeEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.IDD_HELPER_ERROR_ENVELOPE === '1';
+}
+
+/** Write `text` to stderr (fd 2) synchronously, looping until every byte is
+ * written -- mirrors helper-cli-runner.mts's own writeStderrSync, needed
+ * here for the identical reason: `process.exit()` right after this call
+ * must not race an async stdio write and truncate the envelope line. Used
+ * only on the crash path below, where `process.exit()` genuinely follows
+ * immediately. */
+function writeStderrSync(text: string): void {
+  const buffer = Buffer.from(text, 'utf8');
+  let written = 0;
+  while (written < buffer.length) {
+    written += writeSync(2, buffer, written, buffer.length - written);
+  }
+}
+
+/** Write `text` to stderr through Node's normal queued stream -- mirrors
+ * helper-cli-runner.mts's own `writeStderrQueued`. Used only on the
+ * returned-outcome path below (see `runHelperCli`), where no
+ * `process.exit()` forces the process down immediately afterward: queuing
+ * behind whatever `main` already wrote to stderr is what keeps this line
+ * genuinely last under real pipe backpressure. A raw synchronous write
+ * there (this file's own pre-fix behavior) could bypass `process.stderr`'s
+ * internal write queue and reach the underlying fd before an earlier,
+ * still-draining `process.stderr.write()` call from `main`, reordering
+ * stderr output ahead of the actual last line -- the same race the shared
+ * runner's `writeStderr`/`writeStderrQueued` split fixes (#3346 review
+ * finding). */
+function writeStderrQueued(text: string): void {
+  process.stderr.write(text);
+}
+
+function buildEnvelopeLine(
+  exitCode: number,
+  kind: LocalHelperErrorKind,
+  message: string,
+): string {
+  return `${JSON.stringify({
+    iddHelperError: {
+      version: 1,
+      helper: 'minimize-superseded-markers',
+      kind,
+      exitCode,
+      message,
+      httpStatus: null,
+    },
+  })}\n`;
+}
+
+function applyHelperCliOutcomeWhenDisabled(
+  outcome: LocalHelperCliResult,
+): void {
+  process.exitCode = typeof outcome === 'number' ? outcome : outcome.exitCode;
+}
+
+function runHelperCli(
+  helperName: string,
+  mainFn: () => LocalHelperCliResult,
+): void {
+  let result: LocalHelperCliResult;
+  try {
+    result = mainFn();
+  } catch (error) {
+    if (isHelperErrorEnvelopeEnabled()) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.once('uncaughtException', (caughtError) => {
+        const crashText =
+          caughtError instanceof Error && typeof caughtError.stack === 'string'
+            ? caughtError.stack
+            : String(caughtError);
+        writeStderrSync(`${crashText}\n`);
+        writeStderrSync(buildEnvelopeLine(1, 'internal', message));
+        process.exit(1);
+      });
+    }
+    throw error;
+  }
+  const exitCode = typeof result === 'number' ? result : result.exitCode;
+  process.exitCode = exitCode;
+  if (exitCode !== 0 && isHelperErrorEnvelopeEnabled()) {
+    const kind = typeof result === 'number' ? 'gate' : result.kind;
+    const message =
+      typeof result === 'number'
+        ? `${helperName} exited with code ${result}`
+        : (result.message ??
+          `${helperName} exited with code ${result.exitCode}`);
+    writeStderrQueued(buildEnvelopeLine(exitCode, kind, message));
+  }
+}
+
+function main(): LocalHelperCliResult {
   let args: MinimizeArgs;
   try {
     args = parseMinimizeArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`error: ${(error as Error).message}`);
-    process.exit(2);
+    const message = (error as Error).message;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   if (args.help) {
     printUsage();
-    process.exit(0);
+    return 0;
   }
 
   if (!ALLOWED_CLASSIFIERS.has(args.classifier)) {
-    console.error(
-      `error: --classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`,
-    );
-    process.exit(2);
+    const message = `--classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   if (!ALLOWED_FORMATS.has(args.format)) {
-    console.error(
-      `error: --format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`,
-    );
-    process.exit(2);
+    const message = `--format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`;
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   if (args.subjectIds.length === 0) {
-    console.error('error: --subject-ids must contain at least one ID');
-    process.exit(2);
+    const message = '--subject-ids must contain at least one ID';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   const { actors: trustedActors, source: trustedMarkerActorsSource } =
@@ -251,10 +385,10 @@ if (import.meta.main) {
     });
   const trustedSet = new Set(trustedActors);
   if (trustedSet.size === 0 && !args.allowUntrusted) {
-    console.error(
-      'error: no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json; or pass --allow-untrusted to explicitly opt out of the author gate.',
-    );
-    process.exit(2);
+    const message =
+      'no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json; or pass --allow-untrusted to explicitly opt out of the author gate.';
+    console.error(`error: ${message}`);
+    return { exitCode: 2, kind: 'usage', message };
   }
 
   const report = runMinimize({
@@ -274,8 +408,7 @@ if (import.meta.main) {
     console.log(JSON.stringify(report, null, 2));
   }
 
-  const exitCode = computeExitCode(report);
-  process.exit(exitCode);
+  return computeExitCode(report);
 }
 
 export function runMinimize({

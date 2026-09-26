@@ -337,8 +337,18 @@ export function applyHelperCliOutcomeWhenDisabled(
  * truncate the very envelope line a caller is about to parse (Node's own
  * documented `process.exit()` caveat). A synchronous fd write has no such
  * pending state to race against.
+ *
+ * Exported (#3346 review finding) for the small number of migrated
+ * helpers whose own multi-caller `fail()`-style exit path cannot return
+ * through {@link runHelperCli}'s own outcome handling (a literal
+ * `process.exit()` call reachable from more than one place, so it must
+ * build and write its own envelope line manually before exiting) --
+ * `live-status-digest.mts`'s `fail()` and `idd-onboard.mts`'s
+ * `exitRecordPolicy()` are the two current callers. Both call
+ * `process.exit()` immediately afterward, the same hazard this function
+ * exists to avoid for `runHelperCli`'s own internal use.
  */
-function writeStderrSync(text) {
+export function writeStderrSync(text) {
   const buffer = Buffer.from(text, 'utf8');
   let written = 0;
   while (written < buffer.length) {
@@ -349,6 +359,9 @@ function writeStderrSync(text) {
 export const DEFAULT_HELPER_CLI_IO = {
   env: process.env,
   writeStderr: writeStderrSync,
+  writeStderrQueued: (text) => {
+    process.stderr.write(text);
+  },
   setExitCode: (code) => {
     process.exitCode = code;
   },
@@ -403,9 +416,23 @@ function handleThrown(helperName, io, error) {
   });
 }
 /**
- * A returned (never thrown) outcome: nothing else can still write to
- * stderr afterward, so this writes the envelope immediately rather than
- * deferring to process exit.
+ * A returned (never thrown) outcome: no `process.exit()` forces the
+ * process down immediately afterward here (only `process.exitCode` is
+ * set; the process exits naturally once its stdio queues drain), so the
+ * envelope line is written through the normal queued stream (see {@link
+ * RunHelperCliIo.writeStderrQueued}) rather than a raw synchronous fd
+ * write -- queuing behind whatever the helper's own `main` already
+ * wrote to stderr (for example a progress stream) is what keeps this
+ * line genuinely last, matching the crash path's own use of a raw write
+ * for the opposite reason (there, `process.exit()` *does* follow
+ * immediately, so only a synchronous write is safe -- see {@link
+ * handleThrown}). #3346 review finding: the raw synchronous write this
+ * replaced bypassed `process.stderr`'s own internal write queue and
+ * could reach the underlying fd before an earlier, still-draining
+ * `process.stderr.write()` call from the helper's own `main` under real
+ * pipe backpressure -- verified empirically to reorder stderr output,
+ * landing the envelope well before the actual last line instead of
+ * genuinely last.
  */
 function handleOutcome(helperName, io, outcome) {
   const normalized = normalizeOutcome(helperName, outcome);
@@ -416,7 +443,7 @@ function handleOutcome(helperName, io, outcome) {
     httpStatus: normalized.httpStatus,
   });
   if (line !== null) {
-    io.writeStderr(line);
+    io.writeStderrQueued(line);
   }
 }
 /**

@@ -20,6 +20,13 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
@@ -239,22 +246,28 @@ export function planHandoff(
   };
 }
 
-export function main(argv: string[] = process.argv.slice(2)): void {
+export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
   const args = parseArgs(argv);
 
   if (args.help) {
     printUsage();
-    return;
+    return 0;
   }
 
   if (!args.issueNumber) {
-    throw new Error('missing required --issue <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --issue <number> argument'),
+    );
   }
   if (!args.forcedBy) {
-    throw new Error('missing required --forced-by <actor> argument');
+    throw markCliUsageError(
+      new Error('missing required --forced-by <actor> argument'),
+    );
   }
   if (!args.reason) {
-    throw new Error('missing required --reason <text> argument');
+    throw markCliUsageError(
+      new Error('missing required --reason <text> argument'),
+    );
   }
 
   if (args.plan) {
@@ -362,14 +375,18 @@ export function main(argv: string[] = process.argv.slice(2)): void {
         2,
       ),
     );
-    return;
+    return 0;
   }
 
   if (!args.newAgentId) {
-    throw new Error('missing required --new-agent-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-agent-id <id> argument'),
+    );
   }
   if (!args.newClaimId) {
-    throw new Error('missing required --new-claim-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-claim-id <id> argument'),
+    );
   }
 
   const repoRef =
@@ -508,6 +525,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
   } else {
     console.log(commentBody);
   }
+  return 0;
 }
 
 export function resolveHelperActiveClaim(
@@ -585,7 +603,7 @@ export function parseArgs(argv: string[]): ForcedHandoffMarkerArgs {
 
   const format = values.format as string;
   if (format !== 'text' && format !== 'json') {
-    throw new Error(`unsupported --format value: ${format}`);
+    throw markCliUsageError(new Error(`unsupported --format value: ${format}`));
   }
 
   return {
@@ -699,7 +717,7 @@ function isTruthy(value: unknown): boolean {
 export function parsePositiveInteger(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
@@ -708,7 +726,9 @@ function parseOwnerRepo(value: unknown): { owner: string; name: string } {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
-    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+    throw markCliUsageError(
+      new Error(`invalid --repo value: ${value} (expected owner/name)`),
+    );
   }
   return {
     owner: match[1],
@@ -771,5 +791,9 @@ Environment:
 }
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('forced-handoff-marker', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }

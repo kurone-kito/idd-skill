@@ -9,9 +9,10 @@ Read this file after CI passes on a newly pushed PR, or after returning
 from a fix cycle. It covers fetching review items (E1), running the
 critique pass (E2), and checking whether ReviewItems_snapshot is empty (E3).
 
-Before posting any E-phase operational comment or GitHub reply, apply
-the shared claim revalidation gate. The active claim must still use your
-current `{claim-id}` — this also serves as E1's phase-entry self-check:
+Before any E-phase mutation or GitHub side effect, apply the shared
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+The active claim must still use your current `{claim-id}` — this also
+serves as E1's phase-entry self-check:
 E1 re-fetches all of its state from GitHub on every entry, so, unlike
 B1/B3, there is no local plan or worktree artifact that could go stale
 between checks.
@@ -141,7 +142,8 @@ Use server-reported timestamps, not the local wall clock.
 **CI-completion precondition.** Post the `review-watermark` only
 **after** every CI run counting toward the merge gate has completed —
 including any opt-in/label-triggered job enabled at the quiescent
-pre-merge point. Same precondition for an expected advisory-bot
+pre-merge point (when the final merge-gate CI set is fixed). Same
+precondition for an expected advisory-bot
 re-review: when the primary bot already reviewed an earlier head,
 check the AW1 fast-path signal in `idd-advisory-wait.instructions.md`
 (`LAST_COPILOT_COMMIT == PR_HEAD_SHA`) and post after that review
@@ -149,7 +151,8 @@ lands, bounded by the advisory-wait windows when it never does.
 Operationally: enable the late job, await completion, **then** take
 the Step 1 snapshot and post the watermark — a merge-gate run
 completing _after_ the watermark forces a wasted E1↔F2 round-trip
-(F2's `ci-pass-drift`) with no new review activity.
+because F2's latest-CI `completedAt` mismatches
+`{latest-ci-completed-at}`, with no new review activity.
 
 Note: the post-idd-marker helper above performs this JSON `POST`
 under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`
@@ -187,11 +190,9 @@ Different-claim watermarks (forced-handoff successors, takeovers) must
 not be hidden here — see the claim takeover hide path in
 `idd-claim.instructions.md`.
 
-Do not create or edit the PR live status digest after posting this
-watermark unless the next route is E1, an F3 blocked reroute that
-leaves the F2 restart path (F1/D4), a hold/stop, post-merge cleanup,
-or an F2 `secondaryQuietWindow`-only block — any other edit counts as
-new review-currency activity, requiring a fresh E1 snapshot before F2.
+After posting this watermark, apply the canonical [live status digest contract](idd-overview-appendix.instructions.md#live-status-digest)
+before creating or editing the PR digest; do not treat a digest edit as
+exempt unless that section's exception list applies.
 
 **Step 3 — Filter into ReviewItems_snapshot.** Select and combine into
 **ReviewItems_snapshot**, recording the source URL for each item.

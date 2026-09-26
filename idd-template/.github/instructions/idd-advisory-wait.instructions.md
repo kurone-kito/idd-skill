@@ -269,11 +269,11 @@ AW1-AW2 plus the terminal contract's remaining budget (trusted bound
 `advisory-wait-recovery:` markers only). For the non-pending entry,
 `AW2`'s `SAME_HEAD_REQUEST_MARKER_PRESENT` is required — a same-head
 marker that is only the recovery form must never itself satisfy this
-check (a prior cycle's own marker is not proof a request was
-requested). The non-pending entry reuses `SETTLED_WINDOW_MINUTES` as
-its re-check budget (no new config value); before it elapses the
-classifier stays `"not-applicable"`/`recheck-budget-unspent` —
-ordinary lag, not failure.
+check (a prior cycle's own marker doesn't count). The non-pending
+entry reuses `SETTLED_WINDOW_MINUTES` as its re-check budget; before it
+elapses the classifier stays
+`"not-applicable"`/`recheck-budget-unspent` — ordinary lag, not
+failure.
 
 **Bounded cycle** (only when `"attempt"`). Before each mutating step,
 re-verify the active claim
@@ -288,8 +288,10 @@ pattern as E14's **Primary advisory bot**):
    (`#2327` — `COPILOT_PENDING` was already `false`, so nothing is
    pending to remove) and start at step 3 instead. Otherwise, if removal
    fails because the bot is no longer pending, re-run AW1-AW3 and
-   re-evaluate `staleRequestRecovery`; any other failure posts the `AW4`
-   pending-refresh-failed hold and stops — no cycle counted.
+   re-evaluate `staleRequestRecovery`; if a DELETE can't resolve a User
+   node, retry `gh pr edit --remove-reviewer` alone (step 4's budget);
+   any other failure, or that retry's exhaustion, posts the
+   `AW4` pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
 3. **Request** Copilot again, same fallback pattern.
 4. **Verify association**: confirm `review_requested` follows HEAD's
@@ -298,17 +300,17 @@ pattern as E14's **Primary advisory bot**):
    re-check alone after a brief pause (default: 3 attempts, a few
    seconds apart). Disposition after that budget depends on entry type:
    - **Pending entry**: still unproven → abort without posting a
-     marker or counting a cycle, return to the polling loop (or E1)
-     next interval — never tight-loop on unresolved lag.
+     marker or counting a cycle, return to the polling loop (or E1) —
+     never tight-loop on unresolved lag.
    - **Non-pending entry** (`#2327`): the event appearing proves this
-     re-request actually registered — abort without counting (ordinary
-     success, no cycle needed; the next pass's `COPILOT_PENDING_COVERS_HEAD`
-     check picks it up normally). No event within the same short budget
-     is itself the proof this re-request _also_ failed to register —
-     the entry condition already spent a full `SETTLED_WINDOW_MINUTES`
-     confirming the original request's silence before this cycle
-     started, so the short budget is sufficient here, not a redundant
-     wait — proceed to step 5 and count the cycle.
+     re-request actually registered — abort without counting; the next
+     pass's `COPILOT_PENDING_COVERS_HEAD` check picks it up normally. No
+     event within the same short budget is itself the proof this
+     re-request _also_ failed to register — the entry condition already
+     spent a full `SETTLED_WINDOW_MINUTES` confirming the original
+     request's silence before this cycle started, so the short budget is
+     sufficient here, not a redundant wait — proceed to step 5 and count
+     the cycle.
 5. **Post exactly one** bound marker, once step 4 concludes in a
    counted disposition — proven re-registration for a pending entry, or
    proven failure-to-register for a non-pending entry (`#2327`). `<n>`
@@ -317,8 +319,7 @@ pattern as E14's **Primary advisory bot**):
 
 **Ordinary counters are untouched**: excluded from `requestMarkerCount`
 and `#1511`'s reroll accounting, but **does** count as a same-head
-marker for the AW2 clock (blocking a second mutation for the same
-verified HEAD within one pass).
+marker for the AW2 clock (blocking a same-HEAD second mutation).
 
 ### AW3-H — Hide superseded advisory-wait markers
 

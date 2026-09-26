@@ -10,8 +10,8 @@ ReviewItems_snapshot non-empty; a cold E4 entry runs that file's
 Cold-start section first. Covers classifying, scoring, recording
 dispositions, and counting accepted items.
 
-Before posting any E-phase operational comment or GitHub reply, apply
-the shared claim revalidation gate.
+Before any E-phase mutation or GitHub side effect, apply the shared
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 **Skip condition E8**: if the Accepted PATH A count is zero, proceed to
 the **E-phase branch-sync check** below (its
@@ -82,11 +82,11 @@ Then apply path-specific scoring:
   Record a rejected instance as a known limitation in the PR body's
   follow-up-issues content (`idd-pr-submit.instructions.md` — mapped
   onto the template's "Follow-up issues" section when one exists), not
-  a defect. Edit it under E12's "PR body sync" safeguards
+  a defect. Edit it at E4 under E12's "PR body sync" safeguards
   (`idd-review-fix.instructions.md`: claim revalidation first, fetch
   the full body, edit only this claim, post the full result back,
-  re-check `closingIssuesReferences`) even when E8's zero-Accepted-
-  PATH-A skip bypasses E9-E15, and E12 with it.
+  re-check `closingIssuesReferences`), even when E8's zero-Accepted-
+  PATH-A skip bypasses E9-E15 and E12 (`#3495`).
 
 ## E5 — Record Accept / Reject decisions
 
@@ -110,8 +110,8 @@ Admin access (`GET
 three, assertion alone never reaches Accept forced — only "Verify before
 accept" confirming the claim, or an explicit maintainer confirmation
 reply, gets it there. Otherwise cap it at Rejected with the reasoned
-reply E6 already requires. CODEOWNER/required-reviewer AMD handling is
-unchanged.
+reply E6 already requires. CODEOWNER/required-reviewer AMD
+("Awaiting maintainer decision") handling is unchanged.
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
@@ -571,11 +571,11 @@ ever reaching F3 (background:
 [design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).
 
 **Rule**: post the watermark as the **last** action before F3's
-`idd-merge-execute.mjs --apply`, every pass — anything after (a CI
-rerun settling, a new disposition reply, another `{development-branch}`
-advance) stales it, failing `--apply` closed on `review-currency` regardless
-of CI color; re-post before retrying. A stale `idd-advisory-convergence`
-rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
+`idd-merge-execute.mjs --apply`, every pass. Apply the canonical
+review-currency rules in [pre-merge F2](idd-pre-merge.instructions.md#f2--pre-merge-condition-check)
+when deciding whether later activity stales it; that section's
+own-agent procedural-comment and ack-only carve-outs apply here too. A
+stale `idd-advisory-convergence` rollup: see [rerun mechanics](idd-ci.instructions.md#rerun-mechanics).
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
@@ -617,7 +617,7 @@ Run E14's **Primary advisory bot** procedure
 1-4 plus the active polling loop when it applies; skip Human reviewers
 and the secondary-bot step. Substitute "resume the branch-sync check's
 no-sync-required `clean` exit (watermark-refresh, then F1)" for each of
-E14's four "proceed to E15" exits (step 2's `SATISFIED`, step 4's AW3
+E14's six "proceed to E15" exits (step 2's `SATISFIED`, step 4's AW3
 `SATISFIED` and `CAP_EXHAUSTED` default, and the polling loop's
 `SATISFIED` exit). Every other exit — every "return to E1" and every
 hold-and-stop exit — halts exactly as in a normal E9-E15 pass; never

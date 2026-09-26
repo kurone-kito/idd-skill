@@ -82,7 +82,7 @@ Convergence guardrails:
   redirected by a maintainer.
 - If the critique pass reports zero issues, proceed to E11.
 
-**Round-count heuristic for genuinely-new findings.** The guard above
+**Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
 surfacing a genuinely new, real finding — that is convergence, not
 stagnation, so the no-progress guard never fires. This is a heuristic,
@@ -100,7 +100,7 @@ finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
 
-**Second escalation tier (heuristic, not a hard rule): when the
+**Second escalation tier (Tier 2; heuristic, not a hard rule): when the
 structural fix itself doesn't converge.** The heuristic above names
 one escalation (patch-by-patch → one structural fix); it does not say
 what to do when that structural fix keeps drawing new same-area

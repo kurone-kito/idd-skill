@@ -5,6 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -17,6 +18,13 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { renderUnclaimedByMarker } from './marker-helpers.mjs';
 import {
@@ -56,224 +64,286 @@ export async function runHandoff(options = {}) {
     );
   }
   const ask = promptFn ?? makeReadlinePrompt();
-  const rawIssue = await ask('Issue number: ');
-  const issueNumber = parsePositiveInteger(rawIssue, '--issue');
-  const repoRef =
-    repo ??
-    ghText([
-      'repo',
-      'view',
-      '--json',
-      'nameWithOwner',
-      '--jq',
-      '.nameWithOwner',
-    ]);
-  const { owner, name } = parseOwnerRepo(repoRef);
-  const forcedBy =
-    givenForcedBy ??
-    safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
-  if (!forcedBy) {
-    throw new Error(
-      'could not determine current GitHub user; ensure gh is authenticated',
-    );
+  // #3346 review finding ("prompt cleanup"): pre-migration, main()'s
+  // `runHandoff().catch(...)` called `process.exit(1)` on any error, which
+  // forcibly tore down the process (and with it, the readline interface
+  // `ask` opened on stdin) regardless of where the wizard failed.
+  // Post-migration, `main()` returns an error outcome through
+  // `runHelperCli`/`applyHelperCliOutcomeWhenDisabled` instead of calling
+  // `process.exit()` -- so a throw from any of the steps below, before the
+  // wizard reaches its own `ask.close?.()` calls, now leaves that readline
+  // interface open. An open readline attached to a TTY keeps the event
+  // loop alive, so the CLI would hang instead of exiting with the correct
+  // error code. Wrap the whole interactive body so `ask.close?.()` always
+  // runs, on every exit path, matching the old code's unconditional
+  // teardown; the two existing inline `ask.close?.()` calls further below
+  // stay as an early release once no further prompt is needed, and are
+  // harmless here since readline's `close()` is idempotent.
+  try {
+    return await runInteractiveHandoff();
+  } finally {
+    ask.close?.();
   }
-  const issueComments = fetchIssueComments
-    ? await fetchIssueComments(issueNumber)
-    : ghJson(
-        [
-          'api',
-          '--paginate',
-          `repos/${owner}/${name}/issues/${issueNumber}/comments`,
-        ],
-        true,
-      );
-  const trustedMarkerLogins =
-    givenTrustedLogins ??
-    buildTrustedMarkerLogins(owner, name, forcedBy, issueComments);
-  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const permissionCache = new Map();
-  const isAuthorizedForcedHandoff =
-    givenAuthPredicate ??
-    ((actor) =>
-      isAuthorizedForcedHandoffActor(
-        owner,
-        name,
-        actor,
-        forcedHandoffAuthorityPolicy,
-        permissionCache,
-      ));
-  // #3270 (Copilot review, PR #3370): planHandoff's staleAgeMs is now
-  // required -- this interactive facade previously omitted it and silently
-  // used the hardcoded 24h default.
-  const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
-  const resolveOpts = {
-    trustedMarkerLogins,
-    isAuthorizedForcedHandoff,
-    forcedBy,
-    reason,
-    staleAgeMs,
-  };
-  const firstPass = planHandoff(issueComments, [], resolveOpts);
-  const linkedPrs = fetchLinkedPrs
-    ? await fetchLinkedPrs(firstPass.branch)
-    : ghJson([
-        'pr',
-        'list',
-        '--repo',
-        `${owner}/${name}`,
-        '--head',
-        firstPass.branch,
-        '--state',
-        'open',
+  async function runInteractiveHandoff() {
+    const rawIssue = await ask('Issue number: ');
+    const issueNumber = parsePositiveInteger(rawIssue, '--issue');
+    const repoRef =
+      repo ??
+      ghText([
+        'repo',
+        'view',
         '--json',
-        'number,headRefName',
+        'nameWithOwner',
+        '--jq',
+        '.nameWithOwner',
       ]);
-  let planOptions = resolveOpts;
-  let plan = planHandoff(issueComments, linkedPrs, planOptions);
-  let resolvedPrNumber;
-  if (plan.contextScope === 'issue-plus-pr') {
-    const prList = plan.prReferences.join(', ');
-    const rawPr = await ask(`Open PR on branch (${prList}). Enter PR number: `);
-    const prNumber = parsePositiveInteger(rawPr, '--pr');
-    planOptions = { ...planOptions, prNumber };
-    plan = planHandoff(issueComments, linkedPrs, planOptions);
-    resolvedPrNumber = prNumber;
-  }
-  const rawSuccessorAgentId = await ask(
-    `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`, or \`${RELEASE_SUCCESSOR_KEYWORD}\` for no successor]: `,
-  );
-  const enteredAgentId = rawSuccessorAgentId.trim();
-  if (enteredAgentId.toLowerCase() === RELEASE_SUCCESSOR_KEYWORD) {
-    if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
+    const { owner, name } = parseOwnerRepo(repoRef);
+    const forcedBy =
+      givenForcedBy ??
+      safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
+    if (!forcedBy) {
       throw new Error(
-        "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
+        'could not determine current GitHub user; ensure gh is authenticated',
       );
     }
-    if (!isAuthorizedForcedHandoff(forcedBy)) {
+    const issueComments = fetchIssueComments
+      ? await fetchIssueComments(issueNumber)
+      : ghJson(
+          [
+            'api',
+            '--paginate',
+            `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+          ],
+          true,
+        );
+    const trustedMarkerLogins =
+      givenTrustedLogins ??
+      buildTrustedMarkerLogins(owner, name, forcedBy, issueComments);
+    const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const permissionCache = new Map();
+    const isAuthorizedForcedHandoff =
+      givenAuthPredicate ??
+      ((actor) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          name,
+          actor,
+          forcedHandoffAuthorityPolicy,
+          permissionCache,
+        ));
+    // #3270 (Copilot review, PR #3370): planHandoff's staleAgeMs is now
+    // required -- this interactive facade previously omitted it and silently
+    // used the hardcoded 24h default.
+    const staleAgeMs = readClaimStaleAgeMs(loadIddConfig());
+    const resolveOpts = {
+      trustedMarkerLogins,
+      isAuthorizedForcedHandoff,
+      forcedBy,
+      reason,
+      staleAgeMs,
+    };
+    const firstPass = planHandoff(issueComments, [], resolveOpts);
+    const linkedPrs = fetchLinkedPrs
+      ? await fetchLinkedPrs(firstPass.branch)
+      : ghJson([
+          'pr',
+          'list',
+          '--repo',
+          `${owner}/${name}`,
+          '--head',
+          firstPass.branch,
+          '--state',
+          'open',
+          '--json',
+          'number,headRefName',
+        ]);
+    let planOptions = resolveOpts;
+    let plan = planHandoff(issueComments, linkedPrs, planOptions);
+    let resolvedPrNumber;
+    if (plan.contextScope === 'issue-plus-pr') {
+      const prList = plan.prReferences.join(', ');
+      const rawPr = await ask(
+        `Open PR on branch (${prList}). Enter PR number: `,
+      );
+      const prNumber = parsePositiveInteger(rawPr, '--pr');
+      planOptions = { ...planOptions, prNumber };
+      plan = planHandoff(issueComments, linkedPrs, planOptions);
+      resolvedPrNumber = prNumber;
+    }
+    const rawSuccessorAgentId = await ask(
+      `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`, or \`${RELEASE_SUCCESSOR_KEYWORD}\` for no successor]: `,
+    );
+    const enteredAgentId = rawSuccessorAgentId.trim();
+    if (enteredAgentId.toLowerCase() === RELEASE_SUCCESSOR_KEYWORD) {
+      if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
+        throw new Error(
+          "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
+        );
+      }
+      if (!isAuthorizedForcedHandoff(forcedBy)) {
+        throw new Error(
+          `forced-by actor ${forcedBy} is not authorized to release this claim`,
+        );
+      }
+      const releaseBody = renderUnclaimedByMarker({
+        agentId: plan.activeClaim.agentId,
+        claimId: plan.activeClaim.claimId,
+        timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      });
+      const releaseLines = [
+        '',
+        `Forced-handoff plan for issue #${issueNumber}:`,
+        `  Context:   ${plan.contextScope}`,
+        `  Branch:    ${plan.branch}`,
+        `  Old claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+        '  Action:    release -- no successor',
+        '',
+        'Marker preview:',
+        releaseBody,
+        '',
+      ];
+      write(`${releaseLines.join('\n')}\n`);
+      const releaseConfirm = await ask('Confirm forced handoff? [y/N] ');
+      ask.close?.();
+      if (releaseConfirm.trim().toLowerCase() !== 'y') {
+        write('Aborted. No changes made.\n');
+        return { posted: false };
+      }
+      const releaseResult = postComment
+        ? await postComment(issueNumber, releaseBody)
+        : ghJson([
+            'api',
+            `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+            '--method',
+            'POST',
+            '-f',
+            `body=${releaseBody}`,
+          ]);
+      const releaseUrl = String(
+        releaseResult.html_url ?? releaseResult.url ?? '',
+      );
+      write(
+        [
+          '',
+          `Claim released: ${releaseUrl}`,
+          `  Released claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+          '',
+        ].join('\n'),
+      );
+      return {
+        posted: true,
+        commentUrl: releaseUrl,
+        contextScope: plan.contextScope,
+      };
+    }
+    if (enteredAgentId) {
+      planOptions = { ...planOptions, newAgentId: enteredAgentId };
+      plan = planHandoff(issueComments, linkedPrs, planOptions);
+    }
+    if (!plan.markerBody) {
       throw new Error(
-        `forced-by actor ${forcedBy} is not authorized to release this claim`,
+        'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
       );
     }
-    const releaseBody = renderUnclaimedByMarker({
-      agentId: plan.activeClaim.agentId,
-      claimId: plan.activeClaim.claimId,
-      timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-    });
-    const releaseLines = [
+    const { newAgentId, newClaimId } = plan.successorIds;
+    const successorUnchanged = newAgentId === plan.activeClaim.agentId;
+    const lines = [
       '',
       `Forced-handoff plan for issue #${issueNumber}:`,
       `  Context:   ${plan.contextScope}`,
       `  Branch:    ${plan.branch}`,
       `  Old claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
-      '  Action:    release -- no successor',
+      `  Successor: ${newAgentId} / ${newClaimId}`,
+      ...(resolvedPrNumber ? [`  PR:        #${resolvedPrNumber}`] : []),
       '',
       'Marker preview:',
-      releaseBody,
+      plan.markerBody,
       '',
+      ...(successorUnchanged ? [SAME_SUCCESSOR_WARNING, ''] : []),
     ];
-    write(`${releaseLines.join('\n')}\n`);
-    const releaseConfirm = await ask('Confirm forced handoff? [y/N] ');
+    write(`${lines.join('\n')}\n`);
+    const confirm = await ask('Confirm forced handoff? [y/N] ');
     ask.close?.();
-    if (releaseConfirm.trim().toLowerCase() !== 'y') {
+    if (confirm.trim().toLowerCase() !== 'y') {
       write('Aborted. No changes made.\n');
       return { posted: false };
     }
-    const releaseResult = postComment
-      ? await postComment(issueNumber, releaseBody)
+    const result = postComment
+      ? await postComment(issueNumber, plan.markerBody)
       : ghJson([
           'api',
           `repos/${owner}/${name}/issues/${issueNumber}/comments`,
           '--method',
           'POST',
           '-f',
-          `body=${releaseBody}`,
+          `body=${plan.markerBody}`,
         ]);
-    const releaseUrl = String(
-      releaseResult.html_url ?? releaseResult.url ?? '',
-    );
+    const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [
         '',
-        `Claim released: ${releaseUrl}`,
-        `  Released claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+        `Forced handoff posted: ${commentUrl}`,
+        `  Successor agent-id:  ${newAgentId}`,
+        `  Successor claim-id:  ${newClaimId}`,
         '',
       ].join('\n'),
     );
     return {
       posted: true,
-      commentUrl: releaseUrl,
+      commentUrl,
+      successorIds: { newAgentId, newClaimId },
       contextScope: plan.contextScope,
     };
   }
-  if (enteredAgentId) {
-    planOptions = { ...planOptions, newAgentId: enteredAgentId };
-    plan = planHandoff(issueComments, linkedPrs, planOptions);
-  }
-  if (!plan.markerBody) {
-    throw new Error(
-      'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
-    );
-  }
-  const { newAgentId, newClaimId } = plan.successorIds;
-  const successorUnchanged = newAgentId === plan.activeClaim.agentId;
-  const lines = [
-    '',
-    `Forced-handoff plan for issue #${issueNumber}:`,
-    `  Context:   ${plan.contextScope}`,
-    `  Branch:    ${plan.branch}`,
-    `  Old claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
-    `  Successor: ${newAgentId} / ${newClaimId}`,
-    ...(resolvedPrNumber ? [`  PR:        #${resolvedPrNumber}`] : []),
-    '',
-    'Marker preview:',
-    plan.markerBody,
-    '',
-    ...(successorUnchanged ? [SAME_SUCCESSOR_WARNING, ''] : []),
-  ];
-  write(`${lines.join('\n')}\n`);
-  const confirm = await ask('Confirm forced handoff? [y/N] ');
-  ask.close?.();
-  if (confirm.trim().toLowerCase() !== 'y') {
-    write('Aborted. No changes made.\n');
-    return { posted: false };
-  }
-  const result = postComment
-    ? await postComment(issueNumber, plan.markerBody)
-    : ghJson([
-        'api',
-        `repos/${owner}/${name}/issues/${issueNumber}/comments`,
-        '--method',
-        'POST',
-        '-f',
-        `body=${plan.markerBody}`,
-      ]);
-  const commentUrl = String(result.html_url ?? result.url ?? '');
-  write(
-    [
-      '',
-      `Forced handoff posted: ${commentUrl}`,
-      `  Successor agent-id:  ${newAgentId}`,
-      `  Successor claim-id:  ${newClaimId}`,
-      '',
-    ].join('\n'),
-  );
-  return {
-    posted: true,
-    commentUrl,
-    successorIds: { newAgentId, newClaimId },
-    contextScope: plan.contextScope,
-  };
 }
-export function main() {
-  runHandoff().catch((err) => {
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `help:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --help spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// #3346: this tool previously read no CLI flags at all -- any argv (known
+// or not) was silently ignored and the interactive TTY flow ran regardless.
+// Adding a minimal --help-only parse here is a genuine (narrow) behavior
+// addition, not a pure plumbing change: it lets an unrecognized flag report
+// a proper "unknown argument" usage error instead of being swallowed, and
+// gives `idd-force-handoff --help` a non-interactive exit instead of
+// launching the wizard. Zero-argument invocation -- the only documented
+// usage -- stays byte-identical.
+const FORCE_HANDOFF_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h' },
+};
+function printUsage() {
+  process.stdout.write(`Usage: node scripts/force-handoff.mjs
+
+Interactive, TTY-only operator facade for a forced handoff: prompts for
+issue/PR context, successor agent-id/claim-id, and confirmation, then posts
+the same marker forced-handoff-marker.mjs would render non-interactively.
+Takes no flags of its own besides --help/-h; run it with no arguments in
+an interactive terminal.
+
+Options:
+  --help, -h   show this message
+`);
+}
+export async function main() {
+  const { help } = parseCliArgs(process.argv.slice(2), FORCE_HANDOFF_FLAG_SPEC);
+  if (help) {
+    printUsage();
+    return 0;
+  }
+  try {
+    await runHandoff();
+    return 0;
+  } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
-    process.exit(1);
-  });
+    const classified = classifyHelperError(err);
+    return { exitCode: 1, ...classified };
+  }
 }
 function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${raw}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${raw}`));
   }
   return Number(raw);
 }
@@ -370,5 +440,11 @@ function splitCsv(value) {
     .filter(Boolean);
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('force-handoff', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }
