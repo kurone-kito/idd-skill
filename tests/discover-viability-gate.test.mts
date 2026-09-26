@@ -758,6 +758,34 @@ test('keeps internal credential dependencies descriptive (#3528)', () => {
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('keeps internal only-after sequencing descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 89,
+    title: 'document credential terminology',
+    body:
+      'This issue documents credential storage that initializes only after ' +
+      'platform encryption loads. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a soft-wrapped only-after prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 90,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation may begin\n' +
+      'only after the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('keeps provided contextual credential text descriptive (#3528)', () => {
   const result = evaluateA4Viability({
     number: 79,
