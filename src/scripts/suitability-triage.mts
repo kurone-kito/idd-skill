@@ -345,6 +345,11 @@ const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
 const EXTERNAL_SYSTEM_ACCESS_PATTERN =
   /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
+// #3522: an external-access phrase can be a deliberately negative
+// regression fixture rather than the issue's own prerequisite. Keep the
+// exception explicit and local; generic negation remains fail-closed.
+const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
+  /\b(?:negative|regression)\s+fixture\b|\bexpected\s+(?:rejection|failure)\b|\b(?:should|must)\s+be\s+(?:rejected|failed?)\b|\bshould\s+fail\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -2147,6 +2152,13 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
   }
 
   const body = issue.body;
+  const normalizedBody = body.replace(/\r\n/g, '\n');
+  const codeRanges = findMarkdownCodeRanges(normalizedBody);
+  const maskedBody = maskMarkdownCodeRegionsPreservingPositions(
+    normalizedBody,
+    [...codeRanges, ...findHtmlCommentRanges(normalizedBody, codeRanges)],
+  );
+  const paragraphSpans = getParagraphSpans(normalizedBody);
   const crossRepoLinks: string[] = [];
   const regex =
     /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
@@ -2165,12 +2177,57 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,
     };
   }
-  for (const match of body.matchAll(
-    new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
-  )) {
+  const externalAccessMatches = [
+    ...maskedBody.matchAll(
+      new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
+    ),
+  ];
+  const contextSpanFor = (matchIndex: number) => {
+    const paragraphSpan = paragraphSpans.find(
+      (span) => matchIndex >= span.start && matchIndex < span.end,
+    ) ?? { start: 0, end: normalizedBody.length };
+    const listItemPattern = /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
+    listItemPattern.lastIndex = paragraphSpan.start;
+    let currentItemStart: number | null = null;
+    let nextItemStart: number | null = null;
+    let listItemMatch: RegExpExecArray | null =
+      listItemPattern.exec(maskedBody);
+    while (listItemMatch) {
+      const itemStart = listItemMatch.index;
+      if (itemStart >= paragraphSpan.end) {
+        break;
+      }
+      if (itemStart <= matchIndex) {
+        currentItemStart = itemStart;
+      } else {
+        nextItemStart = itemStart;
+        break;
+      }
+      listItemMatch = listItemPattern.exec(maskedBody);
+    }
+    return currentItemStart === null
+      ? paragraphSpan
+      : {
+          start: currentItemStart,
+          end: nextItemStart ?? paragraphSpan.end,
+        };
+  };
+  const sameContext = (
+    left: { start: number; end: number },
+    right: { start: number; end: number },
+  ) => left.start === right.start && left.end === right.end;
+  const contextSpans = externalAccessMatches.map((match) => ({
+    match,
+    span: contextSpanFor(match.index ?? 0),
+  }));
+  for (const { match, span } of contextSpans) {
     const matchIndex = match.index ?? 0;
     const matchText = match[0] ?? '';
-    const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
+    const matchEnd = matchIndex + matchText.length;
+    const contextBefore = maskedBody.slice(
+      Math.max(0, matchIndex - 60),
+      matchIndex,
+    );
     // Skip a negated non-requirement; only an un-negated external-access
     // requirement blocks Repository Fit. The negation may sit *before* the
     // match ("does **not** require production credentials") or *after* the
@@ -2181,6 +2238,18 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     if (
       NEGATION_PATTERN.test(contextBefore) ||
       negatedRequirement.test(matchText)
+    ) {
+      continue;
+    }
+    const contextMatchCount = contextSpans.filter((candidate) =>
+      sameContext(candidate.span, span),
+    ).length;
+    if (
+      matchEnd <= span.end &&
+      contextMatchCount === 1 &&
+      REPOSITORY_FIT_FIXTURE_CUE_PATTERN.test(
+        maskedBody.slice(span.start, span.end),
+      )
     ) {
       continue;
     }

@@ -5944,6 +5944,74 @@ test('repository fit fails when external system appears before access terms', ()
   assert.equal(result.pass, false);
 });
 
+test('repository fit accepts an explicitly framed #3522 negative fixture', () => {
+  const body = `${BASE_ISSUE.body}
+
+- Negative fixture: a task that explicitly requires a maintainer to supply the material or external access before implementation continues to fail autonomous_completion.`;
+  const check = checkRepositoryFit({
+    issue: { ...BASE_ISSUE, body },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(check.pass, true);
+
+  const result = evaluateSuitability(
+    { ...BASE_ISSUE, body },
+    {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [],
+    },
+  );
+  assert.equal(result.passed, true);
+  assert.equal(result.outcome, 'ready');
+  assert.equal(result.failedCheck, null);
+});
+
+test('repository fit remains fail-closed when the fixture cue is in another paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: this paragraph documents an expected rejection.
+
+This task requires production dashboard credentials to verify the result.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a mixed fixture and live prerequisite', () => {
+  const body = `${BASE_ISSUE.body}
+
+- Negative fixture: a task that explicitly requires a maintainer to supply the material or external access before implementation continues to fail autonomous_completion.
+
+This task requires production dashboard credentials to verify the result.`;
+  const result = evaluateSuitability(
+    { ...BASE_ISSUE, body },
+    {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [],
+    },
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.outcome, 'out-of-scope');
+  assert.equal(result.failedCheck, 'repository_fit');
+});
+
+test('repository fit does not use a fixture cue or access phrase from Markdown code', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+\`negative fixture: a task requires production dashboard credentials\``,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('check helpers expose deterministic evidence', () => {
   assert.equal(
     checkRepositoryFit({
