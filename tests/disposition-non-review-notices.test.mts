@@ -1091,6 +1091,29 @@ test('gate preserves a Codex no-find disposition for an earlier HEAD', () => {
   assert.equal(summary.missingRegularCommentCount, 0);
 });
 
+test('regular-comment gate ignores a prior-HEAD Codex no-find acceptance', () => {
+  const source = {
+    id: 334,
+    author: { login: CODEX },
+    body: CODEX_NO_FIND_RESULT,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const disposition = {
+    id: 335,
+    author: { login: 'kurone-kito' },
+    body: buildCodexNoFindDispositionBody(CODEX, 'abc1234', 334),
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const summary = summarizeRegularCommentsForGate([source, disposition], {
+    advisoryBotLogins: [CODEX],
+    trustedMarkerLogins: ['kurone-kito'],
+    prHeadSha: 'def5678',
+  });
+  assert.equal(summary.count, 0);
+});
+
 test('regular-comment gate clears a current Codex no-find disposition from an IDD agent', () => {
   const source = {
     id: 326,

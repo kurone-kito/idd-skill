@@ -5925,6 +5925,38 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     body: comment.body,
     createdAt: comment.createdAt,
   }));
+  // A source-bound Codex no-find acceptance remains an operational comment
+  // after the PR advances to a later HEAD. Keep the historical acceptance out
+  // of the unreplied-comment pool when its source id, recorded HEAD, and
+  // post-source activity still match; the disposition-evidence matcher applies
+  // the same binding to the source comment itself.
+  const historicalCodexNoFindDispositionIndexes = new Set();
+  for (const disposition of normalized) {
+    if (
+      !trustedMarkerLogins.has(disposition.authorLogin) ||
+      !isCodexNoFindResultDisposition(disposition.body)
+    ) {
+      continue;
+    }
+    const parsed = parseCodexNoFindDisposition(disposition.body);
+    if (!parsed) {
+      continue;
+    }
+    const source = normalized.find(
+      (comment) =>
+        comment.id === parsed.sourceCommentId &&
+        advisoryBotIdentityToken(comment.authorLogin) ===
+          'chatgpt-codex-connector' &&
+        isCodexNoFindResultForHeadSha(comment.body, parsed.headSha),
+    );
+    if (
+      source &&
+      compareIsoTimestamps(disposition.activityAt, source.activityAt) > 0 &&
+      dispositionNamesAdvisoryBot(disposition.body, source.authorLogin)
+    ) {
+      historicalCodexNoFindDispositionIndexes.add(disposition.sortedIndex);
+    }
+  }
   // #1182 A trusted-marker actor's machine-generated advisory disposition — and
   // the advisory-bot sticky it names, matched by bot + type + consumed 1:1 via
   // `matchTrustedAdvisoryStickyDispositions` — is not an unreplied comment.
@@ -5933,14 +5965,15 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   // watermark (which would clear unrelated earlier feedback). Keyed on the two
   // machine forms only, so a trusted human's ordinary `**Accepted**` /
   // `**Rejected**` review disposition stays a genuine comment.
-  const isTrustedMachineDisposition = (authorLogin, body) =>
-    trustedMarkerLogins.has(authorLogin) &&
-    (isNonReviewNoticeDisposition({ body }) ||
-      isReviewSummaryDisposition({ body }) ||
-      (isCodexNoFindResultDisposition(body) &&
-        normalizedCurrentHead.startsWith(
-          parseCodexNoFindDisposition(body)?.headSha ?? '',
-        )));
+  const isTrustedMachineDisposition = (comment) =>
+    trustedMarkerLogins.has(comment.authorLogin) &&
+    (isNonReviewNoticeDisposition({ body: comment.body }) ||
+      isReviewSummaryDisposition({ body: comment.body }) ||
+      (isCodexNoFindResultDisposition(comment.body) &&
+        (normalizedCurrentHead.startsWith(
+          parseCodexNoFindDisposition(comment.body)?.headSha ?? '',
+        ) ||
+          historicalCodexNoFindDispositionIndexes.has(comment.sortedIndex))));
   const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
     normalized,
     advisoryBotLogins,
@@ -5953,7 +5986,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter(
       (comment) =>
-        !isTrustedMachineDisposition(comment.authorLogin, comment.body) &&
+        !isTrustedMachineDisposition(comment) &&
         !dispositionedStickyIndexes.has(comment.sortedIndex),
     )
     .filter(
