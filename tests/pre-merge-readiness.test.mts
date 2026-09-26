@@ -3538,6 +3538,7 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -3591,6 +3592,7 @@ test('disposition evidence recognizes a post-disposition ack across the advisory
                   author: { login: 'idd-bot' },
                   createdAt: '2026-05-12T00:30:00Z',
                   body: '**Rejected** — verified: not applicable here',
+                  lastEditedAt: null,
                 },
                 {
                   author: { login: ackAuthorLogin },
@@ -3643,6 +3645,7 @@ test('disposition evidence does not flag a resolved thread with substantive post
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'reviewer-a' },
@@ -3745,6 +3748,7 @@ test('disposition evidence still blocks but flags in-place-edit-only when a bot 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
             ],
           },
@@ -3790,6 +3794,7 @@ test('disposition evidence does not flag in-place-edit-only for a genuinely new 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 // A genuinely new reply (its own fresh createdAt, not an
@@ -3844,6 +3849,7 @@ test('disposition evidence does not flag ack-only or in-place-edit-only for a no
               {
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
+                lastEditedAt: null,
                 body: '**Rejected** — verified: not applicable here',
               },
             ],
@@ -4857,6 +4863,7 @@ test('disposition evidence reports sole-cause false when a regular comment also 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4911,6 +4918,7 @@ test('disposition evidence flags an ack-only thread dispositioned via a rejectio
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejection confirmed by maintainer** — agreed, no change needed',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -4958,6 +4966,7 @@ test('disposition evidence flags ack-only when the disposition lands after the s
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T02:00:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
@@ -5004,6 +5013,7 @@ test('disposition evidence does not flag a thread with a post-disposition human 
                 author: { login: 'idd-bot' },
                 createdAt: '2026-05-12T00:30:00Z',
                 body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
               },
               {
                 author: { login: 'coderabbitai[bot]' },
