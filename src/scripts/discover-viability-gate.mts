@@ -877,7 +877,7 @@ function isFollowedByCredentialRequirement(
   const sameSentence = sameParagraph.split(/[.]/, 1)[0] ?? sameParagraph;
   return (
     CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN.test(sameSentence) ||
-    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(tail)
+    CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN.test(sameParagraph)
   );
 }
 
