@@ -262,6 +262,9 @@ function printHelp() {
  * a null review id cannot match every thread that also has none. */
 export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
   return reviews.flatMap((review) => {
+    if (review.state !== 'COMMENTED') {
+      return [];
+    }
     const login = String(review.user?.login ?? '')
       .trim()
       .toLowerCase();

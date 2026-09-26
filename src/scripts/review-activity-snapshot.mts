@@ -328,6 +328,9 @@ export function buildCodeRabbitEmbeddedFindings(
   }[],
 ): CodeRabbitEmbeddedFindingReport[] {
   return reviews.flatMap((review) => {
+    if (review.state !== 'COMMENTED') {
+      return [];
+    }
     const login = String(review.user?.login ?? '')
       .trim()
       .toLowerCase();

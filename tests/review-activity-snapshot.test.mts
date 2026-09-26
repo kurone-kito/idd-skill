@@ -368,6 +368,21 @@ test('embeddedFindings reports uncoveredCount 0 when one thread belongs to PR #1
   assert.equal(findings[0]?.embeddedFindingCount, 1);
 });
 
+test('embeddedFindings excludes CodeRabbit reviews that are not COMMENTED', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: PR_1897_REVIEW_ID,
+        user: { login: 'coderabbitai[bot]' },
+        body: PR_1897_REVIEW_4863787336,
+        state: 'CHANGES_REQUESTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, []);
+});
+
 test('embeddedFindings does not treat a missing node_id as covering threads with no review id', () => {
   const findings = buildCodeRabbitEmbeddedFindings(
     [
