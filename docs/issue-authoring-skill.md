@@ -1420,7 +1420,8 @@ enumeration does not finish, including a search response with
 The candidate search is the owner-marker token, so an edited marker
 that dropped the set is still fetched and fails closed. An
 unparseable trusted comment that still carries the token fails
-closed too.
+closed too. A trusted marker whose target names a different
+issue than the comment's host fails closed as well.
 Any other result is inconclusive and blocks this
 exception the same way. A sibling's marker lives on the sibling's own
 issue and never appears in the marked target's own comment log. If either

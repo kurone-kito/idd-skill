@@ -397,7 +397,9 @@ approval boundary that hands off to IDD execution.
   that does not finish. The candidate search is the owner-marker
   token, so an edited marker that dropped the set is still fetched
   and fails closed. An unparseable trusted comment that still
-  carries the token fails closed too; any other result is
+  carries the token fails closed too. A trusted marker whose
+  target names a different issue than the comment's host fails
+  closed as well; any other result is
   inconclusive and blocks
   this exception the same way. A sibling's
   marker lives on the sibling's own issue and never appears in the

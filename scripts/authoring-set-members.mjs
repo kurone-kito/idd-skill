@@ -168,8 +168,10 @@ function looksLikeOwnerMarker(body, markerPrefix) {
  * whose edit removed the set or broke the marker shape. Ignoring that
  * comment could report a sole member while a sibling marker was
  * rewritten. Untrusted comments and unedited markers for a different
- * set do not count. One issue with several markers for the set is
- * still one member.
+ * set do not count. A parsed marker whose target is not the issue
+ * the comment was fetched from fails closed: counting the host
+ * issue instead could collapse two targets into one member. One
+ * issue with several markers for the set is still one member.
  */
 export function evaluateAuthoringSetMembers(input) {
   if (!input.enumerationComplete) {
@@ -207,6 +209,15 @@ export function evaluateAuthoringSetMembers(input) {
         soleMember: false,
         issues: [],
         reason: 'unparseable trusted authoring-owner marker',
+      };
+    }
+    const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
+    if (parsed.target.toLowerCase() !== hostRef.toLowerCase()) {
+      return {
+        complete: false,
+        soleMember: false,
+        issues: [],
+        reason: 'authoring-owner marker target does not match its host issue',
       };
     }
     if (parsed.set !== input.set) {
@@ -404,6 +415,7 @@ function runCli() {
   const evaluation = evaluateAuthoringSetMembers({
     set: args.set,
     markerPrefix,
+    repository: { owner, repo },
     trustedMarkerLogins,
     comments,
     enumerationComplete,

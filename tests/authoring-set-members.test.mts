@@ -56,6 +56,7 @@ test('two trusted markers for the same set on two issues are not a sole member',
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [comment(3468, marker(3468)), comment(3469, marker(3469))],
@@ -69,6 +70,7 @@ test('one trusted marker for the set is a sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [comment(3468, marker(3468))],
@@ -83,6 +85,7 @@ test('several markers on one issue stay a single sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [comment(3468, marker(3468)), comment(3468, heartbeat)],
@@ -95,6 +98,7 @@ test('an untrusted marker and a different set do not count', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [
@@ -111,6 +115,7 @@ test('an edited trusted marker for the set fails closed', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [
@@ -128,6 +133,7 @@ test('an edited trusted marker that no longer parses fails closed', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [
@@ -145,6 +151,7 @@ test('an edited trusted marker for a different set fails closed', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [
@@ -167,6 +174,7 @@ test('an unedited unparseable trusted marker fails closed', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
     comments: [comment(3468, marker(3468)), comment(3469, rewritten)],
@@ -177,10 +185,48 @@ test('an unedited unparseable trusted marker fails closed', () => {
   assert.equal(result.reason, 'unparseable trusted authoring-owner marker');
 });
 
+test('a trusted marker whose target is a different issue fails closed', () => {
+  const misplaced = marker(3469);
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [comment(3468, marker(3468)), comment(3468, misplaced)],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+  assert.equal(
+    result.reason,
+    'authoring-owner marker target does not match its host issue',
+  );
+});
+
+test('a target match is case-insensitive on owner and repo', () => {
+  const folded = marker(3468).replaceAll(
+    'kurone-kito/idd-skill#3468',
+    'Kurone-Kito/IDD-Skill#3468',
+  );
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [comment(3468, folded)],
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, true);
+  assert.deepEqual(result.issues, [3468]);
+});
+
 test('an unfinished enumeration is not a sole member', () => {
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: false,
     comments: [comment(3468, marker(3468))],
