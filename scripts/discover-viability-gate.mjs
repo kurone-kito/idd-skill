@@ -245,9 +245,9 @@ const DESCRIPTIVE_SECURITY_LOOKAHEAD_CHARS = 60;
 const DESCRIPTIVE_SECURITY_LOOKAHEAD_TOKENS = 1;
 const DESCRIPTIVE_SECURITY_BACKWARD_WINDOW = 80;
 const CREDENTIAL_SAME_SENTENCE_FOLLOW_ON_PATTERN =
-  /\b(?:cannot|can't)\b[^.\n]{0,80}\buntil\b|\bonly\s+after\b|\b(?:depends?|relies?)\s+(?:on|upon)\b/i;
+  /\b(?:cannot|can't)\b[^.\n]{0,80}\buntil\b|\bonly\s+after\b|\b(?:depends?|relies?)\s+(?:on|upon)\s+(?:the\s+)?(?:maintainer|operator|owner|team|external|third-?party|human)\b/i;
 const CREDENTIAL_SENTENCE_FOLLOW_ON_PATTERN =
-  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b/i;
+  /[.;:\n]\s*(?:it|the credential|a credential)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:supplied|provided|performed)\b(?:\s+by\s+(?:the\s+)?(?:maintainer|operator|owner|team))?\s+(?:before|until)\b|[.;:\n]\s*(?:the\s+)?(?:maintainer|operator|owner|team)\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall)\b[^.;:\n]{0,80}\b(?:before|until)\b/i;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
