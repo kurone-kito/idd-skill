@@ -2032,6 +2032,88 @@ test('detects follow-on cannot-without credential prerequisites (#3522)', () => 
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let a local operation hide an external credential prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 179,
+    title: 'document credential storage',
+    body:
+      'The credential must be stored by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects stakeholder approval as an external prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 180,
+    title: 'document credential storage',
+    body:
+      'Implementation requires stakeholder approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local token feature work autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 181,
+    title: 'add refresh token support',
+    body: 'Targeted change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps approval requirements in test scenarios autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 182,
+    title: 'add approval-flow coverage',
+    body:
+      'Add a unit test for a workflow that requires maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps quoted UI requirement text autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 183,
+    title: 'document ui output',
+    body:
+      'Assert that the UI renders "requires maintainer approval" for the ' +
+      'fixture. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('detects waiting-on approval blockers independently (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 184,
+    title: 'document credential storage',
+    body:
+      'Implementation is waiting on maintainer approval. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,

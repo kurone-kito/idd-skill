@@ -191,7 +191,7 @@ const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
 // external handoff, while the broader actor vocabulary above still detects
 // explicit credential-supply requirements.
 const CREDENTIAL_COORDINATION_ACTOR_PATTERN =
-  '(?:maintainers?|operators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
+  '(?:maintainers?|operators?|stakeholders?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
 const CREDENTIAL_NEGATED_REQUIREMENT_PATTERN =
   /\b(?:must|shall|does|do|did|will)\s+not\s+(?:require|need|necessitate)\b/i;
 const CREDENTIAL_NEGATED_REQUIREMENT_CLAUSE_PATTERN =
@@ -202,7 +202,7 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
 );
 const CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN = String.raw`(?:(?:the|a|an)\s+)?${CREDENTIAL_COORDINATION_ACTOR_PATTERN}`;
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|wait(?:s|ing)?\s+on|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
   'gi',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
@@ -385,6 +385,12 @@ const CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN = new RegExp(
 );
 const CREDENTIAL_LOCAL_OPERATION_PATTERN =
   /^\s+(?:must|require[sd]?|needs?|shall|should|has\s+to|have\s+to)\s+(?:(?:be)\s+)?(?:redacted|masked|hashed|stored|rotated|validated|logged|encoded|decoded|parsed|sanitized|normalized|serialized|deserialized)\b/i;
+const CREDENTIAL_LOCAL_OPERATION_EXTERNAL_ACTOR_PATTERN = new RegExp(
+  String.raw`^\s+(?:must|require[sd]?|needs?|shall|should|has\s+to|have\s+to)\s+(?:(?:be)\s+)?(?:redacted|masked|hashed|stored|rotated|validated|logged|encoded|decoded|parsed|sanitized|normalized|serialized|deserialized)\s+(?:by|from)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?]{0,80}\b(?:before|until)\b`,
+  'i',
+);
+const CREDENTIAL_LOCAL_FEATURE_PATTERN =
+  /\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:keys?|tokens?)\b|\b(?:keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:support|handling|management|rotation|redaction|validation|parsing)\b/i;
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
   /\bcredential[- ]prompt(?:ing)?\b/i;
 const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
@@ -826,8 +832,23 @@ function isLikelyQuoteCloser(charAfter: string): boolean {
 }
 
 function isExplicitQuotedExampleFraming(textBeforeQuote: string): boolean {
-  return /\b(?:for\s+example|e\.g\.|example|reference|quoted|cited)\s*,?\s*[:：]?\s*$/i.test(
-    textBeforeQuote,
+  return (
+    /\b(?:for\s+example|e\.g\.|example|reference|quoted|cited)\s*,?\s*[:：]?\s*$/i.test(
+      textBeforeQuote,
+    ) ||
+    /\b(?:assert(?:s|ed|ion)?|render(?:s|ed|ing)?|display(?:s|ed|ing)?|show(?:s|ed|ing)?)\s*$/i.test(
+      textBeforeQuote,
+    )
+  );
+}
+
+function isDescribedExternalCoordinationExample(
+  corpus: string,
+  matchIndex: number,
+): boolean {
+  const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
+  return /\b(?:unit\s+tests?|test(?:ing)?\s+coverage|fixture|assert(?:s|ed|ion)?|render(?:s|ed|ing)?)\b/i.test(
+    before,
   );
 }
 
@@ -1176,7 +1197,21 @@ function isDescribedSecurityVocabulary(
     return false;
   }
 
+  if (
+    CREDENTIAL_LOCAL_OPERATION_EXTERNAL_ACTOR_PATTERN.test(
+      requirementContextAfter,
+    )
+  ) {
+    return false;
+  }
   if (CREDENTIAL_LOCAL_OPERATION_PATTERN.test(requirementContextAfter)) {
+    return true;
+  }
+  if (
+    CREDENTIAL_LOCAL_FEATURE_PATTERN.test(
+      `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
+    )
+  ) {
     return true;
   }
 
@@ -1320,6 +1355,7 @@ function findUnexcludedExternalCoordinationMatch(
     if (
       isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
+      isDescribedExternalCoordinationExample(corpus, index) ||
       isGovernedByNegation(corpus, index) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
@@ -1335,6 +1371,7 @@ function findUnexcludedExternalCoordinationMatch(
     if (
       isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
+      isDescribedExternalCoordinationExample(corpus, index) ||
       isGovernedByNegation(corpus, index) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
