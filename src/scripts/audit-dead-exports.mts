@@ -699,6 +699,18 @@ function parseFile(absPath: string, originalText: string): ParsedFile {
           if (!declarationLineByLocalName.has(localAlias)) {
             declarationLineByLocalName.set(localAlias, item.line);
           }
+          // #3498 (Codex C1 finding, round 3): `parseBracedItems` already
+          // recognizes a suppression comment on this import item's own
+          // line (the same generic braced-list parsing a no-`from`
+          // export-list item uses) -- record it here too, so a no-`from`
+          // item resolving to this import line can also be suppressed
+          // there, mirroring the declaration case above.
+          if (!declarationSuppressionByLocalName.has(localAlias)) {
+            declarationSuppressionByLocalName.set(localAlias, {
+              suppressed: item.suppressed,
+              reason: item.reason,
+            });
+          }
         }
       }
       lineIndex = lineNumberAt(strippedText, closeIndex) - 1;

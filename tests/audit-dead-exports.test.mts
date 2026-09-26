@@ -785,6 +785,36 @@ test("a suppression comment on the export-list item's own line still suppresses 
   }
 });
 
+test("a suppression comment on the import statement's own line suppresses a no-`from` list item that resolves to it (Codex C1 round-3 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/origin.mts',
+      'export function helper(): void {\n' + "  console.log('hi');\n" + '}\n',
+    );
+    write(
+      root,
+      'src/scripts/facade.mts',
+      "import { helper } from './origin.mts'; // audit:ignore-dead-export: kept for a planned public API\n" +
+        '\n' +
+        'export { helper as PublicHelper };\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.suppressed,
+      true,
+      'the reported line is the import line for this imported-binding ' +
+        'case -- a suppression comment placed there must take effect, ' +
+        'the same way it does for a bare/exported declaration line',
+    );
+    assert.equal(entry.suppressionReason, 'kept for a planned public API');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(
