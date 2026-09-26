@@ -59,10 +59,13 @@ import {
   isValidIsoTimestamp,
   operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
+  parseActivationNonceComment,
   parseAdvisoryWaitFamilyMarker,
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseLegacyClaimComment,
+  parseLegacyReleaseComment,
   parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -10117,14 +10120,15 @@ export function summarizeClaimValidation(
     // agent-id already match, since claim-id alone cannot distinguish a
     // second, independent activation of the same id. Computed lazily, here,
     // so every pre-#1528 caller that never passes expectedNonce (the
-    // default) pays no parsing/sorting cost for it. Trust-filter first
-    // (findActivationNonceWinner does no author checks of its own), matching
-    // how the resume-side caller pre-filters before calling the same shared
-    // primitive.
+    // default) pays no parsing/sorting cost for it. Trust+edit-state-filter
+    // first (findActivationNonceWinner does no author or edit-state checks
+    // of its own), matching how the resume-side caller pre-filters before
+    // calling the same shared primitive. kurone-kito/idd-skill#3248: an
+    // edited trusted `activation-nonce` marker is dropped here the same way
+    // an edited `claimed-by` is dropped from claim resolution, so it is
+    // never considered by the winner check below.
     const activationNonceWinner = findActivationNonceWinner(
-      claimEvents.filter((event) =>
-        trustedAuthorPredicate(event.author?.login ?? event.user?.login ?? ''),
-      ),
+      filterTrustedClaimFamilyEvents(claimEvents, trustedAuthorPredicate),
       activeClaim.claimId,
     );
     if (
@@ -12679,6 +12683,89 @@ export interface ActiveClaimResolution {
 }
 
 /**
+ * kurone-kito/idd-skill#3248: `true` when `event` may participate in claim
+ * resolution, `false` when it must be ignored -- exactly like an untrusted
+ * comment. Throws when a trusted-author claim-family marker's edit state
+ * cannot be resolved, so an incomplete fetch fails loudly instead of
+ * silently reading as "no active claim" (a `claimed-by` marker is not a
+ * waiver: misreading an edited one as absent can make a genuinely claimed
+ * issue look unclaimed to Discover).
+ *
+ * Untrusted author -> `false` (unchanged from before this issue). Trusted
+ * author whose body does not parse as any claim-family marker (`claimed-by`
+ * / `unclaimed-by` in either new or legacy form / `activation-nonce` /
+ * `forced-handoff`) -> `true`
+ * (plain comments are unaffected; edit state is never checked for them).
+ * Trusted author, marker-shaped -> `classifyCommentEditState(event)`:
+ * `'unedited'` -> `true`; `'edited'` -> `false` (dropped, same treatment as
+ * an untrusted comment, per the maintainer decision this issue implements);
+ * `'unknown'` -> throws.
+ *
+ * Marker-shape detection is parse-based (the same `parseClaimComment` /
+ * `parseReleaseComment` / `parseActivationNonceComment` /
+ * `parseForcedHandoffComment` functions `applyClaimEvent` and
+ * `orderClaimEvents` already call), not a label-prefix check -- a
+ * malformed/junk body from a trusted author already resolves to "ignored"
+ * via those parse functions returning `null`, so it never reaches the
+ * edit-state check and never throws.
+ */
+function isTrustedClaimFamilyEvent(
+  event: CommentLike,
+  isTrustedAuthor: (login: string) => boolean,
+): boolean {
+  const authorLogin = event.author?.login ?? event.user?.login ?? '';
+  if (!isTrustedAuthor(authorLogin ?? '')) {
+    return false;
+  }
+  const body = event.body ?? '';
+  const createdAt = event.createdAt ?? event.created_at ?? '';
+  const isClaimFamilyMarker =
+    parseClaimComment(body, createdAt) !== null ||
+    parseLegacyClaimComment(body, createdAt) !== null ||
+    parseReleaseComment(body) !== null ||
+    parseLegacyReleaseComment(body, createdAt) !== null ||
+    parseActivationNonceComment(body, createdAt) !== null ||
+    parseForcedHandoffComment(body, createdAt) !== null;
+  if (!isClaimFamilyMarker) {
+    return true;
+  }
+  const editState = classifyCommentEditState(event);
+  if (editState === 'edited') {
+    return false;
+  }
+  if (editState === 'unknown') {
+    const identifier =
+      event.html_url ??
+      event.url ??
+      (event.id != null ? String(event.id) : '(no id)');
+    throw new Error(
+      `claim-family marker edit state unresolved for comment ${identifier} -- ` +
+        'fetch it with includeEditState (or resolve lastEditedAt) before ' +
+        'resolving claim state',
+    );
+  }
+  return true;
+}
+
+/**
+ * kurone-kito/idd-skill#3248: `events.filter(...)` over
+ * {@link isTrustedClaimFamilyEvent} -- the shared trust+edit-state filter
+ * every claim-family-marker consumer (this file's own
+ * `resolveActiveClaimWithForcedHandoffTrace` pre-filter and
+ * `summarizeClaimValidation`'s activation-nonce-winner pre-filter, plus
+ * `resume-claim-routing.mts`'s top-of-function filter) applies before
+ * ordering or reducing over the event stream.
+ */
+export function filterTrustedClaimFamilyEvents<T extends CommentLike>(
+  events: T[],
+  isTrustedAuthor: (login: string) => boolean,
+): T[] {
+  return events.filter((event) =>
+    isTrustedClaimFamilyEvent(event, isTrustedAuthor),
+  );
+}
+
+/**
  * Same reduction as {@link resolveActiveClaim}, but also tracks which
  * specific forced-handoff marker (if any) produced the final active
  * claim's identity. `resolveActiveClaim`'s state machine has no memory of
@@ -12718,8 +12805,15 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   // identical trusted event set. `applyClaimEvent`'s own per-event
   // trust check below stays as defense in depth (always true in
   // practice now, since every event it sees already passed this filter).
-  const trustedEvents = events.filter((event) =>
-    options.isTrustedAuthor(event.author?.login ?? ''),
+  //
+  // kurone-kito/idd-skill#3248: this is also where an edited trusted
+  // claim-family marker is dropped -- before ordering, so its claim-id
+  // never enters the same-second tie-break either, exactly like an
+  // untrusted comment (see `isTrustedClaimFamilyEvent`'s doc comment for
+  // the drop-vs-throw rule).
+  const trustedEvents = filterTrustedClaimFamilyEvents(
+    events,
+    options.isTrustedAuthor,
   );
   const orderedEvents = orderClaimEvents(trustedEvents);
 
@@ -12786,7 +12880,14 @@ export function applyClaimEvent(
 ): ParsedClaimMarker | null {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
-  if (!normalizedOptions.isTrustedAuthor(authorLogin)) {
+  // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
+  // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
+  // every event reaching this point from that trace has already passed the
+  // identical check, so this is a no-op in that call path. Supersedes the
+  // plain `!normalizedOptions.isTrustedAuthor(authorLogin)` check this used
+  // to be: an untrusted author is still rejected (first branch inside the
+  // helper), now alongside the edited/unknown-edit-state rule.
+  if (!isTrustedClaimFamilyEvent(event, normalizedOptions.isTrustedAuthor)) {
     return activeClaim;
   }
 

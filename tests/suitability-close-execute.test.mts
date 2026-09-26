@@ -39,6 +39,7 @@ function claimComment(
     }),
     createdAt: '2026-06-26T00:00:00Z',
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   };
 }
 
@@ -206,6 +207,7 @@ function claimTakeoverComment() {
     }),
     createdAt: '2026-06-26T20:00:00Z',
     author: { login: 'kurone-kito' },
+    lastEditedAt: null,
   };
 }
 

@@ -16,7 +16,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { combineOwnerRepoFlags, ghText } from './gh-exec.mts';
+import {
+  combineOwnerRepoFlags,
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+} from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -39,16 +43,25 @@ import {
   isKnownReviewBot,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
   unsafeTextReason,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
 /** Author reference embedded in GraphQL payloads. */
 interface GqlAuthorPayload {
   login?: string | null;
+}
+
+interface IssueCommentRestPayload {
+  body?: string | null;
+  created_at?: string | null;
+  user?: GqlAuthorPayload | null;
+  node_id?: string | null;
 }
 
 /**
@@ -2073,31 +2086,40 @@ export function readActiveClaim(
     prFirstCommitAt?: string | null;
   } = {},
 ): ActiveClaim | null {
-  const result = JSON.parse(
-    ghText([
-      'issue',
-      'view',
-      String(issueNumber),
-      '--repo',
-      `${owner}/${repo}`,
-      '--json',
-      'comments',
-    ]),
-  ) as {
-    comments?:
-      | {
-          body?: string | null;
-          createdAt?: string | null;
-          author?: GqlAuthorPayload | null;
-        }[]
-      | null;
-  };
-
-  const comments = (result.comments ?? []).map((comment) => ({
-    body: comment.body ?? '',
-    createdAt: comment.createdAt ?? '',
-    author: { login: comment.author?.login ?? '' },
-  }));
+  const rows = parsePaginatedGhNdjson(
+    ghText(
+      [
+        'api',
+        '--paginate',
+        '--jq',
+        '.[]',
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+      ],
+      { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+    ),
+  ) as IssueCommentRestPayload[];
+  const nodeIds = rows.map((row) => String(row.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `audit-pr-cleanup: issue #${issueNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  const comments = rows.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    const lastEditedAt = lastEditedAtByNodeId.get(nodeId);
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `audit-pr-cleanup: missing edit-state resolution for issue #${issueNumber} comment ${nodeId}`,
+      );
+    }
+    return {
+      body: comment.body ?? '',
+      createdAt: comment.created_at ?? '',
+      author: { login: comment.user?.login ?? '' },
+      lastEditedAt,
+    };
+  });
 
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during

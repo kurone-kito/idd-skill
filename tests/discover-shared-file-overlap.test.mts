@@ -702,6 +702,7 @@ test('toClaimComment maps ProviderComment.authorLogin into the author field reso
     createdAt: '2026-06-25T00:00:00Z',
     updatedAt: '2026-06-25T00:00:00Z',
     authorLogin: 'kurone-kito',
+    lastEditedAt: null,
   };
   const mapped = toClaimComment(comment);
   assert.equal(mapped.author.login, 'kurone-kito');

@@ -23,6 +23,7 @@ const ISSUE_COMMENTS = [
     body: CLAIM_BODY,
     created_at: '2026-05-13T10:00:00Z',
     user: { login: 'kurone-kito' },
+    lastEditedAt: null,
   },
 ];
 

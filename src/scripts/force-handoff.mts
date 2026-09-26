@@ -34,6 +34,7 @@ import {
   parsePaginatedGhNdjson,
   readClaimStaleAgeMs,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 
@@ -48,6 +49,8 @@ interface IssueCommentPayload {
   created_at?: string | null;
   user?: GhAuthorPayload | null;
   author?: GhAuthorPayload | null;
+  node_id?: string | null;
+  lastEditedAt?: string | null;
 }
 
 /** Linked-PR row returned by `gh pr list --json number,headRefName`. */
@@ -187,17 +190,18 @@ export async function runHandoff(
         'could not determine current GitHub user; ensure gh is authenticated',
       );
     }
-
     const issueComments = fetchIssueComments
       ? await fetchIssueComments(issueNumber)
-      : (ghJson(
-          [
-            'api',
-            '--paginate',
-            `repos/${owner}/${name}/issues/${issueNumber}/comments`,
-          ],
-          true,
-        ) as IssueCommentPayload[]);
+      : resolveIssueCommentEditStates(
+          ghJson(
+            [
+              'api',
+              '--paginate',
+              `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+            ],
+            true,
+          ) as IssueCommentPayload[],
+        );
 
     const trustedMarkerLogins =
       givenTrustedLogins ??
@@ -470,6 +474,27 @@ function ghJson(args: string[], slurp = false): unknown {
     );
   }
   return JSON.parse(ghText(finalArgs));
+}
+
+function resolveIssueCommentEditStates(
+  comments: IssueCommentPayload[],
+): IssueCommentPayload[] {
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'force-handoff: issue comment is missing node_id, cannot resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `force-handoff: missing edit-state resolution for comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
 }
 
 export function buildTrustedMarkerLogins(

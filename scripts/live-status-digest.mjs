@@ -47,6 +47,7 @@ import {
   retireLiveStatusDigestBody,
   summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -1262,6 +1263,13 @@ function fetchIssueComments(owner, repo, number) {
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     ),
   );
+  const nodeIds = result.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `live-status-digest: issue #${number} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
   return result.map((comment) => ({
     id: comment.id,
     url: comment.url,
@@ -1270,6 +1278,15 @@ function fetchIssueComments(owner, repo, number) {
     created_at: comment.created_at ?? '',
     updated_at: comment.updated_at ?? comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
+    lastEditedAt: (() => {
+      const nodeId = String(comment.node_id ?? '');
+      if (!lastEditedAtByNodeId.has(nodeId)) {
+        throw new Error(
+          `live-status-digest: missing edit-state resolution for comment ${nodeId}`,
+        );
+      }
+      return lastEditedAtByNodeId.get(nodeId);
+    })(),
   }));
 }
 function createIssueComment(owner, repo, number, body) {
@@ -1319,6 +1336,7 @@ export function readActiveClaim(owner, repo, issueNumber, options = {}) {
         body: comment.body,
         createdAt: comment.created_at,
         author: { login: comment.author?.login ?? '' },
+        lastEditedAt: comment.lastEditedAt,
       };
     },
   );

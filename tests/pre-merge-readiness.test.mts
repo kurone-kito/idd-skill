@@ -34,7 +34,7 @@ import {
   attachReviewThreadCommentEditHistories,
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
-  buildPreMergeReadinessSummary,
+  buildPreMergeReadinessSummary as buildPreMergeReadinessSummaryImpl,
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
   CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
@@ -52,14 +52,14 @@ import {
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   readClaimStaleAgeMs,
-  resolveActiveClaimForWriteGate,
+  resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
   summarizeBranchCurrency,
-  summarizeClaimValidation,
+  summarizeClaimValidation as summarizeClaimValidationImpl,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
   summarizeRegularCommentsForGate,
@@ -83,6 +83,52 @@ import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { readJson } from './test-utils.mts';
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
+
+function withClaimEditState(events: unknown): unknown {
+  if (!Array.isArray(events)) return events;
+  return events.map((event) => {
+    if (event === null || typeof event !== 'object') return event;
+    const record = event as Record<string, unknown>;
+    return 'lastEditedAt' in record || 'last_edited_at' in record
+      ? event
+      : { ...record, lastEditedAt: null };
+  });
+}
+
+function buildPreMergeReadinessSummary(
+  input: Parameters<typeof buildPreMergeReadinessSummaryImpl>[0],
+  options: Parameters<typeof buildPreMergeReadinessSummaryImpl>[1],
+): ReturnType<typeof buildPreMergeReadinessSummaryImpl> {
+  return buildPreMergeReadinessSummaryImpl(
+    {
+      ...input,
+      claimEvents: withClaimEditState(
+        input.claimEvents,
+      ) as typeof input.claimEvents,
+    },
+    options,
+  );
+}
+
+function summarizeClaimValidation(
+  events: Parameters<typeof summarizeClaimValidationImpl>[0],
+  options: Parameters<typeof summarizeClaimValidationImpl>[1],
+): ReturnType<typeof summarizeClaimValidationImpl> {
+  return summarizeClaimValidationImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
+}
+
+function resolveActiveClaimForWriteGate(
+  events: Parameters<typeof resolveActiveClaimForWriteGateImpl>[0],
+  options: Parameters<typeof resolveActiveClaimForWriteGateImpl>[1],
+): ReturnType<typeof resolveActiveClaimForWriteGateImpl> {
+  return resolveActiveClaimForWriteGateImpl(
+    withClaimEditState(events) as typeof events,
+    options,
+  );
+}
 
 // kurone-kito/idd-skill#3265: a recognized, clean `ccr-overview-v2` body --
 // mirrors `tests/advisory-convergence.test.mts`'s own `MINIMAL_V2_REVIEW_BODY`
@@ -5730,6 +5776,31 @@ test('summarizeClaimValidation follows trusted forced-handoff transitions', () =
   assert.equal(summary.reason, 'match');
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T110000Z-337-new');
   assert.equal(summary.activeClaim.agentId, 'github-copilot-cli-new');
+});
+
+test('summarizeClaimValidation ignores an edited trusted release marker', () => {
+  const claimEvent = {
+    body: '<!-- claimed-by: agent-a claim-1 supersedes: none 2026-05-10T00:00:00Z branch: issue/1-task -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    author: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  };
+  const editedRelease = {
+    body: '<!-- unclaimed-by: agent-a claim-1 2026-05-10T00:01:00Z -->\n\n_agent-a: issue claim released - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:01:00Z',
+    author: { login: 'kurone-kito' },
+    lastEditedAt: '2026-05-10T00:05:00Z',
+  };
+
+  const summary = summarizeClaimValidation([claimEvent, editedRelease], {
+    trustedMarkerLogins: ['kurone-kito'],
+    expectedClaimId: 'claim-1',
+    expectedAgentId: 'agent-a',
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+  assert.equal(summary.activeClaim.claimId, 'claim-1');
 });
 
 test('summarizeClaimValidation rejects forced handoff from unauthorized approver', () => {
@@ -13363,6 +13434,7 @@ test('collectPreMergeReadiness: --claimless refuses a closing reference whose is
         createdAt: '2026-07-01T00:00:00Z',
         updatedAt: '2026-07-01T00:00:00Z',
         authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
       },
     ],
   });
@@ -13502,6 +13574,7 @@ test('collectPreMergeReadiness: --claimless still refuses when a collaborator-tr
           createdAt: '2026-07-01T00:00:00Z',
           updatedAt: '2026-07-01T00:00:00Z',
           authorLogin: 'collab-user',
+          lastEditedAt: null,
         },
       ],
     },

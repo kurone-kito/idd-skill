@@ -146,22 +146,27 @@ test('applies claim transitions across heartbeat, takeover, and release', () => 
   const heartbeat = applyClaimEvent(active, {
     body: fixtures.heartbeat,
     createdAt: '2026-05-09T11:00:00Z',
+    lastEditedAt: null,
   });
   const ignored = applyClaimEvent(heartbeat, {
     body: fixtures.superseded,
     createdAt: '2026-05-09T12:00:00Z',
+    lastEditedAt: null,
   });
   const stale = applyClaimEvent(ignored, {
     body: fixtures.stale,
     createdAt: '2026-05-10T11:00:00Z',
+    lastEditedAt: null,
   });
   const ignoredRelease = applyClaimEvent(stale, {
     body: fixtures.release,
     createdAt: '2026-05-10T12:00:00Z',
+    lastEditedAt: null,
   });
   const released = applyClaimEvent(stale, {
     body: fixtures.staleRelease,
     createdAt: '2026-05-10T12:30:00Z',
+    lastEditedAt: null,
   });
 
   assert.deepEqual(heartbeat, {
@@ -191,6 +196,7 @@ test("matching-branch heartbeat refreshes the active claim's createdAt", () => {
   const after = applyClaimEvent(active, {
     body: '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T13:00:00Z branch: issue/100-task -->',
     createdAt: '2026-05-23T13:00:00Z',
+    lastEditedAt: null,
   });
   assert.equal(after?.createdAt, '2026-05-23T13:00:00Z');
   assert.equal(after?.branch, 'issue/100-task');
@@ -210,6 +216,7 @@ test('branch-mismatched heartbeat is anomalous and does not refresh the stale cl
   const after = applyClaimEvent(active, {
     body: '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-24T11:00:00Z branch: issue/999-WRONG -->',
     createdAt: '2026-05-24T11:00:00Z',
+    lastEditedAt: null,
   });
   // createdAt unchanged: still 10:00, not 11:00 (which would be ~25 h
   // newer and would have masked staleness).
@@ -228,6 +235,7 @@ test('onAnomalousHeartbeat callback receives the anomalous heartbeat metadata', 
     {
       body: '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-24T11:00:00Z branch: issue/999-WRONG -->',
       createdAt: '2026-05-24T11:00:00Z',
+      lastEditedAt: null,
     },
     {
       onAnomalousHeartbeat: (info) => seen.push(info),
@@ -254,6 +262,7 @@ test('matching heartbeat does not invoke the onAnomalousHeartbeat callback', () 
     {
       body: '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T13:00:00Z branch: issue/100-task -->',
       createdAt: '2026-05-23T13:00:00Z',
+      lastEditedAt: null,
     },
     {
       onAnomalousHeartbeat: (info) => seen.push(info),

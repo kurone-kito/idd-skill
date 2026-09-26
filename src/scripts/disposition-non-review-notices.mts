@@ -72,6 +72,7 @@ import {
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
 export interface NoticeComment {
   id: number;
@@ -672,14 +673,36 @@ function claimStillActive(
   forcedHandoffOptions: ForcedHandoffGateOptions,
   staleAgeMs: number,
 ): boolean {
-  const comments = ghJsonPaginated([
+  const rows = ghJsonPaginated([
     'api',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
-  ]) as { body?: string; created_at?: string; user?: { login?: string } }[];
+  ]) as {
+    body?: string;
+    created_at?: string;
+    user?: { login?: string };
+    node_id?: string;
+  }[];
+  const nodeIds = rows.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `disposition-non-review-notices: issue #${issue} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  const comments = rows.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `disposition-non-review-notices: missing edit-state resolution for issue #${issue} comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
   const events = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
+    lastEditedAt: comment.lastEditedAt,
   }));
   return resolveClaimStillActive(
     events,

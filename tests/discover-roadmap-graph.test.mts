@@ -2915,6 +2915,7 @@ function claimComment(
     body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
     createdAt,
     author: { login: author },
+    lastEditedAt: null,
   };
 }
 
@@ -2949,7 +2950,13 @@ function buildClaimState(
     resolution: {
       loadComments: (issueNumber: number) => {
         seen.push(issueNumber);
-        return commentsByIssue.get(issueNumber) ?? [];
+        return (commentsByIssue.get(issueNumber) ?? []).map((comment) => {
+          if (comment === null || typeof comment !== 'object') return comment;
+          const record = comment as Record<string, unknown>;
+          return 'lastEditedAt' in record || 'last_edited_at' in record
+            ? comment
+            : { ...record, lastEditedAt: null };
+        });
       },
       isTrustedAuthor: (login: string) =>
         trusted.has(String(login ?? '').toLowerCase()),
@@ -3320,6 +3327,70 @@ test('a released legacy claim with a live local worktree is not eligible', async
   );
   assert.equal(leaf701?.activeClaim?.present, false);
   assert.equal(leaf701?.activeClaim?.localWorktree?.status, 'occupied');
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('an edited legacy release does not clear a live claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          body: '<!-- claimed-by: legacy-agent 2026-06-25T06:00:00Z branch: issue/700-task -->',
+          createdAt: '2026-06-25T06:00:00Z',
+          author: { login: 'kurone-kito' },
+          lastEditedAt: null,
+        },
+        {
+          body: '<!-- unclaimed-by: legacy-agent 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+          lastEditedAt: '2026-06-25T08:00:00Z',
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.present, true);
+  assert.equal(leaf701?.activeClaim?.claimId, null);
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('snake_case edit state is accepted for a trusted claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          ...claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT),
+          lastEditedAt: undefined,
+          last_edited_at: null,
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.claimId, 'claim-701');
   assert.equal(leaf701?.claimEligible, false);
 });
 

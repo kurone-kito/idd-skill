@@ -37,6 +37,7 @@ import {
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -48,6 +49,8 @@ interface IssueCommentPayload {
   body?: string | null;
   created_at?: string | null;
   user?: GhAuthorPayload | null;
+  node_id?: string | null;
+  lastEditedAt?: string | null;
 }
 
 /** Linked-PR row returned by `gh pr list --json number,headRefName`. */
@@ -282,14 +285,16 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
         '.nameWithOwner',
       ]);
     const { owner, name } = parseOwnerRepo(repoRef);
-    const issueComments = ghJson(
-      [
-        'api',
-        '--paginate',
-        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-      ],
-      true,
-    ) as IssueCommentPayload[];
+    const issueComments = resolveIssueCommentEditStates(
+      ghJson(
+        [
+          'api',
+          '--paginate',
+          `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+        ],
+        true,
+      ) as IssueCommentPayload[],
+    );
     const viewerLogin = safeGhText([
       'api',
       'user',
@@ -405,14 +410,16 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
       'forced-handoff mode is not human-gated; marker generation is disabled',
     );
   }
-  const issueComments = ghJson(
-    [
-      'api',
-      '--paginate',
-      `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-    ],
-    true,
-  ) as IssueCommentPayload[];
+  const issueComments = resolveIssueCommentEditStates(
+    ghJson(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+      ],
+      true,
+    ) as IssueCommentPayload[],
+  );
   const viewerLogin = safeGhText([
     'api',
     'user',
@@ -693,6 +700,7 @@ function normalizeIssueComment(comment: IssueCommentPayload): {
   body: string;
   createdAt: string;
   author: { login: string };
+  lastEditedAt?: string | null;
 } {
   return {
     body: comment.body ?? '',
@@ -700,7 +708,29 @@ function normalizeIssueComment(comment: IssueCommentPayload): {
     author: {
       login: comment.user?.login ?? '',
     },
+    lastEditedAt: comment.lastEditedAt,
   };
+}
+
+function resolveIssueCommentEditStates(
+  comments: IssueCommentPayload[],
+): IssueCommentPayload[] {
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'forced-handoff-marker: issue comment is missing node_id, cannot resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `forced-handoff-marker: missing edit-state resolution for comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
 }
 
 function splitCsv(value: unknown): string[] {

@@ -57,6 +57,25 @@ any flag it does not recognize verbatim to `pre-merge-readiness.mjs`,
 so `--claim-issue` reaches it transitively even though it declares no
 such flag of its own.)
 
+## Claim-family marker edit-state contract (kurone-kito/idd-skill#3248)
+
+Every consumer of a claim-family marker must verify both the trusted GitHub
+actor and the comment's GraphQL `IssueComment.lastEditedAt` state before using
+the marker as authority. This applies to `claimed-by`, `unclaimed-by`,
+`activation-nonce`, and `forced-handoff` markers, including callers that read
+issue comments directly instead of using the provider port.
+
+The only accepted edit state is an explicit `lastEditedAt: null`. A timestamp
+means the marker body was edited and the marker is ignored; a missing,
+malformed, or otherwise unresolved edit state is an error, not an unedited
+marker. REST issue-comment responses do not provide this field, so direct
+readers must resolve each returned comment's node id through GraphQL
+`nodes(ids:)` before parsing claim state. `updated_at`/`updatedAt` cannot
+substitute for `lastEditedAt`, because comment-minimization updates the former
+without editing the body. This fail-closed rule was added after issue #3248
+found that edited claim, release, nonce, and handoff marker bodies could still
+be treated as live authority.
+
 No single top-level decision/verdict field name is consistent across
 the evidence-collector family. This reflects organic accretion across
 many independently authored helpers rather than a recorded design
