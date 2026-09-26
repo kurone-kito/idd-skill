@@ -192,20 +192,20 @@ record each item's source URL:
 - **Review bodies** whose reviewer's latest state is
   `CHANGES_REQUESTED` — exclude any already replied-to and
   re-review-requested in a prior E13/E14 pass.
+- **Embedded CodeRabbit findings:** add one PATH B item per
+  `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
+  reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
+  findings.
 - **Regular comments** where the last speaker isn't an IDD agent and
   you haven't replied since, or whose latest IDD-agent reply starts
-  with `**Awaiting maintainer decision**` — exclude periodic
-  notification bots (Renovate, etc.). Keep Copilot/CI advisory bot
-  comments; they route through PATH B in E4-E7 (non-review notices —
-  rate-limit / quota / queued / bare acknowledgement / error —
-  dispositioned under the E6 non-review-notice rule, not here).
+  with `**Awaiting maintainer decision**` — exclude periodic bots. Keep
+  Copilot/CI comments; they route through PATH B in E4-E7, including
+  non-review notices under E6.
 
-Also carry, from the same Step 1 thread set, a light
-**resolved-thread index** (`isResolved=true`): each entry's file/area,
-claim summary, source URL, and any `**Accepted**` /
-`**Rejected**` marker. Never add resolved threads back into
-ReviewItems_snapshot — a hint only for E5's duplicate pre-check in
-`idd-review-triage.instructions.md`, not a conclusion.
+Also carry a light **resolved-thread index** (`isResolved=true`) with
+file/area, claim, source URL, and any disposition marker. Never re-add
+resolved threads to ReviewItems_snapshot; use the index only for E5's
+duplicate pre-check.
 
 ## E2 — Critique pass
 

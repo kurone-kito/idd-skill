@@ -3828,8 +3828,9 @@ reflexively as any other CLI option.
   snapshot also emits `embeddedFindings`, one object per
   `COMMENTED` review whose author login is `coderabbitai` or
   `coderabbitai[bot]` (case-insensitive). `APPROVED` and
-  `CHANGES_REQUESTED` reviews are omitted from this field and remain
-  covered by the normal review-body path. Each object is `reviewId`
+  `CHANGES_REQUESTED` reviews are omitted from this field. The normal
+  review-body path selects only `CHANGES_REQUESTED`, so `APPROVED`
+  findings are out of scope. Each object is `reviewId`
   (the review's REST `node_id`), `embeddedFindingCount`, and
   `uncoveredCount`. The uncovered count subtracts the number of
   review threads whose first comment's `pullRequestReview.id` equals
