@@ -821,14 +821,18 @@ export function resolvePlaceholderValues(
   );
   for (const key of Object.keys(overrides)) {
     if (!knownNames.has(key)) {
-      throw new Error(`unknown placeholder override: ${key}`);
+      throw markCliUsageError(
+        new Error(`unknown placeholder override: ${key}`),
+      );
     }
   }
   for (const entry of ONBOARDING_PLACEHOLDERS) {
     const override = overrides[entry.name];
     if (override === 'true' && entry.kind !== 'command') {
-      throw new Error(
-        `the no-op value "true" is only valid for command placeholders, not ${entry.name}`,
+      throw markCliUsageError(
+        new Error(
+          `the no-op value "true" is only valid for command placeholders, not ${entry.name}`,
+        ),
       );
     }
   }
@@ -837,8 +841,10 @@ export function resolvePlaceholderValues(
     markerOverride !== undefined &&
     !MARKER_PREFIX_PATTERN.test(markerOverride)
   ) {
-    throw new Error(
-      `--marker-prefix must match ${MARKER_PREFIX_PATTERN}: ${markerOverride}`,
+    throw markCliUsageError(
+      new Error(
+        `--marker-prefix must match ${MARKER_PREFIX_PATTERN}: ${markerOverride}`,
+      ),
     );
   }
 
@@ -1519,6 +1525,11 @@ export function resolveCoreTemplateFiles(sourceRoot: string): ManifestFile[] {
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as SyncManifest;
   } catch (error) {
+    // Not tagged markCliUsageError: this path is reached both with a
+    // user-supplied --source (a real usage error) and with the running
+    // CLI's own resolved bundle root under --substitute (#3291 -- an
+    // internal packaging defect, not caller input), and the throw site
+    // cannot distinguish which caller reached it.
     throw new Error(
       `--source is not a readable idd-skill tree (missing or invalid audit/sync-manifest.json): ${
         error instanceof Error ? error.message : String(error)
@@ -1620,21 +1631,27 @@ export function resolveConfinedDirectory(
 ): string {
   const resolved = resolve(raw);
   if (!statSync(resolved).isDirectory()) {
-    throw new Error(`${flagName} is not a directory: ${raw}`);
+    throw markCliUsageError(
+      new Error(`${flagName} is not a directory: ${raw}`),
+    );
   }
   const realResolved = realpathSync(resolved);
   const boundaries = [process.cwd(), ...allowedRoots].map((root) => {
     try {
       return realpathSync(resolve(root));
     } catch {
-      throw new Error(`--allow-root does not exist: ${root}`);
+      throw markCliUsageError(
+        new Error(`--allow-root does not exist: ${root}`),
+      );
     }
   });
   if (
     !boundaries.some((boundary) => isWithinBoundary(realResolved, boundary))
   ) {
-    throw new Error(
-      `${flagName} resolves outside the confined root(s) (${boundaries.join(', ')}): ${raw} -> ${realResolved}. Pass --allow-root <path> to widen the confined root.`,
+    throw markCliUsageError(
+      new Error(
+        `${flagName} resolves outside the confined root(s) (${boundaries.join(', ')}): ${raw} -> ${realResolved}. Pass --allow-root <path> to widen the confined root.`,
+      ),
     );
   }
   return resolved;
