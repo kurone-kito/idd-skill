@@ -55,6 +55,7 @@ test('an uppercase-authored review-watermark satisfies the F2 currency check for
         author: { login: 'claude-x' },
         body: watermarkBody,
         createdAt: '2026-05-10T00:00:00Z',
+        lastEditedAt: null,
       },
     ],
     { expectedClaimId: 'claim-1', isTrustedAuthor: () => true },
@@ -130,6 +131,7 @@ test('detects a review-watermark comment whose note is glued to the leading unde
       author: { login: 'claude-x' },
       body: gluedNoteBody,
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -167,6 +169,7 @@ test('a malformed review-watermark comment scoped to a different claim id does n
       author: { login: 'claude-x' },
       body: gluedNoteBody,
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -196,6 +199,7 @@ test('does not flag a genuinely valid review-watermark comment as malformed', ()
       author: { login: 'claude-x' },
       body: validBody,
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -229,6 +233,7 @@ test('detects a review-watermark comment with a field-invalid (too short) head S
       author: { login: 'claude-x' },
       body: shortShaBody,
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -263,6 +268,7 @@ test('a field-invalid review-watermark comment scoped to a different claim id do
       author: { login: 'claude-x' },
       body: shortShaBody,
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -290,6 +296,7 @@ test('reports no malformed marker when no watermark-shaped comment exists at all
       author: { login: 'claude-x' },
       body: 'just an ordinary regular comment, not marker-shaped at all',
       createdAt: '2026-05-10T00:00:00Z',
+      lastEditedAt: null,
     },
   ];
 

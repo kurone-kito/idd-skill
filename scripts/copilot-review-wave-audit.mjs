@@ -41,12 +41,14 @@ import {
 } from './gh-exec.mjs';
 import {
   AMD_MARKER_PATTERN,
+  classifyCommentEditState,
   DISPOSITION_ACCEPTED_PREFIX_RE,
   DISPOSITION_REJECTED_PREFIX_RE,
   isCopilotReviewerLogin,
   isRejectionConfirmedDisposition,
   parsePaginatedGhNdjson,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 
 const SEVERITIES = ['high', 'medium', 'low'];
 const TRANSITION_KEYS = ['none', 'low', 'medium', 'high'];
@@ -243,7 +245,11 @@ export function classifyDispositionReply(rawBody) {
  */
 export function resolveThreadDisposition(findingId, comments) {
   const replies = comments
-    .filter((comment) => comment.inReplyToId === findingId)
+    .filter(
+      (comment) =>
+        comment.inReplyToId === findingId &&
+        classifyCommentEditState(comment) === 'unedited',
+    )
     .slice()
     .sort((a, b) => {
       const aTime = a.createdAt ?? '';
@@ -468,7 +474,7 @@ function toRawReview(raw) {
     login: String(raw.user?.login ?? ''),
   };
 }
-function toRawComment(raw) {
+function toRawComment(raw, lastEditedAt) {
   const replyTo = raw.in_reply_to_id;
   return {
     id: Number(raw.id),
@@ -476,6 +482,7 @@ function toRawComment(raw) {
       replyTo === null || replyTo === undefined ? null : Number(replyTo),
     body: String(raw.body ?? ''),
     createdAt: typeof raw.created_at === 'string' ? raw.created_at : null,
+    lastEditedAt,
   };
 }
 function sortReviewsBySubmission(reviews) {
@@ -542,7 +549,22 @@ export function auditPr(owner, repo, prNumber) {
       .map(toRawReview)
       .filter((review) => isCopilotReviewerLogin(review.login)),
   );
-  const comments = rawComments.map(toRawComment);
+  const nodeIds = rawComments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `copilot-review-wave-audit: PR #${prNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  const comments = rawComments.map((comment) => {
+    const nodeId = String(comment.node_id);
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `copilot-review-wave-audit: missing edit-state resolution for PR #${prNumber} comment ${nodeId}`,
+      );
+    }
+    return toRawComment(comment, lastEditedAtByNodeId.get(nodeId));
+  });
   return computePrAudit(prNumber, copilotReviews, comments);
 }
 // ---------------------------------------------------------------------------

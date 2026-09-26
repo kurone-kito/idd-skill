@@ -85,6 +85,9 @@ interface IssueCommentNode extends MinimizableNode {
   body: string;
   createdAt?: string | null;
   author?: GqlAuthorPayload | null;
+  /** #3249: see `ProviderComment.lastEditedAt`'s doc comment (provider-
+   * port.mts) for the three-state contract. */
+  lastEditedAt?: string | null;
 }
 
 /** PR review node from the reviews connection. */
@@ -101,6 +104,9 @@ interface ThreadCommentNode extends MinimizableNode {
   createdAt?: string | null;
   author?: GqlAuthorPayload | null;
   pullRequestReview?: { id?: string | null } | null;
+  /** #3249: see `ProviderComment.lastEditedAt`'s doc comment (provider-
+   * port.mts) for the three-state contract. */
+  lastEditedAt?: string | null;
 }
 
 /** Review-thread node from the reviewThreads connection. */
@@ -302,6 +308,7 @@ const REVIEW_THREAD_COMMENT_FIELDS = `
   viewerCanMinimize
   author{login}
   pullRequestReview{id}
+  lastEditedAt
 `;
 
 // #2478: a thread with more than 100 comments needs its own continuation
@@ -1603,6 +1610,7 @@ function fetchIssueComments(
             minimizedReason
             viewerCanMinimize
             author{login}
+            lastEditedAt
           }
           pageInfo{hasNextPage endCursor}
         }

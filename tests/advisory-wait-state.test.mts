@@ -135,6 +135,7 @@ function recoveryComment(overrides: {
   claimId?: string | null;
   attempt?: number | null;
   timestamp?: string;
+  lastEditedAt?: string | null;
 }) {
   const {
     login = AGENT,
@@ -144,6 +145,7 @@ function recoveryComment(overrides: {
     claimId = CLAIM,
     attempt = 1,
     timestamp = '2026-07-20T00:00:00Z',
+    lastEditedAt = null,
   } = overrides;
   const payload: Record<string, unknown> = { agentId, headSha, timestamp };
   if (claimId !== null) payload.claimId = claimId;
@@ -152,6 +154,7 @@ function recoveryComment(overrides: {
     author: { login },
     body: renderAdvisoryWaitRecoveryMarker(payload),
     createdAt,
+    lastEditedAt,
   };
 }
 
@@ -226,6 +229,62 @@ test('buildCopilotRecoverySummary counts one valid bound marker and reports reco
   assert.equal(result.clockAnchor, '2026-07-22T00:00:00Z');
   assert.equal(result.state, 'NOT_TERMINAL');
   assert.equal(result.reason, 'recovery-cap-not-exhausted');
+});
+
+// #3249: an edited (or edit-state-unresolved) trusted advisory-wait-recovery
+// marker still consumes the bounded cycle budget but cannot contribute a
+// trusted clock anchor -- editing the marker after posting must not reopen
+// an exhausted cap or fabricate terminal timing evidence.
+test('buildCopilotRecoverySummary counts edited or edit-state-unresolved recovery markers only toward the budget', () => {
+  const edited = buildCopilotRecoverySummary(
+    {
+      comments: [
+        recoveryComment({
+          createdAt: '2026-07-22T00:00:00Z',
+          lastEditedAt: '2026-07-22T00:30:00Z',
+        }),
+      ],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    BASE_OPTIONS,
+  );
+  assert.equal(edited.completedCycleCount, 1);
+  assert.equal(edited.remainingBudget, 1);
+  assert.equal(edited.clockAnchor, '');
+  assert.equal(edited.reason, 'no-trusted-recovery-markers');
+
+  const unknownEditState = buildCopilotRecoverySummary(
+    {
+      // `recoveryComment` defaults `lastEditedAt` to `null` (unedited) --
+      // this fixture explicitly omits it to model a caller that never
+      // fetched edit state, distinct from a genuinely unedited marker.
+      comments: [
+        {
+          ...recoveryComment({ createdAt: '2026-07-22T00:00:00Z' }),
+          lastEditedAt: undefined,
+        },
+      ],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    BASE_OPTIONS,
+  );
+  assert.equal(unknownEditState.completedCycleCount, 1);
+  assert.equal(unknownEditState.remainingBudget, 1);
+  assert.equal(unknownEditState.clockAnchor, '');
+
+  // Minimized shape (`lastEditedAt: null`) is still honored (control case).
+  const unedited = buildCopilotRecoverySummary(
+    {
+      comments: [recoveryComment({ createdAt: '2026-07-22T00:00:00Z' })],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    BASE_OPTIONS,
+  );
+  assert.equal(unedited.completedCycleCount, 1);
+  assert.equal(unedited.clockAnchor, '2026-07-22T00:00:00Z');
 });
 
 test('buildCopilotRecoverySummary exhausts the cap at two markers and reports terminal-window-not-elapsed', () => {

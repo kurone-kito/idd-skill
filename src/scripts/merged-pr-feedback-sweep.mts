@@ -29,6 +29,7 @@ import {
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
@@ -64,6 +65,8 @@ export interface SweepCommentInput {
   created_at?: string | null;
   updatedAt?: string | null;
   updated_at?: string | null;
+  /** #3249: edited trust markers must not satisfy review acknowledgements. */
+  lastEditedAt?: string | null;
   url?: string | null;
   html_url?: string | null;
 }
@@ -89,6 +92,8 @@ export interface SweepThreadCommentInput {
   author?: AuthorRef | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+  /** #3249: edited trust dispositions must not satisfy the gate. */
+  lastEditedAt?: string | null;
   url?: string | null;
 }
 
@@ -419,7 +424,8 @@ function threadHasIddAmd(
       isIdd(authorLogin(comment)) &&
       String(comment.body ?? '')
         .trimStart()
-        .startsWith('**Awaiting maintainer decision**'),
+        .startsWith('**Awaiting maintainer decision**') &&
+      classifyCommentEditState(comment) === 'unedited',
   );
 }
 
@@ -464,14 +470,18 @@ function collectUnaddressedComments(
     ...comments
       .filter(
         (comment) =>
-          isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+          isIdd(authorLogin(comment)) &&
+          classifyCommentEditState(comment) === 'unedited' &&
+          isDispositionBody(comment.body),
       )
       .map(commentTimestamp),
     ...threads.flatMap((thread) =>
       (thread.comments?.nodes ?? [])
         .filter(
           (comment) =>
-            isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+            isIdd(authorLogin(comment)) &&
+            classifyCommentEditState(comment) === 'unedited' &&
+            isDispositionBody(comment.body),
         )
         .map((comment) => comment.updatedAt ?? comment.createdAt ?? null),
     ),
@@ -818,6 +828,10 @@ function fetchMergedPr(
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
       author: { login: comment.authorLogin },
+      // #3249: carried through so `hasTrustedReviewAckAfter` can require
+      // `unedited` -- `listChangeRequestGraphqlComments` always populates
+      // this field.
+      lastEditedAt: comment.lastEditedAt,
     })),
     reviews: port.listChangeRequestGraphqlReviews(number).map((review) => ({
       body: review.body,
@@ -839,6 +853,10 @@ function fetchMergedPr(
             createdAt: comment.createdAt,
             updatedAt: comment.updatedAt,
             author: { login: comment.authorLogin },
+            // #3249: carried through so `hasFreshDisposition` can require
+            // `unedited` -- `listChangeRequestReviewThreadsExtended`
+            // always populates this field.
+            lastEditedAt: comment.lastEditedAt,
           })),
         },
       })),

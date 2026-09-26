@@ -233,10 +233,11 @@ function notice(
   body: string,
   createdAt = `2026-05-12T00:00:0${id}Z`,
   updatedAt?: string,
+  lastEditedAt: string | null = null,
 ): NoticeComment {
   return updatedAt === undefined
-    ? { id, login, body, createdAt }
-    : { id, login, body, createdAt, updatedAt };
+    ? { id, login, body, createdAt, lastEditedAt }
+    : { id, login, body, createdAt, updatedAt, lastEditedAt };
 }
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -544,6 +545,7 @@ test('gate agreement: the extended **Rejected** body still clears a notice from 
     body: plan.planned[0]?.body ?? '',
     createdAt: '2026-05-12T01:00:00Z',
     updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
   };
   // After: the gate no longer flags the notice, proving the extended body is
   // still recognized as a valid, bot-attributed disposition.
@@ -643,6 +645,7 @@ test('#3146: consumes repeated already-reviewed refusals one-to-one', () => {
       3146,
     ),
     author: { login: 'idd-bot' },
+    lastEditedAt: null,
   };
   const summary = summarizeDispositionEvidenceForGate(
     {
@@ -834,6 +837,75 @@ test('buildDispositionPlan is idempotent: a notice already dispositioned for its
     plan.skipped.map((entry) => entry.botLogin),
     [CODEX],
   );
+});
+
+test('buildDispositionPlan re-plans edited or unknown notice dispositions', () => {
+  const editedPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE),
+        notice(
+          2,
+          'kurone-kito',
+          '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (rate limit)',
+          '2026-05-12T01:00:00Z',
+          undefined,
+          '2026-05-12T02:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    editedPlan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+
+  const unknownPlan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE),
+        {
+          id: 2,
+          login: 'kurone-kito',
+          body: '**Rejected** — coderabbitai[bot] did not review HEAD abc1234 (rate limit)',
+          createdAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    unknownPlan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+});
+
+test('buildDispositionPlan re-plans edited summary dispositions', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_SUMMARY),
+        notice(
+          2,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+          undefined,
+          '2026-05-12T02:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+  assert.equal(plan.planned[0]?.body.startsWith('**Accepted**'), true);
 });
 
 test('buildDispositionPlan attributes a disposition only to the bot it names (author-scoped)', () => {
@@ -1624,6 +1696,7 @@ test('gate agreement: the planned **Accepted** clears the summary from missingRe
     body: plan.planned[0].body,
     createdAt: '2026-05-12T01:00:00Z',
     updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
   };
   // After: the gate no longer flags the summary.
   const after = summarizeDispositionEvidenceForGate(
@@ -1676,6 +1749,7 @@ test('gate agreement: the summary stays cleared alongside another outstanding co
     body: plan.planned[0].body,
     createdAt: '2026-05-12T01:00:00Z',
     updatedAt: '2026-05-12T01:00:00Z',
+    lastEditedAt: null,
   };
   const humanDisposition = {
     id: 4,
@@ -1683,6 +1757,7 @@ test('gate agreement: the summary stays cleared alongside another outstanding co
     body: '**Accepted** — will rename in a follow-up',
     createdAt: '2026-05-12T01:01:00Z',
     updatedAt: '2026-05-12T01:01:00Z',
+    lastEditedAt: null,
   };
   const after = summarizeDispositionEvidenceForGate(
     {

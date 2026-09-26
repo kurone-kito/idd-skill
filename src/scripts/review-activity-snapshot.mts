@@ -166,7 +166,12 @@ function main(): HelperCliResult {
   const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
   const checks = port.listChangeRequestChecks(args.prNumber);
   const reviews = port.listReviews(args.prNumber) as ReviewPayload[];
-  const comments = port.listWorkItemComments(args.prNumber);
+  // #3249: `includeEditState` so `summarizeDispositionEvidenceForGate`
+  // (via `normalizeComment` below) can reject a body-edited disposition
+  // reply.
+  const comments = port.listWorkItemComments(args.prNumber, {
+    includeEditState: true,
+  });
   const threads = port.listChangeRequestReviewThreadsWithComments(
     args.prNumber,
   );
@@ -313,6 +318,21 @@ function printHelp(): void {
 `);
 }
 
+/** Exported for direct unit testing (#3249), mirroring
+ * `pre-merge-readiness.mts`'s own `normalizeComment`. */
+export function normalizeComment(comment: ProviderComment) {
+  return {
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt || comment.createdAt,
+    // #3249: carried through so `summarizeDispositionEvidenceForGate` can
+    // require `unedited` -- `undefined` unless `includeEditState` was
+    // requested.
+    lastEditedAt: comment.lastEditedAt,
+  };
+}
+
 /** One row per CodeRabbit COMMENTED review. Thread coverage is the number of
  * review threads whose first comment's `pullRequestReview.id` equals
  * the review's REST `node_id`. An empty `node_id` covers nothing, so
@@ -360,15 +380,6 @@ export function buildCodeRabbitEmbeddedFindings(
   });
 }
 
-function normalizeComment(comment: ProviderComment) {
-  return {
-    author: { login: comment.authorLogin },
-    body: comment.body,
-    createdAt: comment.createdAt,
-    updatedAt: comment.updatedAt || comment.createdAt,
-  };
-}
-
 function normalizeReview(review: ReviewPayload) {
   return {
     author: { login: review.user?.login ?? '' },
@@ -379,7 +390,9 @@ function normalizeReview(review: ReviewPayload) {
   };
 }
 
-function normalizeThread(thread: ProviderReviewThreadWithComments) {
+/** Exported for direct unit testing (#3249), mirroring
+ * `pre-merge-readiness.mts`'s own `normalizeThread`. */
+export function normalizeThread(thread: ProviderReviewThreadWithComments) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
@@ -392,6 +405,10 @@ function normalizeThread(thread: ProviderReviewThreadWithComments) {
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt || comment.createdAt,
         pullRequestReview: { id: comment.pullRequestReviewId ?? null },
+        // #3249: carried through so `hasFreshDisposition` can require
+        // `unedited` -- `listChangeRequestReviewThreadsWithComments`
+        // always populates this field.
+        lastEditedAt: comment.lastEditedAt,
       })),
     },
   };

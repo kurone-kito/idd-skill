@@ -225,15 +225,15 @@ helper that predicts, mirrors, or pre-checks another gate's decision) —
 Validation-path parity; Input completeness; Whole-identity comparison;
 Snapshot identity; Point-in-time parity.
 
-**Incremental scope**: on the second and later passes within the same
-claim, scope the review to the diff since the previous E2's head SHA,
-tracked by the latest trusted same-claim `review-baseline` comment.
-Reset to the full-branch diff after: a rebase, a multi-fix batch, a
-baseline SHA that isn't an ancestor of HEAD, no trusted same-claim
-baseline, or an active-claim change (restart, takeover, forced
-handoff). ReviewItems_snapshot is session-local — do not inherit a
-previous claim's critique findings unless already persisted as
-reviewer-visible comments.
+**Incremental scope**: on later passes within the same claim, review the
+diff since the previous E2 head, tracked by a same-claim
+baseline whose GraphQL `lastEditedAt` was resolved via node id/
+`includeEditState` and is explicitly `null`; use a full-branch diff if
+that proof fails, after a rebase, multi-fix batch, non-ancestor baseline,
+or active-claim change. Do not infer edit state from the body, `updatedAt`,
+author, or claim. ReviewItems_snapshot is session-local — do not inherit
+a previous claim's critique findings unless persisted as reviewer-visible
+comments.
 
 After the critique pass completes, re-read the current PR HEAD SHA —
 `gh pr view {pr-number} --json headRefOid --jq '.headRefOid'` — and
