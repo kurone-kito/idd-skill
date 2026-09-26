@@ -553,8 +553,7 @@ ascending issue-number order:
   name the gap in the run report; an unlisted parked issue may be
   picked. Under `instructions-only` (no park helper), this rule does
   not apply.
-- Scan the **top N** survivors (ordered by ascending issue number),
-  where `N` is `.github/idd/config.json`
+- Scan the **top N** survivors, where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the shared
   claim-state rules in `idd-claim.instructions.md`, including
@@ -568,10 +567,11 @@ ascending issue-number order:
   fallback) with `--worktree`=own cwd and that `--claim-id`:
   `present: true` (not malformed) routes to
   `idd-resume.instructions.md`. A refusal continues the scan;
-  other results are **ineligible**. Also **ineligible** when a stale or released
+  others are **ineligible**. Also **ineligible** when a stale or released
   claim's same-clone worktree probe finds a live match or is
   unreadable without verified owner resume or authorized handoff
-  (#3141). Otherwise it **remains eligible**.
+  (#3141); see §LWR (`docs/idd-resume-detail.md`). Otherwise it
+  **remains eligible**.
 
 After scanning the current batch:
 
