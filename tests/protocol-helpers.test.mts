@@ -4431,6 +4431,21 @@ test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted m
     ).sameHeadMarkerPresent,
     false,
   );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
+  );
 
   // (b) unknown
   assert.equal(

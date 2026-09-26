@@ -28,6 +28,7 @@ import {
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
@@ -268,7 +269,8 @@ function threadHasIddAmd(thread, isIdd) {
       isIdd(authorLogin(comment)) &&
       String(comment.body ?? '')
         .trimStart()
-        .startsWith('**Awaiting maintainer decision**'),
+        .startsWith('**Awaiting maintainer decision**') &&
+      classifyCommentEditState(comment) === 'unedited',
   );
 }
 // #2194: GitHub embeds a review finding directly in the review `body` field

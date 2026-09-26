@@ -200,6 +200,31 @@ test('marks an unresolved thread dispositioned on an IDD AMD reply', () => {
   assert.equal(result.prs[0].unresolvedThreads[0].dispositioned, true);
 });
 
+test('does not mark an unresolved thread dispositioned on an edited IDD AMD reply', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3,
+      threads: [
+        buildCommentThread(false, [
+          {
+            login: 'coderabbitai[bot]',
+            body: 'concern',
+            createdAt: '2026-06-09T00:00:00Z',
+          },
+          {
+            login: 'kurone-kito',
+            body: '**Awaiting maintainer decision** — needs a call.',
+            createdAt: '2026-06-09T01:00:00Z',
+            lastEditedAt: '2026-06-09T02:00:00Z',
+          },
+        ]),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs[0].unresolvedThreads[0].dispositioned, false);
+});
+
 test('excludes a thread the IDD agent itself opened', () => {
   const prs: MergedPrInput[] = [
     {

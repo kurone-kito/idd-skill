@@ -5054,6 +5054,33 @@ test('disposition evidence accepts edited IDD disposition comments as fresh repl
   assert.equal(summary.blockingCount, 0);
 });
 
+test('disposition evidence does not let an explicitly edited IDD disposition clear feedback', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:01:00Z',
+          body: 'please address this',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Accepted** — updated after latest feedback',
+          author: { login: 'idd-bot' },
+          lastEditedAt: '2026-05-12T00:02:00Z',
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
 // #1018 — a persistent advisory non-review notice already dispositioned
 // `**Rejected** — {bot} did not review HEAD …` carries that disposition forward
 // across HEAD changes, so a Codex `updatedAt` bump does not re-flag it.

@@ -62,6 +62,7 @@ function recoveryComment(overrides: {
   claimId?: string | null;
   attempt?: number | null;
   timestamp?: string;
+  lastEditedAt?: string | null;
 }) {
   const {
     login = AGENT,
@@ -71,6 +72,7 @@ function recoveryComment(overrides: {
     claimId = CLAIM,
     attempt = 1,
     timestamp = '2026-07-20T00:00:00Z',
+    lastEditedAt = null,
   } = overrides;
   const payload: Record<string, unknown> = { agentId, headSha, timestamp };
   if (claimId !== null) payload.claimId = claimId;
@@ -79,9 +81,31 @@ function recoveryComment(overrides: {
     author: { login },
     body: renderAdvisoryWaitRecoveryMarker(payload),
     createdAt,
-    lastEditedAt: null,
+    lastEditedAt,
   };
 }
+
+test('buildCopilotRecoverySummary: an edited valid recovery marker consumes the restrictive cycle budget but cannot anchor terminal recovery', () => {
+  const summary = buildCopilotRecoverySummary(
+    {
+      comments: [
+        recoveryComment({
+          createdAt: '2026-07-20T01:00:00Z',
+          lastEditedAt: '2026-07-20T02:00:00Z',
+        }),
+      ],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+    },
+    { ...BASE_RECOVERY_OPTIONS, recoveryCycleCap: 1 },
+  );
+
+  assert.equal(summary.completedCycleCount, 1);
+  assert.equal(summary.remainingBudget, 0);
+  assert.equal(summary.capExhausted, true);
+  assert.equal(summary.clockAnchor, '');
+  assert.equal(summary.state, 'NOT_TERMINAL');
+});
 
 // --- 0. Active-claim gating (fail closed without claim-bound evidence) -----
 

@@ -5198,12 +5198,13 @@ export function summarizeAdvisoryWaitMarkers(
     const login = String(comment?.author?.login ?? comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
+    const trustedAuthor = trustedLogins.has(login);
     // #3249: a trusted login alone is not enough -- an edited (or
     // edit-state-unresolved) `advisory-wait:` marker must never satisfy or
-    // relax this gate.
+    // relax this gate. The request-cap count below is deliberately separate:
+    // an edited trusted request still consumed a bounded request attempt.
     const trusted =
-      trustedLogins.has(login) &&
-      classifyCommentEditState(comment) === 'unedited';
+      trustedAuthor && classifyCommentEditState(comment) === 'unedited';
     const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
     const isRequestMarker = advisoryWaitRequestMarker(body);
     if (isSameHeadMarker) {
@@ -5227,7 +5228,7 @@ export function summarizeAdvisoryWaitMarkers(
       }
     }
     if (isRequestMarker) {
-      if (trusted) {
+      if (trustedAuthor) {
         trustedRequestMarkerCount += 1;
       } else {
         untrustedRequestMarkerCount += 1;
@@ -5951,6 +5952,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    lastEditedAt: comment.lastEditedAt,
   }));
   // #1182 A trusted-marker actor's machine-generated advisory disposition — and
   // the advisory-bot sticky it names, matched by bot + type + consumed 1:1 via
@@ -6520,7 +6522,10 @@ export function summarizeDispositionEvidenceForGate(
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
         isValidIsoTimestamp(comment.activityAt) &&
-        !isIddOperationalComment(comment),
+        !isIddOperationalComment(comment) &&
+        (!isDispositionComment({ body: comment.body }) ||
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'edited'),
     )
     .sort((left, right) => {
       const byTime = compareIsoTimestamps(left.activityAt, right.activityAt);

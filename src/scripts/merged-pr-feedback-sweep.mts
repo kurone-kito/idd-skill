@@ -29,6 +29,7 @@ import {
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
+  classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
@@ -423,7 +424,8 @@ function threadHasIddAmd(
       isIdd(authorLogin(comment)) &&
       String(comment.body ?? '')
         .trimStart()
-        .startsWith('**Awaiting maintainer decision**'),
+        .startsWith('**Awaiting maintainer decision**') &&
+      classifyCommentEditState(comment) === 'unedited',
   );
 }
 

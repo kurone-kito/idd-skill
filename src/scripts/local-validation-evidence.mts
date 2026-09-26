@@ -309,7 +309,7 @@ export function resolveLocalValidationEvidence(input: {
     reason = `${latest.authorLogin} is not a trusted marker actor`;
   } else if (edited.length > 0) {
     const latest = edited[edited.length - 1];
-    reason = `${latest.authorLogin}'s local validation evidence was edited after posting and is no longer trusted`;
+    reason = `${latest.authorLogin}'s local validation evidence was edited after posting or its edit state could not be verified, so it is no longer trusted`;
   } else if (wrongHead.length > 0) {
     reason = `local validation evidence is bound to a different HEAD than ${prHeadSha || '(unknown)'}`;
   } else if (malformed.length > 0) {

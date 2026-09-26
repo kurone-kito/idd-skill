@@ -325,7 +325,7 @@ export function resolveProviderOutageDeclaration(input: {
     reason = `${latest.authorLogin} is not authorized to author a provider outage declaration under ${authorityPolicy}`;
   } else if (edited.length > 0) {
     const latest = edited[edited.length - 1];
-    reason = `${latest.authorLogin}'s provider outage declaration was edited after posting and is no longer trusted`;
+    reason = `${latest.authorLogin}'s provider outage declaration was edited after posting or its edit state could not be verified, so it is no longer trusted`;
   } else if (wrongService.length > 0) {
     const latest = latestByCreatedAt(wrongService);
     reason = `declaration is for service "${latest?.service}", not "${service}"`;
