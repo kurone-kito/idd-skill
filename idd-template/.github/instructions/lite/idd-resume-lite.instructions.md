@@ -16,7 +16,7 @@ Lite profile for weak/local models. Same semantics as
 ## Always run helpers first (helper-enabled profiles)
 
 ```sh
-# Claim state (required before any mutation)
+# Claim state (before mutation)
 node scripts/resume-claim-routing.mjs --issue <N> [--claim-id <id>] [--nonce <nonce>] [--worktree <path>]
 
 # Fresh-claim gate immediately before any claim write
@@ -26,8 +26,9 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Pass `--claim-id` once verified, `--nonce` if this session recorded
-one for that claim-id, and `--worktree` once the B1 worktree exists.
+Pass `--claim-id` once this session recorded and verified one,
+`--nonce` if this session recorded one for that claim-id, and
+`--worktree` once the B1 worktree exists.
 
 Map helper fields to actions below.
 
