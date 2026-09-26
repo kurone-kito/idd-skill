@@ -86,8 +86,7 @@ Then apply path-specific scoring:
   (`idd-review-fix.instructions.md`: claim revalidation first, fetch
   the full body, edit only this claim, post the full result back,
   re-check `closingIssuesReferences`), even when E8's zero-Accepted-
-  PATH-A skip bypasses E9-E15 and E12 (`#3495`). E8 and later phases
-  are unchanged.
+  PATH-A skip bypasses E9-E15 and E12 (`#3495`).
 
 ## E5 — Record Accept / Reject decisions
 
