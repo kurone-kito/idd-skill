@@ -85,7 +85,7 @@ Convergence guardrails:
 **No confidence exception.** Fix scope or confidence never excuses
 skipping this pass — run it for every E9 batch before E11. Skipped
 one? Disclose on the PR, name the round(s), run E10 on the
-accumulated diff before F1.
+accumulated diff, then return to E1 before F1.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
@@ -234,10 +234,10 @@ falls outside the touched-file scope; or either bound is reached.
 **Non-goals**: never delays an in-flight CI wait (E15's mid-wait
 fold-in rule is unchanged); never changes PATH A/B routing or triage
 timing (still happens at the next E1 pass — only push timing changes);
-and relaxes nothing else — E14 re-review, `review-watermark`
-invalidation, individual E6 replies, and the
+and relaxes nothing else: E14 re-review, `review-watermark`
+invalidation, and individual E6 replies stay as before; the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-before push all still apply.
+runs immediately before push.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope

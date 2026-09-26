@@ -163,8 +163,8 @@ other GitHub side effect, confirm all of the following:
 8. **No confidence exception.** A fix's scope, or your own
    confidence in it, never excuses skipping this pass — E10 must run
    for every E9 fix batch before E11. Skipped a round anyway?
-   Disclose it, name the round(s), then run E10 against the
-   accumulated diff before F1 — see
+   Disclose it, name the round(s), run E10 against the accumulated
+   diff, then return to E1 before F1 — see
    `idd-review-fix.instructions.md`'s E10 repair path for the full
    procedure.
 9. Heuristic: several new, non-repeated same-area findings across
