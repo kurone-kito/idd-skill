@@ -870,7 +870,7 @@ function isFollowedByCredentialRequirement(
   matchEnd: number,
 ): boolean {
   const tail = corpus.slice(matchEnd, matchEnd + 160);
-  const paragraphBreak = PARAGRAPH_BREAK_PATTERN.exec(tail);
+  const paragraphBreak = /\n[ \t]*\n/.exec(tail);
   const sameParagraph = paragraphBreak
     ? tail.slice(0, paragraphBreak.index)
     : tail;

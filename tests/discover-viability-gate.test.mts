@@ -1066,6 +1066,22 @@ test('does not let a necessary credential prerequisite hide behind generic conte
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('keeps paragraph boundaries independent across multiple credentials (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 109,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern.\n\n' +
+      'This issue documents a credential pattern.\n\n' +
+      'The maintainer must create it before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 test('keeps provided contextual external-system text descriptive (#3528)', () => {
   const result = evaluateA4Viability({
     number: 80,
