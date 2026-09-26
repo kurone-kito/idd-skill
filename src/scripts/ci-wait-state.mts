@@ -281,6 +281,15 @@ const CI_WAIT_STATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
+// Above the CLI entry block: a module-level binding after that block is a
+// top-level-await TDZ risk (tests/cli-entry-smoke.test.mts).
+const PASS_EQUIVALENT_STATES = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
+
 if (import.meta.main) {
   // #3342: call main() directly when the envelope is disabled -- see
   // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
@@ -897,13 +906,6 @@ export function ciWaitSummaryIsPreMergeCiPassing(
     presentRunConclusion,
   });
 }
-
-const PASS_EQUIVALENT_STATES = new Set([
-  'SUCCESS',
-  'SKIPPED',
-  'NEUTRAL',
-  'NOT_APPLICABLE',
-]);
 
 /**
  * Latest completion among pass-equivalent checks, or `none`. Mirrors the
