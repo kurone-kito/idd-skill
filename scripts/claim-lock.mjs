@@ -278,7 +278,18 @@ function sanitizedGitEnvironment() {
   delete env.GIT_OBJECT_DIRECTORY;
   return env;
 }
-function gitRevParse(cwd, args) {
+/**
+ * Spawn `git -C cwd rev-parse ...args` and return its stdout untouched --
+ * no trimming. Shared by {@link gitRevParse} (which trims the result for
+ * its own single-value callers) and {@link resolveAcquireWorktreeFacts}'s
+ * combined multi-flag query, which needs the untrimmed form: trimming
+ * strips leading/trailing whitespace from the *whole* captured string,
+ * which would silently consume a leading or trailing empty *line*
+ * produced by one of several requested flags resolving to an empty
+ * value -- exactly the structural information that query's own
+ * ambiguity check depends on (#3526 review round 2, Copilot).
+ */
+function gitRevParseRaw(cwd, args) {
   // #3434: no explicit `stdio` sets Node's own `inheritStderr =
   // !options.stdio` internal flag, which relays `git`'s captured stderr
   // (e.g. `fatal: cannot change to '<path>': No such file or directory`)
@@ -293,7 +304,10 @@ function gitRevParse(cwd, args) {
     encoding: 'utf8',
     env: sanitizedGitEnvironment(),
     stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  });
+}
+function gitRevParse(cwd, args) {
+  return gitRevParseRaw(cwd, args).trim();
 }
 /**
  * Resolve `cwd`'s own private git-admin directory (`git rev-parse
@@ -388,7 +402,7 @@ function canonicalizeExistingDir(path) {
  * that byte verbatim with no escaping for this query family -- neither
  * `--path-format` nor `--sq` affects `--absolute-git-dir`/
  * `--git-common-dir` output (checked directly against this repository's
- * own git version) -- so more or fewer than two non-empty lines does not
+ * own git version) -- so anything other than exactly two lines does not
  * necessarily mean malformed output, only that this combined spawn
  * cannot safely tell which lines belong to which value (#3526 review,
  * Copilot). Falls back to two separate single-flag queries in that case
@@ -401,32 +415,38 @@ function canonicalizeExistingDir(path) {
  * function exists to fix. Still fails closed (throws) when either
  * resolved value is empty -- neither query ever legitimately returns
  * nothing for a worktree git itself already accepted.
+ *
+ * The structural line count must never be computed by trimming each
+ * line and filtering out empty ones: a first review round did exactly
+ * that, and a second round (#3526 review round 2, Copilot) found it can
+ * silently misclassify a genuinely ambiguous response as unambiguous --
+ * for example, a value containing two *consecutive* embedded newlines
+ * produces an empty line between them, and filtering it away can leave
+ * exactly two surviving non-empty lines even though the response is not
+ * safely splittable. Only the single trailing empty element produced by
+ * the response's own final line terminator is ever dropped; every other
+ * line, empty or not, is preserved as structural evidence.
  */
 function resolveAcquireWorktreeFacts(worktree) {
-  // Reuse gitRevParse (not a fresh execFileSync call) so the #3434
-  // stderr-non-leak `stdio` setting and sanitizedGitEnvironment() apply
-  // here automatically instead of needing to stay duplicated in sync by
-  // hand.
-  const combined = gitRevParse(worktree, [
+  // gitRevParseRaw (not gitRevParse, and not a fresh execFileSync call):
+  // reuses the #3434 stderr-non-leak `stdio` setting and
+  // sanitizedGitEnvironment() automatically instead of needing to stay
+  // duplicated in sync by hand, while skipping gitRevParse's own
+  // whole-string `.trim()` -- that trim would consume a leading or
+  // trailing empty *line* the same way the filtering above does, for
+  // the same reason (see the doc comment above).
+  const combined = gitRevParseRaw(worktree, [
     '--absolute-git-dir',
     '--git-common-dir',
   ]);
-  // Split on a bare `\n` and `.trim()` each line: a `\r` left over from a
-  // `\r\n` line ending is whitespace, so `.trim()` strips it the same as
-  // any other line, and a trailing-newline-produced empty element is
-  // dropped by the length filter below -- CRLF and LF output parse
-  // identically. Any embedded newline inside either value can only ever
-  // *add* lines beyond the ordinary two (never remove one), so exactly
-  // two surviving non-empty lines reliably means neither value contains
-  // one -- see the function doc comment above for the fallback this
-  // exists to gate.
-  const combinedLines = combined
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const rawLines = combined.split(/\r?\n/);
+  const lines =
+    rawLines.length > 0 && rawLines[rawLines.length - 1] === ''
+      ? rawLines.slice(0, -1)
+      : rawLines;
   const [adminDirRaw, commonDirRaw] =
-    combinedLines.length === 2
-      ? combinedLines
+    lines.length === 2
+      ? lines
       : [
           gitRevParse(worktree, ['--absolute-git-dir']),
           gitRevParse(worktree, ['--git-common-dir']),

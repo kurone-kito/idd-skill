@@ -1339,6 +1339,74 @@ test('acquire: an empty rev-parse value still fails closed even after the ambigu
   }
 });
 
+test('acquire: filtering out empty lines would have hidden a genuinely ambiguous response -- an empty value paired with a newline-embedded one still falls back correctly (#3526 review round 2, Copilot)', () => {
+  // An earlier revision of resolveAcquireWorktreeFacts decided ambiguity
+  // by trimming each line and filtering out empty ones before counting
+  // -- Copilot's second review round found this can misclassify a
+  // genuinely ambiguous response as safely unambiguous: if one queried
+  // value is empty and the other contains an embedded newline, the raw
+  // response is "\n<part-one>\n<part-two>\n" (four segments including
+  // the leading and trailing empty ones), but filtering collapses that
+  // down to exactly two non-empty lines ("<part-one>", "<part-two>"),
+  // silently misassigning them as the admin dir and common dir instead
+  // of falling back. The fix parses the raw split directly (dropping
+  // only the one trailing empty element the response's own final line
+  // terminator always produces, never any other line) so this exact
+  // shape is correctly recognized as ambiguous. This test simulates
+  // that response for the combined query and confirms the fallback
+  // still fires and still recovers a valid outcome, matching the
+  // ordinary ambiguous-response test above -- this one specifically
+  // exercises the leading-empty-line shape the filtering approach
+  // mishandled.
+  const fixture = setupLinkedWorktree();
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  let intercepted = false;
+  try {
+    try {
+      cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+        const [file, cmdArgs] = args;
+        if (
+          file === 'git' &&
+          Array.isArray(cmdArgs) &&
+          cmdArgs.length === 5 &&
+          cmdArgs[2] === 'rev-parse' &&
+          cmdArgs[3] === '--absolute-git-dir' &&
+          cmdArgs[4] === '--git-common-dir'
+        ) {
+          intercepted = true;
+          // Simulates an empty --absolute-git-dir value paired with a
+          // --git-common-dir value containing one embedded newline: a
+          // leading empty line, then two more lines for the second
+          // value, then the response's own trailing terminator.
+          return '\npart-one\npart-two\n';
+        }
+        return originalExecFileSync(...args);
+      };
+      require('node:module').syncBuiltinESMExports();
+
+      const outcome = acquireClaimLock(
+        fixture.worktree,
+        'agent-a',
+        'claim-a',
+        false,
+      );
+      assert.equal(outcome.mode, 'acquired');
+      assert.equal(
+        intercepted,
+        true,
+        'expected the execFileSync interception to fire for the combined query',
+      );
+    } finally {
+      cp.execFileSync = originalExecFileSync;
+      require('node:module').syncBuiltinESMExports();
+    }
+    assert.equal(checkClaimLock(fixture.worktree).present, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 // Generated-tokens record tests (#2719).
 
 test('generated-tokens: record/read round trip reports the recorded fields', () => {
