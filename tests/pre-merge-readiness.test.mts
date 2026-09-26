@@ -5813,6 +5813,7 @@ test('deriveIddAgentLogins keeps prior trusted operational actors but not generi
         {
           author: { login: 'prior-agent' },
           body: '<!-- review-baseline: github-copilot-cli claim-123 abcdefabcdefabcdefabcdefabcdefabcdefabcd -->\n\n_github-copilot-cli: critique baseline — IDD automation marker. Do not edit._',
+          lastEditedAt: null,
         },
         {
           author: { login: 'maintainer' },
@@ -5837,6 +5838,7 @@ test('deriveIddAgentLogins recognizes a trusted zero-accepted-path-a-gate marker
         {
           author: { login: 'prior-agent' },
           body: `<!-- zero-accepted-path-a-gate: prior-agent claim-123 a ${sha} -->\n\n_prior-agent: Zero-Accepted-PATH-A gate state — IDD automation marker. Do not edit._`,
+          lastEditedAt: null,
         },
       ],
     }),
@@ -5864,10 +5866,33 @@ test('deriveIddAgentLogins excludes trusted forced-handoff marker authors', () =
         {
           author: { login: 'maintainer' },
           body: forcedHandoffBody,
+          lastEditedAt: null,
         },
       ],
     }),
     ['current-agent'],
+  );
+});
+
+test('deriveIddAgentLogins rejects edited or unknown operational markers', () => {
+  const body =
+    '<!-- review-watermark: prior-agent claim-123 abcdefabcdefabcdefabcdefabcdefabcdefabcd none 3 none -->';
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      trustedMarkerLogins: ['prior-agent'],
+      operationalComments: [
+        {
+          author: { login: 'prior-agent' },
+          body,
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+        {
+          author: { login: 'prior-agent' },
+          body,
+        },
+      ],
+    }),
+    [],
   );
 });
 

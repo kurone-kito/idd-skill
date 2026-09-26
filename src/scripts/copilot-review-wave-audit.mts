@@ -42,12 +42,14 @@ import {
 } from './gh-exec.mts';
 import {
   AMD_MARKER_PATTERN,
+  classifyCommentEditState,
   DISPOSITION_ACCEPTED_PREFIX_RE,
   DISPOSITION_REJECTED_PREFIX_RE,
   isCopilotReviewerLogin,
   isRejectionConfirmedDisposition,
   parsePaginatedGhNdjson,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,6 +102,7 @@ export interface RawComment {
   inReplyToId: number | null;
   body: string;
   createdAt: string | null;
+  lastEditedAt?: string | null;
 }
 
 export interface ParsedOpenFinding {
@@ -404,7 +407,11 @@ export function resolveThreadDisposition(
   comments: readonly RawComment[],
 ): Disposition {
   const replies = comments
-    .filter((comment) => comment.inReplyToId === findingId)
+    .filter(
+      (comment) =>
+        comment.inReplyToId === findingId &&
+        classifyCommentEditState(comment) === 'unedited',
+    )
     .slice()
     .sort((a, b) => {
       const aTime = a.createdAt ?? '';
@@ -674,6 +681,7 @@ interface RestCommentPayload {
   in_reply_to_id?: unknown;
   body?: unknown;
   created_at?: unknown;
+  node_id?: unknown;
 }
 
 function toRawReview(raw: RestReviewPayload): RawReview {
@@ -685,7 +693,10 @@ function toRawReview(raw: RestReviewPayload): RawReview {
   };
 }
 
-function toRawComment(raw: RestCommentPayload): RawComment {
+function toRawComment(
+  raw: RestCommentPayload,
+  lastEditedAt?: string | null,
+): RawComment {
   const replyTo = raw.in_reply_to_id;
   return {
     id: Number(raw.id),
@@ -693,6 +704,7 @@ function toRawComment(raw: RestCommentPayload): RawComment {
       replyTo === null || replyTo === undefined ? null : Number(replyTo),
     body: String(raw.body ?? ''),
     createdAt: typeof raw.created_at === 'string' ? raw.created_at : null,
+    lastEditedAt,
   };
 }
 
@@ -767,7 +779,22 @@ export function auditPr(
       .map(toRawReview)
       .filter((review) => isCopilotReviewerLogin(review.login)),
   );
-  const comments = rawComments.map(toRawComment);
+  const nodeIds = rawComments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      `copilot-review-wave-audit: PR #${prNumber} comment is missing node_id, cannot resolve edit state`,
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  const comments = rawComments.map((comment) => {
+    const nodeId = String(comment.node_id);
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `copilot-review-wave-audit: missing edit-state resolution for PR #${prNumber} comment ${nodeId}`,
+      );
+    }
+    return toRawComment(comment, lastEditedAtByNodeId.get(nodeId));
+  });
 
   return computePrAudit(prNumber, copilotReviews, comments);
 }

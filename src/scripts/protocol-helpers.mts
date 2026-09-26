@@ -6525,6 +6525,7 @@ export function deriveIddAgentLogins({
     const markerPrefix = operationalMarkerPrefix(body);
     if (
       !trustedLogins.has(authorLogin) ||
+      classifyCommentEditState(comment) !== 'unedited' ||
       !markerPrefix ||
       !IDD_AGENT_DERIVED_MARKERS.has(markerPrefix)
     ) {
