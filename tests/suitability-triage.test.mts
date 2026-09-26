@@ -6315,6 +6315,19 @@ This is a non-negative fixture; this task requires production dashboard credenti
   assert.equal(result.pass, false);
 });
 
+test('repository fit does not treat a prose mention as an explicit fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This negative fixture shows that this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit rejects prefixed cues that contain a later fixture marker', () => {
   for (const cue of [
     'Non-negative regression fixture',
@@ -6427,6 +6440,19 @@ test('repository fit treats a subjectless conjunction clause as independent acce
       body: `${BASE_ISSUE.body}
 
 Negative fixture: a task requires setup but requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit treats an adversative noun-led clause as independent access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but the workflow needs Slack access.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);

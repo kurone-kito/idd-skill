@@ -195,13 +195,13 @@ const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
 // exception explicit and local; generic or negated wording remains
 // fail-closed.
 const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
-  /(?<![\w-])(?:negative|regression)\s+fixture\b|\bexpected[-\s]+(?:rejection|failure)\b/i;
+  /(?<![\w-])(?:negative|regression)\s+fixture\b[ \t]*:|\bexpected[-\s]+(?:rejection|failure)\b[ \t]*:/i;
 const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
   /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
 const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
   /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b[ \t]+(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b)/i;
 const REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN =
-  /\b(?:but|yet|nor|however|although|while|whereas)\b[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
+  /\b(?:but|yet|nor|however|although|while|whereas)\b(?:[ \t]+(?:(?:the|a|an|this|that|our|your|its|their)\b(?:[ \t]+[A-Za-z][\w-]*){0,4}|(?:[A-Za-z][\w-]*)(?:[ \t]+[A-Za-z][\w-]*){0,3}))?[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
 const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
   /\b(?:slack|jira|datadog)\b/gi;
 const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
