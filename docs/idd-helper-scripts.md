@@ -2884,7 +2884,14 @@ still fails closed:
   `idd-claim.lock`. Fail closed instead. An already-present
   lock still follows the reacquire and collision rules below; this
   refusal only blocks the create (observed 2026-09-25,
-  kurone-kito/idd-skill#3486). Absent on a linked worktree → write the
+  kurone-kito/idd-skill#3486). The automated `--acquire` helper folds
+  this comparison and the admin-dir lookup above into a single
+  `git rev-parse --absolute-git-dir --git-common-dir` spawn instead of
+  two separate lookups, to remove a burst of concurrent `git` spawns
+  under many parallel acquirers racing the same worktree (observed
+  2026-09-26, kurone-kito/idd-skill#3526); this manual fallback keeps
+  the two lookups separate for clarity, since a human operator never
+  faces that concurrency. Absent on a linked worktree → write the
   same JSON holder shape (`agentId`,
   `claimId`, `acquiredAt`) to a same-directory temporary file with a
   unique name (for example `idd-claim.lock.tmp-<pid>-<random>`); once
