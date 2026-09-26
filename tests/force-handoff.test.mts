@@ -537,3 +537,37 @@ test('runHandoff refuses release when forced-handoff mode is not human-gated', a
   );
   assert.equal(posted, false);
 });
+
+// #3346 review finding ("prompt cleanup"): pre-migration, main()'s
+// `runHandoff().catch(...)` called `process.exit(1)` on any error, tearing
+// the whole process (and its readline interface) down unconditionally.
+// Post-migration, main() only returns an error outcome, so a throw from a
+// step after the first prompt -- but before the wizard's own inline
+// `ask.close?.()` calls further down -- used to leave that readline
+// interface open, which would hang a real CLI invocation reading from a
+// TTY. Assert the prompt is always closed, even on this early-throw path.
+test('runHandoff closes the prompt even when a later step throws before its own close call', async () => {
+  let closed = false;
+  const prompt = async (_question: string) => '497';
+  prompt.close = () => {
+    closed = true;
+  };
+
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt,
+          fetchIssueComments: async () => {
+            throw new Error('network boom');
+          },
+        }),
+      ),
+    /network boom/,
+  );
+  assert.equal(
+    closed,
+    true,
+    'ask.close should run even when a later step throws',
+  );
+});
