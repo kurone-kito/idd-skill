@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -2790,14 +2790,43 @@ const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
 const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 
 test('owner evidence requires a generated-tokens record alongside the lock (#3141)', () => {
-  const worktree = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  // A new lock is refused on the primary worktree, so the session evidence
+  // lives on a linked worktree — the same place B1 acquires it.
+  const primary = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const branch = 'issue/3141-owner-evidence';
   const claimId = 'claim-owner-evidence';
   const originalCwd = process.cwd();
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
   try {
     execFileSync('git', ['init', '--quiet', '-b', 'main'], {
-      cwd: worktree,
+      cwd: primary,
       stdio: 'ignore',
     });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'seed',
+      ],
+      { cwd: primary, stdio: 'ignore', env: gitEnv },
+    );
+    execFileSync(
+      'git',
+      ['worktree', 'add', '--quiet', '-b', branch, worktree, 'main'],
+      { cwd: primary, stdio: 'ignore' },
+    );
     acquireClaimLock(worktree, 'agent-owner', claimId, false);
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-owner',
@@ -2818,7 +2847,7 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
     );
     const resolved = buildClaimStateResolution(port, {}, claimId);
     assert.equal(resolved.currentSessionWorktreePath, realpathSync(worktree));
-    assert.equal(resolved.currentSessionBranch, 'main');
+    assert.equal(resolved.currentSessionBranch, branch);
 
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-other',
@@ -2847,7 +2876,16 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
     );
   } finally {
     process.chdir(originalCwd);
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', worktree], {
+        cwd: primary,
+        stdio: 'ignore',
+      });
+    } catch {
+      // best-effort; rmSync below still runs
+    }
     rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
   }
 });
 

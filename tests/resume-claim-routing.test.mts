@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -861,16 +861,44 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
   // this session is proving ownership of by NAME, not by being inside it --
   // process.cwd() is deliberately left pointed at an unrelated, non-git
   // directory to prove the evidence really comes from the passed path.
-  const worktree = mkdtempSync(join(tmpdir(), 'idd-resume-worktree-evidence-'));
+  // A new lock is refused on the primary worktree. The named evidence
+  // path is a linked worktree checked out at the claim's branch.
+  const primary = mkdtempSync(join(tmpdir(), 'idd-resume-worktree-evidence-'));
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
   const unrelatedCwd = mkdtempSync(join(tmpdir(), 'idd-resume-unrelated-cwd-'));
   const claimId = 'claim-worktree-evidence';
   const branch = 'issue/42-task';
   const originalCwd = process.cwd();
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
   try {
-    execFileSync('git', ['init', '--quiet', '-b', branch], {
-      cwd: worktree,
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: primary,
       stdio: 'ignore',
     });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'seed',
+      ],
+      { cwd: primary, stdio: 'ignore', env: gitEnv },
+    );
+    execFileSync(
+      'git',
+      ['worktree', 'add', '--quiet', '-b', branch, worktree, 'main'],
+      { cwd: primary, stdio: 'ignore' },
+    );
     acquireClaimLock(worktree, 'agent-owner', claimId, false);
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-owner',
@@ -925,7 +953,16 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
     assert.equal(result.reason, 'claim-id-match');
   } finally {
     process.chdir(originalCwd);
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', worktree], {
+        cwd: primary,
+        stdio: 'ignore',
+      });
+    } catch {
+      // best-effort; rmSync below still runs
+    }
     rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
     rmSync(unrelatedCwd, { recursive: true, force: true });
   }
 });

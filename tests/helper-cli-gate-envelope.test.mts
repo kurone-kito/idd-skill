@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -128,11 +128,51 @@ process.exit(1);
 `;
 
 test('claim-lock acquire collision is an envelope gate exit 2', () => {
-  withGitRepo((repo) => {
+  // --acquire refuses a brand-new lock on the primary worktree (exit 4).
+  // Collision is the second acquire against a lock that already exists, so
+  // stage that lock on a linked worktree.
+  const primary = mkdtempSync(join(tmpdir(), 'idd-gate-envelope-'));
+  const linked = join(primary, '..', `${basename(primary)}-wt`);
+  const gitEnv = fixtureEnv();
+  gitEnv.GIT_AUTHOR_NAME = 'idd-test';
+  gitEnv.GIT_AUTHOR_EMAIL = 'idd-test@example.com';
+  gitEnv.GIT_COMMITTER_NAME = 'idd-test';
+  gitEnv.GIT_COMMITTER_EMAIL = 'idd-test@example.com';
+  try {
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: primary,
+      env: gitEnv,
+    });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+      cwd: primary,
+      env: gitEnv,
+    });
+    execFileSync('git', ['config', 'user.name', 'Test'], {
+      cwd: primary,
+      env: gitEnv,
+    });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'seed',
+      ],
+      { cwd: primary, env: gitEnv },
+    );
+    execFileSync(
+      'git',
+      ['worktree', 'add', '--quiet', '-b', 'issue/1-gate', linked, 'main'],
+      { cwd: primary, env: gitEnv },
+    );
     const first = spawnBin('idd-claim-lock.mjs', [
       '--acquire',
       '--worktree',
-      repo,
+      linked,
       '--agent-id',
       'gate-envelope-a',
       '--claim-id',
@@ -142,7 +182,7 @@ test('claim-lock acquire collision is an envelope gate exit 2', () => {
     const collision = spawnBin('idd-claim-lock.mjs', [
       '--acquire',
       '--worktree',
-      repo,
+      linked,
       '--agent-id',
       'gate-envelope-b',
       '--claim-id',
@@ -150,7 +190,18 @@ test('claim-lock acquire collision is an envelope gate exit 2', () => {
     ]);
     assertGate(collision, 2);
     assert.match(collision.stdout, /"mode":"collision"/);
-  });
+  } finally {
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', linked], {
+        cwd: primary,
+        env: gitEnv,
+      });
+    } catch {
+      // best-effort; rmSync below still runs
+    }
+    rmSync(linked, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
 });
 
 test('claim-lock backfill with no lock is an envelope gate exit 2', () => {

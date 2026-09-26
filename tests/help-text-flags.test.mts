@@ -143,8 +143,10 @@ const UNIVERSAL_FLAGS = new Set(['--help']);
 // the owning command so the exclusion stays auditable.
 const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
   'claim-lock': [
-    // `git rev-parse --absolute-git-dir` -- a git flag, not claim-lock's own.
+    // `git rev-parse --absolute-git-dir` / `--git-common-dir` -- git flags,
+    // not claim-lock's own.
     '--absolute-git-dir',
+    '--git-common-dir',
     // resume-claim-routing.mjs's own flag, cited as a cross-tool example of
     // how to re-verify claim state before an authorized takeover.
     '--fresh-claim-gate',
