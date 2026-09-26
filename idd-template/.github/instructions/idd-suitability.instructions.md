@@ -52,12 +52,12 @@ Does the issue describe work scoped to this repository?
   context only when it is a correctly indented loose-list continuation
   paragraph whose cue text also identifies the external/access context. A
   heading at the list item's indentation ends that context. Inline-code terms
-  remain scannable when they occur in a live prerequisite, while an
-  inline-code-only example is ignored. A separate live prerequisite still
-  fails this check, while unrelated or negated cues (including `non-`/`not-`
-  prefixed variants), a cue after the access phrase, a cue in another
-  paragraph, and ambiguous wording remain fail-closed. This boundary follows
-  the observed false positive in issue #3522.
+  remain scannable when they occur in a live prerequisite, while fixture cues
+  inside inline code and inline-code-only examples are ignored. A separate
+  live prerequisite still fails this check, while unrelated or negated cues
+  (including `non-`/`not-` prefixed variants), a cue after the access phrase,
+  a cue in another paragraph, and ambiguous wording remain fail-closed. This
+  boundary follows the observed false positive in issue #3522.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence

@@ -2277,6 +2277,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
     context: string,
     externalMatchOffset: number,
     allowLooseContinuation: boolean,
+    contextStart: number,
   ) => {
     const cuePattern = new RegExp(
       REPOSITORY_FIT_FIXTURE_CUE_PATTERN.source,
@@ -2288,6 +2289,15 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         continue;
       }
       const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
+      const cueGlobalStart = contextStart + cueIndex;
+      const cueGlobalEnd = contextStart + cueEnd;
+      if (
+        inlineCodeRanges.some(
+          (range) => cueGlobalStart >= range.start && cueGlobalEnd <= range.end,
+        )
+      ) {
+        continue;
+      }
       const cueWindow = context.slice(Math.max(0, cueIndex - 40), cueEnd);
       if (REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN.test(cueWindow)) {
         continue;
@@ -2363,6 +2373,7 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
         scanBody.slice(span.start, span.end),
         matchIndex - span.start,
         allowLooseContinuation,
+        span.start,
       )
     ) {
       continue;

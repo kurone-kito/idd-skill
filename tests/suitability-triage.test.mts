@@ -6598,6 +6598,17 @@ test('repository fit ignores an inline-code-only access example', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit ignores an inline-code fixture cue beside live access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n\`negative fixture\` this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit allows a post-verb negated external-access statement', () => {
   // negation after the requirement verb ("requires **no** …"), inside the
   // EXTERNAL_SYSTEM_ACCESS_PATTERN match rather than before it
