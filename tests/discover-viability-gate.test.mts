@@ -1924,6 +1924,48 @@ test("detects plural possessive maintainers' approval blockers (#3522)", () => {
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('does not let an impossible-without credential blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 171,
+    title: 'document credential storage',
+    body:
+      'Implementation is impossible without a credential. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let parser requirements from a maintainer pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 172,
+    title: 'document parser token handling',
+    body:
+      'The parser requires a token from the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let cache-key acquisition from a maintainer pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 173,
+    title: 'document cache key handling',
+    body:
+      'The cache key must be obtained from the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
   const result = evaluateA4Viability({
     number: 167,

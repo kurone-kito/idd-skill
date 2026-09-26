@@ -291,9 +291,11 @@ const CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN =
 const CREDENTIAL_ACQUISITION_ASSERTION_PATTERN =
   /\b(?:obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
 const CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN =
-  /\b(?:cannot|can't)\b[^.;:!?]{0,80}\b(?:without|unless)\s+(?:(?:an?|the)\s+)?$/i;
-const CREDENTIAL_PROVIDER_FORWARD_ASSERTION_PATTERN =
-  /^\s+(?:(?:[A-Za-z][\w-]*\s+){0,2})(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created)\b(?:\s+by\s+[^.;:!?\n]{1,40})?\s+(?:before|until)\b/i;
+  /\b(?:cannot|can't|impossible|unable)\b[^.;:!?]{0,80}\b(?:without|unless)\s+(?:(?:an?|the)\s+)?$/i;
+const CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN = new RegExp(
+  String.raw`(?:\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created|obtained|acquired|fetched|retrieved|generated)\b(?:\s+(?:by|from)\s+[^.;:!?\n]{1,40})?\s+(?:before|until)\b|\b(?:require[sd]?|needs?)\b[^.;:!?\n]{0,80}\b(?:from|by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b)`,
+  'i',
+);
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
   /\bcredential[- ]prompt(?:ing)?\b/i;
 const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
@@ -953,9 +955,10 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
     /\b(?:security|authentication|authorization|production|secret|access|permission|api|signing|private|public)\b/i.test(
       statusContext,
     );
+  const directRequirementContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
   if (
     CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN.test(requirementContextBefore) ||
-    CREDENTIAL_PROVIDER_FORWARD_ASSERTION_PATTERN.test(requirementContextAfter)
+    CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext)
   ) {
     return false;
   }
@@ -963,21 +966,17 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   // dependency merely because it uses `key` or `token` (#3522 Copilot
   // review). Keep the programming-language exception narrow and let nearby
   // security context win when both meanings are present.
-  if (/^(?:keys?|tokens?)$/i.test(vocabulary)) {
-    const contextStart = Math.max(0, matchIndex - 100);
-    const contextEnd = Math.min(corpus.length, matchEnd + 100);
-    const context = corpus.slice(contextStart, contextEnd);
-    if (
-      /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index)\b/i.test(
-        context,
-      ) &&
-      !/\b(?:production|credential|credentials|secret|secrets|security|authentication|authorization|access|permission|api|signing|private|public)\b/i.test(
-        context,
-      )
-    ) {
-      return true;
-    }
-  }
+  const contextStart = Math.max(0, matchIndex - 100);
+  const contextEnd = Math.min(corpus.length, matchEnd + 100);
+  const context = corpus.slice(contextStart, contextEnd);
+  const isProgrammingVocabulary =
+    /^(?:keys?|tokens?)$/i.test(vocabulary) &&
+    /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index)\b/i.test(
+      context,
+    ) &&
+    !/\b(?:production|credential|credentials|secret|secrets|security|authentication|authorization|access|permission|api|signing|private|public)\b/i.test(
+      context,
+    );
   if (
     CREDENTIAL_PROMPTING_ASSERTION_PATTERN.test(
       corpus.slice(matchIndex, matchEnd + 40),
@@ -999,16 +998,18 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   ) {
     return false;
   }
-  if (
+  const hasCredentialRequirement =
     isNearRequirementAssertion(
       corpus,
       matchIndex,
       matchEnd,
       CREDENTIAL_REQUIREMENT_ASSERTION_PATTERN,
-    ) ||
-    isFollowedByCredentialRequirement(corpus, matchEnd)
-  ) {
+    ) || isFollowedByCredentialRequirement(corpus, matchEnd);
+  if (hasCredentialRequirement && !isProgrammingVocabulary) {
     return false;
+  }
+  if (isProgrammingVocabulary) {
+    return true;
   }
   const purposeRawTail = corpus.slice(
     matchEnd,
