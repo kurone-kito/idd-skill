@@ -360,21 +360,15 @@ login).
      `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold from **AW4** and
      stop; otherwise (`phase-specific`, default) skip the wait,
      proceed to E15.
-   - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"` (cap not
-     exhausted): try add-reviewer, then REST `requested_reviewers`.
-     Post only after current-attempt evidence (newer matching event than
-     a pre-request snapshot and after HEAD, or non-empty request node
-     read after requesting); exit status is not evidence (issue `#3500`).
-     If absent, follow the commands link for `requestReviews`.
-     ([commands](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request)).
-     Still absent: stop and ask maintainer; do not poll or
-     continue to E15.
+   - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"`: request via
+     add-reviewer/REST. Post only after current-attempt evidence: a
+     newer matching event than the pre-request snapshot and after HEAD,
+     or a non-empty node after requesting. Exit status is not evidence
+     (issue `#3500`).
+     See the [registration fallback](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
+     if absent, ask the maintainer and do not poll or continue to E15.
 
-     ```text
-     advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
-     ```
-
-     Use `PR_HEAD_SHA` as `{head-SHA}`; post as plain text, not HTML.
+     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"true"` (unproven coverage —
      PR #1562): consult **`AW3-S`**'s `staleRequestRecovery` first —
      `"attempt"` runs its bounded remove/re-request/verify/mark cycle
