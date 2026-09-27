@@ -34,7 +34,7 @@ for when this applies).
    commits. Run this from the primary worktree while on `main`:
 
    ```sh
-   git fetch origin main
+   git fetch origin
    git log origin/main..main --oneline
    ```
 
@@ -130,8 +130,8 @@ resolve it first: read `developmentBranch` from
 defaultBranchRef --jq .defaultBranchRef.name`; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
-`git fetch origin {development-branch}` (may be missing/stale
-otherwise). Use **WorkTrunk** if available (create verb:
+`git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
+if available (create verb:
 `wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`

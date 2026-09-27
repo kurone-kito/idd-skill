@@ -535,6 +535,47 @@ test('buildParkedChangeReport: two markers sharing one originating issue read th
   assert.deepEqual(report.parkedIssues, [555]);
 });
 
+// #3249: `idd-provider-outage-park` is one of the issue's own explicit
+// restrict-only exceptions -- ignoring an edited marker would LOWER the
+// parked count and could lift `providerOutage.maxParkedChanges`, so an
+// edited trusted park marker must still count exactly like the unedited
+// case (mirrors the "two markers sharing one originating issue" fixture
+// above, but with `last_edited_at` set on the marker comment).
+test('buildParkedChangeReport: an edited trusted park marker still counts (restrict-only, unchanged)', () => {
+  const markerBody = renderProviderOutageParkComment({
+    actor: 'claude-1',
+    issueNumber: 555,
+    service: 'advisory-review',
+    headSha: 'a'.repeat(40),
+    claimId: 'claim-1',
+    parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
+  });
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (_owner, _repo, number: number) => {
+        if (number === 7) {
+          return [
+            {
+              body: markerBody,
+              created_at: '2026-09-02T00:00:05Z',
+              user: { login: 'kurone-kito' },
+              last_edited_at: '2026-09-02T00:30:00Z',
+            },
+          ];
+        }
+        return [];
+      },
+    }),
+  );
+  assert.equal(report.count, 1);
+  assert.deepEqual(report.parkedIssues, [555]);
+});
+
 test('buildParkedChangeReport: a REAL later claimed-by comment on the originating issue (via renderClaimedByMarker, latestTrustedClaimCreatedAt end to end) retires the marker', () => {
   const markerBody = renderProviderOutageParkComment({
     actor: 'claude-1',
@@ -575,6 +616,7 @@ test('buildParkedChangeReport: a REAL later claimed-by comment on the originatin
             body: laterClaimBody,
             created_at: '2026-09-02T02:00:00Z',
             user: { login: 'kurone-kito' },
+            lastEditedAt: null,
           },
         ];
       },
@@ -583,6 +625,62 @@ test('buildParkedChangeReport: a REAL later claimed-by comment on the originatin
   assert.equal(report.count, 0);
   assert.equal(report.retiredCount, 1);
   assert.deepEqual(report.parkedIssues, []);
+});
+
+test('buildParkedChangeReport: an edited later claimed-by comment does not retire the marker', () => {
+  const markerBody = renderProviderOutageParkComment({
+    actor: 'claude-1',
+    issueNumber: 555,
+    service: 'advisory-review',
+    headSha: 'a'.repeat(40),
+    claimId: 'claim-1',
+    parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
+  });
+  const laterClaimBody = renderClaimedByMarker({
+    agentId: 'claude-2',
+    claimId: 'claim-2',
+    supersedes: 'none',
+    timestamp: '2026-09-02T01:00:00Z',
+    branch: 'issue/555-resume',
+  });
+  const resolveClaimEditStateCalls: boolean[] = [];
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (
+        _owner,
+        _repo,
+        number: number,
+        resolveClaimEditState?: boolean,
+      ) => {
+        resolveClaimEditStateCalls.push(resolveClaimEditState === true);
+        return number === 7
+          ? [
+              {
+                body: markerBody,
+                created_at: '2026-09-02T00:00:05Z',
+                user: { login: 'kurone-kito' },
+              },
+            ]
+          : [
+              {
+                body: laterClaimBody,
+                created_at: '2026-09-02T02:00:00Z',
+                user: { login: 'kurone-kito' },
+                lastEditedAt: '2026-09-02T03:00:00Z',
+              },
+            ];
+      },
+    }),
+  );
+  assert.equal(report.count, 1);
+  assert.equal(report.retiredCount, 0);
+  assert.deepEqual(report.parkedIssues, [555]);
+  assert.deepEqual(resolveClaimEditStateCalls, [false, true]);
 });
 
 test('buildParkedChangeReport: a real claimed-by comment BEFORE the park comment does not retire the marker', () => {
@@ -622,6 +720,7 @@ test('buildParkedChangeReport: a real claimed-by comment BEFORE the park comment
                 body: earlierClaimBody,
                 created_at: '2026-09-01T00:00:00Z', // BEFORE the marker
                 user: { login: 'kurone-kito' },
+                lastEditedAt: null,
               },
             ],
     }),

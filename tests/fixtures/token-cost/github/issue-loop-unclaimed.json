@@ -7,6 +7,7 @@
             {
               "body": "<!-- claimed-by: claude-test cid-unclaimed supersedes: none 2026-02-01T00:00:00Z branch: issue/9002-test -->\n\n_claude-test: issue claim — IDD automation marker. Do not edit._",
               "createdAt": "2026-02-01T00:00:00Z",
+              "lastEditedAt": null,
               "author": {
                 "login": "claude-test"
               }
@@ -14,6 +15,7 @@
             {
               "body": "<!-- unclaimed-by: claude-test cid-unclaimed 2026-02-01T00:05:00Z -->\n\n_claude-test: issue claim released — IDD automation marker. Do not edit._",
               "createdAt": "2026-02-01T00:05:00Z",
+              "lastEditedAt": null,
               "author": {
                 "login": "claude-test"
               }

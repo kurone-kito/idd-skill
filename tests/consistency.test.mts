@@ -2752,7 +2752,6 @@ const REVIEW_TRIAGE_ALLOWED_MAIN_LINES = new Set([
 const B1_TRUSTED_CHECKOUT_MAIN_LINES = new Set([
   '1. Ensure the local `main` branch is up to date and has no local',
   'commits. Run this from the primary worktree while on `main`:',
-  'git fetch origin main',
   'git log origin/main..main --oneline',
   'If the second command outputs any lines, local `main` has unpushed',
   'commits — stop and report, do not force-reset `main`. Otherwise,',
@@ -2884,6 +2883,119 @@ test('idd-work.instructions.md confines every bare `main` mention to the B1 trus
     findUnallowedMainLines(text, B1_TRUSTED_CHECKOUT_MAIN_LINES),
     [],
     'a `main` mention outside the B1 trusted-checkout allowlist regressed the {development-branch} migration',
+  );
+});
+
+test('single-branch fetches that are read back via origin/<branch> use a destination refspec or plain `git fetch origin` (#3506)', () => {
+  // A single-branch `git fetch origin <branch>` with no destination
+  // refspec is not guaranteed to refresh `refs/remotes/origin/<branch>`
+  // on every clone. Every listed occurrence below either fetches into a
+  // fully-qualified `+refs/heads/<branch>:refs/remotes/origin/<branch>`
+  // destination (self-sufficient regardless of the clone's configured
+  // refspec, and the fully-qualified source avoids a reproducible
+  // `fetch.prune=true` first-fetch deletion that a short `<branch>`
+  // source can trigger) or, only where a destination refspec would
+  // breach a byte-budgeted file's ceiling, falls back to plain
+  // `git fetch origin` (which still refreshes every remote-tracking ref
+  // via the standard clone's own
+  // `+refs/heads/*:refs/remotes/origin/*` refspec).
+  const workText = readText(
+    'idd-template/.github/instructions/idd-work.instructions.md',
+  );
+  assert.ok(
+    workText.includes('git fetch origin\n   git log origin/main..main'),
+    'idd-work.instructions.md B1 must use plain `git fetch origin` before reading origin/main (#3506)',
+  );
+  assert.ok(
+    workText.includes(
+      'never fall back. Then\n`git fetch origin` (may be missing/stale',
+    ),
+    'idd-work.instructions.md B1 Worktree creation must use plain `git fetch origin` before reading origin/{development-branch} (#3506)',
+  );
+  assert.doesNotMatch(
+    workText,
+    /git fetch origin main\b/,
+    'idd-work.instructions.md must not reintroduce a bare single-branch `git fetch origin main` (#3506)',
+  );
+
+  const developmentBranchRefspec =
+    'git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}';
+  assert.ok(
+    readText(
+      'idd-template/.github/instructions/idd-review-fix.instructions.md',
+    ).includes(developmentBranchRefspec),
+    'idd-review-fix.instructions.md must fetch {development-branch} with a fully-qualified destination refspec before reading origin/{development-branch} (#3506)',
+  );
+
+  // idd-merge.instructions.md's F4 step 4, idd-pr-submit.instructions.md's
+  // D1, and idd-review-triage.instructions.md's E-phase sync path all
+  // fetch immediately before reading origin/{development-branch} too, but
+  // each sits in a bundle or per-file budget close enough to its
+  // context-ceiling that the fully-qualified destination refspec form
+  // tips it over -- so each uses the same plain `git fetch origin`
+  // fallback as idd-work.instructions.md instead.
+  const mergeText = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  assert.ok(
+    mergeText.includes(
+      'git fetch origin\n   git switch {development-branch} ||',
+    ),
+    'idd-merge.instructions.md F4 step 4 must use plain `git fetch origin` before reading origin/{development-branch} (#3506)',
+  );
+  assert.doesNotMatch(
+    mergeText,
+    /git fetch origin \{development-branch\}/,
+    'idd-merge.instructions.md must not reintroduce a bare single-branch fetch of {development-branch} (#3506)',
+  );
+
+  const prSubmitText = readText(
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+  );
+  assert.ok(
+    prSubmitText.includes(
+      'First run `git fetch origin`, then check whether the branch is',
+    ),
+    'idd-pr-submit.instructions.md D1 must use plain `git fetch origin` before reading origin/{development-branch} (#3506)',
+  );
+  assert.doesNotMatch(
+    prSubmitText,
+    /git fetch origin \{development-branch\}/,
+    'idd-pr-submit.instructions.md must not reintroduce a bare single-branch fetch of {development-branch} (#3506)',
+  );
+
+  const reviewTriageText = readText(
+    'idd-template/.github/instructions/idd-review-triage.instructions.md',
+  );
+  assert.ok(
+    reviewTriageText.includes(
+      '`git fetch origin && git merge\n   origin/{development-branch}`',
+    ),
+    'idd-review-triage.instructions.md E-phase sync path must use plain `git fetch origin` before reading origin/{development-branch} (#3506)',
+  );
+  assert.doesNotMatch(
+    reviewTriageText,
+    /git fetch origin \{development-branch\}/,
+    'idd-review-triage.instructions.md must not reintroduce a bare single-branch fetch of {development-branch} (#3506)',
+  );
+
+  const resumeDetail = readText('idd-template/docs/idd-resume-detail.md');
+  assert.ok(
+    resumeDetail.includes(
+      'git fetch origin +refs/heads/{branch}:refs/remotes/origin/{branch}',
+    ),
+    'idd-resume-detail.md §W7 must fetch {branch} with a destination refspec before reading origin/{branch} (#3506)',
+  );
+  assert.ok(
+    resumeDetail.includes(developmentBranchRefspec),
+    'idd-resume-detail.md §CSA must fetch {development-branch} with a destination refspec (#3506)',
+  );
+
+  assert.ok(
+    readText('idd-template/docs/idd-helper-scripts.md').includes(
+      'git fetch origin +refs/heads/main:refs/remotes/origin/main',
+    ),
+    'the signed-commit merge wrapper section must fetch main with a destination refspec before reading origin/main (#3506)',
   );
 });
 

@@ -299,11 +299,14 @@ export function isClaimlessEligible(port, pr, options = {}) {
     // closed to in-loop regardless of claim state (closingIssueNumbers is
     // null).
     for (const issueNumber of closingIssueNumbers ?? []) {
-      const events = port.listWorkItemComments(issueNumber).map((comment) => ({
-        body: comment.body,
-        createdAt: comment.createdAt,
-        author: { login: comment.authorLogin },
-      }));
+      const events = port
+        .listWorkItemComments(issueNumber, { includeEditState: true })
+        .map((comment) => ({
+          body: comment.body,
+          createdAt: comment.createdAt,
+          author: { login: comment.authorLogin },
+          lastEditedAt: comment.lastEditedAt,
+        }));
       if (resolveActiveClaim(events, isTrustedAuthor)) {
         closingIssueClaimState = 'present';
         break;
@@ -399,11 +402,14 @@ export function activeOwnedClaim(
   forcedHandoffOptions,
   staleAgeMs,
 ) {
-  const comments = port.listWorkItemComments(issue);
+  const comments = port.listWorkItemComments(issue, {
+    includeEditState: true,
+  });
   const events = comments.map((comment) => ({
     body: comment.body,
     createdAt: comment.createdAt,
     author: { login: comment.authorLogin },
+    lastEditedAt: comment.lastEditedAt,
   }));
   const active = resolveActiveClaimForWriteGate(events, {
     isTrustedAuthor,

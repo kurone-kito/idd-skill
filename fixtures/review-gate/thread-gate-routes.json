@@ -8,16 +8,21 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -39,21 +44,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -81,21 +94,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -122,21 +143,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -163,22 +192,30 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
               "createdAt": "2026-05-11T08:05:00Z",
-              "updatedAt": "2026-05-11T08:07:00Z"
+              "updatedAt": "2026-05-11T08:07:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -204,26 +241,37 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Not quite right yet.",
-              "createdAt": "2026-05-11T08:06:00Z"
+              "createdAt": "2026-05-11T08:06:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -250,16 +298,21 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "**Awaiting maintainer decision** — I think this still needs work.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -285,16 +338,21 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "Follow-up note: `**Awaiting maintainer decision**` is only quoted here.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -321,16 +379,21 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -356,21 +419,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "maintainer" },
+              "author": {
+                "login": "maintainer"
+              },
               "body": "I disagree; please take the requested change.",
-              "createdAt": "2026-05-11T08:06:00Z"
+              "createdAt": "2026-05-11T08:06:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -397,16 +468,21 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
-              "createdAt": "2026-05-11T08:06:00Z"
+              "createdAt": "2026-05-11T08:06:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -431,19 +507,26 @@
         "isResolved": false,
         "updatedAt": "2026-05-11T08:05:00Z",
         "comments": {
-          "pageInfo": { "hasNextPage": true },
+          "pageInfo": {
+            "hasNextPage": true
+          },
           "nodes": [
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author"
     },
     "expected": {
@@ -469,21 +552,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "idd-bot" },
+              "author": {
+                "login": "idd-bot"
+              },
               "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author",
       "requiresConversationResolution": true
     },
@@ -510,21 +601,29 @@
         "comments": {
           "nodes": [
             {
-              "author": { "login": "reviewer" },
+              "author": {
+                "login": "reviewer"
+              },
               "body": "Please adjust this branch.",
-              "createdAt": "2026-05-11T08:00:00Z"
+              "createdAt": "2026-05-11T08:00:00Z",
+              "lastEditedAt": null
             },
             {
-              "author": { "login": "author" },
+              "author": {
+                "login": "author"
+              },
               "body": "Applied in the latest push.",
-              "createdAt": "2026-05-11T08:05:00Z"
+              "createdAt": "2026-05-11T08:05:00Z",
+              "lastEditedAt": null
             }
           ]
         }
       }
     ],
     "options": {
-      "iddAgentLogins": ["idd-bot"],
+      "iddAgentLogins": [
+        "idd-bot"
+      ],
       "prAuthorLogin": "author",
       "requiresConversationResolution": true
     },

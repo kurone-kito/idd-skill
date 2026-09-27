@@ -874,6 +874,13 @@ export interface SuitabilityRejectionComment {
   created_at?: unknown;
   user?: { login?: unknown } | null;
   html_url?: unknown;
+  /** #3249: a suitability-rejection record is one of the issue's own named
+   * restrict-only exceptions -- ignoring an edited record would let a
+   * candidate the gate already rejected re-enter Discover's candidate set,
+   * loosening the gate instead of tightening it. Declared here only so a
+   * test fixture carrying it type-checks; `findTrustedSuitabilityRejection`
+   * never consults it and intentionally applies no edit-state gate. */
+  last_edited_at?: unknown;
 }
 
 /**

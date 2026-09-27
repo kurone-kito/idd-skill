@@ -18,17 +18,26 @@
 
 import { parseCliArgs } from './cli-args.mts';
 import { ghApiJson, ghText } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   compareIsoTimestamps,
+  filterTrustedClaimFamilyEvents,
   type ParsedProviderOutagePark,
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
   toSecondPrecisionIso,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
@@ -175,9 +184,23 @@ export function buildParkedChangeList(
 
 /** One issue comment, in the shape the GitHub REST list endpoint returns. */
 interface CommentLike {
+  id?: string | number | null;
+  node_id?: string | null;
   body?: string | null;
   created_at?: string | null;
+  createdAt?: string | null;
+  author?: { login?: string | null } | null;
   user?: { login?: string | null } | null;
+  /** #3249: `idd-provider-outage-park` is one of the issue's own named
+   * restrict-only exceptions -- ignoring an edited marker would LOWER the
+   * parked count and could lift `providerOutage.maxParkedChanges`, the
+   * opposite of every other family this issue tightens. Declared here only
+   * so a test fixture carrying it type-checks; this reader never consults
+   * it and intentionally applies no edit-state gate. */
+  last_edited_at?: string | null;
+  lastEditedAt?: string | null;
+  html_url?: string | null;
+  url?: string | null;
 }
 
 /**
@@ -231,7 +254,12 @@ function latestTrustedClaimCreatedAt(
   trustedMarkerLogins: ReadonlySet<string>,
 ): string | null {
   let latest: string | null = null;
-  for (const comment of comments) {
+  const trusted = (login: string) =>
+    trustedMarkerLogins.has(login.trim().toLowerCase());
+  for (const comment of filterTrustedClaimFamilyEvents(
+    [...comments],
+    trusted,
+  )) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
@@ -343,6 +371,7 @@ type FetchComments = (
   owner: string,
   repo: string,
   number: number,
+  resolveClaimEditState?: boolean,
 ) => CommentLike[];
 
 const defaultFetchOpenPullRequests: FetchOpenPullRequests = (
@@ -359,7 +388,12 @@ const defaultFetchOpenPullRequests: FetchOpenPullRequests = (
   return payload as GhOpenPullRequest[];
 };
 
-const defaultFetchComments: FetchComments = (owner, repo, number) => {
+const defaultFetchComments: FetchComments = (
+  owner,
+  repo,
+  number,
+  resolveClaimEditState = false,
+) => {
   const payload = ghApiJson(
     `repos/${owner}/${repo}/issues/${number}/comments`,
     {
@@ -369,7 +403,21 @@ const defaultFetchComments: FetchComments = (owner, repo, number) => {
   if (!Array.isArray(payload)) {
     throw new Error('malformed comments response');
   }
-  return payload as CommentLike[];
+  const comments = payload as CommentLike[];
+  if (!resolveClaimEditState || comments.length === 0) {
+    return comments;
+  }
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'provider-outage-park: comment response is missing node_id required to resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => ({
+    ...comment,
+    lastEditedAt: lastEditedAtByNodeId.get(nodeIds[index]),
+  }));
 };
 
 /**
@@ -422,10 +470,16 @@ function collectRawParkMarkers(
   try {
     openPrs = fetchOpenPullRequests(owner, repo, sampleSize);
   } catch (error) {
+    // #3346 review finding: preserve the original gh-exec.mts-tagged error
+    // as `.cause` (not dropped as before) so classifyHelperError's
+    // cause-chain walk can still classify a real gh transport/not-found
+    // failure correctly instead of losing it to the generic `internal`
+    // fallback -- mirrors provider-outage-declaration.mts's identical fix.
     throw new Error(
       `could not read open pull requests to list parked changes: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
     );
   }
 
@@ -444,7 +498,7 @@ function collectRawParkMarkers(
     if (cached !== undefined) return cached;
     let result: string | null;
     try {
-      const issueComments = fetchComments(owner, repo, issueNumber);
+      const issueComments = fetchComments(owner, repo, issueNumber, true);
       result = latestTrustedClaimCreatedAt(
         issueComments,
         options.trustedMarkerLogins,
@@ -712,8 +766,10 @@ export function runParkPullRequest(options: {
   if (
     !PROVIDER_HEALTH_SERVICES.includes(options.service as ProviderHealthService)
   ) {
-    throw new Error(
-      `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+    throw markCliUsageError(
+      new Error(
+        `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+      ),
     );
   }
   const service = options.service as ProviderHealthService;
@@ -816,23 +872,27 @@ const PROVIDER_OUTAGE_PARK_FLAG_SPEC = {
 function parsePositiveIntegerFlag(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-outage-park', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 
-function main(): void {
+function main(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     PROVIDER_OUTAGE_PARK_FLAG_SPEC,
   );
   if (help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
 
   // #3277: --park and --parked-issues are two independent single-purpose
@@ -840,7 +900,9 @@ function main(): void {
   // either mode's own flag validation runs, the same fail-closed posture
   // pre-merge-readiness.mts applies to its own mutually-exclusive flags.
   if ((values.park as boolean) && (values['parked-issues'] as boolean)) {
-    throw new Error('--park and --parked-issues are mutually exclusive');
+    throw markCliUsageError(
+      new Error('--park and --parked-issues are mutually exclusive'),
+    );
   }
 
   const owner =
@@ -853,7 +915,7 @@ function main(): void {
   if (values['parked-issues'] as boolean) {
     const summary = buildParkedIssuesSummary(owner, repo);
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
-    return;
+    return 0;
   }
 
   if (values.park as boolean) {
@@ -862,9 +924,21 @@ function main(): void {
     const service = (values.service as string).trim();
     const agentId = (values['agent-id'] as string).trim();
     const claimId = (values['claim-id'] as string).trim();
-    if (!service) throw new Error('missing required --service <name> argument');
-    if (!agentId) throw new Error('missing required --agent-id <id> argument');
-    if (!claimId) throw new Error('missing required --claim-id <id> argument');
+    if (!service) {
+      throw markCliUsageError(
+        new Error('missing required --service <name> argument'),
+      );
+    }
+    if (!agentId) {
+      throw markCliUsageError(
+        new Error('missing required --agent-id <id> argument'),
+      );
+    }
+    if (!claimId) {
+      throw markCliUsageError(
+        new Error('missing required --claim-id <id> argument'),
+      );
+    }
     const blockers = (values.blockers as string)
       .split(',')
       .map((b) => b.trim())
@@ -882,12 +956,12 @@ function main(): void {
       apply: values.apply as boolean,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    process.exitCode = result.eligible ? 0 : 1;
-    return;
+    return result.eligible ? 0 : 1;
   }
 
   const report = buildParkedChangeReport(owner, repo);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 
 function printHelp(): void {

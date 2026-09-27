@@ -8,12 +8,20 @@ import {
   compareClaimEventOrder,
   compareClaimIds,
   computePreMergeReadinessBlockers,
+  DEFAULT_STALE_AGE_MS,
+  detectMalformedReviewWatermarkComments,
   EDITED_AFTER_DISPOSITION_HINT,
+  hasFreshDisposition,
+  hasTrustedReviewAckAfter,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
   resolveActiveClaim,
+  resolveActiveClaimForWriteGate,
+  resolveLatestReviewWatermark,
+  summarizeAdvisoryWaitMarkers,
+  summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
@@ -61,6 +69,7 @@ test('reviewCurrency and dispositionEvidence agree a shared advisory/IDD-agent l
           id: 'TC-2',
           author: { login: 'dual-bot' },
           body: '**Accepted** — looks fine.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -141,6 +150,7 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
           id: 'RC-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -273,6 +283,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with no sna
           id: 'F4-2',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -307,6 +318,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a non-advisory trailing reply
           id: 'F4H-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -378,6 +390,7 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
           id: 'F2B-1',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -408,6 +421,51 @@ test('classifyThreadAckOnlyPostDisposition still honors an explicit snapshot bou
   assert.equal(afterBoundary.ackOnlyPostDisposition, true);
 });
 
+test('classifyThreadAckOnlyPostDisposition rejects edited and unknown dispositions (#3249)', () => {
+  const makeThread = (lastEditedAt?: string) => ({
+    id: `thread-edit-state-${lastEditedAt ?? 'unknown'}`,
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'EDIT-1',
+          author: { login: 'reviewer-a' },
+          body: 'please fix this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'EDIT-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done.',
+          ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'EDIT-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  });
+
+  for (const thread of [makeThread('2026-05-12T01:00:00Z'), makeThread()]) {
+    assert.deepEqual(
+      classifyThreadAckOnlyPostDisposition(thread, {
+        iddAgentLogins: ['idd-bot'],
+        advisoryBotLogins: ['coderabbitai[bot]'],
+      }),
+      { ackOnlyPostDisposition: false, inPlaceEditOnly: false },
+    );
+  }
+});
+
 // #2641: `classifyThreadAckOnlyPostDisposition` now additionally requires
 // the post-disposition reply to match a known courtesy-acknowledgment
 // template (derived from actually-observed CodeRabbit replies in this
@@ -425,6 +483,7 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a known-template cou
           id: 'KT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -463,6 +522,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes "acknowledged" as a courte
           id: 'ACK-1',
           author: { login: 'idd-bot' },
           body: '**Rejected** — reaffirming.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -502,6 +562,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a novel substantive reply tha
           id: 'NT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -545,6 +606,7 @@ test('classifyThreadAckOnlyPostDisposition fails closed for a reply with no know
           id: 'UB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -584,6 +646,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply t
           id: 'NC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -627,6 +690,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a confirmation-shaped reply t
           id: 'NC2-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -668,6 +732,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes a courtesy ack with the ma
           id: 'MF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -708,6 +773,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a reply carrying only the �
           id: 'EO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -748,6 +814,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a non-CodeRabbit bot reply th
           id: 'NR-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -787,6 +854,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "I couldn\'t resolve" 
           id: 'RF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -833,6 +901,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... con
           id: 'AC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -867,6 +936,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "addresses the ... fin
           id: 'AF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -917,6 +987,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "addresses the ... concer
           id: 'FA-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -968,6 +1039,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'CN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1011,6 +1083,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'CS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1059,6 +1132,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged closure sentence wit
           id: 'HN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1100,6 +1174,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a genuinely new concern in a 
           id: 'CX-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1143,6 +1218,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially addresses
           id: 'HB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1186,6 +1262,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses th
           id: 'BR-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1230,6 +1307,7 @@ test('classifyThreadAckOnlyPostDisposition still recognizes a strong "Review thr
           id: 'SH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1281,6 +1359,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an "addresses the ... concern
           id: 'AU-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1326,6 +1405,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'SC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1365,6 +1445,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'ED-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1405,6 +1486,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unresolved clause joined t
           id: 'AC5-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1447,6 +1529,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback append
           id: 'TT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1487,6 +1570,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback append
           id: 'TS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1530,6 +1614,7 @@ test('classifyThreadAckOnlyPostDisposition rejects genuinely new feedback sandwi
           id: 'TD-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1577,6 +1662,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a coordinating conjunction th
           id: 'BL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1619,6 +1705,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge word hidden inside th
           id: 'HG-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1664,6 +1751,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a same-sentence "addresses th
           id: 'PL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1704,6 +1792,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedged "partially  addresse
           id: 'DS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1751,6 +1840,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge adjective inside the 
           id: 'LH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1789,6 +1879,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a second hedge adjective insi
           id: 'LT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1835,6 +1926,7 @@ test('classifyThreadAckOnlyPostDisposition safely rejects a first "addresses the
           id: 'TO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1875,6 +1967,7 @@ test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's disclai
           id: 'TDO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1913,6 +2006,7 @@ test("classifyThreadAckOnlyPostDisposition recognizes the tail grammar's marker-
           id: 'TMO-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1953,6 +2047,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the lead-in whitelist\'s b
           id: 'PT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -1979,6 +2074,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the lead-in whitelist\'s b
           id: 'PI-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2032,6 +2128,7 @@ test('classifyThreadAckOnlyPostDisposition safely rejects the "Thanks for the fi
           id: 'TF-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2076,6 +2173,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately
           id: 'NV-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2121,6 +2219,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a "no longer addresses" negat
           id: 'NT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2161,6 +2260,7 @@ test('classifyThreadAckOnlyPostDisposition rejects "seldom" before the closure v
           id: 'SL-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2203,6 +2303,7 @@ test('classifyThreadAckOnlyPostDisposition rejects the "in no way" and "by no me
           id: `${id}-1`,
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2257,6 +2358,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an epistemic adverb casting d
           id: 'EP-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2302,6 +2404,7 @@ test('classifyThreadAckOnlyPostDisposition rejects "perhaps" and "possibly" as m
           id: `${id}-1`,
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2357,6 +2460,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a compact conjunction-joined 
           id: 'CC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2397,6 +2501,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a 2-token conjunction bypass 
           id: 'CY-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2441,6 +2546,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
           id: 'MB-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2484,6 +2590,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a hedge adverb immediately be
           id: 'MH-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2527,6 +2634,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a proximity-adverb hedge ("al
           id: 'MA-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2563,6 +2671,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a negation adverb immediately
           id: 'MN-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2607,6 +2716,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a contrastive-adjective varia
           id: 'MC-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2651,6 +2761,7 @@ test('classifyThreadAckOnlyPostDisposition rejects an unrelated trailing sentenc
           id: 'MT-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2693,6 +2804,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a differently-worded trailing
           id: 'MG-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2739,6 +2851,7 @@ test('classifyThreadAckOnlyPostDisposition rejects a second free sentence append
           id: 'MS-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2784,6 +2897,7 @@ test('classifyThreadAckOnlyPostDisposition recognizes the "matches the requested
           id: 'ML-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2839,6 +2953,7 @@ test("classifyThreadAckOnlyPostDisposition rejects a reply combining both the th
           id: 'MX-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2887,6 +3002,7 @@ test("classifyThreadAckOnlyPostDisposition rejects a contrastive adjective insid
           id: 'MW-1',
           author: { login: 'idd-bot' },
           body: '**Accepted** — done.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -2943,6 +3059,7 @@ test('the anchor-set fix honors the [bot]-suffix cross-product (Codex P1, #2014)
             // values below may or may not match this literally.
             author: { login: 'dual-bot[bot]' },
             body: '**Accepted** — looks fine.',
+            lastEditedAt: null,
             createdAt: '2026-05-12T00:30:00Z',
             updatedAt: '2026-05-12T00:30:00Z',
           },
@@ -3028,6 +3145,7 @@ test('the marker-recognition fix only anchors a rejection-confirmed reply on a s
           id: 'RO-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: null,
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T00:30:00Z',
         },
@@ -3087,6 +3205,7 @@ test('a top-level rejection-confirmed comment does not anchor the ack-only windo
     id: 'TL-1',
     author: { login: 'idd-bot' },
     body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+    lastEditedAt: null,
     createdAt: '2026-05-12T00:00:00Z',
     updatedAt: '2026-05-12T00:00:00Z',
   };
@@ -3123,16 +3242,11 @@ test('a top-level rejection-confirmed comment does not anchor the ack-only windo
   );
 });
 
-test('reviewCurrency anchors an edited rejection-confirmed marker by its effective activity, matching dispositionEvidence (#2045)', () => {
+test('reviewCurrency rejects an edited rejection-confirmed marker as an ack-only anchor (#3249)', () => {
   // The maintainer's `**Rejection confirmed by maintainer**` reply is
-  // posted at 00:30 but edited afterward (e.g. a typo fix), so its
-  // updatedAt (01:30) postdates a genuine advisory-bot reply at 01:00 --
-  // between the marker's original createdAt and its edited updatedAt.
-  // dispositionEvidence already anchors the marker by effective
-  // (updatedAt-preferring) activity, so it correctly treats the 01:00
-  // reply as pre-disposition (genuine, not ack-only). Before this fix,
-  // reviewCurrency anchored the same marker by createdAt (00:30) alone,
-  // so it misclassified the 01:00 reply as post-disposition ack-only.
+  // posted at 00:30 but edited afterward (e.g. a typo fix). Its edit state
+  // is explicit, so the marker is not trusted as a disposition anchor even
+  // though its effective activity is later than the advisory-bot reply.
   const thread = {
     id: 'thread-edited-rejection-confirmed',
     isResolved: true,
@@ -3151,6 +3265,7 @@ test('reviewCurrency anchors an edited rejection-confirmed marker by its effecti
           id: 'ERC-2',
           author: { login: 'idd-bot' },
           body: '**Rejection confirmed by maintainer** — agreed, no action needed.',
+          lastEditedAt: '2026-05-12T01:30:00Z',
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T01:30:00Z',
         },
@@ -3183,31 +3298,20 @@ test('reviewCurrency anchors an edited rejection-confirmed marker by its effecti
     },
   );
 
-  // dispositionEvidence already treats the 01:00 reply as pre-disposition
-  // (genuine): the thread needs no fresh disposition of its own.
+  // The external finding is at the snapshot boundary, so it is not a
+  // current blocker for the disposition gate. This assertion only confirms
+  // the edited marker does not become the review-currency anchor below.
   assert.equal(dispositionSummary.route, 'proceed');
   assert.equal(dispositionSummary.blockingCount, 0);
-  assert.deepEqual(dispositionSummary.missingThreads, []);
-
-  // reviewCurrency now agrees: the marker's effective activity (01:30)
-  // anchors the disposition, so the 01:00 reply is genuine, not ack-only.
-  assert.equal(
-    activitySummary.ackOnly.latestDispositionAt,
-    '2026-05-12T01:30:00Z',
-  );
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.equal(activitySummary.ackOnly.latestDispositionAt, 'none');
   assert.deepEqual(activitySummary.ackOnly.items, []);
 });
 
-test('reviewCurrency still anchors an edited ordinary Accepted marker by createdAt, not effective activity (#2045)', () => {
-  // The intentional, pre-existing behavior for ordinary
-  // `**Accepted**`/`**Rejected**` markers -- "Dispositions are not
-  // SHA-bound here" (buildActivitySnapshotSummary's own comment) -- must
-  // NOT change as a side effect of this fix, which is scoped only to the
-  // `**Rejection confirmed by maintainer**` marker. Even though this
-  // `**Accepted**` reply is edited afterward (updatedAt 02:00, after the
-  // advisory-bot's 01:00 reply), it must still anchor by its createdAt
-  // (00:30), so the 01:00 reply stays classified as ack-only exactly as
-  // before this fix.
+test('reviewCurrency rejects an edited ordinary Accepted marker as an ack-only anchor (#3249)', () => {
+  // Ordinary `**Accepted**`/`**Rejected**` markers are trust-bearing too.
+  // An explicit edit therefore removes the marker from the ack-only anchor
+  // set rather than falling back to its createdAt.
   const thread = {
     id: 'thread-edited-accepted',
     isResolved: true,
@@ -3226,6 +3330,7 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
           id: 'AC-2',
           author: { login: 'idd-bot' },
           body: '**Accepted** — looks fine.',
+          lastEditedAt: '2026-05-12T02:00:00Z',
           createdAt: '2026-05-12T00:30:00Z',
           updatedAt: '2026-05-12T02:00:00Z',
         },
@@ -3250,14 +3355,9 @@ test('reviewCurrency still anchors an edited ordinary Accepted marker by created
     },
   );
 
-  assert.equal(
-    activitySummary.ackOnly.latestDispositionAt,
-    '2026-05-12T00:30:00Z',
-  );
-  assert.deepEqual(
-    activitySummary.ackOnly.items.map((item) => item.id),
-    ['AC-3'],
-  );
+  assert.equal(activitySummary.ackOnly.dispositionsPresent, false);
+  assert.equal(activitySummary.ackOnly.latestDispositionAt, 'none');
+  assert.deepEqual(activitySummary.ackOnly.items, []);
 });
 
 // Round 36 field feedback (#3194): a live-status digest edit was still
@@ -3463,6 +3563,40 @@ test('a digest by an iddAgentLogins member outside trustedMarkerLogins never adv
   );
 });
 
+test('an edited or edit-state-unresolved IDD disposition never advances the regular-comment watermark (#3249)', () => {
+  const summarize = (lastEditedAt?: string | null) =>
+    summarizeRegularCommentsForGate(
+      [
+        {
+          id: 'REG-DISPOSITION-1',
+          author: { login: 'reviewer-a' },
+          body: 'Earlier feedback must remain outstanding.',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'REG-DISPOSITION-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — the implementation is correct.',
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+        },
+      ],
+      { iddAgentLogins: ['idd-bot'], trustedMarkerLogins: ['idd-bot'] },
+    );
+
+  for (const summary of [
+    summarize('2026-05-12T02:00:00Z'),
+    summarize(undefined),
+  ]) {
+    assert.equal(summary.count, 1);
+    assert.equal(summary.items[0].id, 'REG-DISPOSITION-1');
+  }
+
+  assert.equal(summarize(null).count, 0);
+});
+
 // Same regression, on the disposition-evidence side: if the digest branch
 // excluded only on `trustedMarkerLogins`, `agent-x`'s digest would wrongly
 // enter `agentReplyComments` and clear the human comment as a
@@ -3494,6 +3628,102 @@ test('a digest by an iddAgentLogins member outside trustedMarkerLogins never pai
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingRegularCommentCount, 1);
   assert.equal(summary.missingRegularComments[0].id, 'REG-3');
+});
+
+// #3249: a disposition with no verifiable edit state must not clear an
+// advisory regular comment. Ordinary non-disposition replies remain eligible
+// for the human presence-only route, but a trust-bearing disposition is
+// accepted only when GitHub explicitly reports `lastEditedAt: null`.
+test('an edit-state-unresolved disposition never pairs as a clearing reply', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 'REG-UNKNOWN-1',
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'The advisory review still needs a disposition.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 'REG-UNKNOWN-2',
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Accepted** — the implementation is correct.',
+          author: { login: 'idd-bot' },
+          // Missing lastEditedAt is the explicit edit-state-unresolved case.
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.reason, 'missing-disposition-evidence');
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingRegularComments[0].id, 'REG-UNKNOWN-1');
+});
+
+test('an edited or edit-state-unresolved AMD marker never pairs as a clearing reply (#3249)', () => {
+  const summarize = (lastEditedAt?: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            id: 'REG-AMD-1',
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'The advisory review still needs a disposition.',
+            author: { login: 'reviewer-a' },
+          },
+          {
+            id: 'REG-AMD-2',
+            createdAt: '2026-05-12T01:00:00Z',
+            body: '**Awaiting maintainer decision** — the implementation is correct.',
+            author: { login: 'idd-bot' },
+            ...(lastEditedAt === undefined ? {} : { lastEditedAt }),
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'], advisoryBotLogins: [] },
+    );
+
+  for (const summary of [summarize('2026-05-12T02:00:00Z'), summarize()]) {
+    assert.equal(summary.route, 'return-to-e1');
+    assert.equal(summary.reason, 'missing-disposition-evidence');
+    assert.equal(summary.missingRegularCommentCount, 1);
+    assert.equal(summary.missingRegularComments[0].id, 'REG-AMD-1');
+  }
+});
+
+test('an ordinary IDD reply still clears a human regular comment', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 'REG-HUMAN-1',
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'Please address this human review comment.',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 'REG-HUMAN-2',
+          createdAt: '2026-05-12T01:00:00Z',
+          body: 'Fixed in the latest commit.',
+          author: { login: 'idd-bot' },
+          // Non-disposition human replies remain presence-only evidence.
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'], advisoryBotLogins: [] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
 });
 
 // #2249: `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
@@ -3690,8 +3920,12 @@ test('disposition evidence hints at an edited-after-disposition notice when the 
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           // Well-formed and genuinely postdated the comment's original
-          // review-finding content at reply time.
+          // review-finding content at reply time. #3249: `lastEditedAt:
+          // null` is the minimized/genuinely-unedited shape -- without it
+          // this disposition's edit state reads as `unknown`, which no
+          // longer counts as evidence either.
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -3732,6 +3966,7 @@ test('disposition evidence does not hint edited-after-disposition when the dispo
           id: 2,
           createdAt: '2026-05-12T02:00:00Z',
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -3772,6 +4007,7 @@ test('disposition evidence does not hint edited-after-disposition when the curre
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -3806,6 +4042,7 @@ test('disposition evidence does not hint edited-after-disposition when the autho
           id: 2,
           createdAt: '2026-05-12T01:00:00Z',
           body: '**Accepted** — looks correct.',
+          lastEditedAt: null,
           author: { login: 'idd-bot' },
         },
       ],
@@ -3845,6 +4082,7 @@ for (const supersedesToken of ['None', 'NONE']) {
         author: { login: 'claude-x' },
         body,
         createdAt: '2026-05-10T00:00:00Z',
+        lastEditedAt: null,
       },
     ]);
     assert.ok(active, `expected ${supersedesToken} to activate the claim`);
@@ -3934,6 +4172,7 @@ test('resolveActiveClaim resolves every valid interleaving of a same-second 3-wa
       body: item.body,
       createdAt: SECOND,
       author: { login: 'trusted-actor' },
+      lastEditedAt: null,
     }));
     const active = resolveActiveClaim(events, () => true);
     if (active?.claimId !== claimOf('a')) {
@@ -4279,4 +4518,413 @@ test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field bef
     ),
     true,
   );
+});
+
+// #3249: reject edited review, evidence, and disposition markers. Each
+// family below proves (a) an edited trusted marker no longer satisfies the
+// reader, (b) an edit-state-unresolved (`unknown`, missing `lastEditedAt`)
+// trusted marker doesn't either -- distinct from `unedited` -- and (c) the
+// minimized shape (`lastEditedAt: null`, `updatedAt` later than `createdAt`)
+// is still honored.
+
+test('resolveLatestReviewWatermark: rejects an edited or edit-state-unresolved trusted watermark, honors the minimized shape', () => {
+  const isTrustedAuthor = () => true;
+  const watermarkBody = (claimId: string) =>
+    [
+      `<!-- review-watermark: claude-x ${claimId} ${'a'.repeat(
+        40,
+      )} none 0 none -->`,
+      '',
+      '_claude-x: review triage snapshot — IDD automation marker. Do not edit._',
+    ].join('\n');
+
+  // (a) edited
+  assert.equal(
+    resolveLatestReviewWatermark(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: watermarkBody('claim-edited'),
+          createdAt: '2026-05-10T00:00:00Z',
+          updatedAt: '2026-05-10T01:00:00Z',
+          lastEditedAt: '2026-05-10T01:00:00Z',
+        },
+      ],
+      { expectedClaimId: 'claim-edited', isTrustedAuthor },
+    ),
+    null,
+  );
+
+  // (b) unknown (no lastEditedAt at all)
+  assert.equal(
+    resolveLatestReviewWatermark(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: watermarkBody('claim-unknown'),
+          createdAt: '2026-05-10T00:00:00Z',
+        },
+      ],
+      { expectedClaimId: 'claim-unknown', isTrustedAuthor },
+    ),
+    null,
+  );
+
+  // (c) minimized shape (lastEditedAt: null, updatedAt later than createdAt)
+  const minimized = resolveLatestReviewWatermark(
+    [
+      {
+        author: { login: 'claude-x' },
+        body: watermarkBody('claim-minimized'),
+        createdAt: '2026-05-10T00:00:00Z',
+        updatedAt: '2026-05-10T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    { expectedClaimId: 'claim-minimized', isTrustedAuthor },
+  );
+  assert.ok(minimized, 'the minimized-shape watermark must still parse');
+});
+
+test('detectMalformedReviewWatermarkComments: an edited or edit-state-unresolved malformed-shaped comment no longer counts as evidence', () => {
+  const gluedNoteBody = [
+    `<!-- review-watermark: claude-x claim-1 ${'a'.repeat(40)} none 0 none -->`,
+    '_IDD note glued directly to the leading underscore, no space before it_',
+  ].join('\n');
+
+  // (a) edited
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+          lastEditedAt: '2026-05-10T01:00:00Z',
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    false,
+  );
+
+  // (b) unknown
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    false,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    detectMalformedReviewWatermarkComments(
+      [
+        {
+          author: { login: 'claude-x' },
+          body: gluedNoteBody,
+          createdAt: '2026-05-10T00:00:00Z',
+          updatedAt: '2026-05-10T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      { isTrustedAuthor: () => true },
+    ),
+    true,
+  );
+});
+
+test('summarizeAdvisoryWaitMarkers: an edited or edit-state-unresolved trusted marker no longer satisfies the gate, minimized shape still honored', () => {
+  const headSha = 'b'.repeat(40);
+  const markerBody = `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`;
+
+  // (a) edited
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    false,
+  );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T01:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
+  );
+  // (b) unknown
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    false,
+  );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).sameHeadMarkerPresent,
+    true,
+  );
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        {
+          body: markerBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      headSha,
+      ['kurone-kito'],
+    ).requestMarkerCount,
+    1,
+  );
+});
+
+test('hasTrustedReviewAckAfter: an edited or edit-state-unresolved trusted review-ack no longer satisfies, minimized shape still honored', () => {
+  const commitSha = 'c'.repeat(40);
+  const reviewSubmittedAt = '2026-05-12T00:00:00Z';
+  const ackBody = `review-ack: agent-x ${commitSha} 2026-05-12T00:30:00Z`;
+
+  // (a) edited
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+          lastEditedAt: '2026-05-12T00:45:00Z',
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    false,
+  );
+
+  // (b) unknown
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    false,
+  );
+
+  // (c) minimized shape
+  assert.equal(
+    hasTrustedReviewAckAfter(
+      [
+        {
+          body: ackBody,
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+      ['kurone-kito'],
+      reviewSubmittedAt,
+      commitSha,
+    ),
+    true,
+  );
+});
+
+test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply no longer counts, and advances freshness like ordinary feedback', () => {
+  const editedThread = {
+    id: 'T-edited',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+          lastEditedAt: '2026-05-12T00:02:00Z',
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(editedThread), false);
+
+  const unknownThread = {
+    id: 'T-unknown',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(unknownThread), false);
+
+  const minimizedThread = {
+    id: 'T-minimized',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'please fix',
+          createdAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          lastEditedAt: null,
+          createdAt: '2026-05-12T00:01:00Z',
+          updatedAt: '2026-05-12T00:03:00Z',
+        },
+      ],
+    },
+  };
+  assert.equal(hasFreshDisposition(minimizedThread), true);
+});
+
+// kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
+// must never be considered by the activation-nonce-winner check --
+// dropped the same way an edited claimed-by/unclaimed-by is dropped from
+// claim resolution.
+test('summarizeClaimValidation ignores an edited trusted activation-nonce when checking the activation-nonce winner', () => {
+  const claimEvent = {
+    author: { login: 'kurone-kito' },
+    body: '<!-- claimed-by: agent-a claim-1 supersedes: none 2026-05-10T00:00:00Z branch: issue/1-fix -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const editedNonce = {
+    author: { login: 'kurone-kito' },
+    body: '<!-- activation-nonce: agent-a claim-1 nonce-edited 2026-05-10T00:01:00Z -->\n\n_agent-a: claim activation nonce - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:01:00Z',
+    // Body-edited after posting: must not be considered by the winner
+    // check, even though it is otherwise the only nonce posted.
+    lastEditedAt: '2026-05-10T00:05:00Z',
+  };
+  const summary = summarizeClaimValidation([claimEvent, editedNonce], {
+    trustedMarkerLogins: ['kurone-kito'],
+    expectedClaimId: 'claim-1',
+    expectedAgentId: 'agent-a',
+    expectedNonce: 'nonce-a-local',
+  });
+  // The edited nonce is ignored, so there is no trusted nonce winner to
+  // disagree with the locally-recorded nonce -- the claim still matches.
+  assert.equal(summary.matchesExpectedClaim, true);
+  assert.equal(summary.reason, 'match');
+});
+
+// kurone-kito/idd-skill#3248: an edited trusted forced-handoff marker must
+// never be honored as a handoff -- the prior claim stays active exactly as
+// if the handoff comment had never been posted.
+test('resolveActiveClaimForWriteGate ignores an edited trusted forced-handoff marker', () => {
+  const claimEvent = {
+    author: { login: 'maintainer' },
+    body: '<!-- claimed-by: agent-old claim-old supersedes: none 2026-05-10T00:00:00Z branch: issue/11-task -->\n\n_agent-old: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: null,
+  };
+  const editedHandoff = {
+    author: { login: 'maintainer' },
+    body: '<!-- forced-handoff: {"oldAgentId":"agent-old","oldClaimId":"claim-old","newAgentId":"agent-new","newClaimId":"claim-new","branch":"issue/11-task","forcedBy":"maintainer","reason":"handoff","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._',
+    createdAt: '2026-05-12T10:01:00Z',
+    // Body-edited after posting: must not be honored as a handoff.
+    lastEditedAt: '2026-05-12T10:05:00Z',
+  };
+  const active = resolveActiveClaimForWriteGate([claimEvent, editedHandoff], {
+    isTrustedAuthor: () => true,
+    forcedHandoffEnabled: true,
+    expectedLinkedPrs: null,
+    isAuthorizedForcedHandoff: () => true,
+    requireAuthorMatchesForcedBy: false,
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  });
+  assert.equal(active?.claimId, 'claim-old');
+  assert.equal(active?.agentId, 'agent-old');
 });

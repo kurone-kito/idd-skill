@@ -13,8 +13,8 @@ import {
   main,
   parseArgs,
   parsePositiveInteger,
-  planHandoff,
-  resolveHelperActiveClaim,
+  planHandoff as planHandoffImpl,
+  resolveHelperActiveClaim as resolveHelperActiveClaimImpl,
 } from '../src/scripts/forced-handoff-marker.mts';
 import {
   applyClaimEvent,
@@ -26,6 +26,31 @@ import {
   renderForcedHandoffComment,
   renderForcedHandoffConsentNote,
 } from '../src/scripts/protocol-helpers.mts';
+
+const withUneditedClaimState = <T extends { lastEditedAt?: string | null }>(
+  comments: T[],
+): (T & { lastEditedAt: string | null })[] =>
+  comments.map((comment) => ({
+    ...comment,
+    lastEditedAt: comment.lastEditedAt ?? null,
+  }));
+
+const resolveHelperActiveClaim = (
+  comments: Parameters<typeof resolveHelperActiveClaimImpl>[0],
+  ...rest: Tail<Parameters<typeof resolveHelperActiveClaimImpl>>
+) => resolveHelperActiveClaimImpl(withUneditedClaimState(comments), ...rest);
+
+const planHandoff = (
+  comments: Parameters<typeof planHandoffImpl>[0],
+  ...rest: Tail<Parameters<typeof planHandoffImpl>>
+) => planHandoffImpl(withUneditedClaimState(comments), ...rest);
+
+type Tail<T extends readonly unknown[]> = T extends readonly [
+  unknown,
+  ...infer R,
+]
+  ? R
+  : never;
 
 const activeClaim = {
   agentId: 'github-copilot-cli-old',
@@ -392,6 +417,7 @@ test('forced handoff markers are ignored by default when the feature is not enab
     author: { login: 'kurone-kito' },
     body,
     createdAt: '2026-05-12T11:00:05Z',
+    lastEditedAt: null,
   });
 
   assert.deepEqual(next, activeClaim);
@@ -405,6 +431,7 @@ test('forced handoff transfers the active claim when trusted, enabled, and autho
       author: { login: 'trusted-relay[bot]' },
       body,
       createdAt: '2026-05-12T11:00:05Z',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',
@@ -430,6 +457,7 @@ test('forced handoff falls back to the active claim timestamp when event metadat
       author: { login: 'trusted-relay[bot]' },
       body,
       createdAt: '',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',
@@ -458,6 +486,7 @@ test('forced handoff is rejected when the approving actor is unauthorized', () =
       author: { login: 'trusted-relay[bot]' },
       body,
       createdAt: '2026-05-12T11:00:05Z',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',
@@ -477,6 +506,7 @@ test('forced handoff is rejected when the marker author is untrusted', () => {
       author: { login: 'untrusted-user' },
       body,
       createdAt: '2026-05-12T11:00:05Z',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',
@@ -499,6 +529,7 @@ test('forced handoff requires an exact old-claim match before transferring owner
       author: { login: 'trusted-relay[bot]' },
       body,
       createdAt: '2026-05-12T11:00:05Z',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',
@@ -521,6 +552,7 @@ test('forced handoff requires an exact old-agent match before transferring owner
       author: { login: 'trusted-relay[bot]' },
       body,
       createdAt: '2026-05-12T11:00:05Z',
+      lastEditedAt: null,
     },
     {
       isTrustedAuthor: (login) => login === 'trusted-relay[bot]',

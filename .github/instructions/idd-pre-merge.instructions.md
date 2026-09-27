@@ -357,7 +357,7 @@ failure into a silent stall.
 
   | Condition                                                                                                       | Classification              |
   | --------------------------------------------------------------------------------------------------------------- | --------------------------- |
-  | IDD agent or PR author has the latest substantive comment, with no later reviewer comment, reopen, or AMD reply | `awaiting-reviewer`         |
+  | IDD/author latest substantive; no later reviewer comment, reopen, or AMD reply ("Awaiting maintainer decision") | `awaiting-reviewer`         |
   | Thread contains an IDD-agent reply starting `**Awaiting maintainer decision**`                                  | `AMD-thread` (not awaiting) |
   | Reviewer commented or reopened (with or without new text) after the latest IDD-agent/PR-author comment          | `not awaiting-reviewer`     |
   | Reviewer has the latest substantive comment (no later IDD-agent/PR-author reply)                                | `not awaiting-reviewer`     |

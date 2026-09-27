@@ -203,6 +203,70 @@ test('deriveAdvisoryReviewObservation: an untrusted actor cannot post evidence-b
   assert.equal(result, null);
 });
 
+// #3249: an edited (or edit-state-unresolved) trusted `advisory-wait:`
+// marker must never register a request either -- editing the marker after
+// posting must not let an operator fabricate or backdate registration
+// evidence. The timeline event below would otherwise register success for
+// this exact marker (mirrors the "recognizes both marker forms" fixture),
+// so a `null` result here proves the edit-state gate, not a coincidental
+// registration-timing mismatch.
+test('deriveAdvisoryReviewObservation: an edited or edit-state-unresolved trusted marker is excluded, minimized shape still honored', () => {
+  const timeline = [
+    {
+      event: 'review_requested',
+      created_at: '2026-09-01T00:05:00Z',
+      requested_reviewer: { login: 'copilot-pull-request-reviewer[bot]' },
+    },
+  ];
+
+  const edited = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+        last_edited_at: '2026-09-01T00:30:00Z',
+      },
+    ],
+    timeline,
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.equal(edited, null);
+
+  const unknownEditState = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+      },
+    ],
+    timeline,
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.equal(unknownEditState, null);
+
+  const unedited = deriveAdvisoryReviewObservation(
+    1,
+    [
+      {
+        body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
+        created_at: '2026-09-01T00:00:00Z',
+        user: { login: 'idd-bot' },
+        last_edited_at: null,
+      },
+    ],
+    timeline,
+    [],
+    BASE_DERIVE_OPTIONS,
+  );
+  assert.deepEqual(unedited, { prNumber: 1, outcome: 'success' });
+});
+
 test('deriveAdvisoryReviewObservation: the LATEST trusted marker decides the outcome, not the earliest', () => {
   const comments = [
     {
@@ -211,6 +275,7 @@ test('deriveAdvisoryReviewObservation: the LATEST trusted marker decides the out
       body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
       created_at: '2026-09-01T00:00:00Z',
       user: { login: 'idd-bot' },
+      last_edited_at: null,
     },
     {
       // Latest marker: never registered -- the observable is whether THIS
@@ -218,6 +283,7 @@ test('deriveAdvisoryReviewObservation: the LATEST trusted marker decides the out
       body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T12:00:00Z',
       created_at: '2026-09-01T12:00:00Z',
       user: { login: 'idd-bot' },
+      last_edited_at: null,
     },
   ];
   const timeline = [
@@ -253,6 +319,7 @@ test('deriveAdvisoryReviewObservation: recognizes both the plain-text and HTML-c
           body,
           created_at: '2026-09-01T00:00:00Z',
           user: { login: 'idd-bot' },
+          last_edited_at: null,
         },
       ],
       timeline,
@@ -275,6 +342,7 @@ test('deriveAdvisoryReviewObservation: a malformed timestamp is not evidence-bea
           body,
           created_at: '2026-09-01T00:00:00Z',
           user: { login: 'idd-bot' },
+          last_edited_at: null,
         },
       ],
       [],
@@ -293,6 +361,7 @@ test('deriveAdvisoryReviewObservation: a submitted review from the primary bot r
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
         created_at: '2026-09-01T00:00:00Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [],
@@ -319,6 +388,7 @@ test('deriveAdvisoryReviewObservation: registration is detected across mismatche
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
         created_at: '2026-09-01T00:00:00Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [
@@ -349,6 +419,7 @@ test('deriveAdvisoryReviewObservation: registration is detected when the timelin
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
         created_at: '2026-09-01T00:00:05Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [
@@ -373,6 +444,7 @@ test('deriveAdvisoryReviewObservation: an unregistered marker still within the s
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
         created_at: '2026-09-01T00:00:00Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [],
@@ -394,6 +466,7 @@ test('deriveAdvisoryReviewObservation: an unregistered marker past the settling 
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
         created_at: '2026-09-01T00:00:00Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [],
@@ -415,6 +488,7 @@ test('deriveAdvisoryReviewObservation: a marker older than the sampling window c
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-08-01T00:00:00Z',
         created_at: '2026-08-01T00:00:00Z',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [],
@@ -434,12 +508,14 @@ test('deriveAdvisoryReviewObservation: an unparsable postedAt on an earlier mark
       body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T00:00:00Z',
       created_at: 'not-a-timestamp',
       user: { login: 'idd-bot' },
+      last_edited_at: null,
     },
     {
       // The genuinely latest request -- registered by neither path below.
       body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-09-01T12:00:00Z',
       created_at: '2026-09-01T12:00:00Z',
       user: { login: 'idd-bot' },
+      last_edited_at: null,
     },
   ];
   const timeline = [
@@ -467,6 +543,7 @@ test('deriveAdvisoryReviewObservation: an unparsable marker postedAt fails close
         body: 'advisory-wait: agent-x 0123456789abcdef0123456789abcdef01234567 2026-08-31T12:00:00Z',
         created_at: 'not-a-timestamp',
         user: { login: 'idd-bot' },
+        last_edited_at: null,
       },
     ],
     [],

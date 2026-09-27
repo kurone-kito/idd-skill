@@ -363,6 +363,7 @@ test('summarizeAdvisoryWaitMarkers: same-HEAD presence and request-marker count'
           body: row.body,
           author: { login: AGENT },
           createdAt: '2026-01-02T00:00:00Z',
+          lastEditedAt: null,
         },
       ],
       PR_HEAD_SHA,

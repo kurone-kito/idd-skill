@@ -43,16 +43,24 @@ import {
 } from './advisory-wait-policy.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { ghApiJson, ghText } from './gh-exec.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
 import {
+  classifyCommentEditState,
   isCopilotReviewerLogin,
   parseAdvisoryWaitRequestMarker,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
 export const PROVIDER_HEALTH_SERVICES = [
   'advisory-review',
@@ -247,6 +255,13 @@ interface GhCommentPayload {
   body?: string;
   created_at?: string;
   user?: { login?: string | null } | null;
+  /** REST-returned GraphQL node id, needed to batch-resolve edit state via
+   * {@link fetchLastEditedAtByNodeId} (#3249). */
+  node_id?: string;
+  /** #3249: see `ProviderComment.lastEditedAt`'s doc comment (provider-
+   * port.mts) for the three-state contract. Populated by
+   * {@link resolveCommentEditState} for every comment fetched here. */
+  last_edited_at?: string | null;
 }
 
 interface GhReviewPayload {
@@ -314,12 +329,48 @@ interface TrustedAdvisoryWaitRequest {
 }
 
 /**
+ * #3249: REST has no edit-timestamp field, so resolve each comment's
+ * GraphQL `lastEditedAt` via one follow-up batch read keyed by `node_id` --
+ * same template as `external-check-waiver.mts`'s `fetchPrComments` and
+ * `provider-outage-declaration.mts`'s `fetchIssueComments`. Throws (never
+ * silently degrades) on a missing `node_id` or an incomplete GraphQL read;
+ * the caller's own per-PR try/catch already treats that the same as any
+ * other unreadable-PR failure -- skip this PR, not a whole-CLI crash.
+ */
+function resolveCommentEditState(
+  comments: GhCommentPayload[],
+): GhCommentPayload[] {
+  if (comments.length === 0) return comments;
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((id) => id === '')) {
+    throw new Error(
+      'resolveCommentEditState: every comment must carry a node_id',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => {
+    const nodeId = nodeIds[index];
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `resolveCommentEditState: missing edit-state resolution for comment node ${nodeId}`,
+      );
+    }
+    return {
+      ...comment,
+      last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+    };
+  });
+}
+
+/**
  * The LATEST trusted `advisory-wait:` request marker among `comments` (by
  * `postedAt`) -- "did the most recent request register" is the observable,
  * not "did the first request ever posted on this PR register". A marker
  * counts only when its author is a `trustedMarkerLogins` member
- * (case-insensitive); an untrusted actor could otherwise post a fabricated
- * marker to poison this service's verdict.
+ * (case-insensitive) AND its edit state is `unedited` -- an edited (or
+ * edit-state-unresolved) marker must never register a request either
+ * (#3249); an untrusted or altered comment could otherwise poison this
+ * service's verdict.
  */
 function latestTrustedAdvisoryWaitRequest(
   comments: GhCommentPayload[],
@@ -331,6 +382,7 @@ function latestTrustedAdvisoryWaitRequest(
       .trim()
       .toLowerCase();
     if (!trustedMarkerLogins.has(authorLogin)) continue;
+    if (classifyCommentEditState(comment) !== 'unedited') continue;
     const requestedAt = parseAdvisoryWaitRequestMarker(
       String(comment?.body ?? ''),
     );
@@ -514,10 +566,11 @@ export function collectAdvisoryReviewEvidence(
     let timeline: GhTimelineReviewRequestedEvent[];
     let reviews: GhReviewPayload[];
     try {
-      comments = ghApiJson(
-        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
-        { paginate: true },
-      ) as GhCommentPayload[];
+      comments = resolveCommentEditState(
+        ghApiJson(`repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+          paginate: true,
+        }) as GhCommentPayload[],
+      );
       timeline = ghApiJson(
         `repos/${owner}/${repo}/issues/${prNumber}/timeline`,
         {
@@ -753,17 +806,21 @@ const PROVIDER_HEALTH_FLAG_SPEC = {
 } as const;
 
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-health', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 
-function main(): void {
+function main(): HelperCliResult {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
     PROVIDER_HEALTH_FLAG_SPEC,
   );
   if (help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
 
   const owner =
@@ -775,6 +832,7 @@ function main(): void {
 
   const report = buildProviderHealthReport(owner, repo);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 
 function printHelp(): void {

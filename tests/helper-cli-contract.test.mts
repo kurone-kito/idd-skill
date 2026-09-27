@@ -15,10 +15,14 @@ import { stubExecutable } from './test-utils.mts';
 // twice -- once with an unknown flag, once with no arguments at all --
 // against a fake `gh` that always fails, from a fresh temporary directory
 // outside any git repository. The committed table
-// (tests/fixtures/helper-cli-contract.json) records, per bin, whether it
-// is migrated onto runHelperCli and, if so, the documented exit code and
-// envelope `kind` for both runs. A bin missing from the table fails this
-// suite outright -- see the first test below.
+// (tests/fixtures/helper-cli-contract.json) records, per bin, the
+// documented exit code and envelope `kind` for both runs. A bin missing
+// from the table fails this suite outright -- see the first test below.
+// #3346 completed the migration onto runHelperCli for every packaged
+// bin: there is no more "not yet migrated" state for this table or this
+// suite to accept -- every row now carries a `runs` entry, and the second
+// test below asserts the full discovered set is covered rather than a
+// hand-kept partial list.
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -32,8 +36,8 @@ interface RunExpectation {
 }
 
 interface BinTableEntry {
-  migrated: boolean;
-  runs?: {
+  migrated: true;
+  runs: {
     unknownFlag: RunExpectation;
     noArgs: RunExpectation;
   };
@@ -211,51 +215,17 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
   );
 });
 
-test('helper-cli-contract fixture: the first, discover/claim, and review/merge batches are marked migrated', () => {
+test('helper-cli-contract fixture: every discovered bin is migrated onto runHelperCli', () => {
+  // #3346 completed the migration for every remaining bin -- there is no
+  // longer a partial, hand-kept list to grow batch by batch (contrast the
+  // earlier #3342/#3343/#3344/#3346-marker-handoff/#3346-provider batches,
+  // each of which extended an explicit array here). Any future bin missing
+  // its own migration would show up here as a shorter migratedBins list
+  // than DISCOVERED_BINS, not as a silently-accepted "not yet migrated" row.
   const migratedBins = DISCOVERED_BINS.filter(
     (bin) => TABLE.bins[bin]?.migrated,
   ).sort();
-  assert.deepEqual(migratedBins, [
-    'idd-advisory-comment-debounce.mjs',
-    'idd-advisory-convergence.mjs',
-    'idd-advisory-wait-state.mjs',
-    'idd-audit-authored-issue.mjs',
-    'idd-audit-pr-cleanup.mjs',
-    'idd-authoring-owner-provenance.mjs',
-    'idd-authoring-set-members.mjs',
-    'idd-branch-conflict-state.mjs',
-    'idd-branch-name.mjs',
-    'idd-ci-wait-policy.mjs',
-    'idd-ci-wait-state.mjs',
-    'idd-claim-approval-gate.mjs',
-    'idd-claim-lock.mjs',
-    'idd-clone-lock.mjs',
-    'idd-discover-orphan-filter.mjs',
-    'idd-discover-readiness-check.mjs',
-    'idd-discover-roadmap-graph.mjs',
-    'idd-discover-shared-file-overlap.mjs',
-    'idd-discover-viability-gate.mjs',
-    'idd-disposition-non-review-notices.mjs',
-    'idd-emit-marker.mjs',
-    'idd-external-check-waiver.mjs',
-    'idd-local-validation-evidence.mjs',
-    'idd-merge-execute.mjs',
-    'idd-merged-pr-feedback-sweep.mjs',
-    'idd-phase-id-resolver.mjs',
-    'idd-pre-merge-readiness.mjs',
-    'idd-rerun-advisory-convergence.mjs',
-    'idd-resolve-review-thread.mjs',
-    'idd-resume-claim-routing.mjs',
-    'idd-resume-route-selection.mjs',
-    'idd-review-activity-snapshot.mjs',
-    'idd-review-comment-origin.mjs',
-    'idd-review-disposition-verify.mjs',
-    'idd-roadmap-audit-execute.mjs',
-    'idd-select-desynced-index.mjs',
-    'idd-stalled-session-quiet-check.mjs',
-    'idd-suitability-close-execute.mjs',
-    'idd-suitability-triage.mjs',
-  ]);
+  assert.deepEqual(migratedBins, DISCOVERED_BINS);
 });
 
 // --- per-bin sweep -------------------------------------------------------
@@ -279,15 +249,8 @@ for (const bin of DISCOVERED_BINS) {
       `bin/${bin} (no args) exceeded the ${PER_RUN_TIMEOUT_MS}ms per-run timeout`,
     );
 
-    // A bin listed as not yet migrated: only the timeout assertions above
-    // apply -- its exit code, stdout, and stderr shape are all still
-    // whatever they were before #3342, unconstrained here.
-    if (!entry.migrated) {
-      return;
-    }
-
     const runs = entry.runs;
-    assert.ok(runs, `bin/${bin} is migrated but has no "runs" table entry`);
+    assert.ok(runs, `bin/${bin} has no "runs" table entry`);
 
     assert.equal(
       unknownFlagResult.status,

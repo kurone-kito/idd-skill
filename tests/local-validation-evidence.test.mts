@@ -30,6 +30,7 @@ function evidenceComment(overrides: {
   createdAt?: string;
   authorLogin?: string;
   nodeId?: string;
+  lastEditedAt?: string | null;
 }): CommentLike {
   const body = renderLocalValidationEvidenceComment({
     actor: overrides.actor ?? 'kurone-kito',
@@ -45,6 +46,10 @@ function evidenceComment(overrides: {
       login: overrides.authorLogin ?? overrides.actor ?? 'kurone-kito',
     },
     node_id: overrides.nodeId ?? 'IC_default',
+    // #3249: minimized shape by default (genuinely unedited); pass
+    // `lastEditedAt` to build an edited-comment fixture instead.
+    last_edited_at:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -120,6 +125,42 @@ test('resolveLocalValidationEvidence: valid evidence under an active declaration
   assert.equal(result.present, true);
   assert.equal(result.evidence?.headSha, HEAD);
   assert.equal(result.valid.length, 1);
+});
+
+// #3249: an edited trusted `idd-local-validation-evidence` marker must not
+// be counted as a pass, even from a trusted actor and even while an outage
+// declaration is active.
+test('resolveLocalValidationEvidence: an edited trusted marker is not counted as a pass', () => {
+  const result = resolveLocalValidationEvidence({
+    comments: [evidenceComment({ lastEditedAt: '2026-09-01T05:30:00Z' })],
+    prHeadSha: HEAD,
+    requiredCheckNames: REQUIRED_CHECKS,
+    trustedMarkerLogins: TRUSTED,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(result.present, false);
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
+  assert.match(result.reason, /edited after posting/);
+});
+
+test('resolveLocalValidationEvidence: an edit-state-unresolved marker is not counted as a pass either', () => {
+  const comment = evidenceComment({});
+  delete (comment as { last_edited_at?: string | null }).last_edited_at;
+  const result = resolveLocalValidationEvidence({
+    comments: [comment],
+    prHeadSha: HEAD,
+    requiredCheckNames: REQUIRED_CHECKS,
+    trustedMarkerLogins: TRUSTED,
+    outageDeclarationActive: true,
+    policy: basePolicy,
+    now: NOW,
+  });
+  assert.equal(result.present, false);
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.edited.length, 1);
 });
 
 test('resolveLocalValidationEvidence: no relief without an active outage declaration', () => {

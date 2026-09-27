@@ -270,11 +270,13 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
       ]),
       ndjson([
         {
+          node_id: 'C_1',
           user: { login: 'commenter-one' },
           body: 'first',
           created_at: '2026-07-31T09:00:00Z',
         },
         {
+          node_id: 'C_2',
           user: { login: 'commenter-two' },
           body: 'second',
           created_at: '2026-07-31T09:30:00Z',
@@ -283,6 +285,13 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
     ],
   ]);
 
+  // #3249: `listWorkItemComments`'s `includeEditState` opt-in (used by
+  // review-activity-snapshot.mjs since this issue) issues a SEPARATE
+  // `nodes(ids: ...) { ... lastEditedAt }` GraphQL call, keyed by each
+  // comment's `node_id` above. `buildStubGh`'s single canned
+  // `graphqlResponse` matches ANY `api graphql` call regardless of query
+  // text, so one literal carries both this query's `data.nodes` shape and
+  // `fetchReviewThreads`'s own `data.repository...reviewThreads` shape.
   const graphqlResponse = JSON.stringify({
     data: {
       repository: {
@@ -293,6 +302,10 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
           },
         },
       },
+      nodes: [
+        { id: 'C_1', lastEditedAt: null },
+        { id: 'C_2', lastEditedAt: null },
+      ],
     },
   });
 

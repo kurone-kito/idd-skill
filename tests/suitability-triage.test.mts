@@ -387,6 +387,33 @@ test('repository fit accepts cross-repo links used as context', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit ignores cross-repo examples inside fenced code and comments', () => {
+  for (const example of [
+    '```md\nCross-repo dependency: external repo https://github.com/other-org/other-repo/issues/42\n```',
+    '<!-- Cross-repo dependency: external repo https://github.com/other-org/other-repo/issues/42 -->',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n${example}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, true, example);
+  }
+});
+
+test('repository fit ignores cross-repo signals hidden in link metadata', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n[sample](https://github.com/other-org/other-repo/issues/42 "cross-repo dependency: external repo")`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety allows unsafe string when it is context only', () => {
   const result = checkTrustSafety({
     issue: {
@@ -5944,6 +5971,892 @@ test('repository fit fails when external system appears before access terms', ()
   assert.equal(result.pass, false);
 });
 
+test('repository fit does not let an unrelated loose-list cue exempt access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Negative fixture: invalid input should be rejected.\n\n  This issue requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit stops a fixture list item at a following heading', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Negative fixture: descriptive example.\n\n## Actual work\n\n  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit still detects dotted and single-line-wrapped access phrases', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This task requires production.example.com dashboard\ncredentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit accepts an explicitly framed #3522 negative fixture', () => {
+  const body = `${BASE_ISSUE.body}
+
+- Negative fixture: a task that explicitly requires a maintainer to supply the material or external access before implementation continues to fail autonomous_completion.`;
+  const check = checkRepositoryFit({
+    issue: { ...BASE_ISSUE, body },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(check.pass, true);
+
+  const result = evaluateSuitability(
+    { ...BASE_ISSUE, body },
+    {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [],
+    },
+  );
+  assert.equal(result.passed, true);
+  assert.equal(result.outcome, 'ready');
+  assert.equal(result.failedCheck, null);
+});
+
+test('repository fit accepts the documented hyphenated expected-rejection cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Expected-rejection: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit remains fail-closed when the fixture cue is in another paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: this paragraph documents an expected rejection.
+
+This task requires production dashboard credentials to verify the result.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a mixed fixture and live prerequisite', () => {
+  const body = `${BASE_ISSUE.body}
+
+- Negative fixture: a task that explicitly requires a maintainer to supply the material or external access before implementation continues to fail autonomous_completion.
+
+This task requires production dashboard credentials to verify the result.`;
+  const result = evaluateSuitability(
+    { ...BASE_ISSUE, body },
+    {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [],
+    },
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.outcome, 'out-of-scope');
+  assert.equal(result.failedCheck, 'repository_fit');
+});
+
+test('repository fit keeps blockquote fixture examples fail-closed', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+> - Negative fixture: a descriptive example.
+> - This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a same-paragraph fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires a maintainer to supply protected material before implementation continues. This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a live prerequisite after an intervening list-closing paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the production access requirement below is descriptive.
+
+Ordinary prose closes the list.
+
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps a repeated requirement verb inside one fixture clause descriptive', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: this task must fail because it requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit rejects separate same-item sentences on a marker line', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: a task requires a maintainer to supply protected material before implementation continues. This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a semicolon-separated fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the access wording is descriptive; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a comma-and-separated fixture and live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires protected material, but this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a conjunction-separated live clause after a fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects an additive conjunction before a live clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, and this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects hard-wrapped and adverbial independent clauses', () => {
+  for (const continuation of [
+    'and\nthis implementation needs Slack access.',
+    'and then this implementation needs Slack access.',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail ${continuation}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, continuation);
+  }
+});
+
+test('repository fit rejects an alternative conjunction before a live clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, or this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a subject-independent conjunction before a live clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but we need Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit accepts repeated requirement verbs within one fixture subject', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires setup and needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit rejects an unframed third requirement after a fixture clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires setup and needs Slack access, but this implementation requires Jira access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit exempts each explicitly cued fixture independently', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires Slack access. Negative fixture: a task requires Jira access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit rejects an unrelated should-fail sentence beside a live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This task requires production dashboard credentials. Invalid input should fail validation.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a negated fixture cue beside a live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This is not a negative fixture; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects the broader negation vocabulary before a fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Avoid negative fixture; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves negation across cue-label punctuation', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nAvoid: negative fixture: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a fixture cue negated after the cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture is not applicable; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects a non-negative cue beside a live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This is a non-negative fixture; this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not treat a prose mention as an explicit fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This negative fixture shows that this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps hedged fixture framing fail-closed', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nMaybe a negative fixture: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit rejects prefixed cues that contain a later fixture marker', () => {
+  for (const cue of [
+    'Non-negative regression fixture',
+    'Non-expected rejection',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\n${cue}: this task requires production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, cue);
+  }
+});
+
+test('repository fit keeps a loose-list continuation in the same fixture context', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the access requirement below is descriptive.
+
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit restores a parent fixture after a nested list item', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the Slack access requirement below is descriptive.
+  - Subdetail.
+
+  This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit rejects an unframed second prerequisite in a loose-list continuation', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the production access requirement below is descriptive.
+
+  This task requires Slack access. This implementation requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not treat a same-line continuation as a loose-list paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: production access is descriptive.
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit measures tab-indented loose-list continuations by columns', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the production access requirement below is descriptive.
+
+	This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit keeps loose-list fixture vocabulary aligned with access matching', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: this exercises Datadog behavior.
+
+  This task requires Datadog access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit does not bind a loose-list cue to a different external system', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the Datadog access below is descriptive.
+
+  This implementation requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit treats a subjectless conjunction clause as independent access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: a task requires setup but requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit treats an adversative noun-led clause as independent access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+Negative fixture: invalid input should fail, but the workflow needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps a Setext heading from extending a fixture list item', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: production access is descriptive.
+
+Actual work
+-----------
+
+  This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores an inactive strikethrough fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+~~Negative fixture:~~ this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not absorb a one-space line outside a list item', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+- Negative fixture: the access requirement below is descriptive.
+
+ This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores fixture wording hidden in an HTML comment when a live prerequisite is visible', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+<!-- Negative fixture: this task requires production dashboard credentials. -->
+
+This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not use a fixture cue or access phrase from Markdown code', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+\`negative fixture: a task requires production dashboard credentials\``,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit does not carry a fixture cue across a fenced block', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body:
+        `${BASE_ISSUE.body}\n\nRegression fixture:\n` +
+        '```text\nexample\n```\n' +
+        'This issue requires production dashboard access.',
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit does not carry a fixture cue from a heading', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n## Negative fixture:\nThis task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores fixture cues in link metadata', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n[sample](https://example.com "negative fixture: hidden") this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores fixture cues in HTML attributes', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n<span title="negative fixture: hidden">sample</span> this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit masks hidden metadata before matching external access', () => {
+  const linkResult = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires [the example](https://production-dashboard.example/access).`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(linkResult.pass, true);
+
+  const htmlResult = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires <span title="production dashboard credentials">the example</span>.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(htmlResult.pass, true);
+});
+
+test('repository fit masks a multiline reference-definition title', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+[sample]: https://example.com
+  "Negative fixture:"
+This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps malformed reference-definition prose visible', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+[context]: This task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps HTTPS autolinks visible to external-access matching', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires <https://production-dashboard.example/access>.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps malformed link fragments visible', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task requires ](Slack access credentials).`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit separates an HTML block from preceding fixture prose', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input\n<div>\nThis task requires Slack access.\n</div>`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps a Setext heading from extending a fixture paragraph', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture:\n================\nThis task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves negation across abbreviation punctuation', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nThis task does not, e.g., require production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit separates fixture and live prerequisites across table rows', () => {
+  for (const table of [
+    '| Negative fixture: | invalid input |\n| --- | --- |\n| Actual work | This task requires Slack access |',
+    '| Negative fixture: | This task requires Slack access |\n| --- | --- |',
+    'Negative fixture: | invalid input\n--- | ---\nActual work | This task requires Slack access',
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\n${table}`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, table);
+  }
+});
+
+test('repository fit detects an independent hard-wrapped conjunction clause', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail and\n this implementation needs Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit treats a blank blockquote line as a paragraph boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n> Negative fixture: invalid input\n>\n> This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit separates a blockquote transition from preceding prose', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input\n> This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves a loose fixture list nested in a blockquote', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n> - Negative fixture: the Slack access requirement below is descriptive.\n>\n>   This task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit masks multiline HTML attributes', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n<span\n title="negative fixture:">sample</span> this task requires Slack access.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit keeps an escaped table pipe inside its cell', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n| Negative fixture: a \\| b requires Slack access. | expected |\n| --- | --- |`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit rejects punctuation-delimited live clauses', () => {
+  for (const separator of ['—', ':']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: invalid input should fail ${separator} this implementation requires Slack access.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, separator);
+  }
+});
+
+test('repository fit ignores abbreviation periods inside an explicit fixture cue', () => {
+  for (const abbreviation of ['e.g.', 'i.e.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\n\nNegative fixture: ${abbreviation} this task requires production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, true, abbreviation);
+  }
+});
+
 test('check helpers expose deterministic evidence', () => {
   assert.equal(
     checkRepositoryFit({
@@ -6284,6 +7197,63 @@ test('repository fit allows a negated external-access statement', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit preserves negation across a hard-wrapped line', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis does not\nrequire production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit remains fail-closed when negation is far before the fixture cue', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+
+This is not, despite the extended explanatory preamble that documents why this scenario represents actual implementation work rather than merely descriptive coverage, a negative fixture: this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit scans inline-code access terms in a live prerequisite', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis task requires \`production dashboard credentials\`.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit ignores an inline-code-only access example', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe check must not use \`production dashboard credentials\` as an example.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit ignores an inline-code fixture cue beside live access', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n\`negative fixture\` this task requires production dashboard credentials.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('repository fit allows a post-verb negated external-access statement', () => {
   // negation after the requirement verb ("requires **no** …"), inside the
   // EXTERNAL_SYSTEM_ACCESS_PATTERN match rather than before it
@@ -6302,6 +7272,78 @@ test('repository fit still flags a real external-access requirement', () => {
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\nThis requires production dashboard credentials to verify the result.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('repository fit preserves abbreviations inside access requirements', () => {
+  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.', 'prod.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}
+This task requires ${abbreviation} production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
+});
+
+test('repository fit preserves dotted initialisms before uppercase access terms', () => {
+  for (const abbreviation of ['e.g.', 'i.e.', 'U.S.']) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\nThis task requires ${abbreviation} Production dashboard credentials.`,
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
+});
+
+test('repository fit treats an uppercase sentence after an abbreviation as a boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}
+This change requires updating the docs. Production dashboard access is unchanged.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit preserves lexical abbreviations before capitalized services', () => {
+  for (const [abbreviation, service] of [
+    ['prod.', 'Slack'],
+    ['admin.', 'Jira'],
+  ]) {
+    const result = checkRepositoryFit({
+      issue: {
+        ...BASE_ISSUE,
+        body:
+          BASE_ISSUE.body +
+          '\nThis task requires ' +
+          abbreviation +
+          ' ' +
+          service +
+          ' access.',
+      },
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    } as Context);
+    assert.equal(result.pass, false, abbreviation);
+  }
+});
+
+test('repository fit treats an uppercase sentence after a lexical abbreviation as a boundary', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\nNegative fixture: this documents the behavior, etc. This task requires production dashboard credentials.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);

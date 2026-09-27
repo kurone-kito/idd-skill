@@ -1,15 +1,13 @@
 # IDD — Merge Execution Phase (F3–F5)
 
-Read only after `idd-merge-handoff.instructions.md` routes the current
-claim to the autonomous merge path. Covers executing the merge (F3),
-cleanup (F4), and looping back to discover (F5).
+Read after `idd-merge-handoff.instructions.md` routes the claim.
+Covers executing the merge (F3), cleanup (F4), and F5.
 
-The final merge-gate timing defaults are named in
-[IDD policy constants](../../docs/policy-constants.md); the merge logic
-itself stays here.
+See [IDD policy constants](../../docs/policy-constants.md).
 
 Before any mutating action in F3, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-development-branch-livelock-under-fast-moving-development-branch).
 
 ## F3 — Merge
 
@@ -492,7 +490,7 @@ Before any mutating action in F3, apply the
    and fast-forward it:
 
    ```sh
-   git fetch origin {development-branch}
+   git fetch origin
    git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch} \
      && git merge --ff-only origin/{development-branch}
    ```
@@ -547,18 +545,20 @@ Before any mutating action in F3, apply the
      --worktree <issue-worktree-path>
    ```
 
-   `keep` / `already_owned` and a matching lock means ours. Omitting
-   `--worktree` and getting `owner_evidence_required` /
-   `claim-id-match-without-independent-owner-evidence` is incomplete,
-   not claim loss: re-run with the flag. A remaining `stop` means do
-   not remove the worktree. Repeat that check immediately before
-   every removal, including `git worktree remove --force <path>`
-   after preserving leftovers. If this shell's cwd was removed,
-   rerun from the primary. Then:
+   `keep` / `already_owned` plus a matching lock means ours. Omitting
+   `--worktree` (`owner_evidence_required` /
+   `claim-id-match-without-independent-owner-evidence`) is incomplete:
+   re-run with the flag. A remaining `stop` means do
+   not remove the worktree. `git worktree remove --force` runs only
+   after failure `working trees containing submodules cannot be moved
+   or removed`, and only after leftovers are preserved. Revalidate
+   `--worktree` immediately before that retry.
+   [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
+   Then:
 
    - `git worktree remove <path>`.
-   - `git branch -d <branch-name>` (the baseline permission profile
-     denies `-D`; see `docs/permissions.md`). Local `{development-branch}`
+   - `git branch -d <branch-name>` (`-D` is denied; see
+     `docs/permissions.md`). Local `{development-branch}`
      was fast-forwarded in step 4, so this shouldn't fail with
      `error: the branch '<branch-name>' is not fully merged`. If it
      still does, compare `git rev-parse <branch-name>` with `gh pr

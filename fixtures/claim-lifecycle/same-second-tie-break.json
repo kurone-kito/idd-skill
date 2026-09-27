@@ -6,14 +6,16 @@
       "author": {
         "login": "agent-b"
       },
-      "body": "<!-- claimed-by: agent-b claim-zzzzzzzz supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-b: issue claim - IDD automation marker. Do not edit._\n"
+      "body": "<!-- claimed-by: agent-b claim-zzzzzzzz supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-b: issue claim - IDD automation marker. Do not edit._\n",
+      "lastEditedAt": null
     },
     {
       "createdAt": "2026-05-11T07:08:33.900Z",
       "author": {
         "login": "agent-a"
       },
-      "body": "<!-- claimed-by: agent-a claim-aaaaaaaa supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._\n"
+      "body": "<!-- claimed-by: agent-a claim-aaaaaaaa supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-a: issue claim - IDD automation marker. Do not edit._\n",
+      "lastEditedAt": null
     }
   ],
   "expectedActiveClaim": {

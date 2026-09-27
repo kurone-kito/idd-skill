@@ -34,6 +34,7 @@ import {
   findIndentedCodeRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
+  indentationColumns,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mjs';
 import {
@@ -184,8 +185,39 @@ const UNSAFE_PATTERNS = [
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_PATTERN =
-  /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
+const EXTERNAL_SYSTEM_ACCESS_GAP = String.raw`(?:(?![.!?](?:[ \t]+|$)|\r?\n[ \t]*\r?\n)[\s\S]|(?<=\b[A-Za-z]\.[A-Za-z])\.(?=[ \t])|(?<=\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|vs|vol))\.(?=[ \t]+[a-z]))`;
+const EXTERNAL_SYSTEM_ACCESS_PATTERN = new RegExp(
+  String.raw`\b(requires?|need(?:s)?|must|depends on)\b${EXTERNAL_SYSTEM_ACCESS_GAP}{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)${EXTERNAL_SYSTEM_ACCESS_GAP}{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b`,
+  'i',
+);
+// #3522: an external-access phrase can be a deliberately negative
+// regression fixture rather than the issue's own prerequisite. Keep the
+// exception explicit and local; generic or negated wording remains
+// fail-closed.
+const REPOSITORY_FIT_FIXTURE_CUE_PATTERN =
+  /(?<![\w-])(?:negative|regression)\s+fixture\b[ \t]*:|\bexpected[-\s]+(?:rejection|failure)\b[ \t]*:/i;
+const REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN =
+  /\b(?:maybe|perhaps|possibly|potentially|might|could|may)\b[^.!?\n]{0,80}\b(?:negative|regression)\s+fixture\b/i;
+const REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN =
+  /\b(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog|access|credentials?|login|permission|sign-?in)\b/i;
+const REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN =
+  /\b(?:and|or|but|yet|nor|however|although|while|whereas)\b(?:[ \t]+|\r?\n[ \t]*)(?:(?:(?:then|also|now|still|subsequently)[ \t]+)*(?:(?:we|you|they|he|she|it|i)\b|(?:(?:this|that|the|a|an|our|your|its|their)[ \t]+)?(?:implementation|issue|task|work|code)\b))/i;
+const REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN =
+  /\b(?:but|yet|nor|however|although|while|whereas)\b(?:[ \t]+(?:(?:the|a|an|this|that|our|your|its|their)\b(?:[ \t]+[A-Za-z][\w-]*){0,4}|(?:[A-Za-z][\w-]*)(?:[ \t]+[A-Za-z][\w-]*){0,3}))?[ \t]+(?:requires?|needs?|must|depends\s+on)\b/i;
+const REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN =
+  /\b(?:slack|jira|datadog)\b/gi;
+const REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN =
+  /(?<![\w-])(?:non|not)[ \t-]+(?:negative|regression|expected)(?=[ \t-]|$)/i;
+const REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN =
+  /\b(?:not|no|don['’]?t|doesn['’]?t|can['’]?t|won['’]?t|never|avoid|skip|omit|ignore|exempt|without|isn['’]?t)\b/i;
+const REPOSITORY_FIT_ABBREVIATION_PATTERN =
+  /\b(?:abbr|admin|approx|auth|config|coord|dev|doc|docs|e\.g|i\.e|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|u\.s|vs|vol)\.$/i;
+const REPOSITORY_FIT_ALWAYS_NON_BOUNDARY_ABBREVIATION_PATTERN =
+  /\b(?:e\.g|i\.e|u\.s)\.$/i;
+const REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN =
+  /\b(?:abbr|admin|approx|auth|config|coord|dev|env|etc|ext|fig|impl|info|max|min|misc|prod|ref|repo|req|sec|src|stg|temp|util|vs|vol)\.$/i;
+const REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN =
+  /^(?:slack|jira|datadog)\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
   /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
@@ -222,6 +254,401 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
   'i',
 );
+function findRepositoryFitHiddenMetadataRanges(text) {
+  const ranges = [];
+  const hasLinkLabel = (closeIndex) => {
+    let nestedClosers = 0;
+    for (let cursor = closeIndex - 1; cursor >= 0; cursor -= 1) {
+      const character = text[cursor] ?? '';
+      if (character === '\n') {
+        return false;
+      }
+      if (character === '\\') {
+        cursor -= 1;
+        continue;
+      }
+      if (character === ']') {
+        nestedClosers += 1;
+      } else if (character === '[') {
+        if (nestedClosers === 0) {
+          return true;
+        }
+        nestedClosers -= 1;
+      }
+    }
+    return false;
+  };
+  const pushBalancedLinkDestination = (openIndex) => {
+    let depth = 1;
+    let quote = null;
+    for (let index = openIndex + 1; index < text.length; index += 1) {
+      const character = text[index] ?? '';
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (quote !== null) {
+        if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          ranges.push({ start: openIndex, end: index + 1 });
+          return;
+        }
+      } else if (character === '\n') {
+        return;
+      }
+    }
+  };
+  for (let index = 0; index + 1 < text.length; index += 1) {
+    if (
+      text[index] === ']' &&
+      text[index + 1] === '(' &&
+      text[index - 1] !== '\\' &&
+      hasLinkLabel(index)
+    ) {
+      pushBalancedLinkDestination(index + 1);
+    }
+  }
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '<' || text[index - 1] === '\\') {
+      continue;
+    }
+    // CommonMark HTTPS autolinks are visible text, not HTML metadata. Keep
+    // them in the dependency scan so a URL that names an external system
+    // cannot hide a live access requirement.
+    if (/^<https?:\/\//i.test(text.slice(index))) {
+      continue;
+    }
+    const tagStart = index;
+    const tagPrefix = text.slice(tagStart, tagStart + 2);
+    if (!/^<\/?[A-Za-z]/u.test(tagPrefix)) {
+      continue;
+    }
+    let quote = null;
+    for (let cursor = tagStart + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor] ?? '';
+      if (quote !== null) {
+        if (character === quote) {
+          quote = null;
+        }
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '>') {
+        ranges.push({ start: tagStart, end: cursor + 1 });
+        index = cursor;
+        break;
+      }
+    }
+  }
+  // A reference definition is metadata rather than rendered prose. Ignore
+  // its destination/title, including a cue that appears only in that title.
+  // CommonMark also permits a one-line indented title continuation.
+  for (const line of text.matchAll(
+    /^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*(?:\n[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\))[ \t]*)?/gm,
+  )) {
+    if (!isRepositoryFitReferenceDefinition(line[0] ?? '')) {
+      continue;
+    }
+    const start = line.index ?? 0;
+    ranges.push({ start, end: start + (line[0] ?? '').length });
+  }
+  return ranges;
+}
+function isRepositoryFitReferenceDefinition(value) {
+  const firstLineEnd = value.indexOf('\n');
+  const firstLine = firstLineEnd === -1 ? value : value.slice(0, firstLineEnd);
+  const continuation = firstLineEnd === -1 ? '' : value.slice(firstLineEnd + 1);
+  const match = /^[ \t]{0,3}\[[^\]\n]+\]:(.*)$/u.exec(firstLine);
+  if (match === null) {
+    return false;
+  }
+  let rest = (match[1] ?? '').trimStart();
+  if (rest.length === 0) {
+    return false;
+  }
+  let destinationEnd = 0;
+  if (rest.startsWith('<')) {
+    let escaped = false;
+    destinationEnd = -1;
+    for (let index = 1; index < rest.length; index += 1) {
+      const character = rest[index] ?? '';
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '>') {
+        destinationEnd = index + 1;
+        break;
+      }
+    }
+    if (destinationEnd === -1) {
+      return false;
+    }
+  } else {
+    let depth = 0;
+    let escaped = false;
+    for (; destinationEnd < rest.length; destinationEnd += 1) {
+      const character = rest[destinationEnd] ?? '';
+      if (/\s/u.test(character)) {
+        break;
+      }
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === '\\') {
+        escaped = true;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        if (depth === 0) {
+          return false;
+        }
+        depth -= 1;
+      }
+    }
+    if (destinationEnd === 0 || depth !== 0 || escaped) {
+      return false;
+    }
+  }
+  rest = rest.slice(destinationEnd).trim();
+  if (rest.length === 0) {
+    return (
+      continuation.length === 0 ||
+      isRepositoryFitReferenceTitle(continuation.trim())
+    );
+  }
+  return continuation.length === 0 && isRepositoryFitReferenceTitle(rest);
+}
+function isRepositoryFitReferenceTitle(value) {
+  const end = findRepositoryFitReferenceTitleEnd(value);
+  return end !== -1 && value.slice(end).trim().length === 0;
+}
+function findRepositoryFitReferenceTitleEnd(value) {
+  const opener = value[0] ?? '';
+  const closer = opener === '(' ? ')' : opener;
+  if (opener !== '"' && opener !== "'" && opener !== '(') {
+    return -1;
+  }
+  let escaped = false;
+  for (let index = 1; index < value.length; index += 1) {
+    const character = value[index] ?? '';
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === closer) {
+      return index + 1;
+    }
+  }
+  return -1;
+}
+function hasRepositoryFitSentenceBoundary(text) {
+  const punctuationPattern = /[.!?;:—–]/g;
+  let punctuation = punctuationPattern.exec(text);
+  while (punctuation !== null) {
+    const character = punctuation[0] ?? '';
+    if (
+      character !== '.' ||
+      isRepositoryFitPeriodBoundary(text, punctuation.index)
+    ) {
+      return true;
+    }
+    punctuation = punctuationPattern.exec(text);
+  }
+  return false;
+}
+function isRepositoryFitPeriodBoundary(text, periodIndex) {
+  const suffix = text.slice(periodIndex + 1);
+  if (suffix.length > 0 && !/^\s/u.test(suffix)) {
+    return false;
+  }
+  const prefix = text.slice(0, periodIndex + 1);
+  if (REPOSITORY_FIT_ALWAYS_NON_BOUNDARY_ABBREVIATION_PATTERN.test(prefix)) {
+    return false;
+  }
+  if (!REPOSITORY_FIT_ABBREVIATION_PATTERN.test(prefix)) {
+    return true;
+  }
+  return !(
+    REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(prefix) &&
+    REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN.test(suffix.trimStart())
+  );
+}
+function buildRepositoryFitParagraphSpans(scanBody, nonInlineCodeRanges) {
+  const paragraphSpans = getParagraphSpans(scanBody);
+  const headingRanges = [
+    ...scanBody.matchAll(/^[ \t]{0,3}#{1,6}(?:[ \t]+[^\n]*|[ \t]*)$/gm),
+  ].map((headingMatch) => {
+    const start = headingMatch.index ?? 0;
+    return { start, end: start + (headingMatch[0] ?? '').length };
+  });
+  const quoteBlankLineRanges = [
+    ...scanBody.matchAll(/^[ \t]{0,3}>[ \t]*(?:\n|$)/gm),
+  ].map((quoteBlankLineMatch) => {
+    const start = quoteBlankLineMatch.index ?? 0;
+    return { start, end: start + (quoteBlankLineMatch[0] ?? '').length };
+  });
+  const lineRecords = [...scanBody.matchAll(/^[^\n]*(?:\n|$)/gm)].map(
+    (lineMatch) => {
+      const raw = lineMatch[0] ?? '';
+      return {
+        start: lineMatch.index ?? 0,
+        raw,
+        isBlockQuote: /^[ \t]{0,3}>/u.test(raw),
+      };
+    },
+  );
+  const quoteTransitionRanges = lineRecords.flatMap((line, index) => {
+    const previousLine = lineRecords[index - 1];
+    if (
+      previousLine === undefined ||
+      previousLine.isBlockQuote === line.isBlockQuote
+    ) {
+      return [];
+    }
+    // End the preceding block immediately before the new block's line. The
+    // range must not extend into that line: consecutive quote lines belong to
+    // one blockquote paragraph unless a blank quote line separates them.
+    return [{ start: previousLine.start, end: line.start }];
+  });
+  const htmlBlockLinePattern =
+    /^[ \t]{0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[ \t/>])/iu;
+  const htmlBlockTransitionRanges = lineRecords.flatMap((line, index) => {
+    if (!htmlBlockLinePattern.test(line.raw)) {
+      return [];
+    }
+    const previousLine = lineRecords[index - 1];
+    return previousLine === undefined
+      ? []
+      : [{ start: previousLine.start, end: line.start }];
+  });
+  const setextHeadingRanges = [
+    ...scanBody.matchAll(
+      /^[ \t]{0,3}(?=\S)[^\n]+\n[ \t]{0,3}(?:=+|-+)[ \t]*(?:\n|$)/gm,
+    ),
+  ].map((setextHeadingMatch) => {
+    const start = setextHeadingMatch.index ?? 0;
+    return { start, end: start + (setextHeadingMatch[0] ?? '').length };
+  });
+  const tableLines = [...scanBody.matchAll(/^[ \t]{0,3}[^\n]*(?:\n|$)/gm)]
+    .map((lineMatch) => {
+      const raw = lineMatch[0] ?? '';
+      const line = raw.replace(/\n$/u, '');
+      const content = line.trim();
+      const isTableRow = [...content.matchAll(/(?<!\\)\|/g)].length > 0;
+      const isTableDelimiter =
+        /^\|?[ \t]*(?::?-{1,}:?[ \t]*\|)+[ \t]*:?-{1,}:?[ \t]*\|?[ \t]*$/u.test(
+          content,
+        );
+      return {
+        start: lineMatch.index ?? 0,
+        end: (lineMatch.index ?? 0) + raw.length,
+        contentStart:
+          (lineMatch.index ?? 0) + (line.length - line.trimStart().length),
+        contentEnd: (lineMatch.index ?? 0) + line.trimEnd().length,
+        isTableRow,
+        isTableDelimiter,
+      };
+    })
+    .filter((line) => line.isTableRow);
+  const tableRows = new Set();
+  for (const delimiter of tableLines.filter((line) => line.isTableDelimiter)) {
+    const delimiterIndex = tableLines.indexOf(delimiter);
+    let start = delimiterIndex;
+    while (start > 0 && tableLines[start - 1]?.end === delimiter.start) {
+      start -= 1;
+    }
+    let end = delimiterIndex;
+    while (
+      end + 1 < tableLines.length &&
+      tableLines[end + 1]?.start === delimiter.end
+    ) {
+      end += 1;
+    }
+    if (start === delimiterIndex) {
+      continue;
+    }
+    for (let index = start; index <= end; index += 1) {
+      const row = tableLines[index];
+      if (row !== undefined) {
+        tableRows.add(row);
+      }
+    }
+  }
+  const unescapedPipeOffsets = (text) => {
+    const offsets = [];
+    for (let offset = 0; offset < text.length; offset += 1) {
+      if (text[offset] !== '|') {
+        continue;
+      }
+      let backslashCount = 0;
+      for (
+        let cursor = offset - 1;
+        cursor >= 0 && text[cursor] === '\\';
+        cursor -= 1
+      ) {
+        backslashCount += 1;
+      }
+      if (backslashCount % 2 === 0) {
+        offsets.push(offset);
+      }
+    }
+    return offsets;
+  };
+  const tableCellRanges = [...tableRows].flatMap((row) => {
+    const rowText = scanBody.slice(row.contentStart, row.contentEnd);
+    const pipeOffsets = unescapedPipeOffsets(rowText).map(
+      (offset) => row.contentStart + offset,
+    );
+    const boundaries = [row.contentStart, ...pipeOffsets, row.contentEnd];
+    return boundaries.slice(0, -1).flatMap((start, index) => {
+      const end = boundaries[index + 1] ?? start;
+      return start < end ? [{ start, end }] : [];
+    });
+  });
+  const blockRanges = [
+    ...nonInlineCodeRanges,
+    ...headingRanges,
+    ...quoteBlankLineRanges,
+    ...quoteTransitionRanges,
+    ...htmlBlockTransitionRanges,
+    ...setextHeadingRanges,
+    ...tableCellRanges,
+  ].sort((left, right) => left.start - right.start);
+  const spans = [];
+  for (const paragraphSpan of paragraphSpans) {
+    const splitPoints = new Set([paragraphSpan.start, paragraphSpan.end]);
+    for (const range of blockRanges) {
+      if (
+        range.end <= paragraphSpan.start ||
+        range.start >= paragraphSpan.end
+      ) {
+        continue;
+      }
+      splitPoints.add(Math.max(paragraphSpan.start, range.start));
+      splitPoints.add(Math.min(paragraphSpan.end, range.end));
+    }
+    const points = [...splitPoints].sort((left, right) => left - right);
+    for (let index = 0; index + 1 < points.length; index += 1) {
+      const start = points[index] ?? paragraphSpan.start;
+      const end = points[index + 1] ?? paragraphSpan.end;
+      if (start < end && /[^\n]/u.test(scanBody.slice(start, end))) {
+        spans.push({ start, end });
+      }
+    }
+  }
+  return spans.length > 0 ? spans : paragraphSpans;
+}
 // #2512: a match landing in a paragraph that also reports on another
 // document's or process's existing behavior ("...paragraph SAYS a later
 // worker session removes the label once a human decision resolves the
@@ -1919,30 +2346,354 @@ export function checkRepositoryFit(context) {
     };
   }
   const body = issue.body;
+  const normalizedBody = body.replace(/\r\n/g, '\n');
+  const codeRanges = findMarkdownCodeRanges(normalizedBody);
+  const fencedCodeRanges = findFencedCodeRanges(normalizedBody);
+  const nonInlineCodeRanges = [
+    ...fencedCodeRanges,
+    ...findIndentedCodeRanges(normalizedBody, fencedCodeRanges),
+  ];
+  const htmlCommentRanges = findHtmlCommentRanges(normalizedBody, codeRanges);
+  const scanBody = maskMarkdownCodeRegionsPreservingPositions(normalizedBody, [
+    ...nonInlineCodeRanges,
+    ...htmlCommentRanges,
+  ]);
+  const inlineCodeRanges = codeRanges.filter(
+    (range) =>
+      !nonInlineCodeRanges.some(
+        (nonInlineRange) =>
+          range.start < nonInlineRange.end && nonInlineRange.start < range.end,
+      ),
+  );
+  const strikethroughRanges = [
+    ...normalizedBody.matchAll(/~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g),
+  ].map((strikeMatch) => ({
+    start: strikeMatch.index ?? 0,
+    end: (strikeMatch.index ?? 0) + (strikeMatch[0] ?? '').length,
+  }));
+  const hiddenMetadataRanges =
+    findRepositoryFitHiddenMetadataRanges(normalizedBody);
+  const externalAccessScanBody = maskMarkdownCodeRegionsPreservingPositions(
+    scanBody,
+    hiddenMetadataRanges,
+  );
+  const paragraphSpans = buildRepositoryFitParagraphSpans(
+    scanBody,
+    nonInlineCodeRanges,
+  );
   const crossRepoLinks = [];
   const regex =
     /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
-  let match = regex.exec(body);
+  let match = regex.exec(externalAccessScanBody);
   while (match) {
     const owner = (match[1] ?? '').toLowerCase();
     const repo = (match[2] ?? '').toLowerCase();
     if (owner !== repository.owner || repo !== repository.repo) {
       crossRepoLinks.push(match[0]);
     }
-    match = regex.exec(body);
+    match = regex.exec(externalAccessScanBody);
   }
-  if (crossRepoLinks.length > 0 && EXTERNAL_COORDINATION_PATTERN.test(body)) {
+  if (
+    crossRepoLinks.length > 0 &&
+    EXTERNAL_COORDINATION_PATTERN.test(externalAccessScanBody)
+  ) {
     return {
       pass: false,
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,
     };
   }
-  for (const match of body.matchAll(
-    new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
-  )) {
+  // Match against a lowercase copy so the sentence-boundary exceptions can
+  // distinguish lowercase abbreviations (such as `prod.`) from a sentence
+  // starting with an uppercase word while keeping offsets stable.
+  const lowerCaseScanBody = externalAccessScanBody
+    .replace(
+      /(?<![.\w])([A-Za-z]{2,})\.(?=[ \t]+[A-Z])/g,
+      (_whole, word, offset, source) => {
+        const suffix = source.slice(offset + _whole.length);
+        return REPOSITORY_FIT_CAPITALIZED_ACCESS_ABBREVIATION_PATTERN.test(
+          `${word}.`,
+        ) &&
+          REPOSITORY_FIT_CAPITALIZED_ACCESS_SERVICE_PATTERN.test(
+            suffix.trimStart(),
+          )
+          ? `${word}.`
+          : `${word}!`;
+      },
+    )
+    .replace(
+      /(?<![.\w])([A-Za-z]\.[A-Za-z])\.(?=[ \t]+[A-Z])/g,
+      (_whole, word) =>
+        REPOSITORY_FIT_ABBREVIATION_PATTERN.test(`${word}.`)
+          ? `${word}.`
+          : `${word}!`,
+    )
+    .replace(/[A-Z]/g, (character) => character.toLowerCase());
+  const externalAccessMatches = [
+    ...lowerCaseScanBody.matchAll(
+      new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'g'),
+    ),
+  ].filter((match) => {
+    const matchStart = match.index ?? 0;
+    const matchEnd = matchStart + (match[0] ?? '').length;
+    return ![...inlineCodeRanges, ...hiddenMetadataRanges].some(
+      (range) => matchStart >= range.start && matchEnd <= range.end,
+    );
+  });
+  const stripBlockQuotePrefix = (line) =>
+    line.replace(/^[ \t]{0,3}>[ \t]?/u, '');
+  const listItemPattern =
+    /^(?:[ \t]{0,3}>[ \t]?)?[ \t]*(?:[-+*]|\d+[.)])[ \t]+/gm;
+  const listItems = [...scanBody.matchAll(listItemPattern)].map(
+    (listItemMatch) => {
+      const markerText = stripBlockQuotePrefix(listItemMatch[0] ?? '');
+      const leadingWhitespace = markerText.match(/^[ \t]*/)?.[0] ?? '';
+      const markerAndSpacing = markerText.slice(leadingWhitespace.length);
+      const marker = markerAndSpacing.match(/^(?:[-+*]|\d+[.)])/u)?.[0] ?? '';
+      const spacing = markerAndSpacing.slice(marker.length);
+      const indent = indentationColumns(leadingWhitespace);
+      return {
+        start: listItemMatch.index ?? 0,
+        indent,
+        contentIndent: indentationColumns(spacing, indent + marker.length),
+      };
+    },
+  );
+  const listBlockBoundaryPattern =
+    /^(?:[ \t]{0,3}>[ \t]?)?[ \t]{0,3}(?:#{1,6}(?:[ \t]+|$)|(?:=+|-+)[ \t]*)/gm;
+  const listBlockBoundaries = [
+    ...scanBody.matchAll(listBlockBoundaryPattern),
+  ].map((boundaryMatch) => {
+    const leadingWhitespace =
+      (boundaryMatch[0] ?? '').match(/^[ \t]*/)?.[0] ?? '';
+    return {
+      start: boundaryMatch.index ?? 0,
+      indent: indentationColumns(leadingWhitespace),
+    };
+  });
+  const listItemContextFor = (matchIndex) => {
+    const lineStart = normalizedBody.lastIndexOf('\n', matchIndex - 1) + 1;
+    const candidates = listItems
+      .filter((listItem) => listItem.start <= matchIndex)
+      .reverse();
+    const lineIndent = indentationColumns(
+      stripBlockQuotePrefix(normalizedBody.slice(lineStart)).match(
+        /^[ \t]*/,
+      )?.[0] ?? '',
+    );
+    for (const currentItem of candidates) {
+      if (
+        listBlockBoundaries.some(
+          (boundary) =>
+            boundary.start > currentItem.start &&
+            boundary.start < lineStart &&
+            boundary.indent <= currentItem.indent,
+        )
+      ) {
+        continue;
+      }
+      const interveningLines = normalizedBody
+        .slice(currentItem.start, lineStart)
+        .split('\n')
+        .slice(1);
+      if (
+        interveningLines.some((line) => {
+          const contentLine = stripBlockQuotePrefix(line);
+          if (contentLine.trim() === '') {
+            return false;
+          }
+          const interveningIndent = indentationColumns(
+            contentLine.match(/^[ \t]*/)?.[0] ?? '',
+          );
+          return interveningIndent < currentItem.contentIndent;
+        })
+      ) {
+        continue;
+      }
+      const isMarkerLine = lineStart === currentItem.start;
+      if (!isMarkerLine && lineIndent < currentItem.contentIndent) {
+        continue;
+      }
+      const nextItem = listItems.find(
+        (listItem) =>
+          listItem.start > currentItem.start &&
+          listItem.indent <= currentItem.indent,
+      );
+      return {
+        span: {
+          start: currentItem.start,
+          end: nextItem?.start ?? normalizedBody.length,
+        },
+        allowLooseContinuation:
+          !isMarkerLine &&
+          normalizedBody
+            .slice(currentItem.start, lineStart)
+            .split('\n')
+            .slice(1, -1)
+            .some((line) => stripBlockQuotePrefix(line).trim() === ''),
+      };
+    }
+    return null;
+  };
+  const contextSpanFor = (matchIndex) => {
+    const paragraphSpan = paragraphSpans.find(
+      (span) => matchIndex >= span.start && matchIndex < span.end,
+    ) ?? { start: 0, end: normalizedBody.length };
+    return listItemContextFor(matchIndex)?.span ?? paragraphSpan;
+  };
+  const hasPositiveFixtureCue = (
+    context,
+    externalMatchOffset,
+    allowLooseContinuation,
+    contextStart,
+    externalMatchText,
+    minimumCueOffset = 0,
+  ) => {
+    const cuePattern = new RegExp(
+      REPOSITORY_FIT_FIXTURE_CUE_PATTERN.source,
+      'gi',
+    );
+    for (const cueMatch of context.matchAll(cuePattern)) {
+      const cueIndex = cueMatch.index ?? 0;
+      if (cueIndex >= externalMatchOffset) {
+        continue;
+      }
+      const cueEnd = cueIndex + (cueMatch[0] ?? '').length;
+      if (cueEnd <= minimumCueOffset) {
+        continue;
+      }
+      const cueGlobalStart = contextStart + cueIndex;
+      const cueGlobalEnd = contextStart + cueEnd;
+      if (
+        [
+          ...inlineCodeRanges,
+          ...strikethroughRanges,
+          ...hiddenMetadataRanges,
+        ].some(
+          (range) => cueGlobalStart >= range.start && cueGlobalEnd <= range.end,
+        )
+      ) {
+        continue;
+      }
+      if (
+        nonInlineCodeRanges.some(
+          (range) =>
+            range.start >= cueGlobalEnd &&
+            range.end <= contextStart + externalMatchOffset,
+        )
+      ) {
+        continue;
+      }
+      const cueWindow = context.slice(Math.max(0, cueIndex - 40), cueEnd);
+      if (REPOSITORY_FIT_FIXTURE_NEGATED_PREFIX_PATTERN.test(cueWindow)) {
+        continue;
+      }
+      if (
+        REPOSITORY_FIT_FIXTURE_AMBIGUOUS_PATTERN.test(
+          context.slice(Math.max(0, cueIndex - 80), cueEnd),
+        )
+      ) {
+        continue;
+      }
+      if (
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
+          context.slice(Math.max(0, cueIndex - 80), cueIndex),
+        )
+      ) {
+        continue;
+      }
+      const cuePrefix = context.slice(0, cueIndex);
+      const clauseStart = lastRepositoryFitClauseBoundary(cuePrefix);
+      const cueToMatch = context.slice(cueEnd, externalMatchOffset);
+      if (allowLooseContinuation) {
+        if (!REPOSITORY_FIT_FIXTURE_ACCESS_CONTEXT_PATTERN.test(cueToMatch)) {
+          continue;
+        }
+        const cueSystems = new Set(
+          [
+            ...cueToMatch.matchAll(
+              REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN,
+            ),
+          ].map((systemMatch) => (systemMatch[0] ?? '').toLowerCase()),
+        );
+        const matchSystems = new Set(
+          [
+            ...externalMatchText.matchAll(
+              REPOSITORY_FIT_SPECIFIC_EXTERNAL_SYSTEM_PATTERN,
+            ),
+          ].map((systemMatch) => (systemMatch[0] ?? '').toLowerCase()),
+        );
+        if (
+          cueSystems.size > 0 &&
+          ![...cueSystems].some((system) => matchSystems.has(system))
+        ) {
+          continue;
+        }
+      }
+      if (
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(
+          cuePrefix.slice(clauseStart + 1),
+        ) ||
+        REPOSITORY_FIT_FIXTURE_NEGATION_PATTERN.test(cueToMatch) ||
+        (!allowLooseContinuation &&
+          hasRepositoryFitSentenceBoundary(cueToMatch)) ||
+        hasIndependentConjunctionClause(cueToMatch + externalMatchText) ||
+        /,[ \t]*(?:and|or|but|yet|nor)\b/i.test(cueToMatch)
+      ) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  };
+  const hasIndependentRequirementClause = (matchText) => {
+    const requirementPattern = /\b(?:requires?|needs?|must|depends\s+on)\b/gi;
+    const requirementMatches = [...matchText.matchAll(requirementPattern)];
+    if (requirementMatches.length <= 1) {
+      return false;
+    }
+    for (let index = 0; index < requirementMatches.length - 1; index += 1) {
+      const firstMatch = requirementMatches[index];
+      const secondMatch = requirementMatches[index + 1];
+      const betweenRequirements = matchText.slice(
+        (firstMatch?.index ?? 0) + (firstMatch?.[0].length ?? 0),
+        secondMatch?.index ?? matchText.length,
+      );
+      if (
+        hasRepositoryFitSentenceBoundary(betweenRequirements) ||
+        hasIndependentConjunctionClause(
+          betweenRequirements + (secondMatch?.[0] ?? ''),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hasIndependentConjunctionClause = (text) =>
+    REPOSITORY_FIT_INDEPENDENT_CONJUNCTION_PATTERN.test(text) ||
+    REPOSITORY_FIT_ADVERSATIVE_REQUIREMENT_PATTERN.test(text);
+  const contextSpans = externalAccessMatches.map((match) => {
+    const matchIndex = match.index ?? 0;
+    const listItemContext = listItemContextFor(matchIndex);
+    return {
+      match,
+      span: listItemContext?.span ?? contextSpanFor(matchIndex),
+      allowLooseContinuation: listItemContext?.allowLooseContinuation ?? false,
+    };
+  });
+  for (const { match, span, allowLooseContinuation } of contextSpans) {
     const matchIndex = match.index ?? 0;
     const matchText = match[0] ?? '';
-    const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
+    const matchEnd = matchIndex + matchText.length;
+    const contextBefore = scanBody.slice(
+      Math.max(0, matchIndex - 60),
+      matchIndex,
+    );
+    const contextBeforeClauseStart =
+      lastRepositoryFitClauseBoundary(contextBefore);
+    const contextBeforeClause = contextBefore.slice(
+      contextBeforeClauseStart + 1,
+    );
     // Skip a negated non-requirement; only an un-negated external-access
     // requirement blocks Repository Fit. The negation may sit *before* the
     // match ("does **not** require production credentials") or *after* the
@@ -1951,8 +2702,41 @@ export function checkRepositoryFit(context) {
     const negatedRequirement =
       /\b(?:requires?|needs?|must|depends?\s+on)\s+(?:no|not|never|without|n['’]?t)\b/i;
     if (
-      NEGATION_PATTERN.test(contextBefore) ||
+      NEGATION_PATTERN.test(contextBeforeClause) ||
       negatedRequirement.test(matchText)
+    ) {
+      continue;
+    }
+    const previousMatchEnd = allowLooseContinuation
+      ? contextSpans
+          .filter(
+            (candidate) =>
+              candidate.span.start === span.start &&
+              candidate.span.end === span.end &&
+              (candidate.match.index ?? 0) < matchIndex,
+          )
+          .reduce(
+            (latestEnd, candidate) =>
+              Math.max(
+                latestEnd,
+                (candidate.match.index ?? 0) +
+                  (candidate.match[0]?.length ?? 0) -
+                  span.start,
+              ),
+            0,
+          )
+      : 0;
+    if (
+      matchEnd <= span.end &&
+      !hasIndependentRequirementClause(matchText) &&
+      hasPositiveFixtureCue(
+        scanBody.slice(span.start, span.end),
+        matchIndex - span.start,
+        allowLooseContinuation,
+        span.start,
+        matchText,
+        previousMatchEnd,
+      )
     ) {
       continue;
     }
@@ -1969,6 +2753,28 @@ export function checkRepositoryFit(context) {
         ? 'Cross-repository links appear contextual; no explicit external coordination signal detected.'
         : 'No out-of-repository scope signals detected.',
   };
+}
+function lastRepositoryFitClauseBoundary(text) {
+  let boundary = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '.' && !isRepositoryFitPeriodBoundary(text, index)) {
+      continue;
+    }
+    if (/[.!?;:—–]/u.test(character)) {
+      boundary = index;
+    }
+  }
+  const paragraphBreakPattern = /\n[ \t]*\n/g;
+  let paragraphBreak = paragraphBreakPattern.exec(text);
+  while (paragraphBreak) {
+    boundary = Math.max(
+      boundary,
+      (paragraphBreak.index ?? 0) + paragraphBreak[0].length - 1,
+    );
+    paragraphBreak = paragraphBreakPattern.exec(text);
+  }
+  return boundary;
 }
 export function checkCoherence(context) {
   const { issue } = context;

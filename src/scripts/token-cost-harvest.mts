@@ -34,6 +34,10 @@ import {
   parseReviewWatermarkComment,
 } from './marker-helpers.mts';
 import {
+  classifyCommentEditState,
+  filterTrustedClaimFamilyEvents,
+} from './protocol-helpers.mts';
+import {
   type ClaudeHarvestInput,
   claudeAdapter,
   defaultClaudeProjectDir,
@@ -764,6 +768,7 @@ interface TrustedComment {
   body: string;
   createdAt: string;
   login: string;
+  lastEditedAt?: string | null;
 }
 
 // GitHub logins are case-insensitive for account identity; compare
@@ -803,7 +808,7 @@ const ISSUE_LOOP_CONTEXT_QUERY = `
 query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
-      comments(first:100){nodes{body createdAt author{login}}}
+      comments(first:100){nodes{body createdAt lastEditedAt author{login}}}
       closedByPullRequestsReferences(first:10){
         nodes{
           number headRefName createdAt mergedAt
@@ -849,7 +854,12 @@ export function fetchIssueLoopGithubContext(
   const commentNodes = Array.isArray(issue?.comments?.nodes)
     ? issue.comments.nodes
     : [];
-  const comments: TrustedComment[] = [];
+  const commentsForFilter: {
+    body: string;
+    createdAt: string;
+    author: { login: string };
+    lastEditedAt?: string | null;
+  }[] = [];
   for (const node of commentNodes) {
     if (!isPlainObject(node)) {
       continue;
@@ -860,10 +870,33 @@ export function fetchIssueLoopGithubContext(
         : '';
     const body = typeof node.body === 'string' ? node.body : '';
     const createdAt = typeof node.createdAt === 'string' ? node.createdAt : '';
-    if (login && body && createdAt && isTrusted(login, trustedLogins)) {
-      comments.push({ body, createdAt, login });
+    const lastEditedAt =
+      node.lastEditedAt === null || typeof node.lastEditedAt === 'string'
+        ? node.lastEditedAt
+        : undefined;
+    if (login && body && createdAt) {
+      commentsForFilter.push({
+        body,
+        createdAt,
+        author: { login },
+        lastEditedAt,
+      });
     }
   }
+  // Claim-family markers must use the same trust + edit-state contract as
+  // the operational readers. In particular, an edited release or handoff
+  // must not rewrite the harvested session outcome, while ordinary trusted
+  // comments such as review watermarks remain available to the join.
+  const comments = filterTrustedClaimFamilyEvents(commentsForFilter, (login) =>
+    isTrusted(login, trustedLogins),
+  )
+    .filter((comment) => isTrusted(comment.author.login, trustedLogins))
+    .map(({ body, createdAt, author, lastEditedAt }) => ({
+      body,
+      createdAt,
+      login: author.login,
+      lastEditedAt,
+    }));
 
   // closedByPullRequestsReferences already scopes to PRs GitHub recorded
   // as actually CLOSING this issue (the "Closes #N" keyword this
@@ -992,6 +1025,9 @@ export function resolveIssueLoopContext(
 
   let firstWatermarkAtMs: number | null = null;
   for (const comment of github.comments) {
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      continue;
+    }
     const watermark = parseReviewWatermarkComment(
       comment.body,
       comment.createdAt,

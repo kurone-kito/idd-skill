@@ -1004,11 +1004,13 @@ export function toClaimComment(raw: ProviderComment): {
   body: string;
   createdAt: string;
   author: { login: string };
+  lastEditedAt?: string | null;
 } {
   return {
     body: raw.body,
     createdAt: raw.createdAt,
     author: { login: raw.authorLogin },
+    lastEditedAt: raw.lastEditedAt,
   };
 }
 
@@ -1016,7 +1018,9 @@ function fetchIssueComments(
   port: ProviderPort,
   number: number,
 ): { body: string; createdAt: string; author: { login: string } }[] {
-  return port.listWorkItemComments(number).map(toClaimComment);
+  return port
+    .listWorkItemComments(number, { includeEditState: true })
+    .map(toClaimComment);
 }
 
 function fetchOpenPrLinkedIssues(port: ProviderPort): number[] {

@@ -33,6 +33,13 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadTrustedActorConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
@@ -40,6 +47,7 @@ import {
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
+  classifyCommentEditState,
   composeGateTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   parseProviderOutageAdvancedComment,
@@ -48,6 +56,7 @@ import {
   renderProviderOutageDeclarationComment,
   toSecondPrecisionIso,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 
 const DECLARATION_MARKER_START = /^<!--\s*idd-provider-outage-declaration:/i;
@@ -90,6 +99,7 @@ export function resolveProviderOutageDeclaration(input) {
     wrongService: [],
     unauthorized: [],
     malformed: [],
+    edited: [],
   });
   if (!input.declarationTargetConfigured) {
     return empty(
@@ -119,6 +129,7 @@ export function resolveProviderOutageDeclaration(input) {
   const wrongService = [];
   const unauthorized = [];
   const malformed = [];
+  const edited = [];
   let shapedCount = 0;
   for (const comment of input.comments ?? []) {
     const body = String(comment?.body ?? '');
@@ -138,6 +149,16 @@ export function resolveProviderOutageDeclaration(input) {
     const authority = input.authorityOf(authorLogin);
     if (!authority.known || !authority.authorized) {
       unauthorized.push({
+        authorLogin,
+        service: parsed.service,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
+    // #3249: an edited (or edit-state-unresolved) declaration must never
+    // relieve the gate, even from an authorized actor.
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      edited.push({
         authorLogin,
         service: parsed.service,
         expiresAt: parsed.expiresAt,
@@ -203,6 +224,7 @@ export function resolveProviderOutageDeclaration(input) {
       wrongService,
       unauthorized,
       malformed,
+      edited,
     };
   }
   let reason = `no provider outage declaration found for service "${service}"`;
@@ -222,6 +244,9 @@ export function resolveProviderOutageDeclaration(input) {
   } else if (unauthorized.length > 0) {
     const latest = unauthorized[unauthorized.length - 1];
     reason = `${latest.authorLogin} is not authorized to author a provider outage declaration under ${authorityPolicy}`;
+  } else if (edited.length > 0) {
+    const latest = edited[edited.length - 1];
+    reason = `${latest.authorLogin}'s provider outage declaration was edited after posting or its edit state could not be verified, so it is no longer trusted`;
   } else if (wrongService.length > 0) {
     const latest = latestByCreatedAt(wrongService);
     reason = `declaration is for service "${latest?.service}", not "${service}"`;
@@ -240,6 +265,7 @@ export function resolveProviderOutageDeclaration(input) {
     wrongService,
     unauthorized,
     malformed,
+    edited,
   };
 }
 /**
@@ -329,6 +355,9 @@ export function listProviderOutageAdvancements(comments, options = {}) {
     if (!ADVANCED_MARKER_START.test(body)) continue;
     const authorLogin = commentAuthorLogin(comment);
     if (trustedSet.size > 0 && !trustedSet.has(authorLogin)) continue;
+    // #3249: an edited (or edit-state-unresolved) advancement marker must
+    // never be trusted either.
+    if (classifyCommentEditState(comment) !== 'unedited') continue;
     const parsed = parseProviderOutageAdvancedComment(
       body,
       String(comment?.created_at ?? ''),
@@ -360,7 +389,7 @@ const PROVIDER_OUTAGE_DECLARATION_FLAG_SPEC = {
 function parsePositiveIntegerFlag(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
@@ -371,7 +400,7 @@ export function parseArgs(argv) {
   );
   const format = values.format.trim();
   if (format !== 'json' && format !== 'text') {
-    throw new Error(`unsupported --format value: ${format}`);
+    throw markCliUsageError(new Error(`unsupported --format value: ${format}`));
   }
   const modeFlags = [
     values.declare,
@@ -379,8 +408,10 @@ export function parseArgs(argv) {
     values['list-advanced'],
   ].filter(Boolean);
   if (modeFlags.length > 1) {
-    throw new Error(
-      '--declare, --record-advanced, and --list-advanced are mutually exclusive',
+    throw markCliUsageError(
+      new Error(
+        '--declare, --record-advanced, and --list-advanced are mutually exclusive',
+      ),
     );
   }
   const mode = values.declare
@@ -419,23 +450,29 @@ export function parseArgs(argv) {
   if (!parsed.help) {
     if (mode === 'resolve' || mode === 'declare') {
       if (!parsed.service) {
-        throw new Error('missing required --service <name> argument');
+        throw markCliUsageError(
+          new Error('missing required --service <name> argument'),
+        );
       }
     }
     if (mode === 'declare') {
       const hasExpiresAt = Boolean(parsed.expiresAt);
       const hasExpiresIn = Boolean(parsed.expiresIn);
       if (hasExpiresAt === hasExpiresIn) {
-        throw new Error('specify exactly one of --expires or --expires-in');
+        throw markCliUsageError(
+          new Error('specify exactly one of --expires or --expires-in'),
+        );
       }
     }
     if (mode === 'record-advanced') {
       if (!parsed.prNumber) {
-        throw new Error('missing required --pr <number> argument');
+        throw markCliUsageError(
+          new Error('missing required --pr <number> argument'),
+        );
       }
       if (!/^[0-9a-f]{40}$/.test(parsed.headSha)) {
-        throw new Error(
-          'missing or invalid required --head-sha <40-hex> argument',
+        throw markCliUsageError(
+          new Error('missing or invalid required --head-sha <40-hex> argument'),
         );
       }
     }
@@ -446,13 +483,17 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
   if (expiresAt) {
     const parsed = new Date(expiresAt);
     if (!Number.isFinite(parsed.getTime())) {
-      throw new Error(`invalid --expires value: ${expiresAt}`);
+      throw markCliUsageError(
+        new Error(`invalid --expires value: ${expiresAt}`),
+      );
     }
     return toSecondPrecisionIso(parsed);
   }
   const durationMs = parseIsoDurationToMs(expiresIn);
   if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
-    throw new Error(`invalid --expires-in value: ${expiresIn}`);
+    throw markCliUsageError(
+      new Error(`invalid --expires-in value: ${expiresIn}`),
+    );
   }
   return toSecondPrecisionIso(new Date(now.getTime() + (durationMs ?? 0)));
 }
@@ -467,7 +508,9 @@ function parseOwnerRepo(value) {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
-    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+    throw markCliUsageError(
+      new Error(`invalid --repo value: ${value} (expected owner/name)`),
+    );
   }
   return { owner: match[1], name: match[2] };
 }
@@ -488,10 +531,38 @@ function fetchIssueComments({ owner, repo, issueNumber }) {
       ],
       { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
     );
-    return parsePaginatedGhNdjson(payload);
-  } catch {
+    const comments = parsePaginatedGhNdjson(payload);
+    // #3249: REST has no edit-timestamp field -- resolve it via one
+    // follow-up GraphQL batch read keyed by each comment's own `node_id`,
+    // same template as `external-check-waiver.mts`'s `fetchPrComments`.
+    if (comments.length === 0) return comments;
+    const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+    if (nodeIds.some((id) => id === '')) {
+      throw new Error(
+        `issue #${issueNumber} comment is missing node_id, cannot resolve edit state`,
+      );
+    }
+    const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+    return comments.map((comment, index) => {
+      const nodeId = nodeIds[index];
+      if (!lastEditedAtByNodeId.has(nodeId)) {
+        throw new Error(
+          `missing edit-state resolution for comment node ${nodeId} on issue #${issueNumber}`,
+        );
+      }
+      return {
+        ...comment,
+        last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
+      };
+    });
+  } catch (error) {
+    // #3346: preserve the original gh-exec.mts-tagged error as `.cause` (not
+    // dropped as before) so classifyHelperError's cause-chain walk can still
+    // classify a real gh transport/not-found failure correctly instead of
+    // losing it to the generic `internal` fallback.
     throw new Error(
       `could not read issue #${issueNumber} comments to resolve the provider outage declaration`,
+      { cause: error },
     );
   }
 }
@@ -711,8 +782,23 @@ export async function runProviderOutageDeclaration(options = {}) {
   if (!args.yes) {
     process.stdout.write(`${body}\n`);
     const ask = options.prompt ?? makeReadlinePrompt();
-    const answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
-    ask.close?.();
+    // #3346 review finding ("Close the interactive prompt when outage
+    // declaration fails"): pre-migration, main()'s `main().catch(...)`
+    // called `process.exit(1)` on any error, unconditionally tearing the
+    // whole process (and this readline interface) down regardless of
+    // where the failure occurred. Post-migration, main() returns an
+    // error outcome through runHelperCli/applyHelperCliOutcomeWhenDisabled
+    // instead, so a rejected `ask(...)` call now reaches that catch
+    // without ever running the close below, leaving the readline open
+    // and hanging a real interactive invocation -- the same regression
+    // already fixed for force-handoff.mts and idd-onboard.mts earlier
+    // this PR. Wrap the prompt call itself so ask.close?.() always runs.
+    let answer;
+    try {
+      answer = await ask(`Post this to issue #${targetIssue}? [y/N] `);
+    } finally {
+      ask.close?.();
+    }
     if (
       String(answer ?? '')
         .trim()
@@ -789,12 +875,22 @@ Options:
 `);
 }
 export async function main(argv = process.argv.slice(2)) {
-  const result = await runProviderOutageDeclaration({ args: parseArgs(argv) });
-  process.exit(result.exitCode);
+  try {
+    const result = await runProviderOutageDeclaration({
+      args: parseArgs(argv),
+    });
+    return result.exitCode;
+  } catch (error) {
+    process.stderr.write(`Error: ${error.message}\n`);
+    return { exitCode: 1, ...classifyHelperError(error) };
+  }
 }
 if (import.meta.main) {
-  main().catch((error) => {
-    process.stderr.write(`Error: ${error.message}\n`);
-    process.exit(1);
-  });
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-outage-declaration', main);
+  } else {
+    main().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
+  }
 }

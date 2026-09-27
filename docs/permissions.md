@@ -265,8 +265,9 @@ marker text.
 Each IDD phase needs a different subset of access:
 
 - **Discover and Claim** need issues read, issue comment write for claim
-  markers, pull request read for collision checks, and contents read for
-  branch collision checks.
+  markers, and GraphQL access to `IssueComment.lastEditedAt` so claim-family
+  markers can be verified as unedited; pull request read is needed for
+  collision checks, and contents read for branch collision checks.
 - **Work and PR Submit** need contents write for the feature branch,
   pull requests write to open or update the PR, issues write for progress
   comments, and checks/statuses read for validation state.
@@ -348,16 +349,16 @@ The main risks are not unique to IDD, but IDD makes them worth spelling
 out because the agent reads untrusted GitHub content and runs local
 commands.
 
-| Threat                        | Example                                                                                             | Controls                                                                                                       |
-| ----------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Prompt injection              | An issue, PR comment, copied doc, or skill file tells the agent to leak credentials or ignore rules | Treat repository and GitHub text as untrusted input; follow local instructions and phase gates over issue text |
-| Malicious skills or scripts   | A downloaded skill includes a shell script that exfiltrates tokens                                  | Inspect new skills and scripts before use; pre-approve shell/bash only for trusted skills and trusted repos    |
-| Credential overreach          | A worker token can modify settings or read secrets                                                  | Use the profile split above, repository scope, short expirations, and separate merge credentials               |
-| Claim race or stale ownership | Two agents believe they own the same issue                                                          | Re-read and parse claim comments before side effects, pushes, merges, and operational comments                 |
-| Marker spoofing               | An untrusted commenter copies an IDD marker and tries to release, extend, or supersede a claim      | Accept operational markers only from trusted actors and treat marker bodies as public, untrusted data          |
-| Poisoned branch or dependency | A branch changes between review and merge, or a dependency install runs unexpected code             | Rebase, validate, inspect diffs, rely on protected branches, and avoid unreviewed dependency/script changes    |
-| Review or CI bypass           | A merge happens while checks or review threads are stale                                            | Keep merge phase checks mandatory and require branch freshness before merge                                    |
-| Log leakage                   | Tokens appear in command output, CI logs, screenshots, or copied prompts                            | Redact outputs, avoid verbose auth commands, and rotate credentials if leakage is suspected                    |
+| Threat                        | Example                                                                                             | Controls                                                                                                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prompt injection              | An issue, PR comment, copied doc, or skill file tells the agent to leak credentials or ignore rules | Treat repository and GitHub text as untrusted input; follow local instructions and phase gates over issue text                                                    |
+| Malicious skills or scripts   | A downloaded skill includes a shell script that exfiltrates tokens                                  | Inspect new skills and scripts before use; pre-approve shell/bash only for trusted skills and trusted repos                                                       |
+| Credential overreach          | A worker token can modify settings or read secrets                                                  | Use the profile split above, repository scope, short expirations, and separate merge credentials                                                                  |
+| Claim race or stale ownership | Two agents believe they own the same issue                                                          | Re-read and parse claim comments before side effects, pushes, merges, and operational comments                                                                    |
+| Marker spoofing               | An untrusted commenter copies an IDD marker and tries to release, extend, or supersede a claim      | Accept operational markers only from trusted actors, require `lastEditedAt: null`, and treat marker bodies as public, untrusted data (kurone-kito/idd-skill#3248) |
+| Poisoned branch or dependency | A branch changes between review and merge, or a dependency install runs unexpected code             | Rebase, validate, inspect diffs, rely on protected branches, and avoid unreviewed dependency/script changes                                                       |
+| Review or CI bypass           | A merge happens while checks or review threads are stale                                            | Keep merge phase checks mandatory and require branch freshness before merge                                                                                       |
+| Log leakage                   | Tokens appear in command output, CI logs, screenshots, or copied prompts                            | Redact outputs, avoid verbose auth commands, and rotate credentials if leakage is suspected                                                                       |
 
 ## Safe Operating Checklist
 
@@ -444,6 +445,23 @@ Keep approval labels and operational marker trust as separate controls:
 - External-check waivers are a separate maintainer authorization
   surface. Neither a ready label nor a trusted operational marker can
   substitute for the dedicated waiver contract.
+
+An edited comment is not evidence for any trust-bearing marker or IDD
+disposition either, generalizing the external-check-waiver rule above
+(kurone-kito/idd-skill#3249, extending #3246's original waiver-only
+scope): `review-watermark`/`review-baseline`, `advisory-wait`/
+`advisory-wait-recovery`, `review-ack`, `idd-provider-outage-declaration`/
+`idd-provider-outage-advanced`, `idd-local-validation-evidence`, and an
+`**Accepted**`/`**Rejected**`/`**Awaiting maintainer decision**`
+disposition reply all require the same GraphQL `lastEditedAt` check as
+the waiver: an explicit `null` (never body-edited), never a timestamp or
+an edit state the runtime could not resolve. Three markers are the
+deliberate exception, because for them ignoring an edited comment would
+loosen a gate instead of tightening one: an `idd-provider-outage-park`
+marker still counts toward `providerOutage.maxParkedChanges` when
+edited, an `advisory-reroll` marker still counts toward the same-HEAD
+reroll budget when edited, and a trusted A4.5 suitability-rejection
+record still excludes its candidate when edited.
 
 ## Claude Code Permission Baseline
 

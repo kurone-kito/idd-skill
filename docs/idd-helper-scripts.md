@@ -57,6 +57,25 @@ any flag it does not recognize verbatim to `pre-merge-readiness.mjs`,
 so `--claim-issue` reaches it transitively even though it declares no
 such flag of its own.)
 
+## Claim-family marker edit-state contract (kurone-kito/idd-skill#3248)
+
+Every consumer of a claim-family marker must verify both the trusted GitHub
+actor and the comment's GraphQL `IssueComment.lastEditedAt` state before using
+the marker as authority. This applies to `claimed-by`, `unclaimed-by`,
+`activation-nonce`, and `forced-handoff` markers, including callers that read
+issue comments directly instead of using the provider port.
+
+The only accepted edit state is an explicit `lastEditedAt: null`. A timestamp
+means the marker body was edited and the marker is ignored; a missing,
+malformed, or otherwise unresolved edit state is an error, not an unedited
+marker. REST issue-comment responses do not provide this field, so direct
+readers must resolve each returned comment's node id through GraphQL
+`nodes(ids:)` before parsing claim state. `updated_at`/`updatedAt` cannot
+substitute for `lastEditedAt`, because comment-minimization updates the former
+without editing the body. This fail-closed rule was added after issue #3248
+found that edited claim, release, nonce, and handoff marker bodies could still
+be treated as live authority.
+
 No single top-level decision/verdict field name is consistent across
 the evidence-collector family. This reflects organic accretion across
 many independently authored helpers rather than a recorded design
@@ -79,9 +98,10 @@ returns `passed` for its live `--issue` invocation, but its offline
 `passed` value at all; `claim-approval-gate.mjs` returns `approved`.
 The mutation-style helpers overlap rather than cleanly splitting on
 one field: `audit-pr-cleanup.mjs` exposes both `mode`
-(`dry-run`/`apply`) and `status` (a seven-value vocabulary: `clean`,
+(`dry-run`/`apply`) and `status` (spanning `clean`,
 `needs-apply`, `permission-blocked`, `rescan-failed`, `failed`,
-`incomplete`, `applied`); `disposition-non-review-notices.mjs` prints
+`time-budget-exhausted`, `incomplete`, `applied`);
+`disposition-non-review-notices.mjs` prints
 no `status` key at all in its default dry-run mode, and its `status`
 value (`applied`/`failed`) under `--apply` is still driven only by
 `applied`/`failed` -- `--apply` output also carries a separate
@@ -255,14 +275,14 @@ call-site pattern described above.
 
 ### Migrated helpers (first batch)
 
-The helpers in the tables below are migrated onto `runHelperCli`;
-every other packaged command is unaffected by the variable (it still
-crashes with a raw, unshaped stack trace on failure, exactly as
-before these tracks). For the six first-batch helpers, `exitCode` is
-`0` on success (including `--help`, which exits `0` before
-`runHelperCli` ever sees an outcome) and `1` on any failure; none of
-the six currently returns a non-zero exit code as its own verdict, so
-none of them produces `kind: "gate"` today.
+The helpers in the tables below are migrated onto `runHelperCli`.
+Issues #3342-#3346 moved every packaged bin onto the runner in
+batches (see the per-batch sections that follow); none remain on the
+old raw, unshaped crash-on-failure behavior. For the six first-batch
+helpers, `exitCode` is `0` on success (including `--help`, which
+exits `0` before `runHelperCli` ever sees an outcome) and `1` on any
+failure; none of the six currently returns a non-zero exit code as
+its own verdict, so none of them produces `kind: "gate"` today.
 
 | Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
 | -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
@@ -309,7 +329,8 @@ Issue #3343 moves the 16 discover and claim helpers onto the same
 runner. Argument errors are `usage`. A `gh` failure is `not-found` or
 `transport` the same way as the first batch. A returned non-zero exit
 code is `gate`: `claim-lock.mjs` keeps exit `2` for an `--acquire`
-lock collision and for a `--backfill-tokens` result that is not
+lock collision, exit `4` when `--acquire` refuses the primary
+worktree, and exit `2` for a `--backfill-tokens` result that is not
 `backfilled`; `clone-lock.mjs` keeps exit `3` for an `--exec` acquire
 timeout and passes a wrapped command's own non-zero status through as
 `gate` too; `suitability-close-execute.mjs` keeps exit `1` when the
@@ -322,24 +343,78 @@ other eleven return `0` on success and throw on failure, so they do
 not produce `gate` today. `discover-orphan-filter.mjs` with no
 arguments reaches `gh repo view` and is `transport`, not `usage`.
 
-| Helper                             | `usage`                                                                     | `gate`                                                                         |
-| ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                       |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                     |
-| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                     |
-| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
-| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision or a non-`backfilled` `--backfill-tokens` |
-| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status        |
-| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                     |
-| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                     |
-| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                     |
-| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                     |
-| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`          |
-| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                    |
-| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                    |
-| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                     |
-| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                     |
+| Helper                             | `usage`                                                                     | `gate`                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                                                                |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                                                              |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                                                              |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                                                              |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens` |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                 |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                                                              |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                                                              |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                                                              |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`                                                   |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                                                             |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                                                             |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                                                              |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                                                              |
+
+### Migrated helpers (marker, handoff, provider, and misc batch)
+
+Issue #3346 moves the last 15 packaged bins onto the same runner --
+every `bin/idd-*.mjs` is now migrated; there is no remaining
+not-yet-migrated state (`tests/helper-cli-contract.test.mts` asserts
+the full discovered set, not a partial hand-kept list). Argument
+errors are `usage`; a `gh` failure reached by an uncaught throw is
+`not-found`/`transport` the same way as every earlier batch; `gate`
+is a completed non-zero verdict the helper returns as its own
+result, never a thrown domain refusal (a thrown "not authorized" /
+"no active declaration" / "branch moved" style refusal that never
+reaches a `gh`-tagged cause classifies `internal`, same as any other
+unexpected exception, unless noted otherwise below).
+`minimize-superseded-markers.mjs` is the sole exact-mode
+`idd-template/scripts/` mirror (`audit/sync-manifest.json`) and
+cannot import `helper-cli-runner.mts`; it carries a small local copy
+of the runner with only `usage`/`gate`/`internal` kinds (this file
+never tags a `gh` failure with an HTTP status of its own, so
+`not-found`/`transport` never apply to it). `force-handoff.mjs`
+previously read no CLI flags at all (any argv was silently ignored
+and the interactive TTY flow ran regardless); it now parses a
+`--help`-only spec, so an unrecognized flag reports a proper usage
+error and a non-interactive invocation still reaches its own
+`NON_TTY_ERROR` check (classified `internal`, an environment
+precondition, not an argument mistake) before any `gh` call.
+`idd-onboard.mjs`'s top-level dispatcher reports every uncaught
+error at exit `2` (`usage`/`transport`/`not-found`/`internal` per the
+real cause); its own `--substitute`/`--import`/`--verify` verdicts
+and `--hear`/`--record-policy`'s schema-invalid-transcript verdict
+report `gate` at exit `1` instead. `runRecordPolicyCli` (exported,
+and directly imported by `tests/idd-onboard.test.mts`, which stubs
+`process.exit` itself) keeps calling `process.exit(N)` literally
+rather than returning a value, so it classifies its own envelope
+manually before exiting rather than through `runHelperCli`'s normal
+outcome path.
+
+| Helper                               | `usage`                                                                                                                                                                                                                                | `not-found` / `transport`                                                                                               | `gate`                                                                                                                                      | `internal`                                                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post-idd-marker.mjs`                | missing/invalid `--type`, `--target`, positional number, `--from-pr` combination, `--marker-target`/`--anchor`/`--journal` format, a mode/digest coupling error, or the canonical-body round-trip check, or an unknown flag (exit `1`) | a `gh` failure deriving `--from-pr` fields, resolving the current repository, or fetching `--marker-target`'s live body | refusing to post a watermark whose live HEAD moved past the stored `--expected-head-sha`                                                    | an unexpected exception (e.g. `--marker-target` not found, a digest mismatch)                                                                   |
+| `minimize-superseded-markers.mjs`    | missing/invalid `--classifier`, `--format`, or `--subject-ids`, no trusted marker logins, or an unknown flag (exit `2`)                                                                                                                | —                                                                                                                       | the sweep's own non-zero exit (a candidate failed to minimize)                                                                              | an unexpected exception                                                                                                                         |
+| `sweep-authoring-markers.mjs`        | missing `--issue`, an invalid `--classifier`/`--format`, no trusted marker logins, no marker prefix resolved, an invalid `--issue` token, or an unknown flag (exit `2`)                                                                | a `gh` failure resolving the current repository                                                                         | `computeSweepExitCode`'s own non-zero verdict                                                                                               | an unexpected exception                                                                                                                         |
+| `live-status-digest.mjs`             | missing `--issue`/`--pr`, a conflicting flag combination, or an unknown flag (exit `2`)                                                                                                                                                | a `gh` failure resolving the repository, comments, or applying the digest                                               | the digest report is a duplicate (dry-run or apply alike)                                                                                   | an unexpected exception (e.g. a repair-report invariant violation)                                                                              |
+| `forced-handoff-marker.mjs`          | missing `--issue`/`--forced-by`/`--reason`/`--new-agent-id`/`--new-claim-id`, an invalid `--repo`, or an unknown flag                                                                                                                  | a `gh` failure resolving issue comments or the linked pull request                                                      | —                                                                                                                                           | an unexpected exception (no active claim, `--forced-by` not authorized, branch mismatch)                                                        |
+| `force-handoff.mjs`                  | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | a non-interactive invocation (`NON_TTY_ERROR`), or an unexpected exception                                                                      |
+| `provider-health.mjs`                | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure resolving the repository or classifying health                                                           | —                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `provider-outage-declaration.mjs`    | missing/invalid `--service`, `--expires`/`--expires-in`, `--pr`, `--head-sha`, a conflicting mode combination, an invalid `--repo`, or an unknown flag (exit `1`)                                                                      | a `gh` failure resolving issue comments                                                                                 | —                                                                                                                                           | an unexpected exception (not authorized, no active declaration, actor mismatch)                                                                 |
+| `provider-outage-park.mjs`           | missing `--service`/`--agent-id`/`--claim-id`, an invalid `--pr`/`--issue`, `--park` and `--parked-issues` together, or an unknown flag (exit `1`)                                                                                     | a `gh` failure resolving the repository                                                                                 | `--park` reports an ineligible park (exit `1`)                                                                                              | an unexpected exception                                                                                                                         |
+| `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure reached during a live check                                                                              | the report contains at least one error (exit `1`)                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, an unknown argument, or a missing flag value (exit `2`)                                      | a `gh` failure reached during any stage (exit `2`)                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, or `--hear`/`--record-policy` report a schema-invalid transcript (exit `1`) | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`) |
+| `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
+| `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
+| `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                           | an unexpected exception                                                                                                                         |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a
@@ -1490,6 +1565,16 @@ The adopted helper boundaries are intentionally narrow:
   unless `--format table` is requested
 - apply mode is explicit and can re-validate an active claim before
   every minimization mutation
+- an apply pass snapshots the full report once and re-validates each
+  candidate with a cheap per-subject read instead of rebuilding the
+  whole report per candidate (kurone-kito/idd-skill#3321); apply mode
+  accepts `--time-budget-seconds <n>` (single `--pr` only, rejected
+  together with `--prs`), measured from helper start with an injectable
+  clock, to bound total apply-pass wall time -- once spent, the run
+  starts no new candidate or pass, keeps every already-applied row, and
+  reports `status: time-budget-exhausted` (never collapsing into
+  `applied`, `clean`, or `incomplete`) with no confirming rescan;
+  omitting the flag leaves apply-mode behavior unchanged
 - known review-bot regular comments are considered only after merge and
   only when they match a completed-review or stale-notification signal
 - cleanup remains best-effort and never becomes a merge gate
@@ -1810,7 +1895,16 @@ Interpretation rules:
   `edited` bucket even when every other check (author, HEAD, claim,
   expiry) passes -- `updated_at` is not a substitute, since GitHub's
   `minimizeComment` advances it without touching `lastEditedAt`
-  (kurone-kito/idd-skill#3173).
+  (kurone-kito/idd-skill#3173). kurone-kito/idd-skill#3249 generalizes
+  this same edited-comment rejection to every other trust-bearing marker
+  and IDD disposition reader (`review-watermark`/`review-baseline`,
+  `advisory-wait`/`advisory-wait-recovery`, `review-ack`,
+  `idd-provider-outage-declaration`/`idd-provider-outage-advanced`,
+  `idd-local-validation-evidence`, and disposition replies), with the
+  same three deliberate exceptions named in
+  [Approval Labels vs Trusted Marker Actors](permissions.md#approval-labels-vs-trusted-marker-actors)
+  (`idd-provider-outage-park`, `advisory-reroll`, and a suitability-
+  rejection record all still count an edited comment unchanged).
 - `claim-id` accepts the case-insensitive literal sentinel `none`
   (#1905) alongside an arbitrary claim id, declaring a deliberately
   claimless waiver. It satisfies the claim-binding check only when no
@@ -2327,6 +2421,9 @@ still fails closed:
   merge gate or `idd-advisory-convergence` check consumes this helper's
   output -- see the provider outage declaration helper below for the
   decoupling this implies for `providerOutage`.
+- An edited `advisory-wait:` request marker never registers a request
+  either (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt`
+  check as the external-check waiver above.
 
 ### Provider outage declaration helper
 
@@ -2393,6 +2490,11 @@ still fails closed:
   Declare with that exact service name (`--service
   idd-advisory-convergence`) for either gate to honor it; a declaration
   for any other service name relieves nothing here.
+- An edited declaration or advancement marker relieves nothing either
+  (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt` check as
+  the external-check waiver, checked after authority and before the
+  timestamp/validity checks -- reported in its own `edited` bucket,
+  distinct from `unauthorized` and `malformed`.
 
 ### Provider outage park helper
 
@@ -2469,6 +2571,11 @@ still fails closed:
 - Read-only by construction in list mode and `--parked-issues`: exposes
   no field named or shaped as a merge-readiness or CI-gate result,
   mirroring the provider-health helper above.
+- Unlike every reader above, `idd-provider-outage-park` is a deliberate
+  restrict-only exception (kurone-kito/idd-skill#3249): an edited marker
+  still counts toward `providerOutage.maxParkedChanges` exactly like an
+  unedited one, since ignoring an edit would lower the count and could
+  lift the bound instead of tightening it.
 
 ### Local validation evidence helper
 
@@ -2521,6 +2628,10 @@ still fails closed:
   `headSha` (`evaluateLocalValidationEvidenceRecovery`): a pull request
   whose HEAD advanced past the recorded evidence is re-validated, never
   merged on the stale record.
+- An edited evidence marker is never counted as a pass either
+  (kurone-kito/idd-skill#3249): the same GraphQL `lastEditedAt` check as
+  the external-check waiver, reported in its own `edited` bucket even
+  when the trusted author, HEAD, and outcome all otherwise check out.
 
 ### A4 viability gate
 
@@ -2697,10 +2808,21 @@ still fails closed:
   use the helper-free exclusive file-create fallback. If neither is
   available, disable the automatic install and acquire the lock immediately
   after worktree creation.
+- `--acquire` refuses to create `idd-claim.lock` in the primary
+  worktree, where `git rev-parse --git-common-dir` and
+  `--absolute-git-dir` resolve to the same real directory. The CLI
+  exits
+  `4` with `mode` `primary-worktree-refused`. That admin directory is
+  never removed by `git worktree remove`, so a lock created there has
+  no automatic cleanup path (observed 2026-09-25,
+  kurone-kito/idd-skill#3486). An already-present lock keeps the
+  reacquire, collision, and `--takeover` contract. `--check`,
+  `--record-tokens`, `--read-tokens`, and `--backfill-tokens` still
+  accept the primary worktree.
 - Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
   same-`claim-id` reacquire that writes nothing, or an authorized
   `--takeover` override — disambiguated by the optional `reacquired` /
-  `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
+  `forcedTakeover` boolean fields), `collision` (a different `claim-id`
   already holds the lock, or the existing path is malformed/unreadable —
   retry with `--takeover` only when
   `resume-claim-routing.mjs --fresh-claim-gate` returns an
@@ -2708,7 +2830,9 @@ still fails closed:
   `claim-id` the caller has already independently verified as its own
   **and** whose top-level `reason` is not a `released-claim-*` reason; a
   `claimable` verdict, a `stale-reclaimable` verdict, or any
-  `released-claim-*` reason means the claim was lost instead). A
+  `released-claim-*` reason means the claim was lost instead), or
+  `primary-worktree-refused` (refuses creating a new lock on the
+  primary worktree and exits `4`). A
   released new-format claim with a matching local worktree retains
   `winning_claim_id` for owner release-then-fresh in pre-check (c), but
   that retained, `released-claim-*`-tagged id never by itself authorizes
@@ -2725,9 +2849,10 @@ still fails closed:
   invocation's first look. A caller trusting `reacquired: true` as
   evidence the lock predates this call (as the backfill-tokens recovery
   route does) must also require `racedCreate` to be absent/`false`.
-- The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
-  `collision`, so a hook can safely chain installation or another mutation
-  with `&&`; `--check` remains read-only and exits `0` for a reported state.
+- The `--acquire` CLI exits `0` only for `acquired`, exits `2` for
+  `collision`, and exits `4` for `primary-worktree-refused`, so a
+  hook can safely chain installation or another mutation with `&&`;
+  `--check` remains read-only and exits `0` for a reported state.
 - `--check` reports `{ path, present, holder?, malformed? }` read-only,
   never creating, mutating, or deleting the lock; `malformed: true` means
   a lock file exists but could not be parsed as a well-formed lock body
@@ -2735,7 +2860,8 @@ still fails closed:
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.
   The configured GitHub `claim-stale-age` stays the sole staleness
-  authority; this lock only ever reports `collision` or acquires.
+  authority; besides `primary-worktree-refused` on the create path,
+  this lock only ever reports `collision` or acquires.
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
   `git worktree remove` at F4 deletes it together with the worktree
@@ -2746,7 +2872,27 @@ still fails closed:
   well-formed, and its holder matches (`agentId`, `claimId`) →
   re-acquired without writing — this call's own first read found the
   lock already there, mirroring the helper's `reacquired: true` with no
-  `racedCreate`. Absent → write the same JSON holder shape (`agentId`,
+  `racedCreate`. Before creating a lock that is absent, canonicalize
+  `<worktree>` to its real directory first, then compare
+  `git -C <real-worktree> rev-parse --git-common-dir` with
+  `--absolute-git-dir`, resolving both to absolute real paths against
+  that real directory (the common dir is often the relative `.git` on
+  the primary worktree). Resolving a relative common dir against an
+  unresolved symlink, including a symlink to a subdirectory, walks
+  `..` on the link and hides the primary worktree. When the two real
+  paths are the same directory, the worktree is primary: do not create
+  `idd-claim.lock`. Fail closed instead. An already-present
+  lock still follows the reacquire and collision rules below; this
+  refusal only blocks the create (observed 2026-09-25,
+  kurone-kito/idd-skill#3486). The automated `--acquire` helper folds
+  this comparison and the admin-dir lookup above into a single
+  `git rev-parse --absolute-git-dir --git-common-dir` spawn instead of
+  two separate lookups, to remove a burst of concurrent `git` spawns
+  under many parallel acquirers racing the same worktree (observed
+  2026-09-26, kurone-kito/idd-skill#3526); this manual fallback keeps
+  the two lookups separate for clarity, since a human operator never
+  faces that concurrency. Absent on a linked worktree → write the
+  same JSON holder shape (`agentId`,
   `claimId`, `acquiredAt`) to a same-directory temporary file with a
   unique name (for example `idd-claim.lock.tmp-<pid>-<random>`); once
   that temp file is fully written and closed, publish it into the
@@ -3485,7 +3631,11 @@ author is a trusted marker actor; the body
 parses as the bound five-field shape; the embedded agent id and claim
 id match the active claim; the embedded HEAD SHA matches current PR
 HEAD; the comment's GitHub `created_at` is a valid ISO 8601 UTC
-timestamp. The clock anchor is the GitHub `created_at` of the
+timestamp; the comment's GraphQL `lastEditedAt` is an explicit `null`
+(kurone-kito/idd-skill#3249) -- an edited or edit-state-unresolved
+marker never counts toward the cycle or the clock anchor, the same
+edited-comment rejection the external-check waiver applies. The clock
+anchor is the GitHub `created_at` of the
 _earliest_ qualifying marker (embedded timestamps are diagnostics
 only, mirroring the `review-watermark`/claim-heartbeat clock rule); the
 completed-cycle count is qualifying-marker _presence_, never the
@@ -3824,6 +3974,18 @@ reflexively as any other CLI option.
   success output, when the watermark it is about to post already covers
   comments/threads that were never actually dispositioned, and stays
   silent for the courtesy-ack flag case above
+- Embedded CodeRabbit findings (kurone-kito/idd-skill#3341): the
+  snapshot also emits `embeddedFindings`, one object per
+  `COMMENTED` review whose author login is `coderabbitai` or
+  `coderabbitai[bot]` (case-insensitive). `APPROVED` and
+  `CHANGES_REQUESTED` reviews are omitted from this field. The normal
+  review-body path selects only `CHANGES_REQUESTED`, so `APPROVED`
+  findings are out of scope. Each object is `reviewId`
+  (the review's REST `node_id`), `embeddedFindingCount`, and
+  `uncoveredCount`. The uncovered count subtracts the number of
+  review threads whose first comment's `pullRequestReview.id` equals
+  that `node_id`. An empty `node_id` covers no threads. Add one PATH B
+  item per uncovered finding
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
@@ -4458,16 +4620,16 @@ evidence, purely additively: `converged` / `waived` / `ready` are
 computed with **no reference to it at all**, so it can never let the
 gate pass on anything but the primary bot's own real signal.
 
-| Field               | Meaning                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eligible`          | `matchesHead: true`, `itemCount` known AND (`itemCount > 0` OR `suppressedCount > 0`, #1880), every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding. |
-| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                                                                                      |
-| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                                                                              |
-| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                                                                         |
-| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                                                                        |
-| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                                                                           |
-| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.                                                          |
-| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                                                                                    |
+| Field               | Meaning                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eligible`          | `matchesHead: true`, `itemCount` known AND (`itemCount > 0` OR `suppressedCount > 0`, #1880), every Copilot-authored thread resolved or validly dispositioned, AND no outstanding regular-comment disposition evidence (`dispositionEvidence.missingRegularCommentCount === 0`) -- the static count is the ONLY thing keeping `converged` false, with no other triage work still outstanding.             |
+| `ineligibleReasons` | `#1719`: one stable, machine-readable token per failing term of the `eligible` conjunction above (empty exactly when `eligible` is `true`), so a caller can self-diagnose a stuck reroll without re-deriving the rule by hand. See below for the token list and the report-mode example.                                                                                                                  |
+| `count`             | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over). `advisory-reroll:` is a deliberate restrict-only exception to the edited-comment rejection elsewhere in this issue (kurone-kito/idd-skill#3249): an edited marker still counts, since ignoring an edit would lower the count and could wrongly lift an exhausted budget. |
+| `cap`               | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                                                                                     |
+| `exhausted`         | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                                                                                                    |
+| `latestAt`          | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                                                                                       |
+| `inFlight`          | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request.                                                                      |
+| `requestable`       | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                                                                                                |
 
 **`ineligibleReasons` tokens (`#1719`)**: one entry per failing term, in
 the same order the `eligible` conjunction is written in
@@ -4628,7 +4790,11 @@ thread does not cover a review that posted two items (Copilot + CodeRabbit
 review, PR #2054). `hasValidReviewAck` is `true` when a trusted
 `review-ack:` marker's OWN `created_at` postdates the latest Copilot
 review's `submittedAt` (never the marker's embedded timestamp), so any
-later review automatically invalidates a pre-existing ack.
+later review automatically invalidates a pre-existing ack. The
+marker's comment must also carry a GraphQL `lastEditedAt` of explicit
+`null` (kurone-kito/idd-skill#3249): an edited or edit-state-unresolved
+`review-ack:` never satisfies this gate, even from a trusted author
+whose HEAD and timing otherwise check out.
 
 The `review-ack:` marker matches `advisory-reroll:`'s field shape and
 posting path exactly (see
@@ -5018,7 +5184,10 @@ same as `AW4`/`AW5`.
     Clause 1 uses) naming that SPECIFIC review's own reviewed commit,
     posted after it, clears the finding; an unrelated later disposition
     comment does not, since a thread-less body-embedded finding has no
-    discrete comment or thread an ordinary disposition reply could address.
+    discrete comment or thread an ordinary disposition reply could
+    address. As with every `hasTrustedReviewAckAfter`/`hasFreshDisposition`
+    caller, an edited or edit-state-unresolved marker or disposition reply
+    never clears anything here either (kurone-kito/idd-skill#3249).
     Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
@@ -5204,6 +5373,16 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   keeps it (never `-D`) and tells the operator they may delete it by
   hand; unequal tips mean genuinely unmerged
   local work, so F4 holds instead of discarding it.
+- **Submodule removal** (step 5, issue `#2016`): plain `git worktree
+  remove <path>` fails with `fatal: working trees containing
+  submodules cannot be moved or removed`. `git worktree remove
+  --force` is warranted only for that fatal, and only after leftovers
+  are preserved. Revalidate with `--worktree` immediately before the
+  retry (`idd-merge.instructions.md`).
+- **Removed cwd** (step 5, issue `#3189`): a later `node` call fails
+  with `ENOENT` on `uv_cwd`, or `gh` / `git` fails with `Unable to
+  read current working directory`, and `unclaimed-by` is skipped
+  unless the session reruns from the primary checkout.
 
 The two step 4 holds reuse the `primary-worktree-dirty` resume rule
 (#3192): once the hold clears, re-run F4 from step 4 through step 7.
@@ -5220,9 +5399,15 @@ a destructive re-run.
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
 `idd-review-fix.instructions.md`'s E11 both merge `main` into the feature
-branch with `git fetch origin main && git merge origin/main`. On a repo
-whose primary commit signing is non-interactive-hostile (GPG pinentry /
-hardware-touch) and that configures a fallback signing wrapper for
+branch:
+
+```sh
+git fetch origin +refs/heads/main:refs/remotes/origin/main \
+  && git merge origin/main
+```
+
+On a repo whose primary commit signing is non-interactive-hostile (GPG
+pinentry / hardware-touch) and that configures a fallback signing wrapper for
 arbitrary git subcommands, run the **merge** step — including a
 `--continue` after conflict resolution — through that wrapper, never the
 plain command (`git fetch` creates no commit and needs no signing):

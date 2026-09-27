@@ -40,7 +40,10 @@ import { ghGraphql } from './gh-exec.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { parseClaimComment } from './marker-helpers.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
+import {
+  filterTrustedClaimFamilyEvents,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
 import { evaluateSuitabilityLocal } from './suitability-triage.mts';
 
@@ -299,6 +302,23 @@ export interface FetchedIssue {
   hasTrustedClaim: boolean;
 }
 
+export interface SnapshotIssueComment {
+  author: { login: string } | null;
+  body: string;
+  createdAt: string;
+  lastEditedAt: string | null;
+}
+
+/** Returns whether an issue has an unedited trusted claimed-by marker. */
+export function hasTrustedClaimMarker(
+  comments: readonly SnapshotIssueComment[],
+  isTrustedLogin: (login: string) => boolean,
+): boolean {
+  return filterTrustedClaimFamilyEvents([...comments], isTrustedLogin).some(
+    (comment) => parseClaimComment(comment.body, comment.createdAt) !== null,
+  );
+}
+
 // #3368 Copilot review round 3: `labels`/`comments` are fetched as a
 // single un-paginated page each (no cursor follow-up) -- a known,
 // fails-safe limitation, not silent bad data: an issue with its
@@ -319,7 +339,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       stateReason
       labels(first: 100) { nodes { name } }
       closedByPullRequestsReferences(first: 10) { nodes { state } }
-      comments(first: 100) { nodes { author { login } body createdAt } }
+      comments(first: 100) { nodes { author { login } body createdAt lastEditedAt } }
     }
   }
 }`;
@@ -347,11 +367,7 @@ function fetchIssue(
           labels: { nodes: { name: string }[] };
           closedByPullRequestsReferences: { nodes: { state: string }[] };
           comments: {
-            nodes: {
-              author: { login: string } | null;
-              body: string;
-              createdAt: string;
-            }[];
+            nodes: SnapshotIssueComment[];
           };
         } | null;
       } | null;
@@ -376,10 +392,8 @@ function fetchIssue(
   // The parser's own `createdAt` echo isn't consumed here -- only whether
   // parsing succeeds at all -- but the comment's real GraphQL `createdAt`
   // is passed through for hygiene rather than an empty placeholder.
-  const hasTrustedClaim = issue.comments.nodes.some(
-    (comment) =>
-      parseClaimComment(comment.body, comment.createdAt) !== null &&
-      isTrustedLogin(comment.author?.login ?? ''),
+  const hasTrustedClaim = hasTrustedClaimMarker(issue.comments.nodes, (login) =>
+    isTrustedLogin(login),
   );
   return {
     number: issue.number,

@@ -32,6 +32,7 @@ import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   advisoryWaitFamilyMarkerStart,
   buildAdvisoryWaitSummary,
+  classifyCommentEditState,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
   findLastCopilotReviewCommit,
@@ -52,6 +53,11 @@ function toIssueCommentPayload(comment) {
     body: comment.body,
     created_at: comment.createdAt,
     user: { login: comment.authorLogin },
+    // #3249: carried through to the `CommentLike`-compatible shape
+    // `resolveProviderOutageDeclaration` reads -- never derived from
+    // `updatedAt`/`updated_at`. `undefined` unless the caller opted into
+    // `includeEditState`.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 // #2554 (Copilot review, PR #2564 round 4): resolve whether a
@@ -77,8 +83,12 @@ function resolveOutageDeclarationActiveForConvergenceSelector({
     const policy = normalizePolicyConfig(iddConfig);
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return false;
+    // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+    // reject a body-edited declaration marker. Safe inside this function's
+    // existing fail-closed try/catch: a GraphQL failure here degrades to
+    // `false` (declaration not active), never a crash.
     const declarationComments = port
-      .listWorkItemComments(targetIssue)
+      .listWorkItemComments(targetIssue, { includeEditState: true })
       .map(toIssueCommentPayload);
     const authorityOf = (actorLogin) =>
       normalizeAuthorityEvidence(
@@ -126,10 +136,12 @@ function minutesBetweenIso(start, end) {
  * matching `findActivationNonceWinner`'s and `summarizeAdvisoryWaitMarkers`'s
  * shared "re-read must reconverge" design.
  *
- * A candidate `advisory-wait-recovery:` comment counts as one completed
- * recovery cycle only when ALL of the following hold -- any single failure
- * excludes it from both `completedCycleCount` and `clockAnchor` (fail
- * closed; never a whole-computation abort):
+ * A structurally valid, claim- and HEAD-bound `advisory-wait-recovery:`
+ * comment counts as one completed recovery cycle after the server-created
+ * timestamp validates. Edit state is split deliberately: an edited or
+ * unresolved marker still consumes the restrictive cycle budget so editing
+ * an old marker cannot reopen an exhausted cap, but it never contributes to
+ * the trusted `clockAnchor` (fail closed; never a whole-computation abort):
  *  - the comment author is a trusted marker actor (else: untrusted);
  *  - the body parses as the BOUND form via `parseAdvisoryRecoveryComment`
  *    (a malformed body, or the legacy unbound 3-field form, both parse to
@@ -142,7 +154,9 @@ function minutesBetweenIso(start, end) {
  *    including both an earlier and a later HEAD than the current one);
  *  - the comment's GitHub `created_at` validates as an ISO 8601 UTC
  *    timestamp (else: ambiguous-created-at -- excluded from BOTH counting
- *    and anchoring, never counted with a missing anchor contribution).
+ *    and anchoring, never counted with a missing anchor contribution);
+ *  - `lastEditedAt` is explicitly `null` to contribute the trusted clock
+ *    anchor (otherwise it still consumes budget but contributes no anchor).
  */
 export function buildCopilotRecoverySummary(
   { comments = [], prHeadSha, lastCopilotCommit },
@@ -213,6 +227,12 @@ export function buildCopilotRecoverySummary(
         continue;
       }
       completedCycleCount += 1;
+      // #3249: editing a structurally valid marker must not reopen the
+      // bounded recovery budget, but edited or unresolved content cannot
+      // provide the terminal clock evidence.
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        continue;
+      }
       if (
         !clockAnchor ||
         compareIsoTimestamps(marker.createdAt, clockAnchor) < 0
@@ -495,7 +515,15 @@ function main() {
     .getChangeRequestRequestedReviewerLogins(args.prNumber)
     .map((login) => ({ login }));
   const timelineEvents = port.getWorkItemTimeline(args.prNumber);
-  const comments = port.listWorkItemComments(args.prNumber);
+  // #3249: `includeEditState` resolves each comment's GraphQL `lastEditedAt`
+  // -- needed so `summarizeAdvisoryWaitMarkers` and
+  // `buildCopilotRecoverySummary` below (fed via `normalizeComment`) can
+  // reject a body-edited `advisory-wait:` / `advisory-wait-recovery:`
+  // marker. A GraphQL failure now throws where this call previously could
+  // not; see this issue's PR description for that tradeoff.
+  const comments = port.listWorkItemComments(args.prNumber, {
+    includeEditState: true,
+  });
   const collaboratorTrustEnabled = isTruthy(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
@@ -680,6 +708,10 @@ function normalizeComment(comment) {
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    // #3249: carried through so `summarizeAdvisoryWaitMarkers` and
+    // `buildCopilotRecoverySummary` can require `unedited` -- passthrough
+    // only, `undefined` unless the caller opted into `includeEditState`.
+    lastEditedAt: comment.lastEditedAt,
   };
 }
 function resolveTrustedCollaboratorMarkerLogins(port, comments) {

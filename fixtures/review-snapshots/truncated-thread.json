@@ -2,7 +2,9 @@
   "comments": [],
   "reviews": [
     {
-      "author": { "login": "coderabbitai" },
+      "author": {
+        "login": "coderabbitai"
+      },
       "state": "COMMENTED",
       "submittedAt": "2026-05-09T18:00:00Z"
     }
@@ -12,13 +14,20 @@
       "id": "THREAD-3",
       "isResolved": false,
       "comments": {
-        "pageInfo": { "hasNextPage": true },
+        "pageInfo": {
+          "hasNextPage": true
+        },
         "nodes": [
           {
-            "author": { "login": "coderabbitai" },
+            "author": {
+              "login": "coderabbitai"
+            },
             "body": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_\n\n**Add a missing disposition.**",
             "createdAt": "2026-05-09T18:04:46Z",
-            "pullRequestReview": { "id": "REVIEW-3" }
+            "pullRequestReview": {
+              "id": "REVIEW-3"
+            },
+            "lastEditedAt": null
           }
         ]
       }

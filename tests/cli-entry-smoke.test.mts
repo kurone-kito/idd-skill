@@ -652,6 +652,7 @@ test('audit-pr-cleanup.mjs --help prints usage and exits 0', () => {
   );
   assert.match(output, /^usage: node scripts\/audit-pr-cleanup\.mjs/);
   assert.match(output, /--claim-issue <number>/);
+  assert.match(output, /--time-budget-seconds <n>/);
 });
 
 test('audit-pr-cleanup.mjs without --pr fails before any gh invocation', () => {

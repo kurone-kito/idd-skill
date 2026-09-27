@@ -357,11 +357,14 @@ export function runSuitabilityCloseExecute(args, deps) {
 // Production dependency wiring (live gh)
 // ---------------------------------------------------------------------------
 function loadIssueComments(port, issueNumber) {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 function buildTrustedAuthorPredicate({ owner, viewerLogin, rawConfig }) {
   const { actors } = resolveTrustedMarkerActors({

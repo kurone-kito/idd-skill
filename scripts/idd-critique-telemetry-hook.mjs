@@ -20,6 +20,11 @@
 // and `invokeCritiqueTelemetryHook` below, and their CLI `--invoke` mode.
 import { spawn } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { resolveEffectiveCritiqueLoopTelemetryHookFromEnv } from './idd-config.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -294,7 +299,11 @@ process.stdin.on('end', () => {
 });
 `;
 if (import.meta.main) {
-  runCli();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-critique-telemetry-hook', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 /**
  * `docs/idd-workflow.md`'s "User-global critique telemetry hook default"
@@ -1118,17 +1127,18 @@ function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   if (args.invoke) {
     runInvoke(args);
-    return;
+    return 0;
   }
   const report = buildCritiqueTelemetryHookReport(
     args.policy ? { localPolicyPath: args.policy } : undefined,
     args.noUserGlobal,
   );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 /**
  * Fire off {@link invokeCritiqueTelemetryHook} and resolve once BOTH the

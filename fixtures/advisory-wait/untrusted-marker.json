@@ -10,7 +10,8 @@
           "login": "external-user"
         },
         "body": "advisory-wait: external-user ffffffffffffffffffffffffffffffffffffffff 2026-05-11T17:05:00Z",
-        "createdAt": "2026-05-11T17:05:00Z"
+        "createdAt": "2026-05-11T17:05:00Z",
+        "lastEditedAt": null
       }
     ],
     "trustedMarkerLogins": [

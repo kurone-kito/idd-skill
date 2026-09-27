@@ -32,7 +32,6 @@ import { dirname, join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { NON_TTY_ERROR } from '../src/scripts/force-handoff.mts';
 import { buildCommandCatalog } from '../src/scripts/helper-runtime-manifest.mts';
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -41,11 +40,6 @@ const WORKFLOWS_DIR = join(REPO_ROOT, 'idd-template', '.github', 'workflows');
 
 // Matches tests/cli-entry-smoke.test.mts's own per-spawn timeout.
 const SPAWN_TIMEOUT_MS = 60_000;
-
-// The one entry in the interactive-only exception list: force-handoff.mts
-// rejects non-TTY stdin before parsing any argument (including --help), so
-// it can never satisfy the ordinary "exit 0, non-empty stdout" contract.
-const FORCE_HANDOFF_ID = 'force-handoff';
 
 // The six helpers idd-template/.github/workflows/*.yml invoke today, per
 // the issue's own floor-against-a-vacuous-pass requirement.
@@ -189,10 +183,7 @@ function sweepHelp(
     });
     const stdout = result.stdout ?? '';
     const stderr = result.stderr ?? '';
-    const ok =
-      command.id === FORCE_HANDOFF_ID
-        ? result.status === 1 && stderr.includes(NON_TTY_ERROR)
-        : result.status === 0 && stdout.trim() !== '';
+    const ok = result.status === 0 && stdout.trim() !== '';
     if (!ok) {
       const snippet = stderr.trim().split('\n')[0] ?? '';
       failed.push({
@@ -221,47 +212,6 @@ function passingIds<K>(
     catalog.filter((command) => !failedIds.has(command.id)).map(keyOf),
   );
 }
-
-// ---------------------------------------------------------------------------
-// Interactive-only exception-list validator
-// ---------------------------------------------------------------------------
-
-/** Pure: reports every `exceptionIds` entry absent from `catalog`, so the
- * interactive-only exception list can never silently go stale (a helper
- * renamed or removed from the catalog would otherwise leave a dangling,
- * unnoticed exception). */
-function validateExceptionList(
-  exceptionIds: readonly string[],
-  catalog: readonly { id: string }[],
-): string[] {
-  const catalogIds = new Set(catalog.map((command) => command.id));
-  return exceptionIds
-    .filter((id) => !catalogIds.has(id))
-    .map(
-      (id) =>
-        `exception list names "${id}", which is absent from the command catalog`,
-    );
-}
-
-test('interactive-only exception list: validates clean against the real catalog', () => {
-  const violations = validateExceptionList(
-    [FORCE_HANDOFF_ID],
-    buildCommandCatalog(),
-  );
-  assert.deepEqual(violations, []);
-});
-
-test('interactive-only exception list: the validator reports a violation when its target is missing from the catalog', () => {
-  const catalogWithoutForceHandoff = buildCommandCatalog().filter(
-    (command) => command.id !== FORCE_HANDOFF_ID,
-  );
-  const violations = validateExceptionList(
-    [FORCE_HANDOFF_ID],
-    catalogWithoutForceHandoff,
-  );
-  assert.equal(violations.length, 1);
-  assert.match(violations[0], /force-handoff/);
-});
 
 // ---------------------------------------------------------------------------
 // Shape 1 -- vendored-node, no ancestor package.json

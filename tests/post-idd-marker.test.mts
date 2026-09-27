@@ -1306,6 +1306,7 @@ function watermarkFromPrGhStub(
     options.commentsBody ??
       JSON.stringify([
         {
+          node_id: 'C_1',
           body: 'hi',
           created_at: '2026-06-25T10:00:00Z',
           updated_at: '2026-06-25T10:30:00Z',
@@ -1324,7 +1325,10 @@ if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statu
   out(${rollup});
 }
 if (args[0] === 'api' && args[1] === 'graphql') {
-  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
+  // #3249: the SAME canned response also answers listWorkItemComments's
+  // includeEditState node-lookup query (nodes(ids: ...) { lastEditedAt }),
+  // keyed by the comment's own node_id below -- one literal, two shapes.
+  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
 }
 if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
 if (args[0] === 'api' && /rules\\/branches\\//.test(args[1])) out(${rulesBody});

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -2790,14 +2790,43 @@ const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
 const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 
 test('owner evidence requires a generated-tokens record alongside the lock (#3141)', () => {
-  const worktree = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  // A new lock is refused on the primary worktree, so the session evidence
+  // lives on a linked worktree — the same place B1 acquires it.
+  const primary = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const branch = 'issue/3141-owner-evidence';
   const claimId = 'claim-owner-evidence';
   const originalCwd = process.cwd();
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
   try {
     execFileSync('git', ['init', '--quiet', '-b', 'main'], {
-      cwd: worktree,
+      cwd: primary,
       stdio: 'ignore',
     });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'seed',
+      ],
+      { cwd: primary, stdio: 'ignore', env: gitEnv },
+    );
+    execFileSync(
+      'git',
+      ['worktree', 'add', '--quiet', '-b', branch, worktree, 'main'],
+      { cwd: primary, stdio: 'ignore' },
+    );
     acquireClaimLock(worktree, 'agent-owner', claimId, false);
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-owner',
@@ -2818,7 +2847,7 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
     );
     const resolved = buildClaimStateResolution(port, {}, claimId);
     assert.equal(resolved.currentSessionWorktreePath, realpathSync(worktree));
-    assert.equal(resolved.currentSessionBranch, 'main');
+    assert.equal(resolved.currentSessionBranch, branch);
 
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-other',
@@ -2847,7 +2876,16 @@ test('owner evidence requires a generated-tokens record alongside the lock (#314
     );
   } finally {
     process.chdir(originalCwd);
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', worktree], {
+        cwd: primary,
+        stdio: 'ignore',
+      });
+    } catch {
+      // best-effort; rmSync below still runs
+    }
     rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
   }
 });
 
@@ -2877,6 +2915,7 @@ function claimComment(
     body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
     createdAt,
     author: { login: author },
+    lastEditedAt: null,
   };
 }
 
@@ -2911,7 +2950,13 @@ function buildClaimState(
     resolution: {
       loadComments: (issueNumber: number) => {
         seen.push(issueNumber);
-        return commentsByIssue.get(issueNumber) ?? [];
+        return (commentsByIssue.get(issueNumber) ?? []).map((comment) => {
+          if (comment === null || typeof comment !== 'object') return comment;
+          const record = comment as Record<string, unknown>;
+          return 'lastEditedAt' in record || 'last_edited_at' in record
+            ? comment
+            : { ...record, lastEditedAt: null };
+        });
       },
       isTrustedAuthor: (login: string) =>
         trusted.has(String(login ?? '').toLowerCase()),
@@ -3282,6 +3327,70 @@ test('a released legacy claim with a live local worktree is not eligible', async
   );
   assert.equal(leaf701?.activeClaim?.present, false);
   assert.equal(leaf701?.activeClaim?.localWorktree?.status, 'occupied');
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('an edited legacy release does not clear a live claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          body: '<!-- claimed-by: legacy-agent 2026-06-25T06:00:00Z branch: issue/700-task -->',
+          createdAt: '2026-06-25T06:00:00Z',
+          author: { login: 'kurone-kito' },
+          lastEditedAt: null,
+        },
+        {
+          body: '<!-- unclaimed-by: legacy-agent 2026-06-25T07:00:00Z -->',
+          createdAt: '2026-06-25T07:00:00Z',
+          author: { login: 'kurone-kito' },
+          lastEditedAt: '2026-06-25T08:00:00Z',
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.present, true);
+  assert.equal(leaf701?.activeClaim?.claimId, null);
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('snake_case edit state is accepted for a trusted claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        {
+          ...claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT),
+          lastEditedAt: undefined,
+          last_edited_at: null,
+        },
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.claimId, 'claim-701');
   assert.equal(leaf701?.claimEligible, false);
 });
 

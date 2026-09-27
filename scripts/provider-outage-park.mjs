@@ -17,16 +17,24 @@
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
 import { parseCliArgs } from './cli-args.mjs';
 import { ghApiJson, ghText } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   compareIsoTimestamps,
+  filterTrustedClaimFamilyEvents,
   parseProviderOutageParkComment,
   renderProviderOutageParkComment,
   resolveTrustedMarkerActors,
   toSecondPrecisionIso,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import {
   buildProviderHealthReport,
   PROVIDER_HEALTH_SERVICES,
@@ -162,7 +170,12 @@ function latestTrustedParkMarker(comments, trustedMarkerLogins) {
  */
 function latestTrustedClaimCreatedAt(comments, trustedMarkerLogins) {
   let latest = null;
-  for (const comment of comments) {
+  const trusted = (login) =>
+    trustedMarkerLogins.has(login.trim().toLowerCase());
+  for (const comment of filterTrustedClaimFamilyEvents(
+    [...comments],
+    trusted,
+  )) {
     const authorLogin = String(comment?.user?.login ?? '')
       .trim()
       .toLowerCase();
@@ -249,7 +262,12 @@ const defaultFetchOpenPullRequests = (owner, repo, sampleSize) => {
   }
   return payload;
 };
-const defaultFetchComments = (owner, repo, number) => {
+const defaultFetchComments = (
+  owner,
+  repo,
+  number,
+  resolveClaimEditState = false,
+) => {
   const payload = ghApiJson(
     `repos/${owner}/${repo}/issues/${number}/comments`,
     {
@@ -259,7 +277,21 @@ const defaultFetchComments = (owner, repo, number) => {
   if (!Array.isArray(payload)) {
     throw new Error('malformed comments response');
   }
-  return payload;
+  const comments = payload;
+  if (!resolveClaimEditState || comments.length === 0) {
+    return comments;
+  }
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'provider-outage-park: comment response is missing node_id required to resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment, index) => ({
+    ...comment,
+    lastEditedAt: lastEditedAtByNodeId.get(nodeIds[index]),
+  }));
 };
 /**
  * Collect every open pull request's latest trusted park marker, bounded to
@@ -297,8 +329,14 @@ function collectRawParkMarkers(owner, repo, options) {
   try {
     openPrs = fetchOpenPullRequests(owner, repo, sampleSize);
   } catch (error) {
+    // #3346 review finding: preserve the original gh-exec.mts-tagged error
+    // as `.cause` (not dropped as before) so classifyHelperError's
+    // cause-chain walk can still classify a real gh transport/not-found
+    // failure correctly instead of losing it to the generic `internal`
+    // fallback -- mirrors provider-outage-declaration.mts's identical fix.
     throw new Error(
       `could not read open pull requests to list parked changes: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   // #3379 review (Copilot): several markers can share one originating
@@ -314,7 +352,7 @@ function collectRawParkMarkers(owner, repo, options) {
     if (cached !== undefined) return cached;
     let result;
     try {
-      const issueComments = fetchComments(owner, repo, issueNumber);
+      const issueComments = fetchComments(owner, repo, issueNumber, true);
       result = latestTrustedClaimCreatedAt(
         issueComments,
         options.trustedMarkerLogins,
@@ -513,8 +551,10 @@ export function buildParkedIssuesSummary(owner, repo, options = {}) {
  */
 export function runParkPullRequest(options) {
   if (!PROVIDER_HEALTH_SERVICES.includes(options.service)) {
-    throw new Error(
-      `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+    throw markCliUsageError(
+      new Error(
+        `unsupported --service value: ${options.service} (expected one of ${PROVIDER_HEALTH_SERVICES.join(', ')})`,
+      ),
     );
   }
   const service = options.service;
@@ -607,12 +647,16 @@ const PROVIDER_OUTAGE_PARK_FLAG_SPEC = {
 function parsePositiveIntegerFlag(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('provider-outage-park', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }
 function main() {
   const { values, help } = parseCliArgs(
@@ -621,14 +665,16 @@ function main() {
   );
   if (help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   // #3277: --park and --parked-issues are two independent single-purpose
   // modes -- both true is never a coherent request, so fail closed before
   // either mode's own flag validation runs, the same fail-closed posture
   // pre-merge-readiness.mts applies to its own mutually-exclusive flags.
   if (values.park && values['parked-issues']) {
-    throw new Error('--park and --parked-issues are mutually exclusive');
+    throw markCliUsageError(
+      new Error('--park and --parked-issues are mutually exclusive'),
+    );
   }
   const owner =
     values.owner ||
@@ -638,7 +684,7 @@ function main() {
   if (values['parked-issues']) {
     const summary = buildParkedIssuesSummary(owner, repo);
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
-    return;
+    return 0;
   }
   if (values.park) {
     const prNumber = parsePositiveIntegerFlag(values.pr, '--pr');
@@ -646,9 +692,21 @@ function main() {
     const service = values.service.trim();
     const agentId = values['agent-id'].trim();
     const claimId = values['claim-id'].trim();
-    if (!service) throw new Error('missing required --service <name> argument');
-    if (!agentId) throw new Error('missing required --agent-id <id> argument');
-    if (!claimId) throw new Error('missing required --claim-id <id> argument');
+    if (!service) {
+      throw markCliUsageError(
+        new Error('missing required --service <name> argument'),
+      );
+    }
+    if (!agentId) {
+      throw markCliUsageError(
+        new Error('missing required --agent-id <id> argument'),
+      );
+    }
+    if (!claimId) {
+      throw markCliUsageError(
+        new Error('missing required --claim-id <id> argument'),
+      );
+    }
     const blockers = values.blockers
       .split(',')
       .map((b) => b.trim())
@@ -665,11 +723,11 @@ function main() {
       apply: values.apply,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    process.exitCode = result.eligible ? 0 : 1;
-    return;
+    return result.eligible ? 0 : 1;
   }
   const report = buildParkedChangeReport(owner, repo);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 function printHelp() {
   process.stdout.write(`Usage:

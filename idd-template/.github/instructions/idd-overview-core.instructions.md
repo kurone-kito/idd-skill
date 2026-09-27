@@ -270,8 +270,7 @@ enabled and default approval actors to
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-Non-shell rows (**issue-scope**, **orphan-first-policy**) are workflow
-settings — read them literally, not as commands.
+Non-shell rows are settings, not commands.
 
 `pre-push-validate` omits auto-fix. If lint fails, run
 **fix-validate**, commit, then re-run **pre-push-validate**.
@@ -283,25 +282,25 @@ commit before any push, rebase, or step needing a clean tree.
 recreated worktrees must not need manual cleanup or leave unexpected
 tracked changes.
 
-Judge a command-set run by exit status: run without a pipe, or in
-Bash check `${PIPESTATUS[0]}` or `set -o pipefail` — a
-`tail`/`head` filter can't prove success (#3139).
+Judge a command-set run by exit status; when piping, check
+`${PIPESTATUS[0]}` or `pipefail` because filters can't prove success
+(#3139).
 
-**Tool availability**: run commands only when tools exist. For Node.js:
+**Tool availability**: run commands only when tools exist. For Node.js,
 prefer project scripts; use `npx <tool>` if Node.js and `npx` are available
 and no relevant script exists; else use `true`. For other tools, use
 `true` when absent.
 
 ## Phase routing table
 
-Start by reading this file for shared definitions, then load the phase
-file that matches your current situation.
+Read this file first, then load the phase file matching your situation.
 
 <!-- dprint-ignore-start -->
 | Situation | Read this file |
 | --- | --- |
 | Starting fresh (no active claim) | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
+| Unsure mid E/F-phase while still owning claim | [Live-session E/F orientation](../../docs/idd-workflow.md#live-session-ef-orientation) |
 | Resuming after crash / rate-limit / handoff / operator-present deliberate pause | `idd-resume.instructions.md` |
 | Claimed, branch exists, no PR yet | `idd-work.instructions.md` |
 | PR open, CI running, no reviews yet | `idd-pr-submit.instructions.md` |

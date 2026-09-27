@@ -81,16 +81,21 @@ const ADVISORY_CONVERGENCE_WAIVABLE = [
 function baseInputs(
   overrides: Partial<AdvisoryConvergenceInputs> = {},
 ): AdvisoryConvergenceInputs {
+  const claimEvents = (overrides.claimEvents ?? []).map((event) =>
+    'lastEditedAt' in event || 'last_edited_at' in event
+      ? event
+      : { ...event, lastEditedAt: null },
+  );
   return {
     prNumber: 1234,
     prHeadSha: HEAD,
     reviews: [],
     threads: [],
     comments: [],
-    claimEvents: [],
     claimMarkerHistoryPresent: false,
     claimCandidateAmbiguous: false,
     ...overrides,
+    claimEvents,
   };
 }
 
@@ -153,6 +158,7 @@ function claimComment(claimId: string = CLAIM_ID) {
     author: { login: TRUSTED },
     body: `<!-- claimed-by: ${AGENT_ID} ${claimId} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
     createdAt: OLD,
+    lastEditedAt: null,
   };
 }
 
@@ -945,6 +951,7 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
                 body: '**Rejected** — not applicable to this change.',
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },
@@ -958,6 +965,48 @@ test('valid Reject-disposition: an unresolved bot thread with a fresh Rejected m
   assert.equal(verdict.threads.satisfied, true);
   assert.equal(verdict.converged, true);
   assert.equal(verdict.ready, true);
+});
+
+// #3249: same fixture as above, but the trusted `**Rejected**` reply was
+// edited after posting -- it must no longer count as a fresh disposition,
+// so the thread stays in `threads.blockingIds` (an edited disposition must
+// never satisfy or relax this gate, only ordinary unedited feedback can).
+test('#3249: an edited trusted Rejected reply leaves the thread in threads.blockingIds', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRT_EDITED_REJECT',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: TRUSTED },
+                body: '**Rejected** — not applicable to this change.',
+                createdAt: RECENT,
+                updatedAt: RECENT,
+                lastEditedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.blockingCount, 1);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRT_EDITED_REJECT']);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
 });
 
 // #3244: `summarizeDispositionEvidenceForGate` (reused unfiltered for
@@ -1024,6 +1073,7 @@ test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted
                 body: `**Accepted** — extracted in abc123\n\n${stamp}`,
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },
@@ -1920,6 +1970,7 @@ function rerollMarkerComment(
     login?: string;
     headSha?: string;
     embeddedAt?: string;
+    lastEditedAt?: string | null;
   } = {},
 ) {
   const headSha = overrides.headSha ?? HEAD;
@@ -1928,6 +1979,8 @@ function rerollMarkerComment(
     author: { login: overrides.login ?? TRUSTED },
     body: `advisory-reroll: ${AGENT_ID} ${headSha} ${embeddedAt}`,
     createdAt,
+    lastEditedAt:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -2050,6 +2103,27 @@ test('sameHeadReroll: a trusted same-HEAD marker counts and is not yet exhausted
     baseInputs({
       reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
       comments: [rerollMarkerComment(REROLL_AT)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 1);
+  assert.equal(verdict.sameHeadReroll.exhausted, false);
+  assert.equal(verdict.sameHeadReroll.latestAt, REROLL_AT);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+// #3249: `advisory-reroll:` is a restrict-only marker (the issue's own
+// exception list) -- ignoring an edited copy would LOWER the count and
+// could lift an exhausted budget, the opposite direction of every other
+// family this issue tightens. An edited trusted marker must therefore keep
+// counting toward the same-HEAD reroll budget, exactly like the unedited
+// case above.
+test('#3249: an edited trusted same-HEAD reroll marker still counts toward the budget (restrict-only, unchanged)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT, { lastEditedAt: RECENT })],
     }),
     baseOptions(),
   );
@@ -2542,6 +2616,7 @@ test('#3269: dispositionEvidence.missingThreadCount agrees with F2 for the real 
           author: { login: TRUSTED },
           createdAt: '2026-09-20T07:17:35Z',
           updatedAt: '2026-09-20T07:17:35Z',
+          lastEditedAt: null,
           body: '**Accepted** — Fixed in 28c18a9.',
         },
       ],
@@ -3154,6 +3229,7 @@ for (const [label, body, expectedSuppressedCount, expectedShape] of [
             author: { login: TRUSTED },
             body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
             createdAt: ackAfterReview,
+            lastEditedAt: null,
           },
         ],
       }),
@@ -3249,6 +3325,7 @@ test('review-body shape (#3258): an on-HEAD Copilot review with an unrecognized 
           author: { login: TRUSTED },
           body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
           createdAt: ackAfterReview,
+          lastEditedAt: null,
         },
       ],
     }),
@@ -3328,7 +3405,12 @@ const ACK_BEFORE_REVIEW = OLD; // well before RECENT
  * anchors on the comment's own `createdAt`, never the embedded text). */
 function reviewAckComment(
   createdAt: string,
-  overrides: { login?: string; headSha?: string; embeddedAt?: string } = {},
+  overrides: {
+    login?: string;
+    headSha?: string;
+    embeddedAt?: string;
+    lastEditedAt?: string | null;
+  } = {},
 ) {
   const headSha = overrides.headSha ?? HEAD;
   const embeddedAt = overrides.embeddedAt ?? createdAt;
@@ -3336,6 +3418,8 @@ function reviewAckComment(
     author: { login: overrides.login ?? TRUSTED },
     body: `review-ack: ${AGENT_ID} ${headSha} ${embeddedAt}`,
     createdAt,
+    lastEditedAt:
+      overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
 }
 
@@ -3365,6 +3449,7 @@ test('review-ack: nonzero itemCount with Clause 2 satisfied (via existing thread
                 body: '**Rejected** — not applicable to this change.',
                 createdAt: RECENT,
                 updatedAt: RECENT,
+                lastEditedAt: null,
               },
             ],
           },
@@ -3797,6 +3882,7 @@ function terminalRecoveryComments() {
         attempt: 1,
       }),
       createdAt: RECOVERY_ANCHOR_1,
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
@@ -3808,6 +3894,7 @@ function terminalRecoveryComments() {
         attempt: 2,
       }),
       createdAt: RECOVERY_ANCHOR_2,
+      lastEditedAt: null,
     },
   ];
 }
@@ -5664,6 +5751,7 @@ test('pickResolvingClaimEvents: a lone candidate trusted only via collaborator-m
       author: { login: COLLABORATOR },
       body: `<!-- claimed-by: ${AGENT_ID} ${CLAIM_ID} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
       createdAt: OLD,
+      lastEditedAt: null,
     },
   ];
 
@@ -5749,16 +5837,19 @@ test('pickResolvingClaimEvents (#3270): a takeover inside a configured 18h stale
       author: { login: TRUSTED },
       body: `<!-- claimed-by: ${AGENT_ID} claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
       createdAt: '2026-05-12T09:00:00Z',
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
       body: `<!-- claimed-by: ${AGENT_ID} ${takeoverClaimId} supersedes: claim-20260512T090000Z-337-old 2026-05-13T04:00:00Z branch: issue/337-feat -->\n\n_${AGENT_ID}: issue claim — IDD automation marker._`,
       createdAt: '2026-05-13T04:00:00Z',
+      lastEditedAt: null,
     },
     {
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${AGENT_ID} ${takeoverClaimId} 2026-05-13T04:05:00Z -->\n\n_${AGENT_ID}: issue claim released — IDD automation marker._`,
       createdAt: '2026-05-13T04:05:00Z',
+      lastEditedAt: null,
     },
   ];
 
@@ -5960,6 +6051,16 @@ test('hasTrustedClaimMarkerHistory: true for a still-active trusted claim (the o
   );
 });
 
+test('hasTrustedClaimMarkerHistory: ignores an edited trusted claim marker', () => {
+  assert.equal(
+    hasTrustedClaimMarkerHistory(
+      [[{ ...claimComment(), lastEditedAt: RECENT }]],
+      [TRUSTED],
+    ),
+    false,
+  );
+});
+
 test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-by marker well past staleAge with no active claim resolving', () => {
   // Ground truth for path 4: `resolveActiveClaim` never expires a claim by
   // elapsed time alone (see this function's own doc comment) -- the
@@ -5977,6 +6078,7 @@ test('hasTrustedClaimMarkerHistory: true for a STALE trusted claim -- a claimed-
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   assert.equal(
@@ -6021,6 +6123,15 @@ test('resolveClaimEvidence: happy path -- a lone candidate resolves cleanly, una
   });
 });
 
+test('resolveClaimEvidence: an edited-only claim marker is not claim history', () => {
+  const editedClaim = { ...claimComment(), lastEditedAt: RECENT };
+  assert.deepEqual(resolveClaimEvidence([[editedClaim]], [TRUSTED], false), {
+    claimEvents: [],
+    claimCandidateAmbiguous: false,
+    claimMarkerHistoryPresent: false,
+  });
+});
+
 test('resolveClaimEvidence: reproduces #1686 path 2 -- two candidates each independently resolve an active claim', () => {
   const claimA = [claimComment('claim-a')];
   const claimB = [claimComment('claim-b')];
@@ -6044,6 +6155,7 @@ test('resolveClaimEvidence: reproduces #1686 path 4 -- a stale/released trusted 
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   assert.deepEqual(resolveClaimEvidence([released], [TRUSTED], false), {
@@ -6105,6 +6217,7 @@ test('resolveClaimEvidence end-to-end: its COMPUTED path-4 output (not hand-supp
       author: { login: TRUSTED },
       body: `<!-- unclaimed-by: ${agentId} ${claimId} ${RECENT} -->\n\n_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
       createdAt: RECENT,
+      lastEditedAt: null,
     },
   ];
   const evidence = resolveClaimEvidence([released], [TRUSTED], false);

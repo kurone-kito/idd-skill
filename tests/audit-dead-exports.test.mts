@@ -485,6 +485,475 @@ test('a whole-statement `export type { X } from` re-export credits nothing (type
   }
 });
 
+test('a no-`from` aliased export-list item whose underlying declaration has zero real importers is classified unused, not masked as production by the declarationLine mismatch (#3498)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'PublicHelper');
+    assert.equal(
+      entry.category,
+      'unused',
+      'the underlying declaration is never referenced anywhere but its ' +
+        'own declaration line and has zero cross-file importers -- it ' +
+        'must not be masked as `production` by crediting the export ' +
+        "statement's own line as a false self-reference",
+    );
+    assert.ok(result.findings.some((f) => f.name === 'PublicHelper'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` unaliased export-list item whose underlying declaration has zero real importers is classified unused (same declarationLine fix, no alias)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function forgottenLocal(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export { forgottenLocal };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    const entry = findByName(result, 'forgottenLocal');
+    assert.equal(entry.category, 'unused');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` aliased export-list item whose underlying declaration IS genuinely self-referenced elsewhere is still classified production (declarationLine fix does not break the true-positive path)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export function main(): void {',
+        '  helper();',
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(findByName(result, 'PublicHelper').category, 'production');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a no-`from` export list appearing BEFORE the declaration it re-exports (valid via function hoisting) still resolves the real declaration line, not the export statement's own line (#3498 C1 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'export { helper as PublicHelper };',
+        '',
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'the declaration is textually AFTER the export statement (hoisting) ' +
+        '-- the real declaration line must still be resolved via a ' +
+        'full-file scan, not only a forward, in-order lookup',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a multi-line no-`from` export list resolves the item's own line to the identifier's actual line, not the opening brace's line (#3498 C1 finding)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export {',
+        '  helper as PublicHelper,',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      "a multi-line export-list item's own line must resolve to the " +
+        "identifier's actual line, not the `export {` opening-brace " +
+        'line -- otherwise the wrong line is excluded from the ' +
+        "self-reference scan and the real declaration's own occurrence " +
+        'is wrongly counted as "elsewhere"',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('two aliases of the same local name in a multi-line no-`from` export list do not falsely count each other as a self-reference (#3498 C1 finding)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export {',
+        '  helper as PublicA,',
+        '  helper as PublicB,',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicA').category,
+      'unused',
+      "PublicB's own list line must not count as a self-reference for " +
+        'PublicA, and vice versa -- both are re-export mechanisms for ' +
+        'the same local name, neither is real usage',
+    );
+    assert.equal(findByName(result, 'PublicB').category, 'unused');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('two aliases of the same local name are classified independently when only one has a real cross-file importer (#3498 C1 finding: the shared exclude-lines fix must not blur independent importer credit)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {',
+        "  console.log('hi');",
+        '}',
+        '',
+        'export {',
+        '  helper as PublicA,',
+        '  helper as PublicB,',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    write(
+      root,
+      'src/scripts/widget-consumer.mts',
+      "import { PublicA } from './widget.mts';\n" + 'void PublicA;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicA').category,
+      'production',
+      'PublicA has a genuine cross-file importer',
+    );
+    assert.equal(
+      findByName(result, 'PublicB').category,
+      'unused',
+      'PublicB has zero importers and no real self-use -- it must not ' +
+        "inherit PublicA's production status just because they share a " +
+        'local name and an export statement',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` export list re-exporting a BARE function with multiple TypeScript overload signatures is classified unused, not masked by the other overload lines (Copilot High-severity finding, post-reduction review)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(a: number): void;',
+        'function helper(a: string): void;',
+        'function helper(a: number | string): void {',
+        '  console.log(a);',
+        '}',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      'every overload signature line mentions `helper` -- all of them ' +
+        'must be excluded from the self-reference scan, not only the ' +
+        'last one recorded (a plain overwrite of a single-line map ' +
+        'entry kept only the LAST signature line, so the EARLIER ' +
+        'signature lines registered as false self-references and ' +
+        'masked a genuinely dead export as production)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` export list re-exporting the SECOND declarator of a bare, single-line multi-declarator `const` statement is classified unused, not masked by the whole statement counting as a self-reference (Copilot High-severity finding, post-reduction review)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      ['const other = 1, helper = 2;', '', 'export { helper };', ''].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      '`BARE_CONST_DECL_PATTERN` only ever captures the FIRST ' +
+        'identifier in the declarator list -- before this fix, the ' +
+        'SECOND declarator (`helper`) never got a real declaration ' +
+        'line at all, so the no-`from` item fell back to the ' +
+        "export-list's own line and the const statement's own " +
+        '(unexcluded) mention of `helper` registered as a false ' +
+        'self-reference, masking a genuinely unimported export as ' +
+        'production',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a no-`from` export list re-exporting the SECOND declarator of an EXPORTED, single-line multi-declarator `const` statement is classified unused (proactive fix, same class as the bare-const finding above, found before Copilot flagged it)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'export const other = 1, helper = 2;',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'unused',
+      '`CONST_DECL_PATTERN` only ever captures the FIRST identifier -- ' +
+        'a SEPARATE no-`from` item re-exporting the SECOND declarator ' +
+        "under an alias must still resolve that declarator's own real " +
+        'line, not fall back to the export-list line and let the ' +
+        'const statement itself register as a false self-reference',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a genuine same-line usage after a bare declaration is still detected as a self-reference (round-15 redesign: offset-based exclusion, not whole-line, Codex/Copilot C1 findings)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function register(x: unknown): void { console.log(x); }',
+        'const helper = 1; register(helper);',
+        '',
+        'export { helper as PublicHelper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'production',
+      'excluding the WHOLE declaration line (the earlier, line-based ' +
+        'design) discarded the genuine `register(helper)` call sharing ' +
+        'that line, wrongly classifying a genuinely-used export as ' +
+        'unused -- a verified regression relative to pre-#3498 ' +
+        "behavior; excluding only the declaration identifier's own " +
+        'offset must still let the real usage register',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a genuine same-line usage after a no-`from` export-list statement is still detected as a self-reference (round-15 redesign: offset-based exclusion, not whole-line, Codex/Copilot C1 findings)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      ['function helper(): void {}', 'export { helper }; helper();', ''].join(
+        '\n',
+      ),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'excluding the WHOLE export-list item line (the earlier, ' +
+        'line-based design) discarded the genuine `helper()` call ' +
+        'sharing that line, wrongly classifying a genuinely-used ' +
+        "export as unused; excluding only the export-list item's own " +
+        'offset must still let the real usage register',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a function parameter sharing the exact same name as the function itself is a DOCUMENTED, ACCEPTED limitation of the whole-file text match (Codex C1 finding, round-15 redesign) -- verified to predate the offset redesign via a multi-line sibling fixture, not a new regression it introduced', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export function helper(helper: unknown): void {}\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'production',
+      'documents the accepted false positive: the shadowing PARAMETER ' +
+        'named `helper` is an unrelated local binding, not a use of ' +
+        'the exported function -- the SAME whole-file-text-match ' +
+        'limitation already accepted since the #3478 review, now ' +
+        'applying uniformly (a multi-line sibling with the parameter ' +
+        'on a DIFFERENT line already misclassified the same way ' +
+        'BEFORE the offset redesign, since the OLD whole-line ' +
+        'exclusion never covered a later signature line either -- ' +
+        'this is not something the redesign introduced). If this ever ' +
+        'starts reading `unused`, the limitation may have been fixed ' +
+        'for real (update this test and the doc comment together)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a REDUNDANT self-alias no-`from` item (`export { helper as helper };`) is still classified unused, not masked by its own alias token counting as a self-reference (Codex C1 finding, round-16, offset redesign)', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {}',
+        '',
+        'export { helper as helper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'helper').category,
+      'unused',
+      'a redundant self-alias textually mentions the same word TWICE ' +
+        "in one item -- excluding only the ORIGINAL name's own offset " +
+        'left the ALIAS token counted as a separate, genuine ' +
+        'self-reference, masking a genuinely unimported export as ' +
+        'production',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a no-`from` item whose alias merely CONTAINS the local name as a whole word (`export { helper as $helper };`) is still classified unused (Codex C1 finding, round 17: the alias's own start offset is the `$`, but `\\bhelper\\b` matches one character later)", () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      [
+        'function helper(): void {}',
+        '',
+        'export { helper as $helper };',
+        '',
+      ].join('\n'),
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, '$helper').category,
+      'unused',
+      "excluding the alias's own start offset (the `$` character) does " +
+        'not exclude the actual `\\bhelper\\b` match, which starts one ' +
+        "character later -- the fix must scan the alias's own text for " +
+        'the real match position(s) instead of assuming they coincide ' +
+        "with the alias's own start",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a bare declaration crammed onto the SAME physical line as a preceding, already-consumed no-`from` export list is a DOCUMENTED, ACCEPTED limitation of the line-oriented parsing loop (Codex C1 finding, round 18) -- verified this is specifically about a trailing same-line statement, not declaration-after-export ordering in general, since moving the declaration to its own separate line already works correctly', () => {
+  const root = makeFixtureRoot();
+  try {
+    write(
+      root,
+      'src/scripts/widget.mts',
+      'export { helper as PublicHelper }; const helper = 1;\n',
+    );
+    const result = collectDeadExportAuditResult(root);
+    assert.equal(
+      findByName(result, 'PublicHelper').category,
+      'production',
+      'documents the accepted limitation: once the export-list is ' +
+        'consumed, the loop advances past its closing line ' +
+        'unconditionally, so a declaration crammed onto that SAME ' +
+        'line afterward is never scanned or added to ' +
+        'declarationOffsetsByLocalName -- unchanged since this ' +
+        "branch's first commit, but only exposed now that exclusion " +
+        'is offset-based rather than whole-line (the old whole-line ' +
+        'exclusion masked it by coincidence, not because the ' +
+        'declaration was ever found). If this ever starts reading ' +
+        '`unused`, the limitation may have been fixed for real ' +
+        '(update this test and the doc comment together)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('this repository, at its current state, has no unsuppressed dead/test-only export (regression guard for the acceptance criterion)', () => {
   const result = collectDeadExportAuditResult(REPO_ROOT);
   assert.deepEqual(

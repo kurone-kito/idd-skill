@@ -311,6 +311,54 @@
     }
   },
   {
+    "id": "codex-no-find-3517",
+    "botLogin": "chatgpt-codex-connector[bot]",
+    "source": {
+      "pr": 3517,
+      "reviewId": null,
+      "commentId": 5846803562,
+      "editedAt": null
+    },
+    "surface": "pr comment",
+    "body": "Codex Review: Didn't find any major issues. You're on a roll.\n\n**Reviewed commit:** `509c5a1531`\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>\n",
+    "note": "Real terminal Codex no-find result from PR #3517.",
+    "expectedLabels": {
+      "codex-no-find-result": true
+    }
+  },
+  {
+    "id": "codex-no-find-2787",
+    "botLogin": "chatgpt-codex-connector[bot]",
+    "source": {
+      "pr": 2787,
+      "reviewId": null,
+      "commentId": 5599430840,
+      "editedAt": null
+    },
+    "surface": "pr comment",
+    "body": "Codex Review: Didn't find any major issues. What shall we delve into next?\n\n**Reviewed commit:** `626572f066`\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>\n",
+    "note": "Real terminal Codex no-find result from PR #2787.",
+    "expectedLabels": {
+      "codex-no-find-result": true
+    }
+  },
+  {
+    "id": "codex-no-find-2785",
+    "botLogin": "chatgpt-codex-connector[bot]",
+    "source": {
+      "pr": 2785,
+      "reviewId": null,
+      "commentId": 5598564699,
+      "editedAt": null
+    },
+    "surface": "pr comment",
+    "body": "Codex Review: Didn't find any major issues. :+1:\n\n**Reviewed commit:** `fc4add2220`\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>\n",
+    "note": "Real terminal Codex no-find result from PR #2785.",
+    "expectedLabels": {
+      "codex-no-find-result": true
+    }
+  },
+  {
     "id": "copilot-error-3013",
     "botLogin": "copilot-pull-request-reviewer[bot]",
     "source": {

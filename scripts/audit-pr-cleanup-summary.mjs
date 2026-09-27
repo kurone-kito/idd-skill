@@ -47,6 +47,18 @@ export function computeReportSummary(report) {
       report.status = 'failed';
       return;
     }
+    // The apply-mode time budget ran out before this pass (and every
+    // candidate/pass after it) could finish (#3321): report this distinctly
+    // from the existing statuses below rather than let a stopped-early run
+    // read as a genuine `incomplete` permission-blocked remainder or a
+    // false `applied`/`clean` convergence. Checked after `rescanError`/
+    // `failed` (both take precedence -- a genuine error or an unconfirmed
+    // rescan outranks a merely-incomplete-by-budget run) and before the
+    // existing statuses below.
+    if (report.timeBudgetExhausted) {
+      report.status = 'time-budget-exhausted';
+      return;
+    }
     // A candidate that ended up minimized is done — whether this run minimized
     // it (`applied`) or it was already / cascade-minimized (an
     // already-minimized skip; minimizing a parent collapses its child threads,

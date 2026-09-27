@@ -32,10 +32,10 @@ import {
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
-import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   advisoryWaitFamilyMarkerStart,
   buildAdvisoryWaitSummary,
+  classifyCommentEditState,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
   findLastCopilotReviewCommit,
@@ -44,6 +44,7 @@ import {
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
   resolveTrustedMarkerActors,
+  type TrustedMarkerActorResolution,
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -57,6 +58,9 @@ interface IssueCommentPayload {
   body?: string | null;
   created_at?: string | null;
   user?: { login?: string | null } | null;
+  /** #3249: see `ProviderComment.lastEditedAt`'s doc comment (provider-
+   * port.mts) for the three-state contract. */
+  last_edited_at?: string | null;
 }
 
 function toIssueCommentPayload(comment: ProviderComment): IssueCommentPayload {
@@ -64,6 +68,11 @@ function toIssueCommentPayload(comment: ProviderComment): IssueCommentPayload {
     body: comment.body,
     created_at: comment.createdAt,
     user: { login: comment.authorLogin },
+    // #3249: carried through to the `CommentLike`-compatible shape
+    // `resolveProviderOutageDeclaration` reads -- never derived from
+    // `updatedAt`/`updated_at`. `undefined` unless the caller opted into
+    // `includeEditState`.
+    last_edited_at: comment.lastEditedAt,
   };
 }
 
@@ -96,8 +105,12 @@ function resolveOutageDeclarationActiveForConvergenceSelector({
     const policy = normalizePolicyConfig(iddConfig);
     const targetIssue = policy.providerOutage.declarationTarget;
     if (!targetIssue) return false;
+    // #3249: `includeEditState` so `resolveProviderOutageDeclaration` can
+    // reject a body-edited declaration marker. Safe inside this function's
+    // existing fail-closed try/catch: a GraphQL failure here degrades to
+    // `false` (declaration not active), never a crash.
     const declarationComments = port
-      .listWorkItemComments(targetIssue)
+      .listWorkItemComments(targetIssue, { includeEditState: true })
       .map(toIssueCommentPayload);
     const authorityOf = (actorLogin: string): AuthorityEvidence =>
       normalizeAuthorityEvidence(
@@ -168,6 +181,9 @@ interface CopilotRecoveryCommentLike {
   author?: { login?: string | null } | null;
   body?: string | null;
   createdAt?: string | null;
+  /** #3249: see `classifyCommentEditState`'s doc comment (protocol-
+   * helpers.mts) for the three-state contract. */
+  lastEditedAt?: string | null;
 }
 
 /**
@@ -185,10 +201,12 @@ export interface CopilotRecoverySummary {
   /** Configured per-PR-HEAD recovery-cycle cap (default 2). */
   cap: number;
   /**
-   * Count of trusted, active-claim-bound, current-HEAD-bound
-   * `advisory-recovery` markers. A completed cycle is counted by marker
-   * *presence*, never by the largest embedded `attempt` number (that field
-   * is a diagnostic only).
+   * Count of structurally valid, trusted-author, active-claim-bound,
+   * current-HEAD-bound `advisory-recovery` markers with a valid server
+   * `created_at`. A completed cycle is counted by marker *presence*, never
+   * by the largest embedded `attempt` number (that field is a diagnostic
+   * only). Edited or unresolved edit state still consumes this restrictive
+   * budget, but only explicitly unedited markers may anchor the clock.
    */
   completedCycleCount: number;
   /** `max(cap - completedCycleCount, 0)`. */
@@ -198,12 +216,12 @@ export interface CopilotRecoverySummary {
   /** Configured terminal-unavailability window in minutes (default 720). */
   terminalWindowMinutes: number;
   /**
-   * GitHub `created_at` of the *earliest* trusted, bound, current-HEAD
-   * `advisory-recovery` marker; `''` when none exists. Embedded marker
-   * timestamps are diagnostics only and never move this anchor -- only the
-   * GitHub-assigned comment `created_at` counts, mirroring the
-   * `review-watermark` / claim-heartbeat clock rule elsewhere in this
-   * protocol.
+   * GitHub `created_at` of the *earliest* explicitly unedited, trusted,
+   * bound, current-HEAD `advisory-recovery` marker; `''` when none exists.
+   * Embedded marker timestamps are diagnostics only and never move this
+   * anchor -- only the GitHub-assigned comment `created_at` counts,
+   * mirroring the `review-watermark` / claim-heartbeat clock rule elsewhere
+   * in this protocol.
    */
   clockAnchor: string;
   /** Minutes between `clockAnchor` and `now`; `0` when there is no anchor. */
@@ -252,10 +270,12 @@ function minutesBetweenIso(start: string, end: string): number {
  * matching `findActivationNonceWinner`'s and `summarizeAdvisoryWaitMarkers`'s
  * shared "re-read must reconverge" design.
  *
- * A candidate `advisory-wait-recovery:` comment counts as one completed
- * recovery cycle only when ALL of the following hold -- any single failure
- * excludes it from both `completedCycleCount` and `clockAnchor` (fail
- * closed; never a whole-computation abort):
+ * A structurally valid, claim- and HEAD-bound `advisory-wait-recovery:`
+ * comment counts as one completed recovery cycle after the server-created
+ * timestamp validates. Edit state is split deliberately: an edited or
+ * unresolved marker still consumes the restrictive cycle budget so editing
+ * an old marker cannot reopen an exhausted cap, but it never contributes to
+ * the trusted `clockAnchor` (fail closed; never a whole-computation abort):
  *  - the comment author is a trusted marker actor (else: untrusted);
  *  - the body parses as the BOUND form via `parseAdvisoryRecoveryComment`
  *    (a malformed body, or the legacy unbound 3-field form, both parse to
@@ -268,7 +288,9 @@ function minutesBetweenIso(start: string, end: string): number {
  *    including both an earlier and a later HEAD than the current one);
  *  - the comment's GitHub `created_at` validates as an ISO 8601 UTC
  *    timestamp (else: ambiguous-created-at -- excluded from BOTH counting
- *    and anchoring, never counted with a missing anchor contribution).
+ *    and anchoring, never counted with a missing anchor contribution);
+ *  - `lastEditedAt` is explicitly `null` to contribute the trusted clock
+ *    anchor (otherwise it still consumes budget but contributes no anchor).
  */
 export function buildCopilotRecoverySummary(
   {
@@ -357,6 +379,12 @@ export function buildCopilotRecoverySummary(
         continue;
       }
       completedCycleCount += 1;
+      // #3249: editing a structurally valid marker must not reopen the
+      // bounded recovery budget, but edited or unresolved content cannot
+      // provide the terminal clock evidence.
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        continue;
+      }
       if (
         !clockAnchor ||
         compareIsoTimestamps(marker.createdAt, clockAnchor) < 0
@@ -772,7 +800,15 @@ function main(): HelperCliResult {
   const timelineEvents = port.getWorkItemTimeline(
     args.prNumber,
   ) as TimelineEventPayload[];
-  const comments = port.listWorkItemComments(args.prNumber);
+  // #3249: `includeEditState` resolves each comment's GraphQL `lastEditedAt`
+  // -- needed so `summarizeAdvisoryWaitMarkers` and
+  // `buildCopilotRecoverySummary` below (fed via `normalizeComment`) can
+  // reject a body-edited `advisory-wait:` / `advisory-wait-recovery:`
+  // marker. A GraphQL failure now throws where this call previously could
+  // not; see this issue's PR description for that tradeoff.
+  const comments = port.listWorkItemComments(args.prNumber, {
+    includeEditState: true,
+  });
 
   const collaboratorTrustEnabled = isTruthy(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
@@ -972,6 +1008,10 @@ function normalizeComment(comment: ProviderComment) {
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
+    // #3249: carried through so `summarizeAdvisoryWaitMarkers` and
+    // `buildCopilotRecoverySummary` can require `unedited` -- passthrough
+    // only, `undefined` unless the caller opted into `includeEditState`.
+    lastEditedAt: comment.lastEditedAt,
   };
 }
 

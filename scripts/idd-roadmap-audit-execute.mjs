@@ -1376,11 +1376,14 @@ function buildTrustedAuthorPredicate({ owner, viewerLogin, rawConfig }) {
 }
 /** Load every issue comment (paginated) as the claim-marker event stream. */
 function loadIssueComments(port, issueNumber) {
-  return port.listWorkItemComments(issueNumber).map((comment) => ({
-    body: comment.body,
-    createdAt: comment.createdAt,
-    author: { login: comment.authorLogin },
-  }));
+  return port
+    .listWorkItemComments(issueNumber, { includeEditState: true })
+    .map((comment) => ({
+      body: comment.body,
+      createdAt: comment.createdAt,
+      author: { login: comment.authorLogin },
+      lastEditedAt: comment.lastEditedAt,
+    }));
 }
 /**
  * Resolve which of `issueNumbers` still have an OPEN linked PR — covering A1.5's

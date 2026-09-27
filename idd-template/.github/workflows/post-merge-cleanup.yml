@@ -370,7 +370,7 @@ jobs:
           # and is always passed as its own separately quoted argument,
           # never folded into a word-split string, so a crafted value
           # cannot inject extra flags/args into the helper invocation.
-          FLAGS="--apply --skip-claim-check --format json"
+          FLAGS="--apply --skip-claim-check --format json --time-budget-seconds 360"
           case "$PROFILE" in
             vendored-node)
               # shellcheck disable=SC2086

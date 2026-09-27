@@ -8,6 +8,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { inspectHelperRuntimeConfig } from './policy-helpers.mjs';
 
 // Resolve the package/bundle root via the shared resolveBundleRoot (issue
@@ -642,10 +648,17 @@ const HELPER_RUNTIME_MANIFEST_FLAG_SPEC = {
   '--target-root': { type: 'string' },
 };
 if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('helper-runtime-manifest', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
+}
+function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   const manifest = buildHelperRuntimeManifest({
     profile: args.profile,
@@ -655,6 +668,7 @@ if (import.meta.main) {
     targetRoot: args.targetRoot,
   });
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
+  return 0;
 }
 /**
  * Resolve `targetRoot`'s configured `helperRuntime.packageSpec`
@@ -1125,7 +1139,7 @@ function normalizeProfile(profile) {
     return '';
   }
   if (!PROFILE_NAMES.includes(profile)) {
-    throw new Error(`unsupported profile: ${profile}`);
+    throw markCliUsageError(new Error(`unsupported profile: ${profile}`));
   }
   return profile;
 }
@@ -1138,14 +1152,18 @@ function normalizeOptionalProfile(profile) {
 function normalizePackageManager(packageManager, profile) {
   if (!packageManager) {
     if (profile === 'package-manager') {
-      throw new Error(
-        'package-manager profile requires --package-manager <npm|pnpm|yarn> or a detectable package manager in --target-root',
+      throw markCliUsageError(
+        new Error(
+          'package-manager profile requires --package-manager <npm|pnpm|yarn> or a detectable package manager in --target-root',
+        ),
       );
     }
     return '';
   }
   if (!PACKAGE_MANAGERS.includes(packageManager)) {
-    throw new Error(`unsupported package manager: ${packageManager}`);
+    throw markCliUsageError(
+      new Error(`unsupported package manager: ${packageManager}`),
+    );
   }
   return packageManager;
 }

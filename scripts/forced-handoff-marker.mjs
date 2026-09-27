@@ -18,6 +18,12 @@ import {
   ghText,
   safeGhText,
 } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
@@ -27,6 +33,7 @@ import {
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
 } from './protocol-helpers.mjs';
+import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 export function generateSuccessorIds(baseAgentId) {
   return {
     newAgentId: String(baseAgentId || 'idd-agent'),
@@ -138,16 +145,22 @@ export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     printUsage();
-    return;
+    return 0;
   }
   if (!args.issueNumber) {
-    throw new Error('missing required --issue <number> argument');
+    throw markCliUsageError(
+      new Error('missing required --issue <number> argument'),
+    );
   }
   if (!args.forcedBy) {
-    throw new Error('missing required --forced-by <actor> argument');
+    throw markCliUsageError(
+      new Error('missing required --forced-by <actor> argument'),
+    );
   }
   if (!args.reason) {
-    throw new Error('missing required --reason <text> argument');
+    throw markCliUsageError(
+      new Error('missing required --reason <text> argument'),
+    );
   }
   if (args.plan) {
     const repoRef =
@@ -161,13 +174,15 @@ export function main(argv = process.argv.slice(2)) {
         '.nameWithOwner',
       ]);
     const { owner, name } = parseOwnerRepo(repoRef);
-    const issueComments = ghJson(
-      [
-        'api',
-        '--paginate',
-        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-      ],
-      true,
+    const issueComments = resolveIssueCommentEditStates(
+      ghJson(
+        [
+          'api',
+          '--paginate',
+          `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+        ],
+        true,
+      ),
     );
     const viewerLogin = safeGhText([
       'api',
@@ -250,13 +265,17 @@ export function main(argv = process.argv.slice(2)) {
         2,
       ),
     );
-    return;
+    return 0;
   }
   if (!args.newAgentId) {
-    throw new Error('missing required --new-agent-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-agent-id <id> argument'),
+    );
   }
   if (!args.newClaimId) {
-    throw new Error('missing required --new-claim-id <id> argument');
+    throw markCliUsageError(
+      new Error('missing required --new-claim-id <id> argument'),
+    );
   }
   const repoRef =
     args.repo ??
@@ -274,13 +293,15 @@ export function main(argv = process.argv.slice(2)) {
       'forced-handoff mode is not human-gated; marker generation is disabled',
     );
   }
-  const issueComments = ghJson(
-    [
-      'api',
-      '--paginate',
-      `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
-    ],
-    true,
+  const issueComments = resolveIssueCommentEditStates(
+    ghJson(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+      ],
+      true,
+    ),
   );
   const viewerLogin = safeGhText([
     'api',
@@ -389,6 +410,7 @@ export function main(argv = process.argv.slice(2)) {
   } else {
     console.log(commentBody);
   }
+  return 0;
 }
 export function resolveHelperActiveClaim(
   issueComments,
@@ -449,7 +471,7 @@ export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, FORCED_HANDOFF_MARKER_FLAG_SPEC);
   const format = values.format;
   if (format !== 'text' && format !== 'json') {
-    throw new Error(`unsupported --format value: ${format}`);
+    throw markCliUsageError(new Error(`unsupported --format value: ${format}`));
   }
   return {
     format,
@@ -538,7 +560,26 @@ function normalizeIssueComment(comment) {
     author: {
       login: comment.user?.login ?? '',
     },
+    lastEditedAt: comment.lastEditedAt,
   };
+}
+function resolveIssueCommentEditStates(comments) {
+  const nodeIds = comments.map((comment) => String(comment.node_id ?? ''));
+  if (nodeIds.some((nodeId) => nodeId === '')) {
+    throw new Error(
+      'forced-handoff-marker: issue comment is missing node_id, cannot resolve edit state',
+    );
+  }
+  const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(ghText, nodeIds);
+  return comments.map((comment) => {
+    const nodeId = String(comment.node_id ?? '');
+    if (!lastEditedAtByNodeId.has(nodeId)) {
+      throw new Error(
+        `forced-handoff-marker: missing edit-state resolution for comment ${nodeId}`,
+      );
+    }
+    return { ...comment, lastEditedAt: lastEditedAtByNodeId.get(nodeId) };
+  });
 }
 function splitCsv(value) {
   return String(value ?? '')
@@ -552,7 +593,7 @@ function isTruthy(value) {
 export function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value}`));
   }
   return Number(raw);
 }
@@ -560,7 +601,9 @@ function parseOwnerRepo(value) {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
-    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+    throw markCliUsageError(
+      new Error(`invalid --repo value: ${value} (expected owner/name)`),
+    );
   }
   return {
     owner: match[1],
@@ -618,5 +661,9 @@ Environment:
 `);
 }
 if (import.meta.main) {
-  main();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('forced-handoff-marker', main);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(main());
+  }
 }

@@ -117,16 +117,16 @@ entered directly (for example, on resume) without a fresh B1 pass, the same
 caveat this document's §CSA section and `idd-pr-submit.instructions.md`'s
 D1 use for the same variable.
 
-**Sanctioned direct F4 entry.** `idd-merge.instructions.md`'s own opening
-line ("Read only after `idd-merge-handoff.instructions.md` routes the
-current claim to the autonomous merge path") describes the common F3-first
-path, where merge-handoff's job is deciding whether _this_ session may
-execute the merge under the repository's recorded policy
-(`fully_autonomous_merge` / `human_merge` / `separate_merge_agent`). Both
-rows here enter F4 directly, never F3, and only once the PR is already
-merged — the decision merge-handoff exists to make is already resolved by
-then, so there is nothing left for it to route. This is the sanctioned
-exception these two rows establish, not a bypass of a still-open decision.
+**Sanctioned direct F4 entry.** The opening entry condition in
+[`idd-merge.instructions.md`](../.github/instructions/idd-merge.instructions.md)
+describes the common F3-first path, where merge-handoff's job is deciding
+whether _this_ session may execute the merge under the repository's
+recorded policy (`fully_autonomous_merge` / `human_merge` /
+`separate_merge_agent`). Both rows here enter F4 directly, never F3, and
+only once the PR is already merged — the decision merge-handoff exists to
+make is already resolved by then, so there is nothing left for it to route.
+This is the sanctioned exception these two rows establish, not a bypass of
+a still-open decision.
 
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
@@ -259,7 +259,15 @@ claim ownership:
 
 From the primary worktree (HEAD stays on `main`):
 
-1. `git fetch origin {branch}` — fetch the remote tip.
+1. Fetch the remote tip with a fully-qualified destination refspec --
+   unlike a bare `git fetch origin {branch}`, this does not depend on
+   the clone's configured fetch refspec to refresh
+   `refs/remotes/origin/{branch}`:
+
+   ```sh
+   git fetch origin +refs/heads/{branch}:refs/remotes/origin/{branch}
+   ```
+
 2. `git branch {branch} origin/{branch}` — create the local branch
    without moving primary HEAD.
 3. `git worktree add <sibling-worktree-path> {branch}` — create the
@@ -314,7 +322,7 @@ example, on resume) without a fresh B1 pass, the same caveat
 example:
 
 ```sh
-git fetch origin {development-branch}
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
 git diff origin/{development-branch}...{branch}
 ```
 

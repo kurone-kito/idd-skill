@@ -16,6 +16,12 @@
 // prose, per `idd-work-lite.instructions.md` C1.
 
 import { parseCliArgs } from './cli-args.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import { resolveEffectiveCritiqueLoopDelegateFromEnv } from './idd-config.mts';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -43,7 +49,11 @@ const NO_DELEGATE_REASONS: Record<string, string> = {
 };
 
 if (import.meta.main) {
-  runCli();
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-critique-delegate', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
 
 export interface CritiqueDelegateReport {
@@ -119,17 +129,18 @@ interface ParsedArgs {
   help: boolean;
 }
 
-function runCli(): void {
+function runCli(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return 0;
   }
   const report = buildCritiqueDelegateReport(
     args.policy ? { localPolicyPath: args.policy } : undefined,
     args.noUserGlobal,
   );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

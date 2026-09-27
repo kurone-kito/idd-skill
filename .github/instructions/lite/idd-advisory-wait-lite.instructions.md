@@ -75,9 +75,8 @@ node scripts/advisory-wait-state.mjs --pr <pr-number> \
 Resolve the package-manager / ephemeral-npx equivalent from
 `docs/idd-helper-scripts.md`.
 
-Required fields (stop and ask if any are missing — matching
-`idd-review-fix-lite.instructions.md`'s E14 field list exactly):
-`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
+Required fields (stop and ask if any are missing): `prHeadSha`,
+`lastCopilotCommit`, `copilotPending`,
 `copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
 `secondaryBotLogins`, `secondaryRequestLogins`, `secondaryRequestNeeded`,
 `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,

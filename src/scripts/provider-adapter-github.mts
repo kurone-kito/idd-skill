@@ -210,7 +210,11 @@ export function fetchLastEditedAtByNodeId(
     return result;
   }
   const query = `query($ids:[ID!]!){
-  nodes(ids:$ids) { id ... on IssueComment { lastEditedAt } }
+  nodes(ids:$ids) {
+    id
+    ... on IssueComment { lastEditedAt }
+    ... on PullRequestReviewComment { lastEditedAt }
+  }
 }`;
   const chunkSize = 100;
   for (let start = 0; start < nodeIds.length; start += chunkSize) {

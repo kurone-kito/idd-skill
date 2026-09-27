@@ -93,6 +93,7 @@ test('normalizeClaimComment maps only body/createdAt/author.login, dropping id/u
       body: '<!-- claimed-by: agent -->',
       createdAt: '2026-07-30T10:00:00Z',
       author: { login: 'claimant-user' },
+      lastEditedAt: undefined,
     },
   );
 });
@@ -308,6 +309,7 @@ function buildStubGhScript(
   const claimComments = [
     {
       id: 2,
+      node_id: 'IC_kwDOclaim002',
       body: '<!-- claimed-by: {"claimId":"c1","agentId":"a1"} -->',
       created_at: '2026-07-30T10:00:00Z',
       user: { login: 'claimant-user' },
@@ -411,16 +413,16 @@ if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDa
 // #3246: listWorkItemComments' includeEditState opt-in batch-resolves
 // each PR comment's lastEditedAt via nodes(ids:) -- every fixture
 // comment is unedited by construction.
-if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) out(${JSON.stringify(
-    JSON.stringify({
-      data: {
-        nodes: prComments.map((comment) => ({
-          id: comment.node_id,
-          lastEditedAt: null,
-        })),
-      },
-    }),
-  )});
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) {
+  const requestedIds = args
+    .filter((value) => value.startsWith('ids[]='))
+    .map((value) => value.slice('ids[]='.length));
+  out(JSON.stringify({
+    data: {
+      nodes: requestedIds.map((id) => ({ id, lastEditedAt: null })),
+    },
+  }));
+}
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/files`}') out(${JSON.stringify(ndjson(changedFiles))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/commits`}') out(${JSON.stringify(ndjson(options.commits ?? []))});
 ${
