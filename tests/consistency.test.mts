@@ -3078,7 +3078,7 @@ test('D4 pending:true recovery ties each advisory-wait outcome to its actual act
     requestNeededSplit,
     /post the same-head `advisory-wait:` marker/,
   );
-  assert.match(requestNeededSplit, /AW3-R/);
+  assert.match(requestNeededSplit, /--type advisory/);
   assert.match(requestNeededSplit, /When `copilotPending` is `true`/);
   assert.match(requestNeededSplit, /AW3-S/);
   assert.match(

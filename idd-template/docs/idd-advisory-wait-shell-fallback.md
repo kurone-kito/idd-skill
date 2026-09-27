@@ -310,14 +310,23 @@ registration_attempt() {
     e14|aw3-s) ;;
     *) echo "unknown registration evidence mode" >&2; return 2 ;;
   esac
-  HEAD_TIMELINE_INDEX=$(head_timeline_index) || {
-    echo "HEAD timeline snapshot unreadable" >&2
-    return 2
-  }
-  [ -n "$HEAD_TIMELINE_INDEX" ] || {
-    echo "HEAD committed timeline event absent" >&2
-    return 2
-  }
+  HEAD_TIMELINE_INDEX=
+  if [ "$evidence_mode" = "aw3-s" ]; then
+    HEAD_TIMELINE_INDEX=$(head_timeline_index) || {
+      echo "HEAD timeline snapshot unreadable" >&2
+      return 2
+    }
+    [ -n "$HEAD_TIMELINE_INDEX" ] || {
+      echo "HEAD committed timeline event absent" >&2
+      return 2
+    }
+  else
+    # E14 may use a fresh request node when GitHub has not exposed the
+    # current HEAD's committed timeline event yet. Event proof remains
+    # preferred when the index is available, but it is not mandatory in
+    # this mode.
+    HEAD_TIMELINE_INDEX=$(head_timeline_index) || HEAD_TIMELINE_INDEX=
+  fi
   EVENT_BEFORE=$(request_event) || { echo "event snapshot unreadable" >&2; return 2; }
   NODES_BEFORE=$(request_nodes) || { echo "request-node snapshot unreadable" >&2; return 2; }
   registration_ok() {
@@ -331,7 +340,7 @@ registration_attempt() {
       *)
         if [ -n "$EVENT_ID" ] \
           && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
-          && [ "$EVENT_INDEX" -gt "$HEAD_TIMELINE_INDEX" ]; then
+          && { [ -z "$HEAD_TIMELINE_INDEX" ] || [ "$EVENT_INDEX" -gt "$HEAD_TIMELINE_INDEX" ]; }; then
           EVENT_NEW=true
         fi
         ;;
@@ -470,6 +479,16 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # registration-proven review request above in AW3-S mode. Its
 # event/node snapshots precede both mutations, but step 4 accepts only
 # a fresh review_requested event after HEAD's committed event.
+if [ -z "${AW3S_ENTRY:-}" ]; then
+  case "${COPILOT_PENDING:-}" in
+    true) AW3S_ENTRY=pending ;;
+    false) AW3S_ENTRY=non-pending ;;
+    *)
+      echo "AW3-S requires AW3S_ENTRY or COPILOT_PENDING from the AW3 decision" >&2
+      exit 2
+      ;;
+  esac
+fi
 case "$AW3S_ENTRY" in
   pending | non-pending) ;;
   *)
@@ -484,7 +503,7 @@ fi
 REGISTRATION_STATUS=0
 registration_attempt aw3-s || REGISTRATION_STATUS=$?
 
-# Set AW3S_ENTRY to "pending" or "non-pending" from AW3's decision.
+# AW3S_ENTRY is now "pending" or "non-pending" from AW3's decision.
 # Pending success is counted; pending status 1 returns without a marker.
 # Non-pending status 0 is ordinary success and also returns without a
 # marker; only its status 1 failure reaches the counted marker below.

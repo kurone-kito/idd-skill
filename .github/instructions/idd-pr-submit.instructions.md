@@ -641,9 +641,11 @@ confirmed condition above. Delegate polling mechanics to
   for this PR first and read `outcome`: only `REQUEST_NEEDED` triggers
   new action here, and it splits on `copilotPending`. When `false`, exit
   CI-wait and request a review now by entering E14's guarded registration
-  procedure directly, then post the same-head `advisory-wait:` marker via
-  AW3-R only after evidence. D4 must not inline those calls; this covers
-  the no-review-items case without a silent-success marker.
+  procedure directly, then, only after it returns registration status 0 and
+  its same-head claim gate passes, post the same-head `advisory-wait:` marker
+  with the profile-selected marker command using `--type advisory`.
+  D4 must not inline those calls; this covers the no-review-items case
+  without a silent-success marker.
   When `copilotPending` is `true` instead
   (a pending reviewer with unproven HEAD coverage and no same-head
   marker), this is **AW3-S**'s own pending entry — the fuller
