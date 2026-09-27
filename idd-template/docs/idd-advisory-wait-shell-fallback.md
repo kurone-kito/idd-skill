@@ -350,13 +350,13 @@ EOF
 
   # Re-run the shared claim revalidation gate immediately before every
   # reviewer-request mutation. A failed gate must stop this attempt.
-  claim_revalidate || return 2
+  claim_revalidate || return 3
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
   if registration_ok; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
-  claim_revalidate || return 2
+  claim_revalidate || return 3
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
   if registration_ok; then status=0; else status=$?; fi
@@ -370,7 +370,7 @@ EOF
   REVIEWER_NODE_ID=$(printf '%s' "$REVIEWER_JSON" | jq -r '.node_id // empty') || return 2
   REVIEWER_TYPE=$(printf '%s' "$REVIEWER_JSON" | jq -r '(.type // "") | ascii_downcase') || return 2
   [ -n "$REVIEWER_NODE_ID" ] || return 2
-  claim_revalidate || return 2
+  claim_revalidate || return 3
   case "$REVIEWER_TYPE" in
     bot)
       jq -n --arg id "$PR_NODE_ID" --arg reviewer "$REVIEWER_NODE_ID" \
@@ -394,8 +394,9 @@ EOF
   return 1
 }
 
-# E14 stops/asks on status 1 or 2. AW3-S may recheck status 1, but status 2
-# is unreadable evidence: hold via AW4 and never count a failed cycle.
+# E14 stops/asks on status 1 or 2. Status 3 means the claim/HEAD guard
+# failed and stops the route for an E1 restart. AW3-S may recheck status 1,
+# but status 2 is unreadable evidence: hold via AW4 and never count a cycle.
 REGISTRATION_STATUS=0
 registration_attempt e14 || REGISTRATION_STATUS=$?
 ```
@@ -406,9 +407,9 @@ mode. E14 can carry a fresh node proof when the event is delayed, but
 AW3-S uses event-after-HEAD proof only; a fresh node alone cannot prove
 that the stale-request re-registration covers this HEAD. E14 posts its
 `advisory-wait` marker only when `REGISTRATION_STATUS` is `0`; statuses
-`1`/`2` stop and ask. AW3-S uses step 4 only after readable event
-evidence; status `2` routes to AW4 and cannot count a failed cycle or
-post a marker.
+`1`/`2` stop and ask, while status `3` stops for an E1 restart. AW3-S
+uses step 4 only after readable event evidence; status `2` routes to AW4
+and cannot count a failed cycle or post a marker.
 
 ## AW3-S
 

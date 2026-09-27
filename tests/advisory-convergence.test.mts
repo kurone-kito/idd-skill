@@ -7193,7 +7193,7 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
     fallback,
     /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \]/,
   );
-  assert.match(fallback, /claim_revalidate \|\| return 2[\s\S]*?jq -n/);
+  assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?jq -n/);
 });
 
 test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#2143)', () => {

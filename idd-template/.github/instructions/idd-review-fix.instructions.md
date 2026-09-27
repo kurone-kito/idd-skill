@@ -373,7 +373,9 @@ login).
      with a newer event after HEAD or a fresh node absent from that
      snapshot. Exit status is not evidence (issue `#3500`).
      See the [registration fallback](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
-     if absent, ask the maintainer and do not poll or continue to E15.
+     if absent, ask and do not poll or continue to E15. Status `3` means
+     claim/HEAD guard failure: stop and return to E1; `1`/`2` are
+     non-gating evidence/API failures.
 
      `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"true"` (unproven coverage —
@@ -391,8 +393,9 @@ login).
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
    fallback: every configured login not yet requested this HEAD) —
-   same procedure per login; status 1/2 records/skips it: no stop, route
-   change, or marker. Each review is ordinary
+   same procedure per login; `1`/`2` record/skip it, while `3` stops on a
+   claim/HEAD guard failure. Ordinary failures do not change route/marker.
+   Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;
    only F2's `secondary-quiet-window` blocker

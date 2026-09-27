@@ -335,8 +335,9 @@ other GitHub side effect, confirm all of the following:
      after HEAD or a fresh node absent from the pre-request snapshot;
      exit status is not evidence (issue `#3500`). If absent, see
      [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
-     use `requestReviews` with live `botIds` and `union: true`; never
-     hard-code ids. Still absent: stop and ask; poll after success.
+     use its account-typed fallback; never hard-code ids. Still absent:
+     stop and ask; poll only after success. Status `3` means claim/HEAD
+     guard failure: stop and return to E1; `1`/`2` are non-gating failures.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the
@@ -395,9 +396,9 @@ other GitHub side effect, confirm all of the following:
     `secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
-    the same procedure; status 1/2 only records/skips it. Post no
-    `advisory-wait:` marker for any — none satisfy the primary gate or
-    consume its cap, and none change the route already decided above.
+    the same procedure; `1`/`2` record/skip it, while `3` stops on a
+    claim/HEAD guard failure. Post no marker or change route for ordinary
+    failures — none satisfy the primary gate or consume its cap.
     Each review is ordinary advisory input, picked up by the next E1
     snapshot if it lands before merge. Skip this step entirely when
     `secondaryRequestNeeded` is `false`.

@@ -634,15 +634,11 @@ confirmed condition above. Delegate polling mechanics to
   [canonical `advisory-wait-state`
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
   for this PR first and read `outcome`: only `REQUEST_NEEDED` triggers
-  new action here, and it splits on `copilotPending`. When `false`,
-  request a review now and post the same-head `advisory-wait:` marker
-  in the same step (helper-first: the profile-selected
-  `post-idd-marker` command per **AW3-R**, which documents
-  `--type advisory` as this same request-marker form), matching E14's
-  `REQUEST_NEEDED`
-  marker step — without it, `requestMarkerCount` never advances and
-  every resumed D4 pass reads `REQUEST_NEEDED` again instead of
-  progressing toward the cap. When `copilotPending` is `true` instead
+  new action here, and it splits on `copilotPending`. When `false`, exit
+  CI-wait and proceed to E1; E14 performs the request and marker through
+  its guarded registration procedure. This keeps D4 from bypassing the
+  evidence gate and prevents silent-success calls from creating a marker.
+  When `copilotPending` is `true` instead
   (a pending reviewer with unproven HEAD coverage and no same-head
   marker), this is **AW3-S**'s own pending entry — the fuller
   remove/re-request cycle this bullet does not reimplement — exit
