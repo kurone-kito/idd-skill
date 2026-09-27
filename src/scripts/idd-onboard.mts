@@ -2637,7 +2637,7 @@ function readHeldModule(
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_PATTERN =
-  /\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)?|scan(?:Dir|Directory)?|list(?:Files|Entries|Directory)?|collect(?:Files|Entries)?)\b/iu;
+  /\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(/iu;
 
 function moduleScansManifestDirectory(
   text: string,
@@ -2678,7 +2678,7 @@ const SAFE_GIT_REF = /^[A-Za-z0-9._/-]+$/u;
  */
 function resolveGitTargetBaseline(
   targetRoot: string,
-  targetBaseRef: string,
+  targetBaseRef?: string,
 ): GitTargetBaseline | undefined {
   let isWorkTree = false;
   try {
@@ -2694,18 +2694,24 @@ function resolveGitTargetBaseline(
   if (!isWorkTree) {
     return undefined;
   }
-  if (!SAFE_GIT_REF.test(targetBaseRef)) {
+  if (targetBaseRef !== undefined && !SAFE_GIT_REF.test(targetBaseRef)) {
     throw new Error(
       `invalid --target-base-ref (expected a simple Git ref): ${targetBaseRef}`,
     );
   }
+  const baselineRef = targetBaseRef ?? 'HEAD';
   try {
     execFileSync(
       'git',
-      ['-C', targetRoot, 'rev-parse', '--verify', `${targetBaseRef}^{commit}`],
+      ['-C', targetRoot, 'rev-parse', '--verify', `${baselineRef}^{commit}`],
       { stdio: ['ignore', 'pipe', 'ignore'] },
     );
   } catch {
+    if (targetBaseRef === undefined) {
+      // A freshly initialized target has no HEAD commit yet. The advisory
+      // must retain the historical working-tree comparison in that case.
+      return undefined;
+    }
     throw new Error(
       `--target-base-ref does not resolve to a commit in --target: ${targetBaseRef}`,
     );
@@ -2715,7 +2721,7 @@ function resolveGitTargetBaseline(
       try {
         return execFileSync(
           'git',
-          ['-C', targetRoot, 'show', `${targetBaseRef}:${targetPath}`],
+          ['-C', targetRoot, 'show', `${baselineRef}:${targetPath}`],
           { encoding: null, stdio: ['ignore', 'pipe', 'ignore'] },
         );
       } catch {
@@ -2773,10 +2779,7 @@ export function checkHeldSchemaDrift(
   if (hold.length === 0) {
     return { findings: [], warning: null };
   }
-  const baseline =
-    targetBaseRef === undefined
-      ? undefined
-      : resolveGitTargetBaseline(targetRoot, targetBaseRef);
+  const baseline = resolveGitTargetBaseline(targetRoot, targetBaseRef);
   const resolved = resolveImportFiles(sourceRoot, profile);
   const holdSet = new Set(hold);
   if (resolved.missingSource.length === 0) {
@@ -4947,7 +4950,7 @@ function runVerifyCli(args: ParsedArgs): HelperCliResult {
     targetDir,
     args.profile,
     args.hold,
-    args.targetBaseRef ?? 'HEAD',
+    args.targetBaseRef,
   );
   const verdict = {
     protocolVersion: '1',

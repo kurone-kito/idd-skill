@@ -3574,6 +3574,26 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
   assert.equal(verify.heldSchemaDrift.findings.length, 1);
 });
 
+test('checkHeldSchemaDrift falls back for an unborn Git target', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+  assert.doesNotThrow(() =>
+    runVerify(sourceRoot, targetRoot, undefined, [DRIFT_MODULE]),
+  );
+});
+
 test('checkHeldSchemaDrift flags a directory-scanning held module', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3591,6 +3611,18 @@ test('checkHeldSchemaDrift flags a directory-scanning held module', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift ignores bare enumeration words', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "const list = 'schemas';\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
