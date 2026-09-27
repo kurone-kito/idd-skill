@@ -2618,7 +2618,7 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? `-${sha} uninitialized\n` : '',
+          stdout: cwd === '/repo/linked' ? `-${sha} uninitialized*\n` : '',
           stderr: '',
         };
       }
@@ -2630,7 +2630,7 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked' ? ' M tracked.txt\n?? uninitialized\n' : '',
+            cwd === '/repo/linked' ? ' M tracked.txt\n?? uninitialized*\n' : '',
           stderr: '',
         };
       }
@@ -2665,7 +2665,7 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
       'idd-lwr claim-x',
       '--',
       '.',
-      ':(exclude)uninitialized/**',
+      ':(exclude,literal)uninitialized*',
     ],
   ]);
   assert.equal(
@@ -4592,7 +4592,7 @@ test('primary recovery removes preserved ignored files before reporting release'
   const preserveDir = mkdtempSync(
     join(tmpdir(), 'idd-lwr-primary-ignored-preserve-'),
   );
-  const ignoredPath = join(root, 'stale.env');
+  const ignoredPath = join(root, 'stale*');
   let ignoredPresent = true;
   let confirmCalls = 0;
   let submoduleUpdateArgs: string[] = [];
@@ -4649,7 +4649,7 @@ test('primary recovery removes preserved ignored files before reporting release'
           return {
             ok: true,
             status: 0,
-            stdout: ignoredPresent ? '!! stale.env\0' : '',
+            stdout: ignoredPresent ? '!! stale*\0' : '',
             stderr: '',
           };
         }
@@ -4697,7 +4697,7 @@ test('primary recovery removes preserved ignored files before reporting release'
       deps,
     );
     assert.deepEqual(events.slice(-3), [
-      `clean:${root}:-fdx --:stale.env`,
+      `clean:${root}:-fdx --::(literal)stale*`,
       'checkout',
       'submodule-update',
     ]);

@@ -1383,6 +1383,15 @@ function nestedSubmodulePathsForScope(
     .map((candidate) => candidate.slice(prefix.length));
 }
 
+/** Treat recovery paths as literal Git pathspecs, never as globs. */
+function literalGitPathspec(path: string): string {
+  return `:(literal)${path}`;
+}
+
+function excludedLiteralGitPathspec(path: string): string {
+  return `:(exclude,literal)${path}`;
+}
+
 /** Preserve one scope (the worktree itself, or a submodule path relative to
  * it) -- stash tracked/untracked changes under `tag`, or fall back to
  * copying conflicted files out on an unmerged-path stash failure. Returns
@@ -1457,9 +1466,7 @@ function planAndMaybeStashScope(
     stashArgv.push(
       '--',
       '.',
-      ...excludedDirtyPaths.map(
-        (excludedPath) => `:(exclude)${excludedPath}/**`,
-      ),
+      ...excludedDirtyPaths.map(excludedLiteralGitPathspec),
     );
   }
   const stash = deps.runGit(stashArgv, scopePath);
@@ -1791,7 +1798,7 @@ function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
   for (const [scope, paths] of pathsByScope) {
     const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
     const cleaned = deps.runGit(
-      ['clean', '-fdx', '--', ...Array.from(paths)],
+      ['clean', '-fdx', '--', ...Array.from(paths, literalGitPathspec)],
       scopePath,
     );
     if (!cleaned.ok) {
