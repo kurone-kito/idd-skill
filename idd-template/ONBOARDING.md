@@ -235,7 +235,7 @@ below instead.
    Before Step 3, require a clean target:
 
    ```sh
-   test -z "$(git -C <target-repo> status --short)" || exit 1
+   test -z "$(git -C <target-repo> status --short --untracked-files=all)" || exit 1
    ```
 
 3. Import the core template file set (add `--profile vendored-node`
@@ -254,8 +254,8 @@ below instead.
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   If unrelated paths appear, stage only imported paths. `--target-ref` must
-   name it; squash later only if policy permits, retaining its SHA for reruns.
+   `--target-ref` must name it; squash later only if policy permits, retaining
+   its SHA for reruns.
 
 4. Replace the seven placeholders from the confirmed transcript.
 

@@ -76,7 +76,8 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   'scripts/audit-code-span-wrap.mjs',
   // verify-import-mirror.mjs is deliberately source-checkout-only: the
   // distributed recipes invoke it from an idd-skill clone, while the
-  // separate package-manager path is registered above.
+  // separate package-manager path is registered above. Its invocation
+  // must retain the explicit `<idd-skill>/` checkout prefix below.
   'scripts/verify-import-mirror.mjs',
   // check-pnpm-boundary.mjs: a `docs/customization.md` example row only
   // (no profile-selected claim anywhere) -- a CI/lint-authoring tool for
@@ -223,7 +224,7 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
 ]);
 
 const NODE_SCRIPTS_RE =
-  /\bnode\s+(?:<idd-skill>\/)?(scripts\/[a-z0-9-]+\.mjs)\b/g;
+  /\bnode\s+((?:<idd-skill>\/)?scripts\/[a-z0-9-]+\.mjs)\b/g;
 const PACKAGE_MANAGER_ENTRY_RE =
   /\bnode\s+(?:\.\/)?(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
@@ -326,10 +327,19 @@ function collectHelperInvocationViolations(
       bareBinCommands,
     } = scanInvocations(file.content);
 
-    for (const entryPath of nodeScripts) {
+    for (const invokedPath of nodeScripts) {
+      const hasSourceCheckoutPrefix = invokedPath.startsWith('<idd-skill>/');
+      const entryPath = hasSourceCheckoutPrefix
+        ? invokedPath.slice('<idd-skill>/'.length)
+        : invokedPath;
+      const isSourceCheckoutOnly =
+        entryPath === 'scripts/verify-import-mirror.mjs';
       if (
         !entryPaths.has(entryPath) &&
-        !SOURCE_REPO_INTERNAL_ENTRY_PATHS.has(entryPath)
+        !(
+          SOURCE_REPO_INTERNAL_ENTRY_PATHS.has(entryPath) &&
+          (!isSourceCheckoutOnly || hasSourceCheckoutPrefix)
+        )
       ) {
         violations.push({
           file: file.path,
@@ -657,6 +667,26 @@ test('accepts the registered source-checkout helper path', () => {
   );
 
   assert.deepEqual(violations, []);
+});
+
+test('rejects the source-checkout helper without its checkout prefix', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content:
+          'Run `node scripts/verify-import-mirror.mjs` from the adopter root.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/verify-import-mirror.mjs');
 });
 
 test('rejects an unregistered source-checkout helper path', () => {
