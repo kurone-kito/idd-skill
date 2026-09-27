@@ -3173,11 +3173,15 @@ function expandGlobRange(text: string): string[] | null {
   return null;
 }
 
-function globPatternToRegex(pattern: string): string {
+function globPatternToRegex(
+  pattern: string,
+  initialSegmentStart = true,
+): string {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index] ?? '';
-    const segmentStart = index === 0 || pattern[index - 1] === '/';
+    const segmentStart =
+      index === 0 ? initialSegmentStart : pattern[index - 1] === '/';
     if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
       const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
       if (closing === -1) {
@@ -3188,7 +3192,7 @@ function globPatternToRegex(pattern: string): string {
         pattern.slice(index + 2, closing),
         '|',
       )
-        .map(globPatternToRegex)
+        .map((alternative) => globPatternToRegex(alternative, segmentStart))
         .join('|');
       if (character === '!') {
         const slash = pattern.indexOf('/', closing + 1);
@@ -3196,7 +3200,7 @@ function globPatternToRegex(pattern: string): string {
           closing + 1,
           slash === -1 ? pattern.length : slash,
         );
-        expression += `(?!(?:${inner})${globPatternToRegex(suffix)}(?=$|/))[^/]*`;
+        expression += `(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
       } else {
         const quantifier = character === '@' ? '' : character;
         expression += `(?:${inner})${quantifier}`;
@@ -3239,6 +3243,9 @@ function globPatternToRegex(pattern: string): string {
         expression += '\\[';
       } else {
         let characterClass = pattern.slice(index + 1, closing);
+        const negatedCharacterClass = characterClass.startsWith('!');
+        const explicitlyMatchesDot =
+          !negatedCharacterClass && characterClass.includes('.');
         if (characterClass.startsWith('!')) {
           characterClass = `^${characterClass.slice(1)}`;
         }
@@ -3268,7 +3275,7 @@ function globPatternToRegex(pattern: string): string {
             /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
             (_match, name: string) => posixClassReplacements[name] ?? _match,
           );
-        expression += `[${characterClass}]`;
+        expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}[${characterClass}]`;
         index = closing;
       }
     } else if (character === '{') {
@@ -3279,7 +3286,9 @@ function globPatternToRegex(pattern: string): string {
         const content = pattern.slice(index + 1, closing);
         const alternatives =
           expandGlobRange(content) ?? splitGlobAlternatives(content, ',');
-        expression += `(?:${alternatives.map(globPatternToRegex).join('|')})`;
+        expression += `(?:${alternatives
+          .map((alternative) => globPatternToRegex(alternative, segmentStart))
+          .join('|')})`;
         index = closing;
       }
     } else {

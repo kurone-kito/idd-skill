@@ -4315,6 +4315,24 @@ test('checkHeldSchemaDrift excludes dotfiles from wildcard glob matches', () => 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift excludes dotfiles from leading negated classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a]*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/.hidden.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/.hidden.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift does not let mid-segment globstars cross directories', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4440,6 +4458,29 @@ test('checkHeldSchemaDrift supports brace and extglob directory scans', () => {
       { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
     ]);
   }
+});
+
+test('checkHeldSchemaDrift preserves segment context in brace alternatives', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/x{*,y}.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/x.foo.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/x.foo.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/x.foo.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
 });
 
 test('checkHeldSchemaDrift supports numeric and alphabetic brace ranges', () => {
