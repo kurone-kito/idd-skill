@@ -4036,6 +4036,20 @@ test('checkHeldSchemaDrift recognizes quoted cwd option keys', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift ignores cwd text inside option strings', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/*.json', { note: 'cwd: fixtures' });\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift does not retain raw glob candidates when cwd is set', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

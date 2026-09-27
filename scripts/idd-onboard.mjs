@@ -2331,26 +2331,37 @@ function maskJavaScriptStringContents(text) {
       result += character;
       continue;
     }
-    result += character;
-    index += 1;
+    let end = index + 1;
     let escaped = false;
-    while (index < text.length) {
-      const quotedCharacter = text[index] ?? '';
+    while (end < text.length) {
+      const quotedCharacter = text[end] ?? '';
       if (!escaped && quotedCharacter === character) {
-        result += quotedCharacter;
         break;
       }
-      result +=
-        quotedCharacter === '\n' || quotedCharacter === '\r'
-          ? quotedCharacter
-          : ' ';
       if (escaped) {
         escaped = false;
       } else if (quotedCharacter === '\\') {
         escaped = true;
       }
-      index += 1;
+      end += 1;
     }
+    const content = text.slice(index + 1, end);
+    let after = end + (end < text.length ? 1 : 0);
+    while (/\s/u.test(text[after] ?? '')) {
+      after += 1;
+    }
+    const isPropertyKey =
+      /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(content) && text[after] === ':';
+    result += character;
+    result += isPropertyKey
+      ? content
+      : [...content]
+          .map((entry) => (entry === '\n' || entry === '\r' ? entry : ' '))
+          .join('');
+    if (end < text.length) {
+      result += text[end];
+    }
+    index = end;
   }
   return result;
 }
@@ -2657,16 +2668,16 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
           : candidate,
     );
     const cwdCandidates = (() => {
-      const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(argumentsText);
+      const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(optionText);
       return cwd === null
         ? []
         : pathExpressionCandidates(
             firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
           );
     })();
-    const hasCwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(argumentsText);
+    const hasCwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(optionText);
     const excludeMatch = /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(
-      argumentsText,
+      optionText,
     );
     const excludeCandidates =
       excludeMatch === null
