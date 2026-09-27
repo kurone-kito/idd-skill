@@ -1253,7 +1253,9 @@ function planAndMaybePreserve(
   // means the submodule HEAD differs from the superproject's recorded
   // gitlink, so retain it as a parent-level change: the submodule scope alone
   // cannot preserve the superproject index state. Retain `U`/`-` entries for
-  // the same reason (Copilot review #4114207705).
+  // the same reason (Copilot review #4114207705). The per-submodule loop below
+  // still preserves every initialized submodule, including `+`, in its own
+  // scope so ordinary files inside a changed submodule are not lost.
   const submodulePaths = submodules
     .filter((submodule) => submodule.status === ' ')
     .map((submodule) => submodule.path)
@@ -3526,6 +3528,13 @@ export function copyPathWithSafeSymlinks(
     }
     if (sourceStat.isDirectory()) {
       const sourceReal = realpathSync(source);
+      if (
+        !sourceRootsReal.some((root) => isPathContainedIn(sourceReal, root))
+      ) {
+        throw new Error(
+          `source directory escaped the declared roots during copy: ${source}`,
+        );
+      }
       if (activeDirectories.has(sourceReal)) {
         throw new Error(`source directory cycle detected: ${source}`);
       }

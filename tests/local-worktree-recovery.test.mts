@@ -161,6 +161,25 @@ test('copyPathWithSafeSymlinks refuses special files before copying', {
   }
 });
 
+test('copyPathWithSafeSymlinks refuses a directory outside declared source roots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-root-'));
+  const source = join(root, 'source');
+  const declaredRoot = join(root, 'declared');
+  const destination = join(root, 'preserve', 'destination');
+  try {
+    mkdirSync(source);
+    mkdirSync(declaredRoot);
+    writeFileSync(join(source, 'outside.txt'), 'outside\n');
+    assert.throws(
+      () => copyPathWithSafeSymlinks(source, destination, declaredRoot),
+      /source directory escaped the declared roots during copy/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery refuses malformed local config before default-branch lookup', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-config-'));
   try {
@@ -2752,7 +2771,12 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stdout:
+            cwd === '/repo/linked'
+              ? ' M submodule\n'
+              : cwd === '/repo/linked/submodule'
+                ? ' M changed.txt\n'
+                : '',
           stderr: '',
         };
       }
@@ -2777,6 +2801,12 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
     deps,
   );
   assert.deepEqual(copied, ['/tmp/preserve/submodule-gitdir/c3VibW9kdWxl']);
+  assert.equal(
+    verdict.plan.stashes.find((stash) => stash.scope === 'submodule')
+      ?.hasChanges,
+    true,
+    'a changed `+` submodule keeps its own files in the submodule scope',
+  );
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
