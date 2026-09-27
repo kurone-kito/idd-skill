@@ -4069,6 +4069,21 @@ test('checkHeldSchemaDrift detects scans after postfix updates', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift keeps scans visible after an object literal', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "try {} finally {}; const ratio = {} / readdirSync('schemas').length / divisor;\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after class declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4487,6 +4502,42 @@ test('checkHeldSchemaDrift detects optional-chain scan calls', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift detects non-null asserted scan calls', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync!('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift keeps glob array patterns separate from path joins', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync(['schemas/@(a|b).json', 'schemas/c*.json']);\n";
+  const sourceFiles = {
+    'schemas/a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  };
+  const targetFiles = {
+    'schemas/a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  };
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/a.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift recognizes quoted cwd option keys', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4735,6 +4786,48 @@ test('checkHeldSchemaDrift preserves Unicode POSIX digit matches', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: 'schemas/١.json', heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {
+  for (const [pattern, relativePath, expected] of [
+    ['schemas/?.json', 'schemas/🙂.json', []],
+    [
+      'schemas/??.json',
+      'schemas/🙂.json',
+      [
+        {
+          schemaOrFixturePath: 'schemas/🙂.json',
+          heldModulePath: DRIFT_MODULE,
+        },
+      ],
+    ],
+    [
+      'schemas/??.json',
+      'schemas/ab.json',
+      [
+        {
+          schemaOrFixturePath: 'schemas/ab.json',
+          heldModulePath: DRIFT_MODULE,
+        },
+      ],
+    ],
+  ] as const) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('${pattern}');\n`;
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, expected);
+  }
 });
 
 test('checkHeldSchemaDrift excludes dotfiles from wildcard glob matches', () => {

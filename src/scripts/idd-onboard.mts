@@ -2648,7 +2648,7 @@ function readHeldModule(
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.)?\s*\()/gu;
+  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2684,13 +2684,15 @@ function isBlockClosingBrace(text: string, index: number): boolean {
     } else if (character === '{') {
       depth -= 1;
       if (depth === 0) {
+        const openingPrefix = text.slice(0, current);
         return (
-          /(?:\b(?:else|do|try|finally)\s*|\)\s*$|=>\s*$)/u.test(
-            text.slice(0, current),
+          /(?:^|[;}])\s*(?:else(?:\s+if\b[\s\S]*)?|do|try|finally)\s*$/u.test(
+            openingPrefix,
           ) ||
-          /(?:^|;)\s*$/u.test(text.slice(0, current)) ||
+          /(?:\)\s*$|=>\s*$)/u.test(openingPrefix) ||
+          /(?:^|;)\s*$/u.test(openingPrefix) ||
           /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
-            text.slice(0, current),
+            openingPrefix,
           )
         );
       }
@@ -2988,7 +2990,7 @@ function firstCallArgument(text: string): string {
 
 function normalizeComputedDirectoryScanMembers(text: string): string {
   return text.replace(
-    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.)?\s*\()/gu,
+    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*\()/gu,
     (_match, _quote: string, apiName: string) => `.${apiName}`,
   );
 }
@@ -3003,14 +3005,19 @@ function findDirectoryScanCalls(
   for (const match of normalizedText.matchAll(DIRECTORY_SCAN_API_PATTERN)) {
     const apiName = match[0] ?? '';
     let openIndex = (match.index ?? 0) + apiName.length;
-    while (/\s/u.test(normalizedText[openIndex] ?? '')) {
-      openIndex += 1;
-    }
-    if (normalizedText.slice(openIndex, openIndex + 2) === '?.') {
-      openIndex += 2;
+    while (true) {
       while (/\s/u.test(normalizedText[openIndex] ?? '')) {
         openIndex += 1;
       }
+      if (normalizedText.slice(openIndex, openIndex + 2) === '?.') {
+        openIndex += 2;
+        continue;
+      }
+      if (normalizedText[openIndex] === '!') {
+        openIndex += 1;
+        continue;
+      }
+      break;
     }
     if (normalizedText[openIndex] !== '(') {
       continue;
@@ -3073,10 +3080,11 @@ function scanStringLiterals(text: string): string[] {
 
 function pathExpressionCandidates(text: string): string[] {
   const literals = scanStringLiterals(text);
-  if (/\+\s*/u.test(text)) {
+  const expressionText = maskJavaScriptStringContents(text);
+  if (/\+\s*/u.test(expressionText)) {
     return literals.length === 0 ? [] : [literals.join('')];
   }
-  if (text.includes('(')) {
+  if (expressionText.includes('(')) {
     return literals.length === 0 ? [] : [literals.join('/')];
   }
   return literals;
@@ -3320,10 +3328,13 @@ function expandGlobBracePatternsBounded(
   return [text];
 }
 
+type GlobQuestionCapture = { name: string; codeUnitCount: number };
+
 function globPatternToRegex(
   pattern: string,
   initialSegmentStart = true,
   inheritedSuffix = '',
+  questionCaptures: GlobQuestionCapture[] = [],
 ): string {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -3351,7 +3362,12 @@ function globPatternToRegex(
       const innerExpressions = expandedGroups.map((expandedGroup) =>
         splitGlobAlternatives(expandedGroup, '|')
           .map((alternative) =>
-            globPatternToRegex(alternative, segmentStart, trailingPattern),
+            globPatternToRegex(
+              alternative,
+              segmentStart,
+              trailingPattern,
+              questionCaptures,
+            ),
           )
           .join('|'),
       );
@@ -3365,7 +3381,7 @@ function globPatternToRegex(
             0,
             slash === -1 ? trailingPattern.length : slash,
           );
-          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
+          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures)}(?=$|/))[^/]*`;
         }
         const quantifier = character === '@' ? '' : character;
         return `(?:${inner})${quantifier}`;
@@ -3394,7 +3410,17 @@ function globPatternToRegex(
     } else if (character === '*') {
       expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
     } else if (character === '?') {
-      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]`;
+      let questionEnd = index + 1;
+      while (pattern[questionEnd] === '?') {
+        questionEnd += 1;
+      }
+      const captureName = `__iddQuestion${questionCaptures.length}`;
+      questionCaptures.push({
+        name: captureName,
+        codeUnitCount: questionEnd - index,
+      });
+      expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
+      index = questionEnd - 1;
     } else if (character === '[') {
       let closing = index + 1;
       if (pattern[closing] === '!') {
@@ -3481,7 +3507,12 @@ function globPatternToRegex(
         const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
         expression += `(?:${alternatives
           .map((alternative) =>
-            globPatternToRegex(alternative, segmentStart, trailingPattern),
+            globPatternToRegex(
+              alternative,
+              segmentStart,
+              trailingPattern,
+              questionCaptures,
+            ),
           )
           .join('|')})`;
         index = closing;
@@ -3497,9 +3528,17 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
   if (!isGlobPattern(pattern)) {
     return false;
   }
-  const expression = globPatternToRegex(pattern);
+  const questionCaptures: GlobQuestionCapture[] = [];
+  const expression = globPatternToRegex(pattern, true, '', questionCaptures);
   try {
-    return new RegExp(`^${expression}$`, 'u').test(targetPath);
+    const match = new RegExp(`^${expression}$`, 'u').exec(targetPath);
+    if (match === null) {
+      return false;
+    }
+    return questionCaptures.every(({ name, codeUnitCount }) => {
+      const captured = match.groups?.[name];
+      return captured === undefined || captured.length === codeUnitCount;
+    });
   } catch {
     return false;
   }
