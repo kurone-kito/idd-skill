@@ -2094,7 +2094,7 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_CALL_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)\r\n]*)\)/giu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)]*)\)/giu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n)]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2339,12 +2339,15 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
     );
   }
   const baselineRef = targetBaseRef ?? 'HEAD';
+  let baselineCommit;
   try {
-    execFileSync(
+    baselineCommit = execFileSync(
       'git',
       ['-C', targetRoot, 'rev-parse', '--verify', `${baselineRef}^{commit}`],
       { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
-    );
+    )
+      .toString('utf8')
+      .trim();
   } catch {
     if (targetBaseRef === undefined) {
       // A freshly initialized target has no HEAD commit yet. The advisory
@@ -2363,7 +2366,7 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
           : targetPath;
         return execFileSync(
           'git',
-          ['-C', normalizedGitRoot, 'show', `${baselineRef}:${treePath}`],
+          ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
           {
             encoding: null,
             stdio: ['ignore', 'pipe', 'ignore'],

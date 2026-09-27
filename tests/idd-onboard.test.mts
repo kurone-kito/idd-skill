@@ -3672,6 +3672,25 @@ test('checkHeldSchemaDrift detects multi-segment join-based directory scans', ()
   ]);
 });
 
+test('checkHeldSchemaDrift detects multiline directory scans', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
+readdirSync(
+  join(root, 'schemas'),
+);
+`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores regex literals that mention directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
