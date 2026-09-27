@@ -403,6 +403,10 @@ const CREDENTIAL_LOCAL_FEATURE_EXTERNAL_ACTOR_PATTERN = new RegExp(
 );
 const CREDENTIAL_LOCAL_FEATURE_REQUIREMENT_PATTERN =
   /\b(?:must|require[sd]?|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,40}\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:before|until)\b/i;
+const CREDENTIAL_LOCAL_FEATURE_APPROVAL_PATTERN = new RegExp(
+  String.raw`\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:only\s+)?(?:once|after|until|before)\b[^.;:!?\n]{0,80}\b(?:${CREDENTIAL_EXTERNAL_ACTOR_PATTERN})(?:'s|')?\s+(?:approval|access|permission|authorization)\b`,
+  'i',
+);
 const CREDENTIAL_LOCAL_BEHAVIOR_PATTERN =
   /\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:expiration|expiry|expir(?:e|es|ed)|revocation|rejection)\b[^.;:!?\n]{0,40}\b(?:must|shall|should|will|can)\s+(?:trigger|cause|detect|reject|invalidate|refresh|prompt)\b/i;
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
@@ -1240,6 +1244,9 @@ function isDescribedSecurityVocabulary(
       `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
     ) ||
     CREDENTIAL_LOCAL_FEATURE_REQUIREMENT_PATTERN.test(
+      `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
+    ) ||
+    CREDENTIAL_LOCAL_FEATURE_APPROVAL_PATTERN.test(
       `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
     )
   ) {

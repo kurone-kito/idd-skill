@@ -3290,3 +3290,17 @@ test('does not let blocked pending credentials hide in descriptive context (#352
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
+
+test('does not let approval-gated local credential features hide in the feature exception (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 195,
+    title: 'add credential rotation',
+    body:
+      'Add credential rotation only once maintainer approval for implementation has been granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
