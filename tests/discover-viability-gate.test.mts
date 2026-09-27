@@ -3345,3 +3345,29 @@ test('does not let a vendor access prerequisite pass in actor-subject form (#352
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
+
+test('does not let maintainer sign-off prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 199,
+    title: 'document credential storage',
+    body:
+      'Implementation requires maintainer sign-off before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local signing-key generation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 200,
+    title: 'Generate a signing key',
+    body:
+      'Make a targeted change in a single file to generate a new signing key locally. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
