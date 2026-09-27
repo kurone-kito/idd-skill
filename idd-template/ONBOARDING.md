@@ -217,26 +217,24 @@ below instead.
    node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
    ```
 
-2. Validate the answers, print the confirmed transcript, and save it.
+2. Validate, print, and save the confirmed transcript.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --apply \
      --answers <answers-file> --target <target-repo>
    ```
 
-   **Check `bootstrap-execution-mode`.** If `issue-mediated`, stop and use
+   **Check `bootstrap-execution-mode`.** For `issue-mediated`, stop and use
    [Onboarding Reference — Issue-Mediated
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
-   3-5; they write the template directly without review (`direct-import`
-   default).
+   3-5; those steps write the template directly (`direct-import` default).
 
    Require a clean target:
 
    ```sh
    root=$(git -C <target-repo> rev-parse --show-toplevel) &&
    test "$root" = "$(cd <target-repo> && pwd -P)" &&
-   status=$(git -C <target-repo> status --short --untracked-files=all) &&
-   test -z "$status" || exit 1
+   test -z "$(git -C <target-repo> status --short --untracked-files=all)"
    ```
 
 3. Import the core template file set (add `--profile vendored-node`
@@ -247,16 +245,16 @@ below instead.
      --source <idd-skill-clone> --target <target-repo>
    ```
 
-   **Checkpoint.** Commit before `--substitute`:
+   **Checkpoint.** Before `--substitute`, commit the mirror and keep its ref
+   reachable:
 
    ```sh
-   git -C <target-repo> status --short
-   git -C <target-repo> add -A
+   git -C <target-repo> add -A && \
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   `--target-ref` must name it; keep it reachable through a ref until
-   verification and reruns finish. Do not squash it.
+   `--target-ref` must name it until verification and reruns finish; do not
+   squash it.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
@@ -687,31 +685,18 @@ error), so an agent can gate on the exit code without parsing prose.
   ```
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
-  check for a target tree after `--import` and `--substitute` have run,
-  replacing a manual walkthrough of the checklist below with six check
-  groups: manifest completeness (reusing `--import`'s own file-set
-  resolution; `--hold` does not shrink this set), placeholder residue
-  (reusing `--substitute`'s scanner), a helper-load check
-  (`vendored-node` only: spawns each cataloged helper under `--target`
-  with `--help`), an informational stale-import signal, a non-blocking
-  package-pin advisory (flags an `ephemeral-npx`/`package-manager`
-  helper runtime profile with no configured `helperRuntime.packageSpec`
-  — see
-  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
-  and a non-blocking held-schema drift advisory (a schema or fixture
-  `--import` would update, while a held `src/scripts` module or a held
-  vendored `scripts` module still names it or scans its containing
-  directory). For Git targets, the advisory compares against the
-  pre-import target tree at `HEAD`; a freshly initialized Git target with an
-  unborn `HEAD` retains the current-target fallback. Pass
-  `--target-base-ref <ref>` when the import was based on another commit.
-  Other Git discovery or configuration failures are reported as errors;
-  non-Git targets retain the source-vs-current-target fallback. A missing
-  manifest file, leftover placeholder, or helper-load failure is blocking; the
-  stale-import signal, package-pin
-  advisory, and held-schema drift advisory are never blocking. Repeat
-  `--hold` with a manifest target path to name content left unchanged;
-  an unknown path is a usage error.
+  check after `--import` and `--substitute`. It covers manifest
+  completeness (the `--import` file set; `--hold` does not shrink it),
+  placeholder residue, `vendored-node` helper loads, stale-import and
+  package-pin advisories, and held-schema drift (a held `src/scripts` or
+  vendored `scripts` module still names or scans a schema/fixture that
+  `--import` would update). The last three are non-blocking. Git targets
+  compare drift with pre-import `HEAD`; an unborn `HEAD` uses the
+  current-target fallback. Use `--target-base-ref <ref>` for another base.
+  Git discovery/configuration failures are errors; non-Git targets use the
+  source-vs-current-target fallback. Missing manifests, placeholders, or
+  helper-load failures block. Repeat `--hold` to name unchanged manifest
+  paths; unknown paths are usage errors.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
