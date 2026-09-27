@@ -441,7 +441,7 @@ could ever observe it as 'alive'".
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
    unpushed work is otherwise invisible here
-   (`idd-merge.instructions.md`); detached tag-reachable history is not
+   (`idd-merge.instructions.md`); detached tag-only history is not
    counted:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
