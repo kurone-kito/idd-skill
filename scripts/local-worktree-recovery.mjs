@@ -2671,6 +2671,16 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
       const shortcutRoutingStillMatches = () => {
+        const finalRecords = deps.listWorktreeRecords(cwd);
+        const finalShortcut =
+          finalRecords === null
+            ? null
+            : evaluatePrunableShortcut(
+                finalRecords,
+                targetPath,
+                recoveredBranch,
+                deps.pathExists,
+              );
         const confirmation = deps.confirmBlock(cwd);
         const routing = confirmation.routing;
         const recovered = routing ? extractRecoveredClaim(routing) : null;
@@ -2689,6 +2699,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           routing?.evidence?.local_worktree?.status === 'absent' &&
           (routing.evidence?.local_worktree?.paths ?? []).length === 0;
         return (
+          finalShortcut?.eligible === true &&
           confirmation.ok &&
           routing !== null &&
           (reportsTargetPath || reportsPrunableAbsence) &&

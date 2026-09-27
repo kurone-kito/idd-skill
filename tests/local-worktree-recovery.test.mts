@@ -1692,6 +1692,69 @@ test('prunable shortcut rechecks claim identity after final backup verification'
   assert.match(verdict.result, /final prunable-worktree routing/);
 });
 
+test('prunable shortcut stops when the target is recreated after the final record check', () => {
+  let targetPathChecks = 0;
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: (path) => {
+      if (path !== '/repo/linked') return false;
+      targetPathChecks += 1;
+      // The second final shortcut predicate observes a checkout recreated
+      // after the first final record check. It must fail closed instead of
+      // accepting ordinary occupied routing and force-removing it.
+      return targetPathChecks >= 5;
+    },
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'unreadable',
+            paths: ['/repo/linked'],
+            reason: 'recreated checkout is unreadable',
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /final prunable-worktree routing/);
+});
+
 test('prunable shortcut stops when private admin-directory ownership cannot be established', () => {
   let removeCalled = false;
   const deps = fakeDeps({
