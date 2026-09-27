@@ -304,9 +304,9 @@ E14's **Primary advisory bot**):
    absent from the baseline is fresh proof through step 5; do not discard
    node-only proof. Otherwise require `review_requested` after HEAD's
    `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). If
-   not yet true, this is ordinary lag: do **not** redo steps 1-3; recheck
-   alone after a brief pause (default: 3 attempts). Disposition then
-   depends on entry type:
+   not yet true: recheck after a brief pause only on readable evidence
+   (default: 3 attempts); unreadable evidence is indeterminate — use AW4,
+   without a marker or cycle count. Otherwise disposition by entry type:
    - **Pending entry**: still unproven → abort without posting a
      marker or counting a cycle, return to the polling loop (or E1) —
      never tight-loop on unresolved lag.

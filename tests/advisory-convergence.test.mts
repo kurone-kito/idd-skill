@@ -6941,33 +6941,21 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
   // #2159: add-reviewer alone is not a complete request. #3500: neither
   // that call nor the REST requested_reviewers POST is registration
-  // evidence. The pointer must name requestReviews with a botIds array
-  // before the advisory-wait marker.
+  // evidence. The pointer must route the GraphQL fallback through the
+  // guarded E14 procedure before the advisory-wait marker.
   assert.match(
     noneText,
     /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
   );
   assert.match(noneText, /fresh node absent from that snapshot/);
-  assert.match(
-    noneText,
-    /gh api "users\/copilot-pull-request-reviewer\[bot\]" --jq \.node_id/,
-  );
-  assert.match(
-    noneText,
-    /jq -n --arg id "\$PR_NODE_ID" --arg bot "\$BOT_NODE_ID"/,
-  );
-  assert.match(
-    noneText,
-    /requestReviews\(input:\{pullRequestId:\$id,botIds:\$botIds,union:true\}\)/,
-  );
-  assert.match(noneText, /botIds:\[\$bot\]/);
+  assert.match(noneText, /resume E14's guarded registration-proven procedure/);
   assert.doesNotMatch(noneText, /<<EOF/);
   const snapshotAt = noneText.indexOf(
     'snapshot the matching event and request node before either mutation',
   );
   const requestAt = noneText.indexOf('gh pr edit');
   assert.ok(snapshotAt > 0 && requestAt > snapshotAt);
-  const payloadAt = noneText.indexOf('jq -n');
+  const payloadAt = noneText.indexOf('guarded registration-proven');
   const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
   assert.ok(payloadAt > 0 && markerAt > payloadAt);
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);

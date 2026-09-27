@@ -97,7 +97,7 @@ field here isn't "config absent" — it's a malformed helper response
 | Outcome | E14 action |
 | --- | --- |
 | `SATISFIED` | proceed to CI wait |
-| `REQUEST_NEEDED` | `copilotPending`: false → request Copilot + marker, poll; true (no marker) → no `AW3-S` here — stop and ask |
+| `REQUEST_NEEDED` | `copilotPending`: false → registration-proven request + marker, then poll; true (no marker) → no `AW3-S` here — stop and ask |
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
 | `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
