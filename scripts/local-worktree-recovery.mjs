@@ -4170,7 +4170,19 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.plan.removal.detail;
       return verdict;
     }
-    deps.runGit(['worktree', 'prune'], repoPath);
+    const prune = deps.runGit(['worktree', 'prune'], repoPath);
+    if (!prune.ok) {
+      verdict.plan.removal = {
+        kind: 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail: `git worktree remove succeeded, but git worktree prune failed: ${prune.stderr}`,
+      };
+      verdict.mutated = true;
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
     verdict.plan.removal = {
       kind: 'linked',
       developmentBranch: null,

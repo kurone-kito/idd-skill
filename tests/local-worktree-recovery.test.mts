@@ -1120,6 +1120,38 @@ test('step 4 still releases the clone lock when removal fails', () => {
   assert.deepEqual(callOrder, ['acquire', 'remove-failed', 'release']);
 });
 
+test('step 4 reports failure when worktree pruning fails after removal', () => {
+  const callOrder: string[] = [];
+  const deps = fakeDeps({
+    acquireCloneLock: () => {
+      callOrder.push('acquire');
+      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+    },
+    releaseCloneLock: () => {
+      callOrder.push('release');
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        callOrder.push('remove');
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'prune') {
+        callOrder.push('prune-failed');
+        return { ok: false, status: 1, stdout: '', stderr: 'stale admin data' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /git worktree prune failed: stale admin data/);
+  assert.deepEqual(callOrder, ['acquire', 'remove', 'prune-failed', 'release']);
+});
+
 test('step 4 returns a preservation verdict when clone-lock acquisition throws', () => {
   let stashListCalls = 0;
   const deps = fakeDeps({
