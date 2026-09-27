@@ -3560,3 +3560,16 @@ test('keeps approval-gate defect descriptions autonomous (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let a quoted completion blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 216,
+    title: 'document credential storage',
+    body:
+      'The current blocker is "Implementation is pending maintainer approval." ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});

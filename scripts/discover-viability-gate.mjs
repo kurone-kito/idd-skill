@@ -133,6 +133,8 @@ const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN = new RegExp(
   String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+(?:by|pending)|pending|must\s+receive)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bpending\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
   'gi',
 );
+const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_MEMBERSHIP_PATTERN =
+  new RegExp(INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN.source, 'i');
 const REMOVAL_FRAMING_CUE_PATTERN =
   /\b(?:remove[sd]?|replace[sd]?|eliminate[sd]?|automate(?:s|d|ing)?(?=\s+(?:the|a|an|this|that|existing|legacy)\b)|retire[sd]?|drop(?:ped|s)?(?=\s+(?:support|the|a|an|existing|legacy|old|this|that|feature|features|behavior|flow|path|option|dependency|deprecated)\b))\b/gi;
 const REMOVAL_FRAMING_CLAUSE_BREAK_PATTERN =
@@ -758,6 +760,9 @@ function findParagraphSpan(corpus, offset) {
 function isInsideQuotedExample(corpus, matchIndex, matchEnd) {
   const isIndependentCoordinationMatch =
     INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN.test(
+      corpus.slice(matchIndex, matchEnd),
+    ) ||
+    INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_MEMBERSHIP_PATTERN.test(
       corpus.slice(matchIndex, matchEnd),
     );
   const lineStart = corpus.lastIndexOf('\n', matchIndex - 1) + 1;
