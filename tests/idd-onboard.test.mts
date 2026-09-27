@@ -4661,13 +4661,13 @@ test('checkHeldSchemaDrift decodes JavaScript path escapes', () => {
 test('checkHeldSchemaDrift matches decoded literal glob candidates', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
-  const moduleText = "globSync('schemas/\\x77idget.schema.json');\n";
+  const moduleText = "globSync('schemas/\\x77.json');\n";
   writeDriftManifest(sourceRoot, {
-    'schemas/widget.schema.json': '{ "version": 2 }\n',
+    'schemas/w.json': '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   writeDriftManifest(targetRoot, {
-    'schemas/widget.schema.json': '{ "version": 1 }\n',
+    'schemas/w.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -4675,7 +4675,7 @@ test('checkHeldSchemaDrift matches decoded literal glob candidates', () => {
   });
   assert.deepEqual(result.findings, [
     {
-      schemaOrFixturePath: 'schemas/widget.schema.json',
+      schemaOrFixturePath: 'schemas/w.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
