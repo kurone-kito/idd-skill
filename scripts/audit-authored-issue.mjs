@@ -75,6 +75,10 @@ import {
   loadPolicyConfig,
 } from './idd-config.mjs';
 import {
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
+  findHtmlCommentRanges,
+  findIndentedCodeRanges,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mjs';
@@ -302,7 +306,9 @@ function extractNonBlockingReferenceIssueNumbers(text) {
 // class). This is the standard non-overlapping idiom for a
 // backslash-escaped quoted string and applies to both quote styles.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:\?[^\s)#"']*)?(?:#[^)\s"']*)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+const GITHUB_ISSUE_OR_PR_URL_PATTERN =
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:\?[^\s#"']*)?(?:#[^\s"']*)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
 // followed by a task-list checkbox. Captures the leading indentation
@@ -327,8 +333,8 @@ const LIST_ITEM_MARKER_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 // not a hoisted function declaration.
 const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // Matches a Markdown reference-style link *usage*: `[text][ref]`, where a
-// separate `[ref]: <target>` definition (matched by
-// LINK_REFERENCE_DEFINITION_PATTERN below) supplies the actual target
+// separate `[ref]: <target>` definition (collected by
+// collectReferenceStyleLinkDefinitions below) supplies the actual target
 // elsewhere in the document — commonly far from the usage, so this is
 // resolved as a whole-document pre-processing step (see
 // resolveReferenceStyleLinks) rather than as a fifth alternative inside
@@ -339,13 +345,6 @@ const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // explicit-ref shape named in issue #1472 is in scope here. Same
 // TDZ-avoidance placement rationale as LIST_ITEM_MARKER_PATTERN above.
 const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
-// Matches a Markdown link reference definition line: optionally indented
-// (up to 3 spaces, per CommonMark), `[label]: target`, with the target
-// read up to the first whitespace. An optional title on the same
-// definition line (e.g. `[ref]: <url> "title"`) is intentionally not
-// captured — only the destination matters for resolving a reference-style
-// link to a GitHub issue/PR URL.
-const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[([^\]\n]+)\]:\s*(\S+)/gm;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `shape:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --shape spec key
@@ -459,11 +458,9 @@ const NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN =
 // NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN immediately above.
 const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 // Matches a Markdown reference-style link's opening usage at the start of
-// a string -- `[label][ref]` (the `ref` itself is defined elsewhere in
-// the body, e.g. `[ref]: https://...`, which this per-line function has
-// no access to; only the label is checked here, same limitation as
-// MARKDOWN_LINK_START_PATTERN's inline-link form above). Deliberately
-// does not require the `ref` to be non-empty, unlike
+// a string -- `[label][ref]`; the captured ref is resolved against the
+// whole-document definition map passed to looksLikeIssueMarkdownLink.
+// Deliberately does not require the `ref` to be non-empty, unlike
 // REFERENCE_STYLE_LINK_USAGE_PATTERN elsewhere in this file (which
 // excludes the shortcut `[text][]`/bare `[text]` forms for its own,
 // different purpose of resolving a real definition) -- here, any
@@ -471,7 +468,24 @@ const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 // a reference-style link", which is all this near-miss check needs to
 // decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
 // hazard as MARKDOWN_LINK_START_PATTERN immediately above.
-const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[[^\]\n]*\]/;
+const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
+// A CommonMark reference-link label may contain a nonblank line ending,
+// which is normalized to a space before the definition lookup. The regular
+// per-line near-miss scan cannot see this shape, so checkDependencyLineGrammar
+// handles it with a whole-body pass after masking opaque regions.
+const MULTILINE_REFERENCE_LINK_USAGE_PATTERN =
+  /\[((?:\\.|[^\u005B\u005D\\\n])*(?:\n(?:\\.|[^\u005B\u005D\\\n])*)?)\]\[((?:\\.|[^\u005B\u005D\\\n])*(?:\n(?:\\.|[^\u005B\u005D\\\n])*)?)\]/g;
+const MULTILINE_SHORTCUT_LINK_USAGE_PATTERN =
+  /\[((?:\\.|[^\u005B\u005D\\\n])*\n(?:\\.|[^\u005B\u005D\\\n])*)\](?![[(:])/g;
+const COLLAPSED_REFERENCE_LINK_USAGE_PATTERN =
+  /\[((?:\\.|[^\u005B\u005D\\\n])+)\]\[\]/g;
+// Matches a CommonMark shortcut reference link at the start of a string:
+// `[text]` whose next character is not `[` (full/collapsed reference), `(`
+// (inline link), or `:` (reference-definition declaration). Its visible
+// label is resolved against the document-wide definition map just like the
+// explicit reference-style form.
+const MARKDOWN_SHORTCUT_LINK_START_PATTERN = /^\[([^\n\u005D]+)](?![[(:])/;
+const MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN = /\[([^\n\u005D]+)](?![[(:])/g;
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
   // a stack. Catch that tagged throw here. Call main() directly on the
@@ -585,7 +599,6 @@ export function auditAuthoredIssue(body, options) {
     ),
     checkDependencyMarkerRule(text, rawText, markerPrefix, shape),
     checkDependencyLineGrammar(
-      text,
       rawText,
       normalizeCurrentRepo(options.currentRepo),
       markerPrefix,
@@ -1344,11 +1357,12 @@ function checkDependencyMarkerRule(text, rawText, markerPrefix, shape) {
  * `TOKEN_START` grammar has no Markdown-link alternative). Also
  * recognizes the reference-style form `[#12][ref]` by the same
  * label-contains-`#N` heuristic (`idd-skill#3285` final review round,
- * CodeRabbit): `Blocked by [#12][ref]` resolves no dependency under the
- * shared grammar either, so it must be caught here too, not only the
- * inline-link form.
+ * CodeRabbit), and resolves labels without `#N` through the definition
+ * map collected from the full body: `Blocked by [Issue 12][ref]` also
+ * resolves no dependency under the shared grammar, so it must be caught
+ * here too, not only the inline-link form.
  */
-function looksLikeIssueMarkdownLink(text) {
+function looksLikeIssueMarkdownLink(text, referenceDefinitions = new Map()) {
   const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
   if (inlineMatch) {
     const [, label, target] = inlineMatch;
@@ -1357,7 +1371,38 @@ function looksLikeIssueMarkdownLink(text) {
     }
   }
   const referenceMatch = text.match(MARKDOWN_REFERENCE_LINK_START_PATTERN);
-  return referenceMatch !== null && /#\d+/.test(referenceMatch[1]);
+  if (referenceMatch !== null) {
+    if (/#\d+/.test(referenceMatch[1])) {
+      return true;
+    }
+    const definitionLabel =
+      referenceMatch[2].length === 0 ? referenceMatch[1] : referenceMatch[2];
+    if (
+      !isValidLinkReferenceLabel(referenceMatch[1]) ||
+      !isValidLinkReferenceLabel(definitionLabel)
+    ) {
+      return false;
+    }
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(definitionLabel),
+    );
+    return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
+  }
+  const shortcutMatch = text.match(MARKDOWN_SHORTCUT_LINK_START_PATTERN);
+  if (shortcutMatch === null) {
+    return false;
+  }
+  if (!isValidLinkReferenceLabel(shortcutMatch[1])) {
+    return /#\d+/.test(shortcutMatch[1]);
+  }
+  const target = referenceDefinitions.get(
+    normalizeLinkReferenceLabel(shortcutMatch[1]),
+  );
+  return (
+    target !== undefined &&
+    (/#\d+/.test(shortcutMatch[1]) ||
+      GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target))
+  );
 }
 /**
  * Strip, in any order and up to a few repeats, the decoration that can
@@ -1397,7 +1442,7 @@ function stripDependencyLineDecoration(after) {
  * line-anchored grammar (`matchDependencyKeywordLine`) does NOT already
  * accept the line -- a fully canonical line is never re-flagged here.
  */
-function findDependencyKeywordMisuse(line) {
+function findDependencyKeywordMisuse(line, referenceDefinitions) {
   for (const match of line.matchAll(NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN)) {
     const after = line.slice((match.index ?? 0) + match[0].length);
     const stripped = stripDependencyLineDecoration(after);
@@ -1412,12 +1457,79 @@ function findDependencyKeywordMisuse(line) {
     const unwrapped = stripped.replace(/^</, '');
     if (
       hasDependencyReferenceListStart(unwrapped) ||
-      looksLikeIssueMarkdownLink(stripped)
+      looksLikeIssueMarkdownLink(stripped, referenceDefinitions)
     ) {
       return match[0].trim();
     }
   }
   return undefined;
+}
+function findMultilineReferenceLinkMisuses(text, referenceDefinitions) {
+  const misuses = new Map();
+  for (const match of text.matchAll(MULTILINE_REFERENCE_LINK_USAGE_PATTERN)) {
+    if (!match[1].includes('\n') && !match[2].includes('\n')) {
+      continue;
+    }
+    const matchIndex = match.index ?? -1;
+    if (matchIndex < 0) {
+      continue;
+    }
+    const definitionLabel = match[2].length === 0 ? match[1] : match[2];
+    if (
+      !isValidLinkReferenceLabel(match[1]) ||
+      !isValidLinkReferenceLabel(definitionLabel)
+    ) {
+      continue;
+    }
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(definitionLabel),
+    );
+    if (target === undefined || !GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target)) {
+      continue;
+    }
+    const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1;
+    const linePrefix = text.slice(lineStart, matchIndex);
+    const normalizedReference =
+      `[${match[1].replace(/\s+/gu, ' ')}]` +
+      `[${match[2].replace(/\s+/gu, ' ')}]`;
+    const misuse = findDependencyKeywordMisuse(
+      `${linePrefix}${normalizedReference}`,
+      referenceDefinitions,
+    );
+    if (misuse !== undefined) {
+      misuses.set(text.slice(0, lineStart).split('\n').length, misuse);
+    }
+  }
+  return misuses;
+}
+function findMultilineShortcutLinkMisuses(text, referenceDefinitions) {
+  const misuses = new Map();
+  for (const match of text.matchAll(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN)) {
+    const matchIndex = match.index ?? -1;
+    if (matchIndex < 0) {
+      continue;
+    }
+    if (!isValidLinkReferenceLabel(match[1])) {
+      continue;
+    }
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(match[1]),
+    );
+    if (target === undefined || !GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target)) {
+      continue;
+    }
+    const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1;
+    const linePrefix = text.slice(lineStart, matchIndex);
+    const normalizedShortcut = `[${match[1].replace(/\s+/gu, ' ')}]`;
+    const misuse = findDependencyKeywordMisuse(
+      `${linePrefix}${normalizedShortcut}`,
+      referenceDefinitions,
+    );
+    if (misuse !== undefined) {
+      misuses.set(text.slice(0, lineStart).split('\n').length, misuse);
+    }
+  }
+  return misuses;
 }
 /**
  * #3285: fails on a `Blocked by`/`Depends on` mention that Discover's own
@@ -1440,31 +1552,28 @@ function findDependencyKeywordMisuse(line) {
  * silently mis-masking a validly indented/nested line; see
  * `matchDependencyKeywordLine`'s own doc comment):
  *
- * - `text` (already computed by the caller via `maskMarkdownForScan`
- *   with its default options -- fenced/indented/inline code masked, HTML
- *   comments left visible) is the base for the near-miss/mid-line scan
- *   below, since a hidden dependency line inside an HTML comment must
- *   stay visible to this check.
- * - `nearMissScanLines` additionally masks every well-formed
- *   `{markerPrefix}-blocked-by` sequential-roadmap marker out of `text`
+ * - `discoverMaskedLines` masks HTML comments only, matching Discover's
+ *   real view of the body for accepted-line matching. Reference-definition
+ *   collection uses a separate view that also masks raw HTML blocks, because
+ *   those definitions are not active CommonMark metadata.
+ * - `nearMissScanLines` starts from a second view that also masks raw HTML
+ *   blocks while keeping HTML comments visible, then additionally masks
+ *   every well-formed `{markerPrefix}-blocked-by` sequential-roadmap marker
+ *   out of that view
  *   (#3285 review, Copilot) before the near-miss scan runs, since that
  *   marker's own grammar accepts a reference-shaped value (`#12`) and
  *   would otherwise be misread as a "blocked-by" near-miss/mid-line
  *   mention -- the two grammars are unrelated and only coincidentally
  *   share the substring "blocked-by".
- * - A second, separately masked view, masked here with
- *   `{ htmlComments: 'mask' }` -- matching `extractDependencyReferences`'s
- *   own internal masking, i.e. Discover's real view of the body -- is
- *   used to ask "does the shared grammar already accept this line", via
- *   `matchDependencyKeywordLine` (which never masks its input, so
- *   calling it per line here never re-masks).
+ * - A `[ref]: ...` definition inside an HTML comment is therefore not
+ *   treated as active CommonMark metadata.
  *
  * A line the shared grammar already accepts is only re-examined for a
  * cross-repository token (`unresolvable`, and only when `currentRepo` is
  * actually known -- see the cross-repo design note below); it is never
  * also run through the near-miss/mid-line scan.
  */
-function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
+function checkDependencyLineGrammar(rawText, currentRepo, markerPrefix) {
   const id = 'dependency-line-grammar';
   const name =
     'Blocked by / Depends on lines use the canonical line-anchored form';
@@ -1499,9 +1608,59 @@ function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
     `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*[^\\s>]+\\s*-->`,
     'gi',
   );
-  const nearMissScanLines = text
+  const nearMissScanText = maskMarkdownForScan(rawText, {
+    htmlBlocks: 'mask',
+  }).split('');
+  // `htmlBlocks: 'mask'` also masks standalone HTML comments because
+  // CommonMark treats them as HTML blocks. Restore comment ranges after the
+  // block pass so the existing near-miss behavior still audits hidden
+  // dependency mentions in comments, while real raw-HTML content stays
+  // invisible to this scan.
+  const normalizedRawText = rawText.replace(/\r\n/g, '\n');
+  const fencedRanges = findFencedCodeRanges(normalizedRawText);
+  const indentedRanges = findIndentedCodeRanges(
+    normalizedRawText,
+    fencedRanges,
+  );
+  const htmlBlockRanges = findHtmlBlockRanges(normalizedRawText, fencedRanges);
+  const commentRanges = findHtmlCommentRanges(
+    normalizedRawText,
+    [...fencedRanges, ...indentedRanges],
+    fencedRanges,
+    htmlBlockRanges,
+  ).filter(
+    (commentRange) =>
+      !htmlBlockRanges.some(
+        (blockRange) =>
+          blockRange.start <= commentRange.start &&
+          commentRange.end <= blockRange.end &&
+          (blockRange.start !== commentRange.start ||
+            !normalizedRawText.startsWith('<!--', blockRange.start)),
+      ),
+  );
+  for (const range of commentRanges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      nearMissScanText[index] = normalizedRawText[index] ?? ' ';
+    }
+  }
+  const nearMissScanLines = nearMissScanText
+    .join('')
     .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
     .split('\n');
+  const referenceDefinitions = collectReferenceStyleLinkDefinitions(
+    maskMarkdownForScan(rawText, {
+      htmlComments: 'mask',
+      htmlBlocks: 'mask',
+    }),
+  );
+  const multilineReferenceLinkMisuses = findMultilineReferenceLinkMisuses(
+    nearMissScanText.join(''),
+    referenceDefinitions,
+  );
+  const multilineShortcutLinkMisuses = findMultilineShortcutLinkMisuses(
+    nearMissScanText.join(''),
+    referenceDefinitions,
+  );
   // Maps a 1-based accepted line number to how many trailing characters of
   // that line the shared grammar's match left unconsumed (#3285 review,
   // Copilot): the grammar recognizes at most ONE dependency declaration
@@ -1634,7 +1793,10 @@ function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
         ? scanLine
         : scanLine.slice(0, matchStart) +
           scanLine.slice(scanLine.length - remainingLength);
-    const misuse = findDependencyKeywordMisuse(scanText);
+    const misuse =
+      findDependencyKeywordMisuse(scanText, referenceDefinitions) ??
+      multilineReferenceLinkMisuses.get(lineNo) ??
+      multilineShortcutLinkMisuses.get(lineNo);
     if (misuse !== undefined) {
       issues.push(
         `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,
@@ -2372,12 +2534,23 @@ function checkProseOnlyDependency(text, rawText, currentRepo) {
 // collapsing internal whitespace and trimming, so `[Upstream PR]` and
 // `[upstream  pr]` refer to the same definition.
 function normalizeLinkReferenceLabel(label) {
-  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+  return decodeMarkdownCharacterReferences(
+    decodeMarkdownBackslashEscapes(label),
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+// CommonMark limits a link reference label to 999 Unicode characters. Keep
+// this check beside normalization so definitions and usages apply the same
+// rule before they enter or query the document-wide definition map.
+function isValidLinkReferenceLabel(label) {
+  const normalized = normalizeLinkReferenceLabel(label);
+  return normalized.length > 0 && [...normalized].length <= 999;
 }
 // CommonMark §6.6 allows a reference definition's destination to be
-// wrapped in angle brackets (`[ref]: <https://...>`), captured verbatim
-// (brackets included) by LINK_REFERENCE_DEFINITION_PATTERN's `\S+`.
-// Without unwrapping, resolveReferenceStyleLinks would rewrite a usage to
+// wrapped in angle brackets (`[ref]: <https://...>`). Without unwrapping,
+// resolveReferenceStyleLinks would rewrite a usage to
 // `[text](<https://...>)`, which ISSUE_OR_PR_REFERENCE_PATTERN's
 // Markdown-link alternative does not recognize (it expects the URL
 // immediately after the opening paren, no angle brackets) — silently
@@ -2388,6 +2561,384 @@ function unwrapAngleBracketDestination(target) {
   return target.startsWith('<') && target.endsWith('>')
     ? target.slice(1, -1)
     : target;
+}
+function decodeMarkdownBackslashEscapes(value) {
+  return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/gu, '$1');
+}
+function decodeNamedMarkdownCharacterReference(value) {
+  switch (value.toLowerCase()) {
+    case 'amp':
+      return '&';
+    case 'apos':
+      return "'";
+    case 'ast':
+      return '*';
+    case 'bsol':
+      return '\\';
+    case 'colon':
+      return ':';
+    case 'comma':
+      return ',';
+    case 'commat':
+      return '@';
+    case 'equals':
+      return '=';
+    case 'excl':
+      return '!';
+    case 'gt':
+      return '>';
+    case 'hyphen':
+      return '-';
+    case 'lbrack':
+    case 'lsqb':
+      return '[';
+    case 'lpar':
+      return '(';
+    case 'lt':
+      return '<';
+    case 'lowbar':
+      return '_';
+    case 'num':
+      return '#';
+    case 'period':
+      return '.';
+    case 'plus':
+      return '+';
+    case 'quest':
+      return '?';
+    case 'quot':
+      return '"';
+    case 'rbrack':
+    case 'rsqb':
+      return ']';
+    case 'rpar':
+      return ')';
+    case 'semi':
+      return ';';
+    case 'sol':
+      return '/';
+    case 'vert':
+      return '|';
+    default:
+      return false;
+  }
+}
+function decodeMarkdownCharacterReferences(value) {
+  return value.replace(
+    /&(?:#(?:x([0-9a-f]+)|([0-9]+))|([a-z][a-z0-9]+));/giu,
+    (whole, hexadecimal, decimal, named) => {
+      const rawCodePoint = hexadecimal ?? decimal;
+      if (rawCodePoint !== undefined) {
+        const codePoint = Number.parseInt(rawCodePoint, hexadecimal ? 16 : 10);
+        if (
+          !Number.isInteger(codePoint) ||
+          codePoint <= 0 ||
+          codePoint > 0x10ffff ||
+          (codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ) {
+          return whole;
+        }
+        return String.fromCodePoint(codePoint);
+      }
+      const decoded =
+        named === undefined
+          ? false
+          : decodeNamedMarkdownCharacterReference(named);
+      return decoded === false ? whole : decoded;
+    },
+  );
+}
+/**
+ * Remove the block-container prefixes that can precede a reference
+ * definition. The input has already had code and HTML-comment regions
+ * masked, so four-space indented code cannot become a definition merely
+ * because this helper trims its indentation. Repeating the operation lets
+ * the same small parser handle `> - [ref]: ...` and other nested
+ * blockquote/list combinations.
+ */
+function stripReferenceDefinitionContainers(line) {
+  let content = line;
+  const containerKinds = [];
+  let canListContainerInterruptParagraph = true;
+  for (let iteration = 0; iteration < 16; iteration += 1) {
+    content = content.replace(/^ +/u, '');
+    if (content.startsWith('>')) {
+      containerKinds.push('quote');
+      content = content.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    const listMarker = content.match(/^(?:[*+-]|\d{1,9}[.)])[ \t]+/u);
+    if (listMarker) {
+      containerKinds.push('list');
+      if (/^\d/u.test(listMarker[0]) && !/^1[.)][ \t]+/u.test(listMarker[0])) {
+        canListContainerInterruptParagraph = false;
+      }
+      content = content.slice(listMarker[0].length);
+      continue;
+    }
+    break;
+  }
+  return {
+    content,
+    containerKinds,
+    canListContainerInterruptParagraph,
+  };
+}
+/**
+ * Read the first destination token from a reference-definition suffix.
+ * A missing suffix is represented by `undefined` so the caller can allow
+ * exactly one nonblank continuation line, while an unmatched angle
+ * bracket is rejected instead of being mistaken for a bare destination.
+ */
+function readReferenceDefinitionDestination(suffix) {
+  const token = readReferenceDefinitionDestinationToken(suffix);
+  if (token === undefined || token === null) {
+    return token;
+  }
+  return isReferenceDefinitionTitleSuffix(token.remainder)
+    ? token.destination
+    : null;
+}
+function readReferenceDefinitionDestinationToken(suffix) {
+  const value = suffix.trimStart();
+  if (value.length === 0) {
+    return undefined;
+  }
+  if (value.startsWith('<')) {
+    let closingBracket = -1;
+    for (let index = 1; index < value.length; index += 1) {
+      const character = value[index];
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '<') {
+        return null;
+      }
+      if (character === '>') {
+        closingBracket = index;
+        break;
+      }
+    }
+    if (closingBracket <= 1) {
+      return null;
+    }
+    return {
+      destination: value.slice(0, closingBracket + 1),
+      remainder: value.slice(closingBracket + 1),
+    };
+  }
+  const destination = value.match(/^\S+/u)?.[0];
+  if (destination === undefined) {
+    return undefined;
+  }
+  let parenthesisDepth = 0;
+  for (let index = 0; index < destination.length; index += 1) {
+    const character = destination[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '(') {
+      parenthesisDepth += 1;
+    } else if (character === ')') {
+      if (parenthesisDepth === 0) {
+        return null;
+      }
+      parenthesisDepth -= 1;
+    }
+  }
+  return parenthesisDepth === 0
+    ? { destination, remainder: value.slice(destination.length) }
+    : null;
+}
+function readReferenceDefinitionPendingTitle(suffix) {
+  const token = readReferenceDefinitionDestinationToken(suffix);
+  if (token === undefined || token === null) {
+    return undefined;
+  }
+  const remainder = token.remainder.trimStart();
+  const opener = remainder[0];
+  const delimiter =
+    opener === '"' || opener === "'"
+      ? opener
+      : opener === '('
+        ? ')'
+        : undefined;
+  if (
+    delimiter === undefined ||
+    hasUnescapedTitleDelimiter(remainder, delimiter)
+  ) {
+    return undefined;
+  }
+  return {
+    destination: token.destination,
+    titlePrefix: remainder,
+    delimiter,
+  };
+}
+function hasUnescapedTitleDelimiter(title, delimiter) {
+  for (let index = 1; index < title.length; index += 1) {
+    if (title[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (title[index] === delimiter) {
+      return true;
+    }
+  }
+  return false;
+}
+function isReferenceDefinitionTitleSuffix(suffix) {
+  const trimmed = suffix.trim();
+  return (
+    trimmed.length === 0 ||
+    /^(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^)\\\n])*\))$/u.test(
+      trimmed,
+    )
+  );
+}
+function isReferenceDefinitionMultilineTitle(
+  titlePrefix,
+  continuation,
+  delimiter,
+) {
+  const title = `${titlePrefix}\n${continuation.trim()}`;
+  const titleStart = delimiter === ')' ? '\\(' : delimiter;
+  const titleEnd = delimiter === ')' ? '\\)' : delimiter;
+  const escaped = `\\\\.|[^${delimiter}\\\\\\n]`;
+  return new RegExp(
+    `^${titleStart}(?:${escaped})*\\n(?:${escaped})*${titleEnd}$`,
+    'u',
+  ).test(title);
+}
+function referenceDefinitionHasTitle(suffix) {
+  const trimmed = suffix.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (trimmed.startsWith('<')) {
+    const closingBracket = trimmed.indexOf('>');
+    return (
+      closingBracket >= 0 && trimmed.slice(closingBracket + 1).trim() !== ''
+    );
+  }
+  const destination = trimmed.match(/^\S+/u)?.[0];
+  return (
+    destination !== undefined &&
+    trimmed.slice(destination.length).trim().length > 0
+  );
+}
+function parseReferenceDefinitionCandidate(line) {
+  const { content, containerKinds, canListContainerInterruptParagraph } =
+    stripReferenceDefinitionContainers(line);
+  const match = content.match(
+    /^\[((?:\\.|[^\u005B\u005D\\\n])+)\]:[ \t]*(.*)$/u,
+  );
+  if (!match) {
+    return undefined;
+  }
+  if (!isValidLinkReferenceLabel(match[1])) {
+    return undefined;
+  }
+  const destination = readReferenceDefinitionDestination(match[2]);
+  return {
+    label: match[1],
+    destination,
+    pendingTitle:
+      destination === null
+        ? readReferenceDefinitionPendingTitle(match[2])
+        : undefined,
+    hasTitle: referenceDefinitionHasTitle(match[2]),
+    containerKinds,
+    canListContainerInterruptParagraph,
+  };
+}
+function mergeMultilineReferenceDefinitionLabels(text) {
+  const lines = text.split('\n');
+  const mergedLines = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const current = stripReferenceDefinitionContainers(line);
+    const nextLine = lines[index + 1];
+    if (nextLine !== undefined) {
+      const next = stripReferenceDefinitionContainers(nextLine);
+      if (
+        /^\[((?:\\.|[^\u005B\u005D\\\n])*)$/u.test(current.content) &&
+        /^(?:\\.|[^\u005B\u005D\\\n])+\u005D:[ \t]*/u.test(next.content) &&
+        current.containerKinds.join('/') === next.containerKinds.join('/') &&
+        !(
+          current.containerKinds.includes('list') &&
+          next.containerKinds.includes('list') &&
+          startsReferenceDefinitionListItem(line) &&
+          startsReferenceDefinitionListItem(nextLine)
+        )
+      ) {
+        const currentPrefix = line.slice(
+          0,
+          line.length - current.content.length,
+        );
+        mergedLines.push(`${currentPrefix}${current.content} ${next.content}`);
+        index += 1;
+        continue;
+      }
+    }
+    mergedLines.push(line);
+  }
+  return mergedLines;
+}
+function startsReferenceDefinitionListItem(line) {
+  let content = line;
+  for (let iteration = 0; iteration < 16; iteration += 1) {
+    content = content.replace(/^ +/u, '');
+    if (content.startsWith('>')) {
+      content = content.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    return /^(?:[*+-]|\d{1,9}[.)])[ \t]+/u.test(content);
+  }
+  return false;
+}
+function isReferenceDefinitionBlockBoundary(content, paragraphOpen) {
+  return (
+    /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    (paragraphOpen && /^(?:=+|-{1,2})[ \t]*$/u.test(content)) ||
+    /^(`{3,}|~{3,})/u.test(content) ||
+    /^(?:\*\s*){3,}$|^-{3,}[ \t]*$|^(?:_\s*){3,}$/u.test(content)
+  );
+}
+function isReferenceDefinitionTitleContinuation(content) {
+  return isReferenceDefinitionTitleSuffix(content);
+}
+function hasReferenceDefinitionContinuationIndent(line) {
+  return /^(?: {0,3}>[ \t]?)+[ \t]+/u.test(line) || /^[ \t]+/u.test(line);
+}
+function matchesReferenceDefinitionContinuationContainer(
+  line,
+  currentContainerKinds,
+  pendingContainerKinds,
+) {
+  if (currentContainerKinds.join('/') === pendingContainerKinds.join('/')) {
+    if (
+      currentContainerKinds.includes('list') &&
+      pendingContainerKinds.includes('list')
+    ) {
+      return false;
+    }
+    return true;
+  }
+  const currentPrefix = currentContainerKinds.join('/');
+  const pendingPrefix = pendingContainerKinds.join('/');
+  if (
+    currentContainerKinds.filter((kind) => kind === 'quote').length !==
+    pendingContainerKinds.filter((kind) => kind === 'quote').length
+  ) {
+    return false;
+  }
+  return (
+    pendingPrefix.startsWith(currentPrefix ? `${currentPrefix}/` : '') &&
+    hasReferenceDefinitionContinuationIndent(line)
+  );
 }
 /**
  * Resolves every `[text][ref]` reference-style link usage in `text`
@@ -2400,24 +2951,233 @@ function unwrapAngleBracketDestination(target) {
  * first definition, matching CommonMark's rule for duplicate link
  * reference definitions.
  */
-function resolveReferenceStyleLinks(text) {
+function collectReferenceStyleLinkDefinitions(text) {
   const definitions = new Map();
-  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
-    const key = normalizeLinkReferenceLabel(match[1]);
-    if (!definitions.has(key)) {
-      definitions.set(key, unwrapAngleBracketDestination(match[2]));
+  let paragraphOpen = false;
+  let previousDefinition = false;
+  let previousDefinitionTitleConsumed = false;
+  let previousContainerKinds = [];
+  let pendingContinuation;
+  let pendingTitleContinuation;
+  for (const line of mergeMultilineReferenceDefinitionLabels(text)) {
+    const { content, containerKinds } =
+      stripReferenceDefinitionContainers(line);
+    if (content.trim().length === 0) {
+      paragraphOpen = false;
+      previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
+      previousContainerKinds = [];
+      pendingContinuation = undefined;
+      pendingTitleContinuation = undefined;
+      continue;
     }
+    if (pendingTitleContinuation) {
+      if (
+        matchesReferenceDefinitionContinuationContainer(
+          line,
+          containerKinds,
+          pendingTitleContinuation.containerKinds,
+        ) &&
+        isReferenceDefinitionMultilineTitle(
+          pendingTitleContinuation.titlePrefix,
+          content,
+          pendingTitleContinuation.delimiter,
+        )
+      ) {
+        const key = normalizeLinkReferenceLabel(pendingTitleContinuation.label);
+        if (!definitions.has(key)) {
+          definitions.set(
+            key,
+            decodeMarkdownCharacterReferences(
+              decodeMarkdownBackslashEscapes(
+                unwrapAngleBracketDestination(
+                  pendingTitleContinuation.destination,
+                ),
+              ),
+            ),
+          );
+        }
+        pendingTitleContinuation = undefined;
+        paragraphOpen = false;
+        previousDefinition = true;
+        previousDefinitionTitleConsumed = true;
+        previousContainerKinds = containerKinds;
+        continue;
+      }
+      pendingTitleContinuation = undefined;
+      paragraphOpen = true;
+      previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
+    }
+    if (pendingContinuation) {
+      const destination = readReferenceDefinitionDestination(content.trim());
+      if (
+        destination !== undefined &&
+        destination !== null &&
+        !content.trim().startsWith('[') &&
+        matchesReferenceDefinitionContinuationContainer(
+          line,
+          containerKinds,
+          pendingContinuation.containerKinds,
+        )
+      ) {
+        const key = normalizeLinkReferenceLabel(pendingContinuation.label);
+        if (!definitions.has(key)) {
+          definitions.set(
+            key,
+            decodeMarkdownCharacterReferences(
+              decodeMarkdownBackslashEscapes(
+                unwrapAngleBracketDestination(destination),
+              ),
+            ),
+          );
+        }
+        pendingContinuation = undefined;
+        paragraphOpen = false;
+        previousDefinition = true;
+        previousDefinitionTitleConsumed = false;
+        previousContainerKinds = containerKinds;
+        continue;
+      }
+      pendingContinuation = undefined;
+      paragraphOpen = true;
+      previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
+    }
+    const candidate = parseReferenceDefinitionCandidate(line);
+    if (candidate) {
+      const startsNewContainerBlock =
+        (candidate.containerKinds.includes('list') &&
+          candidate.canListContainerInterruptParagraph) ||
+        (candidate.containerKinds.includes('quote') &&
+          candidate.containerKinds.join('/') !==
+            previousContainerKinds.join('/'));
+      const canStart =
+        !paragraphOpen ||
+        previousDefinition ||
+        startsNewContainerBlock ||
+        isReferenceDefinitionBlockBoundary(content, paragraphOpen);
+      if (canStart) {
+        const key = normalizeLinkReferenceLabel(candidate.label);
+        if (
+          candidate.destination !== undefined &&
+          candidate.destination !== null
+        ) {
+          if (!definitions.has(key)) {
+            definitions.set(
+              key,
+              decodeMarkdownCharacterReferences(
+                decodeMarkdownBackslashEscapes(
+                  unwrapAngleBracketDestination(candidate.destination),
+                ),
+              ),
+            );
+          }
+          paragraphOpen = false;
+          previousDefinition = true;
+          previousDefinitionTitleConsumed = candidate.hasTitle;
+          previousContainerKinds = candidate.containerKinds;
+          continue;
+        } else if (candidate.destination === undefined) {
+          pendingContinuation = {
+            label: candidate.label,
+            containerKinds: candidate.containerKinds,
+          };
+          paragraphOpen = false;
+          previousDefinition = false;
+          previousDefinitionTitleConsumed = false;
+          previousContainerKinds = candidate.containerKinds;
+          continue;
+        } else if (candidate.pendingTitle !== undefined) {
+          pendingTitleContinuation = {
+            ...candidate.pendingTitle,
+            label: candidate.label,
+            containerKinds: candidate.containerKinds,
+          };
+          paragraphOpen = false;
+          previousDefinition = false;
+          previousDefinitionTitleConsumed = false;
+          previousContainerKinds = candidate.containerKinds;
+          continue;
+        }
+      }
+    }
+    if (
+      previousDefinition &&
+      !previousDefinitionTitleConsumed &&
+      isReferenceDefinitionTitleContinuation(content) &&
+      matchesReferenceDefinitionContinuationContainer(
+        line,
+        containerKinds,
+        previousContainerKinds,
+      )
+    ) {
+      paragraphOpen = false;
+      previousDefinition = true;
+      previousDefinitionTitleConsumed = true;
+      previousContainerKinds = containerKinds;
+      continue;
+    }
+    paragraphOpen = !isReferenceDefinitionBlockBoundary(content, paragraphOpen);
+    previousDefinition = false;
+    previousDefinitionTitleConsumed = false;
+    previousContainerKinds = containerKinds;
   }
+  return definitions;
+}
+function resolveReferenceStyleLinks(text) {
+  const definitions = collectReferenceStyleLinkDefinitions(text);
   if (definitions.size === 0) {
     return text;
   }
-  return text.replace(
-    REFERENCE_STYLE_LINK_USAGE_PATTERN,
-    (whole, label, ref) => {
+  return text
+    .replace(MULTILINE_REFERENCE_LINK_USAGE_PATTERN, (whole, label, ref) => {
+      if (!label.includes('\n') && !ref.includes('\n')) {
+        return whole;
+      }
+      const definitionLabel = ref.length === 0 ? label : ref;
+      if (
+        !isValidLinkReferenceLabel(label) ||
+        !isValidLinkReferenceLabel(definitionLabel)
+      ) {
+        return whole;
+      }
+      const target = definitions.get(
+        normalizeLinkReferenceLabel(definitionLabel),
+      );
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
+    .replace(REFERENCE_STYLE_LINK_USAGE_PATTERN, (whole, label, ref) => {
+      if (
+        !isValidLinkReferenceLabel(label) ||
+        !isValidLinkReferenceLabel(ref)
+      ) {
+        return whole;
+      }
       const target = definitions.get(normalizeLinkReferenceLabel(ref));
       return target === undefined ? whole : `[${label}](${target})`;
-    },
-  );
+    })
+    .replace(COLLAPSED_REFERENCE_LINK_USAGE_PATTERN, (whole, label) => {
+      if (!isValidLinkReferenceLabel(label)) {
+        return whole;
+      }
+      const target = definitions.get(normalizeLinkReferenceLabel(label));
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
+    .replace(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN, (whole, label) => {
+      if (!isValidLinkReferenceLabel(label)) {
+        return whole;
+      }
+      const target = definitions.get(normalizeLinkReferenceLabel(label));
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
+    .replace(MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN, (whole, label) => {
+      if (!isValidLinkReferenceLabel(label)) {
+        return whole;
+      }
+      const target = definitions.get(normalizeLinkReferenceLabel(label));
+      return target === undefined ? whole : `[${label}](${target})`;
+    });
 }
 // Exactly one blank line between two lines of content is two newline
 // characters (the left line's own terminator, then the blank line's
