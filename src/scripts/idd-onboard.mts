@@ -54,16 +54,21 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -3459,8 +3464,6 @@ interface GitTargetBaseline {
   read: (targetPath: string) => Buffer | null;
 }
 
-const GIT_BASELINE_MAX_BUFFER = 32 * 1024 * 1024;
-
 /**
  * Keep target baseline reads tied to the requested repository instead of
  * ambient Git overrides inherited from a hook, wrapper, or parent process.
@@ -3663,16 +3666,38 @@ function resolveGitTargetBaseline(
           `Git target baseline path is not a regular file: ${treePath}`,
         );
       }
-      return execFileSync(
-        'git',
-        ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
-        {
-          encoding: null,
-          maxBuffer: GIT_BASELINE_MAX_BUFFER,
-          stdio: ['ignore', 'pipe', 'ignore'],
-          env: sanitizedGitEnvironment(),
-        },
+      const temporaryRoot = mkdtempSync(
+        join(tmpdir(), 'idd-onboard-baseline-'),
       );
+      const temporaryPath = join(temporaryRoot, 'blob');
+      let outputFd: number | undefined;
+      try {
+        outputFd = openSync(temporaryPath, 'w');
+        const result = spawnSync(
+          'git',
+          ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
+          {
+            stdio: ['ignore', outputFd, 'pipe'],
+            env: sanitizedGitEnvironment(),
+          },
+        );
+        closeSync(outputFd);
+        outputFd = undefined;
+        if (result.error !== undefined) {
+          throw result.error;
+        }
+        if (result.status !== 0) {
+          throw new Error(
+            `Command failed: git show ${baselineCommit}:${treePath}`,
+          );
+        }
+        return readFileSync(temporaryPath);
+      } finally {
+        if (outputFd !== undefined) {
+          closeSync(outputFd);
+        }
+        rmSync(temporaryRoot, { recursive: true, force: true });
+      }
     },
   };
 }

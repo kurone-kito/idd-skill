@@ -3577,6 +3577,44 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
   assert.equal(verify.heldSchemaDrift.findings.length, 1);
 });
 
+test('checkHeldSchemaDrift reads Git baseline blobs larger than 32 MiB', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  const baselineSchema = 'a'.repeat(33 * 1024 * 1024);
+  writeDriftManifest(sourceRoot, {
+    [DRIFT_SCHEMA]: `${baselineSchema}source`,
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [DRIFT_SCHEMA]: baselineSchema,
+    [DRIFT_MODULE]: moduleText,
+  });
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift falls back for an unborn Git target', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
