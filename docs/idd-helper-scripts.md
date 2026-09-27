@@ -3869,7 +3869,7 @@ to post it is the consuming track's job.
   it is an ordinary `rerun-budget-held` instance and a different workflow
   run for the same check and HEAD has a parseable `completedAt` that is
   strictly later and classifies as `pass`. That sibling also needs verified
-  workflow metadata and no unsuperseded non-pass row in its same-run check
+  workflow metadata and no remaining non-pass row in its same-run check
   group. The check-runs response can contain historical rows from the same
   workflow run, so this decision is made once per run and older rows from a
   run whose latest row is already pass-equivalent do not create a duplicate
