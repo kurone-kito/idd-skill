@@ -5154,6 +5154,23 @@ export function isNonReviewNoticeDisposition(comment: {
   );
 }
 
+const NON_REVIEW_NOTICE_SOURCE_ID_RE = /\(source:\s*#issuecomment-(\d+)\)/i;
+
+export interface NonReviewNoticeDisposition {
+  sourceCommentId: string;
+}
+
+/** Parse the source comment id from a canonical non-review disposition. */
+export function parseNonReviewNoticeDisposition(
+  body: unknown,
+): NonReviewNoticeDisposition | null {
+  if (!isNonReviewNoticeDisposition({ body: String(body ?? '') })) {
+    return null;
+  }
+  const match = NON_REVIEW_NOTICE_SOURCE_ID_RE.exec(String(body ?? ''));
+  return match ? { sourceCommentId: match[1] ?? '' } : null;
+}
+
 // #1833 diagnostic-only hint text: single-sourced so
 // `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
 // names the exact phrase `isNonReviewNoticeDisposition` requires, instead of
@@ -5706,6 +5723,10 @@ export function matchTrustedAdvisoryStickyDispositions<
      * comment during minimization, so it is not an edit signal.
      */
     requireUneditedNotice?: boolean;
+    /** Restrict sticky matching to the configured advisory-bot identities. */
+    requireConfiguredAdvisoryBotLogin?: boolean;
+    /** Require non-review dispositions to name the exact source comment. */
+    requireNoticeSourceCommentId?: boolean;
   } = {},
 ): Set<number> {
   const dispositionedStickyIndexes = new Set<number>();
@@ -5742,6 +5763,11 @@ export function matchTrustedAdvisoryStickyDispositions<
       requireNewerDisposition: false,
       allowIddAgentDisposition: options.allowIddAgentNoticeDisposition,
       requireUneditedSticky: options.requireUneditedNotice,
+      matchesDisposition: options.requireNoticeSourceCommentId
+        ? (sticky, disposition) =>
+            parseNonReviewNoticeDisposition(disposition.body)
+              ?.sourceCommentId === String(sticky.id)
+        : undefined,
     },
     {
       isSticky: (body: string) => isReviewSummaryComment(body),
@@ -5772,7 +5798,12 @@ export function matchTrustedAdvisoryStickyDispositions<
     const stickiesByBot = new Map<string, T[]>();
     for (const comment of comments) {
       if (
-        !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
+        (options.requireConfiguredAdvisoryBotLogin
+          ? !isConfiguredAdvisoryBotLogin(
+              comment.authorLogin,
+              advisoryBotLogins,
+            )
+          : !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) ||
         !kind.isSticky(comment.body) ||
         (kind.requireUneditedSticky &&
           classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==

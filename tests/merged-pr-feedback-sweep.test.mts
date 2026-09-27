@@ -713,6 +713,7 @@ test('#3572 keeps a notice visible without a trusted rejection', () => {
         number: 3572,
         comments: [
           {
+            id: 100,
             body: RATE_LIMIT_NOTICE,
             createdAt: '2026-09-27T06:45:28Z',
             updatedAt: '2026-09-27T07:42:07Z',
@@ -723,6 +724,67 @@ test('#3572 keeps a notice visible without a trusted rejection', () => {
       },
     ],
     OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 does not carry a rejection to a notice with another source id', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 101,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 does not carry a known bot rejection when the bot is unconfigured', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    {
+      ...OPTIONS,
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
   );
   assert.equal(result.prs[0].unaddressedComments.length, 1);
 });
@@ -790,6 +852,7 @@ test('#3572 still surfaces a genuine review that replaces a dispositioned notice
         number: 3572,
         comments: [
           {
+            id: 100,
             body: RATE_LIMIT_NOTICE,
             createdAt: '2026-09-27T06:45:28Z',
             updatedAt: '2026-09-27T07:42:07Z',

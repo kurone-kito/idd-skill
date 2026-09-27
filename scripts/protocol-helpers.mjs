@@ -3816,6 +3816,15 @@ export function isNonReviewNoticeDisposition(comment) {
     /\bdid not review HEAD\b/i.test(body)
   );
 }
+const NON_REVIEW_NOTICE_SOURCE_ID_RE = /\(source:\s*#issuecomment-(\d+)\)/i;
+/** Parse the source comment id from a canonical non-review disposition. */
+export function parseNonReviewNoticeDisposition(body) {
+  if (!isNonReviewNoticeDisposition({ body: String(body ?? '') })) {
+    return null;
+  }
+  const match = NON_REVIEW_NOTICE_SOURCE_ID_RE.exec(String(body ?? ''));
+  return match ? { sourceCommentId: match[1] ?? '' } : null;
+}
 // #1833 diagnostic-only hint text: single-sourced so
 // `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
 // names the exact phrase `isNonReviewNoticeDisposition` requires, instead of
@@ -4340,6 +4349,11 @@ export function matchTrustedAdvisoryStickyDispositions(
       requireNewerDisposition: false,
       allowIddAgentDisposition: options.allowIddAgentNoticeDisposition,
       requireUneditedSticky: options.requireUneditedNotice,
+      matchesDisposition: options.requireNoticeSourceCommentId
+        ? (sticky, disposition) =>
+            parseNonReviewNoticeDisposition(disposition.body)
+              ?.sourceCommentId === String(sticky.id)
+        : undefined,
     },
     {
       isSticky: (body) => isReviewSummaryComment(body),
@@ -4370,7 +4384,12 @@ export function matchTrustedAdvisoryStickyDispositions(
     const stickiesByBot = new Map();
     for (const comment of comments) {
       if (
-        !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
+        (options.requireConfiguredAdvisoryBotLogin
+          ? !isConfiguredAdvisoryBotLogin(
+              comment.authorLogin,
+              advisoryBotLogins,
+            )
+          : !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) ||
         !kind.isSticky(comment.body) ||
         (kind.requireUneditedSticky &&
           classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==

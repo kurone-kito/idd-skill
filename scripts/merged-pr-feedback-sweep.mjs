@@ -346,6 +346,8 @@ function collectUnaddressedComments(
     {
       allowIddAgentNoticeDisposition: true,
       requireUneditedNotice: true,
+      requireConfiguredAdvisoryBotLogin: true,
+      requireNoticeSourceCommentId: true,
     },
   );
   // A non-IDD item counts as addressed only when a later IDD-agent

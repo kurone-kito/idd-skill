@@ -517,6 +517,8 @@ function collectUnaddressedComments(
     {
       allowIddAgentNoticeDisposition: true,
       requireUneditedNotice: true,
+      requireConfiguredAdvisoryBotLogin: true,
+      requireNoticeSourceCommentId: true,
     },
   );
 
