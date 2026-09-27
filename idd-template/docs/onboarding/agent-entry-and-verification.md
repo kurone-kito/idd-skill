@@ -369,7 +369,7 @@ present in that target commit:
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path <idd-skill> \
-  --path-prefix src --path-prefix scripts --path-prefix bin \
+  --path-prefix scripts \
   --path-prefix schemas --path-prefix fixtures
 ```
 
