@@ -3638,6 +3638,21 @@ test('checkHeldSchemaDrift ignores similarly named scanned directories', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift detects join-based directory scans', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { join } from 'node:path';\nimport { readdirSync } from 'node:fs';\nreaddirSync(join(root, 'schemas'));\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift reads a nested Git target baseline from its target root', () => {
   const sourceRoot = makeFixtureDir();
   const outerRoot = makeFixtureDir();
@@ -3722,6 +3737,38 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
       process.env.GIT_DIR = previousGitDir;
     }
   }
+});
+
+test('checkHeldSchemaDrift ignores Git baseline non-file collisions', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  rmSync(join(targetRoot, DRIFT_SCHEMA));
+  mkdirSync(join(targetRoot, DRIFT_SCHEMA));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+    targetBaseRef: 'HEAD',
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {

@@ -1990,6 +1990,12 @@ function manifestContentDiffers(sourceRoot, targetRoot, file, baseline) {
   ) {
     return false;
   }
+  if (
+    !fileExists(targetRoot, file.targetPath) &&
+    pathExists(targetRoot, file.targetPath)
+  ) {
+    return false;
+  }
   if (baseline !== undefined) {
     const baselineContent = baseline.read(file.targetPath);
     return (
@@ -2088,7 +2094,7 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_CALL_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(\s*(['"`])([^'"`\r\n)]*)\1/giu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\([^'"`\r\n)]*?(['"`])([^'"`\r\n)]*)\1/giu;
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
