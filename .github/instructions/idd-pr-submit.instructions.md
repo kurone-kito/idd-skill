@@ -640,9 +640,10 @@ confirmed condition above. Delegate polling mechanics to
   invocation](idd-advisory-wait.instructions.md#1-canonical-path-helper-first)
   for this PR first and read `outcome`: only `REQUEST_NEEDED` triggers
   new action here, and it splits on `copilotPending`. When `false`, exit
-  CI-wait and proceed to E1; E14 performs the request and marker through
-  its guarded registration procedure. This keeps D4 from bypassing the
-  evidence gate and prevents silent-success calls from creating a marker.
+  CI-wait and proceed to E1: request a review now through E14's guarded
+  registration procedure, then post the same-head `advisory-wait:` marker
+  via its AW3-R path only after evidence. D4 must not inline those calls;
+  this prevents silent-success calls from creating a marker.
   When `copilotPending` is `true` instead
   (a pending reviewer with unproven HEAD coverage and no same-head
   marker), this is **AW3-S**'s own pending entry — the fuller
