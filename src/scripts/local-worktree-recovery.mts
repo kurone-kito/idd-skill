@@ -815,7 +815,7 @@ function clearInProgressOperation(
 ): string | null {
   const command: string[] =
     operation.kind === 'rebase'
-      ? ['rebase', '--abort']
+      ? ['rebase', '--quit']
       : operation.kind === 'merge'
         ? ['merge', '--abort']
         : operation.kind === 'cherry-pick'
@@ -824,6 +824,28 @@ function clearInProgressOperation(
   const cleared = runGit(command, path);
   if (!cleared.ok) {
     return `could not clear the in-progress ${operation.kind}: ${cleared.stderr}`;
+  }
+  if (operation.kind === 'rebase') {
+    // `rebase --quit` is the documented recovery cleanup: it removes the
+    // operation metadata without rewinding the recovered worktree. A
+    // conflicted rebase can still leave unmerged index entries behind,
+    // though, and Git refuses the primary-worktree checkout until that
+    // index is released. The conflict files were already copied by the
+    // unmerged-stash fallback before this point, so reset only the index and
+    // retain the working-tree files for the subsequent checkout.
+    const unmerged = runGit(
+      ['diff', '--name-only', '--diff-filter=U', '--'],
+      path,
+    );
+    if (!unmerged.ok) {
+      return `could not inspect the rebase index after cleanup: ${unmerged.stderr}`;
+    }
+    if (unmerged.stdout.trim().length > 0) {
+      const reset = runGit(['reset', '--mixed'], path);
+      if (!reset.ok) {
+        return `could not clear unmerged rebase index entries: ${reset.stderr}`;
+      }
+    }
   }
   const remaining = detectInProgressOperation(
     path,

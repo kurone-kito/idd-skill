@@ -3737,7 +3737,7 @@ test('fresh preservation verification rejects a copied artifact redirected into 
 
 for (const operationCase of [
   { kind: 'merge', cleanup: ['merge', '--abort'] },
-  { kind: 'rebase', cleanup: ['rebase', '--abort'] },
+  { kind: 'rebase', cleanup: ['rebase', '--quit'] },
   { kind: 'cherry-pick', cleanup: ['cherry-pick', '--abort'] },
   { kind: 'bisect', cleanup: ['bisect', 'reset'] },
 ] as const) {
@@ -3900,6 +3900,22 @@ for (const operationCase of [
             }
             return { ok: true, status: 0, stdout: '', stderr: '' };
           }
+          if (
+            operationCase.kind === 'rebase' &&
+            argv[0] === 'diff' &&
+            argv.includes('--diff-filter=U')
+          ) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: 'conflict.txt\n',
+              stderr: '',
+            };
+          }
+          if (operationCase.kind === 'rebase' && argv[0] === 'reset') {
+            events.push('index-reset');
+            return { ok: true, status: 0, stdout: '', stderr: '' };
+          }
           if (argv[0] === 'checkout') {
             events.push('checkout');
           }
@@ -3933,6 +3949,10 @@ for (const operationCase of [
       );
       assert.equal(verdict.plan.removal?.ran, true);
       assert.ok(events.indexOf('cleanup') >= 0);
+      if (operationCase.kind === 'rebase') {
+        assert.ok(events.indexOf('index-reset') >= 0);
+        assert.ok(events.indexOf('index-reset') < events.indexOf('checkout'));
+      }
       assert.ok(events.indexOf('checkout') >= 0);
       assert.ok(events.indexOf('cleanup') < events.indexOf('checkout'));
     } finally {
@@ -4052,7 +4072,7 @@ test('primary-worktree cleanup clears an in-progress submodule operation before 
             stderr: '',
           };
         }
-        if (argv[0] === 'rebase' && argv[1] === '--abort') {
+        if (argv[0] === 'rebase' && argv[1] === '--quit') {
           events.push('submodule-cleanup');
           operationActive = false;
           rmSync(rebaseDir, { recursive: true, force: true });
