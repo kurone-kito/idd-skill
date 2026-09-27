@@ -4085,6 +4085,29 @@ test('listChangeRequestGraphqlReviews throws on a null reviews connection', () =
   );
 });
 
+test('listChangeRequestGraphqlReviews throws when review pageInfo is missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: { nodes: [] },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /malformed \(missing pageInfo\/hasNextPage\)/,
+  );
+});
+
 // --- postWorkItemComment retry / verification (#2460) -----------------------
 
 test('postWorkItemComment retries once after a transient failure and returns the second attempt', () => {

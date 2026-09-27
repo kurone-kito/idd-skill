@@ -2836,7 +2836,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           });
         }
         const pageInfo = connection.pageInfo;
-        if (!pageInfo?.hasNextPage) {
+        if (
+          pageInfo == null ||
+          typeof pageInfo !== 'object' ||
+          typeof pageInfo.hasNextPage !== 'boolean'
+        ) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: page is malformed (missing pageInfo/hasNextPage) for PR #${number}`,
+          );
+        }
+        if (!pageInfo.hasNextPage) {
           break;
         }
         if (!pageInfo.endCursor) {
