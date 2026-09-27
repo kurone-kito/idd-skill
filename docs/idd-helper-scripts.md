@@ -520,9 +520,13 @@ The confirmed substitutions are:
   For a bounded `--limit`, fetch one response at a time, append each
   response's `items`, stop when the requested number of items has been
   collected (or `items` is empty), and apply the limit to the collected
-  items. For an intentionally unbounded snapshot, `--paginate --slurp`
-  still needs a transformation such as `jq '[.[].items[]]'` to flatten
-  the page objects before consumers use the results.
+  items. For a snapshot up to the REST Search API's 1,000-result cap,
+  `--paginate --slurp` still needs a transformation such as
+  `jq '[.[].items[]]'` to flatten the page objects before consumers use
+  the results. Complete coverage of a broader match requires multiple
+  non-overlapping queries, such as disjoint `created:` date ranges;
+  merge and de-duplicate those result sets before applying any overall
+  limit.
 
   ```sh
   limit=100
