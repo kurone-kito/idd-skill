@@ -1258,7 +1258,12 @@ function scanAndMaybeCopyIgnoredFiles(
   for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
     if (!isSafeRelativePath(ignoredPath)) {
       scanFailed = true;
-      copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
+      copied.push({
+        scope: scopeLabel,
+        path: ignoredPath,
+        copiedTo: null,
+        copyFailed: false,
+      });
       continue;
     }
     const preserveDir = apply ? deps.ensurePreserveDir() : plannedPreserveDir;
@@ -1279,7 +1284,12 @@ function scanAndMaybeCopyIgnoredFiles(
         // into the target, do not remove the worktree without a verified
         // artifact.
         scanFailed = true;
-        copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
+        copied.push({
+          scope: scopeLabel,
+          path: ignoredPath,
+          copiedTo: null,
+          copyFailed: false,
+        });
         continue;
       }
       try {
@@ -1295,7 +1305,12 @@ function scanAndMaybeCopyIgnoredFiles(
         // this scan failed, and let the caller report the partial mutation
         // while still stopping before removal (Codex review).
         scanFailed = true;
-        copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
+        copied.push({
+          scope: scopeLabel,
+          path: ignoredPath,
+          copiedTo: destination,
+          copyFailed: true,
+        });
         continue;
       }
     }
@@ -1303,6 +1318,7 @@ function scanAndMaybeCopyIgnoredFiles(
       scope: scopeLabel,
       path: ignoredPath,
       copiedTo: destination,
+      copyFailed: false,
     });
   }
   return { copied, scanFailed };
@@ -1321,6 +1337,9 @@ function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
 ) {
   const pathsByScope = new Map();
   for (const entry of entries) {
+    if (entry.copyFailed) {
+      return `ignored path ${entry.scope}/${entry.path} was only partially preserved`;
+    }
     if (entry.copiedTo === null) {
       return `ignored path ${entry.scope}/${entry.path} was not preserved`;
     }
@@ -1437,9 +1456,12 @@ function planAndMaybePreserve(
               ? result.stdout.trim()
               : null;
           })();
-    return [path, scopePath, ...(gitDir ? [gitDir] : [])].filter(
-      (root, index, roots) => roots.indexOf(root) === index,
-    );
+    return [
+      path,
+      scopePath,
+      ...(targetGitDirForScope ? [targetGitDirForScope] : []),
+      ...(gitDir ? [gitDir] : []),
+    ].filter((root, index, roots) => roots.indexOf(root) === index);
   };
   const submoduleListFailed =
     !submoduleStatus.ok ||
@@ -1859,7 +1881,7 @@ function preservationVerified(preserve, pathExists) {
   // at all -- a failed or partial ignored-file copy could not block
   // removal despite §LWR requiring these copies verified before step 4.
   for (const ignored of preserve.ignoredFilesCopied) {
-    if (ignored.copiedTo === null) return false;
+    if (ignored.copyFailed || ignored.copiedTo === null) return false;
     if (!pathExists(ignored.copiedTo)) return false;
   }
   if (preserve.submoduleAdminCopyFailed) return false;
@@ -1978,7 +2000,10 @@ function reverifyPreservationArtifactsFresh(preserve, targetPath, deps) {
     }
   }
   for (const ignored of preserve.ignoredFilesCopied) {
-    if (ignored.copiedTo !== null && !copyVerified(ignored.copiedTo)) {
+    if (
+      ignored.copyFailed ||
+      (ignored.copiedTo !== null && !copyVerified(ignored.copiedTo))
+    ) {
       return false;
     }
   }
@@ -2607,9 +2632,12 @@ export function runLocalWorktreeRecovery(args, deps) {
   // Node does not expose that primitive on every platform (notably
   // Windows), so reject apply before any stash, ref, or copy mutation rather
   // than discovering the limitation after partial preservation.
-  if (constants.O_NOFOLLOW === undefined) {
+  if (
+    constants.O_NOFOLLOW === undefined ||
+    constants.O_NONBLOCK === undefined
+  ) {
     return recordRemovalFailure(
-      'refusing --apply: this platform does not support the no-follow file opens required for recovery copies; no mutation',
+      'refusing --apply: this platform does not support the no-follow and nonblocking file opens required for recovery copies; no mutation',
     );
   }
   // Capture the target checkout and its private git-admin directory before
@@ -2983,12 +3011,66 @@ export function runLocalWorktreeRecovery(args, deps) {
           }
         }
       }
-      const ignoredCleanupError =
-        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
-          verdict.plan.ignoredFilesCopied,
+      // An editor can create an ignored file after the initial preservation
+      // scan. Capture it before primary checkout, which otherwise leaves
+      // ignored files in place and could carry stale recovery data into the
+      // development branch (Copilot review).
+      const lateIgnoredEntries = [];
+      let lateIgnoredScanFailed = false;
+      const lateIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        null,
+        [targetPath, ...(targetGitDir ? [targetGitDir] : [])],
+        deps,
+      );
+      lateIgnoredEntries.push(...lateIgnored.copied);
+      lateIgnoredScanFailed ||= lateIgnored.scanFailed;
+      for (const stash of verdict.plan.stashes) {
+        if (stash.scope === '.') continue;
+        const submodulePath = join(targetPath, stash.scope);
+        const submoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          submodulePath,
+        );
+        const submoduleGitDir =
+          submoduleGitDirResult.ok && submoduleGitDirResult.stdout.trim()
+            ? submoduleGitDirResult.stdout.trim()
+            : null;
+        const lateSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          submodulePath,
+          stash.scope,
+          true,
           targetPath,
+          null,
+          [
+            targetPath,
+            submodulePath,
+            ...(targetGitDir ? [targetGitDir] : []),
+            ...(submoduleGitDir ? [submoduleGitDir] : []),
+          ],
           deps,
         );
+        lateIgnoredEntries.push(...lateSubmoduleIgnored.copied);
+        lateIgnoredScanFailed ||= lateSubmoduleIgnored.scanFailed;
+      }
+      verdict.plan.ignoredFilesCopied.push(...lateIgnoredEntries);
+      verdict.plan.ignoredFilesScanFailed ||= lateIgnoredScanFailed;
+      verdict.mutated ||= lateIgnoredEntries.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      const ignoredCleanupError =
+        lateIgnoredScanFailed ||
+        lateIgnoredEntries.some(
+          (ignored) =>
+            ignored.copyFailed ||
+            ignored.copiedTo === null ||
+            !deps.pathExists(ignored.copiedTo),
+        )
+          ? 'preserved ignored files could not be fully verified before primary checkout'
+          : null;
       if (ignoredCleanupError !== null) {
         verdict.plan.removal = {
           kind: 'primary',
@@ -2996,6 +3078,23 @@ export function runLocalWorktreeRecovery(args, deps) {
           wouldRun: true,
           ran: false,
           detail: `before checkout ${developmentBranch}, ${ignoredCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const ignoredCleanupAfterLateScanError =
+        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+          verdict.plan.ignoredFilesCopied,
+          targetPath,
+          deps,
+        );
+      if (ignoredCleanupAfterLateScanError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${ignoredCleanupAfterLateScanError}; stopping`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
@@ -3366,8 +3465,18 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
       for (const stash of verdict.plan.stashes) {
         if (stash.scope === '.') continue;
+        const lateSubmodulePath = join(targetPath, stash.scope);
+        const lateSubmoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          lateSubmodulePath,
+        );
+        const lateSubmoduleGitDir =
+          lateSubmoduleGitDirResult.ok &&
+          lateSubmoduleGitDirResult.stdout.trim()
+            ? lateSubmoduleGitDirResult.stdout.trim()
+            : null;
         const lateSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
-          join(targetPath, stash.scope),
+          lateSubmodulePath,
           stash.scope,
           true,
           targetPath,
@@ -3376,6 +3485,7 @@ export function runLocalWorktreeRecovery(args, deps) {
             targetPath,
             join(targetPath, stash.scope),
             ...(lateTargetGitDir ? [lateTargetGitDir] : []),
+            ...(lateSubmoduleGitDir ? [lateSubmoduleGitDir] : []),
           ],
           deps,
         );
@@ -3388,7 +3498,9 @@ export function runLocalWorktreeRecovery(args, deps) {
           lateSubmoduleIgnored.scanFailed ||
           lateSubmoduleIgnored.copied.some(
             (ignored) =>
-              ignored.copiedTo === null || !deps.pathExists(ignored.copiedTo),
+              ignored.copyFailed ||
+              ignored.copiedTo === null ||
+              !deps.pathExists(ignored.copiedTo),
           )
         ) {
           return recordRemovalFailure(
@@ -3400,7 +3512,9 @@ export function runLocalWorktreeRecovery(args, deps) {
         lateIgnored.scanFailed ||
         lateIgnored.copied.some(
           (ignored) =>
-            ignored.copiedTo === null || !deps.pathExists(ignored.copiedTo),
+            ignored.copyFailed ||
+            ignored.copiedTo === null ||
+            !deps.pathExists(ignored.copiedTo),
         )
       ) {
         return recordRemovalFailure(

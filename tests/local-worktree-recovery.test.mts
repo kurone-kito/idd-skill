@@ -3177,6 +3177,18 @@ test('late preservation rescans initialized submodule ignored files before remov
           stderr: '',
         };
       }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir')
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git/modules/submodule\n',
+          stderr: '',
+        };
+      }
       return cleanRepoRunGit(argv, cwd);
     },
     copyPath: (_from, to, sourceRoot, additionalSourceRoots) =>
@@ -3194,6 +3206,7 @@ test('late preservation rescans initialized submodule ignored files before remov
         '/repo/linked',
         '/repo/linked/submodule',
         '/repo/primary/.git/worktrees/linked',
+        '/repo/primary/.git/modules/submodule',
       ],
     },
   ]);
@@ -3232,7 +3245,11 @@ test('records partial ignored-file copies and blocks removal when a later copy f
   assert.equal(copyCalls, 2);
   assert.equal(verdict.plan.ignoredFilesScanFailed, true);
   assert.equal(verdict.plan.ignoredFilesCopied[0]?.copiedTo !== null, true);
-  assert.equal(verdict.plan.ignoredFilesCopied[1]?.copiedTo, null);
+  assert.equal(
+    verdict.plan.ignoredFilesCopied[1]?.copiedTo,
+    '/tmp/preserve/ignored/second.tmp',
+  );
+  assert.equal(verdict.plan.ignoredFilesCopied[1]?.copyFailed, true);
   assert.equal(verdict.mutated, true);
   assert.equal(verdict.plan.removal, null);
 });
@@ -4587,13 +4604,14 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
   }
 });
 
-test('primary recovery removes preserved ignored files before reporting release', () => {
+test('primary recovery removes late ignored files before reporting release', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-ignored-'));
   const preserveDir = mkdtempSync(
     join(tmpdir(), 'idd-lwr-primary-ignored-preserve-'),
   );
   const ignoredPath = join(root, 'stale*');
   let ignoredPresent = true;
+  let ignoredScanCalls = 0;
   let confirmCalls = 0;
   let submoduleUpdateArgs: string[] = [];
   const events: string[] = [];
@@ -4646,10 +4664,11 @@ test('primary recovery removes preserved ignored files before reporting release'
       },
       runGit: (argv, cwd) => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+          ignoredScanCalls += 1;
           return {
             ok: true,
             status: 0,
-            stdout: ignoredPresent ? '!! stale*\0' : '',
+            stdout: ignoredScanCalls === 1 ? '' : '!! stale*\0',
             stderr: '',
           };
         }
@@ -4701,6 +4720,8 @@ test('primary recovery removes preserved ignored files before reporting release'
       'checkout',
       'submodule-update',
     ]);
+    assert.equal(ignoredScanCalls, 2);
+    assert.equal(events.includes(`copy:${preserveDir}/ignored/stale*`), true);
     assert.equal(ignoredPresent, false);
     assert.deepEqual(submoduleUpdateArgs, [
       'submodule',
