@@ -4084,6 +4084,31 @@ test('#3564: listChangeRequestGraphqlReviews fails closed when comment nodes are
   assert.equal(review.replyOnly, false);
 });
 
+test('listChangeRequestGraphqlReviews throws when review nodes are missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /reviews connection is malformed \(missing nodes\)/,
+  );
+});
+
 test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {
   const port = createGithubProviderAdapter(
     'o',

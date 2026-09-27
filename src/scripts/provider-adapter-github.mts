@@ -3529,7 +3529,12 @@ export function createGithubProviderAdapter(
             `listChangeRequestGraphqlReviews: PR #${number} returned a null reviews connection`,
           );
         }
-        for (const node of connection.nodes ?? []) {
+        if (!Array.isArray(connection.nodes)) {
+          throw new Error(
+            `listChangeRequestGraphqlReviews: reviews connection is malformed (missing nodes) for PR #${number}`,
+          );
+        }
+        for (const node of connection.nodes) {
           const commentCount =
             typeof node.comments?.totalCount === 'number'
               ? node.comments.totalCount
