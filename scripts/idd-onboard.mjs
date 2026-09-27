@@ -2622,6 +2622,8 @@ function globPatternToRegex(pattern) {
       if (segmentStart && pattern[index + 1] === '/') {
         index += 1;
         expression += '(?:(?!\\.)[^/]+/)*';
+      } else if (segmentStart && index + 1 === pattern.length) {
+        expression += '(?:(?!\\.)[^/]+(?:/|$))*';
       } else {
         expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
       }
@@ -2700,7 +2702,11 @@ function globPatternMatchesPath(pattern, targetPath) {
     return false;
   }
   const expression = globPatternToRegex(pattern);
-  return new RegExp(`^${expression}$`, 'u').test(targetPath);
+  try {
+    return new RegExp(`^${expression}$`, 'u').test(targetPath);
+  } catch {
+    return false;
+  }
 }
 function moduleScansManifestDirectory(text, targetPath, modulePath) {
   const slash = targetPath.lastIndexOf('/');
@@ -2777,7 +2783,9 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
           !exclusions.some(
             (exclusion) =>
               globPatternMatchesPath(exclusion, normalizedTargetPath) ||
-              exclusion === normalizedTargetPath,
+              exclusion === normalizedTargetPath ||
+              (!isGlobPattern(exclusion) &&
+                normalizedTargetPath.startsWith(`${exclusion}/`)),
           ) &&
           (globPatternMatchesPath(candidate, normalizedTargetPath) ||
             (!isGlobPattern(candidate) &&
