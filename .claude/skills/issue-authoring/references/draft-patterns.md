@@ -160,6 +160,12 @@ finding and re-run before publishing; a `passed: false` report means
 the draft is not ready yet, regardless of how complete the narrative
 reads.
 
+When the proposed issue touches `.github/instructions/` files or their
+`idd-template/` sources, also apply the contract's
+[context-ceiling check](contract.md#codebase-fidelity-validation) before treating
+`bundleBudgets.limitBytes` as available headroom; that limit is not the
+only constraint.
+
 **No helper runtime available (`instructions-only` profile):** the
 linter cannot run. `instructions-only` is a first-class supported
 fallback, not a waiver — manually re-verify the same checks against
