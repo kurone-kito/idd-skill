@@ -37,6 +37,7 @@ import {
   cpSync,
   lstatSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -81,6 +82,12 @@ import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
  * environment variable silently redirects to. */
 function sanitizedGitEnvironment() {
   const env = { ...process.env };
+  // Recovery branches on a small number of Git diagnostics (for example
+  // `needs merge` and `submodules cannot be moved or removed`). Keep those
+  // predicates stable when the operator's locale is not English (Codex
+  // review #4114376798).
+  env.LC_ALL = 'C';
+  env.LANG = 'C';
   for (const key of Object.keys(env)) {
     if (key.startsWith('GIT_CONFIG')) {
       delete env[key];
@@ -551,6 +558,29 @@ function isCopyDestinationOutsideTarget(destination, targetPath, deps) {
     targetGitDirReal !== null &&
     !isPathContainedIn(destinationReal, targetGitDirReal)
   );
+}
+/** The prunable shortcut cannot ask Git for the vanished worktree's private
+ * gitdir, so apply the same containment guard against the admin directory we
+ * located by its `gitdir` pointer (and the vanished worktree's lexical path).
+ */
+function isCopyDestinationOutsideKnownPaths(destination, paths, deps) {
+  if (paths.some((path) => isPathContainedIn(destination, path))) {
+    return false;
+  }
+  const destinationReal = resolveEffectiveRealpath(
+    destination,
+    deps.realpathOrNull,
+    deps.readlinkOrNull,
+  );
+  if (destinationReal === null) return false;
+  return paths.every((path) => {
+    const pathReal = resolveEffectiveRealpath(
+      path,
+      deps.realpathOrNull,
+      deps.readlinkOrNull,
+    );
+    return pathReal === null || !isPathContainedIn(destinationReal, pathReal);
+  });
 }
 /**
  * Resolve the effective realpath of `path`, even when it (or some suffix of
@@ -1357,6 +1387,7 @@ export function runLocalWorktreeRecovery(args, deps) {
       ignoredFilesScanFailed: false,
       submoduleListFailed: false,
       submoduleAdminCopies: [],
+      prunableAdminCopy: null,
       removal: null,
     },
     preserveDir: null,
@@ -2173,8 +2204,9 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.plan.removal.detail;
       return verdict;
     }
+    let finalLinkedLock = null;
     if (!shortcut.eligible) {
-      const finalLinkedLock = deps.checkLock(targetPath);
+      finalLinkedLock = deps.checkLock(targetPath);
       if (!lockMatchesRecoveredClaim(finalLinkedLock, recoveredClaimId)) {
         verdict.plan.removal = {
           kind: 'linked',
@@ -2219,6 +2251,51 @@ export function runLocalWorktreeRecovery(args, deps) {
       return verdict;
     }
     if (shortcut.eligible) {
+      const adminLookup = deps.findWorktreeAdminDir
+        ? deps.findWorktreeAdminDir(repoPath, targetPath)
+        : { path: null, error: null };
+      if (adminLookup.error) {
+        return recordRemovalFailure(
+          `could not locate the prunable worktree's private admin directory; stopping before removal: ${adminLookup.error}`,
+        );
+      }
+      if (adminLookup.path !== null) {
+        const preserveDir = deps.ensurePreserveDir();
+        const destination = join(preserveDir, 'prunable-gitdir');
+        const entry = {
+          source: adminLookup.path,
+          copiedTo: null,
+        };
+        if (
+          !isCopyDestinationOutsideKnownPaths(
+            destination,
+            [targetPath, adminLookup.path],
+            deps,
+          )
+        ) {
+          verdict.plan.prunableAdminCopy = entry;
+          return recordRemovalFailure(
+            'the prunable worktree admin-data backup destination is inside the vanished worktree or its private admin directory; stopping before removal',
+          );
+        }
+        try {
+          deps.copyPath(adminLookup.path, destination);
+          entry.copiedTo = destination;
+        } catch {
+          verdict.plan.prunableAdminCopy = entry;
+          return recordRemovalFailure(
+            'could not copy the prunable worktree private admin directory; stopping before removal',
+          );
+        }
+        verdict.preserveDir = preserveDir;
+        verdict.plan.prunableAdminCopy = entry;
+        verdict.mutated = true;
+        if (!deps.pathExists(destination)) {
+          return recordRemovalFailure(
+            'the copied prunable worktree private admin directory could not be verified; stopping before removal',
+          );
+        }
+      }
       const finalShortcutRecords = deps.listWorktreeRecords(cwd);
       if (
         finalShortcutRecords === null ||
@@ -2234,12 +2311,31 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
     }
-    let remove = deps.runGit(
-      shortcut.eligible
-        ? ['worktree', 'remove', '--force', targetPath]
-        : ['worktree', 'remove', targetPath],
-      repoPath,
-    );
+    let remove;
+    if (shortcut.eligible) {
+      remove = deps.runGit(
+        ['worktree', 'remove', '--force', targetPath],
+        repoPath,
+      );
+    } else {
+      if (!finalLinkedLock || !deps.removeWorktreeIfLockMatches) {
+        return recordRemovalFailure(
+          'no identity-bound linked-worktree removal guard is available; stopping before removal',
+        );
+      }
+      const guardedRemove = deps.removeWorktreeIfLockMatches(
+        targetPath,
+        repoPath,
+        finalLinkedLock,
+        false,
+      );
+      if (guardedRemove === null) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed before the identity-bound removal; stopping before removal',
+        );
+      }
+      remove = guardedRemove;
+    }
     if (
       !shortcut.eligible &&
       !remove.ok &&
@@ -2322,6 +2418,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         targetPath,
         repoPath,
         forceLock,
+        true,
       );
       if (forcedRemove === null) {
         return recordRemovalFailure(
@@ -2521,6 +2618,63 @@ function listWorktreeRecordsProduction(cwd) {
     return null;
   }
 }
+/** Find a vanished worktree's private admin directory by matching the
+ * `gitdir` pointer Git stores under the primary repository's
+ * `.git/worktrees/<name>/` entry. A prunable record can still own submodule
+ * repositories and an index there, even though its checkout path is gone
+ * (Codex review #4114376790). */
+function findWorktreeAdminDirProduction(repoPath, worktreePath) {
+  const rootResult = runLocalGitCommand(
+    ['rev-parse', '--git-path', 'worktrees'],
+    repoPath,
+  );
+  if (!rootResult.ok || !rootResult.stdout.trim()) {
+    return {
+      path: null,
+      error: `could not resolve the primary repository worktrees directory: ${rootResult.stderr || 'git rev-parse failed'}`,
+    };
+  }
+  const root = resolve(repoPath, rootResult.stdout.trim());
+  const targetGitDir = resolve(worktreePath, '.git');
+  let names;
+  try {
+    names = readdirSync(root);
+  } catch (error) {
+    return {
+      path: null,
+      error: `could not read the primary repository worktrees directory: ${errorMessageForProduction(error)}`,
+    };
+  }
+  for (const name of names) {
+    const adminPath = join(root, name);
+    try {
+      if (!lstatSync(adminPath).isDirectory()) continue;
+      const pointer = readFileSync(join(adminPath, 'gitdir'), 'utf8').trim();
+      if (!pointer) {
+        return {
+          path: null,
+          error: `the private worktree admin directory ${adminPath} has an empty gitdir pointer`,
+        };
+      }
+      const pointedPath = resolve(dirname(join(adminPath, 'gitdir')), pointer);
+      if (
+        normalizeGitWorktreePathForComparison(pointedPath) ===
+        normalizeGitWorktreePathForComparison(targetGitDir)
+      ) {
+        return { path: adminPath, error: null };
+      }
+    } catch (error) {
+      return {
+        path: null,
+        error: `could not inspect private worktree admin directory ${adminPath}: ${errorMessageForProduction(error)}`,
+      };
+    }
+  }
+  return { path: null, error: null };
+}
+function errorMessageForProduction(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 /** Delete the final primary-worktree lock only after re-reading and matching
  * its complete ownership token. This keeps the cleanup operation from
  * unlinking a replacement lock observed after the caller's earlier check. */
@@ -2544,11 +2698,12 @@ function removeWorktreeIfLockMatchesProduction(
   worktreePath,
   repoPath,
   expected,
+  force,
 ) {
   const current = checkClaimLock(worktreePath);
   if (!sameClaimLock(current, expected)) return null;
   return runLocalGitCommand(
-    ['worktree', 'remove', '--force', worktreePath],
+    ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
     repoPath,
   );
 }
@@ -2560,6 +2715,7 @@ function createProductionDeps(args) {
     checkLock: (worktreePath) => checkClaimLock(worktreePath),
     removeLockIfMatches: removeClaimLockIfMatchesProduction,
     removeWorktreeIfLockMatches: removeWorktreeIfLockMatchesProduction,
+    findWorktreeAdminDir: findWorktreeAdminDirProduction,
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
     realpathOrNull,

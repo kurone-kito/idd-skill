@@ -562,7 +562,7 @@ function fakeDeps(
       },
     },
   };
-  return {
+  const deps: LocalWorktreeRecoveryDeps = {
     cwd: () => '/repo/primary',
     listWorktreeRecords: () => [
       {
@@ -603,8 +603,18 @@ function fakeDeps(
     copyPath: () => {},
     ensurePreserveDir: () => '/tmp/preserve',
     now: () => '2026-09-25T00:00:00Z',
-    ...overrides,
   };
+  deps.removeWorktreeIfLockMatches = (
+    worktreePath,
+    repoPath,
+    _expected,
+    force,
+  ) =>
+    deps.runGit(
+      ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
+      repoPath,
+    );
+  return Object.assign(deps, overrides);
 }
 
 test('never mutates without --operator-confirmed-no-live-session, regardless of --apply', () => {
@@ -1053,6 +1063,43 @@ test('prunable shortcut removes the worktree with `--force`', () => {
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('prunable shortcut preserves the vanished worktree private admin directory', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: (_from, to) => copied.push(to),
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(copied, ['/tmp/preserve/prunable-gitdir']);
+  assert.equal(verdict.plan.prunableAdminCopy?.copiedTo, copied[0]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('prunable shortcut stops when the record becomes locked immediately before force removal', () => {
   let listCalls = 0;
   let removeCalled = false;
@@ -1119,16 +1166,23 @@ test('forced retry uses the identity-bound removal guard', () => {
       }
       return cleanRepoRunGit(argv);
     },
-    removeWorktreeIfLockMatches: () => {
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
       guardCalls += 1;
-      return null;
+      return force
+        ? null
+        : {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'submodules cannot be moved or removed',
+          };
     },
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(guardCalls, 1);
+  assert.equal(guardCalls, 2);
   assert.equal(forcedRunCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /identity-bound forced removal/);
