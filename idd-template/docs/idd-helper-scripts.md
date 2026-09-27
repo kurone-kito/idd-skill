@@ -486,8 +486,12 @@ The confirmed substitutions are:
   page=1
   issues_file="$(mktemp)"
   trap 'rm -f "$issues_file"' EXIT
+  set -euo pipefail
   while :; do
-    page_json="$(gh api "repos/<owner>/<repo>/issues?state=${state}&per_page=100&page=${page}")"
+    if ! page_json="$(gh api "repos/<owner>/<repo>/issues?state=${state}&per_page=100&page=${page}")"; then
+      printf '%s\n' 'REST issue-list request failed' >&2
+      exit 1
+    fi
     [ "$(jq 'length' <<<"$page_json")" -eq 0 ] && break
     jq -c '[.[] | select(has("pull_request") | not)][]' <<<"$page_json" >>"$issues_file"
     [ "$(wc -l <"$issues_file")" -ge "$limit" ] && break
@@ -513,11 +517,31 @@ The confirmed substitutions are:
   the same repository, issue, state, and text qualifiers. For
   `--state open` or `--state closed`, add the corresponding
   `state:open` or `state:closed` term; omit that term for `all`.
-  Use `--paginate --slurp`, flatten each response's `items`, and apply
-  the requested limit after pagination.
+  For a bounded `--limit`, fetch one response at a time, append each
+  response's `items`, stop when the requested number of items has been
+  collected (or `items` is empty), and apply the limit to the collected
+  items. For an intentionally unbounded snapshot, `--paginate --slurp`
+  still needs a transformation such as `jq '[.[].items[]]'` to flatten
+  the page objects before consumers use the results.
 
   ```sh
-  gh api --paginate --slurp "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state:closed+<url-encoded-query>"
+  limit=100
+  page=1
+  items_file="$(mktemp)"
+  trap 'rm -f "$items_file"' EXIT
+  set -euo pipefail
+  while :; do
+    search_url="search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state:closed+<url-encoded-query>&per_page=100&page=${page}"
+    if ! page_json="$(gh api "$search_url")"; then
+      printf '%s\n' 'REST issue-search request failed' >&2
+      exit 1
+    fi
+    [ "$(jq '.items // [] | length' <<<"$page_json")" -eq 0 ] && break
+    jq -c '.items[]' <<<"$page_json" >>"$items_file"
+    [ "$(wc -l <"$items_file")" -ge "$limit" ] && break
+    page=$((page + 1))
+  done
+  jq -s --argjson limit "$limit" '.[0:$limit]' "$items_file"
   ```
 
 - For `gh repo view`, use the repository endpoint directly. Helpers that
