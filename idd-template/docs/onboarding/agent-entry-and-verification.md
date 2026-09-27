@@ -372,13 +372,11 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
   --path-prefix schemas --path-prefix fixtures
 ```
 
-`--target-ref` must not be moved to the post-substitution commit when
-interpreting a pure mirror. Placeholder rewrites, pinned workflow action
-references, and a deliberately regenerated
-`.github/workflows/strip-untrusted-labels.yml` (including its GHES-specific
-result) are intentional adopter-side differences; they do not make the
-mirror-only commit impure. Conversely, a content or file-mode mismatch in
-the selected mirror-only paths remains a real import discrepancy.
+Keep `--target-ref` on the mirror-only commit. After substitution, run
+`idd-onboard --verify` with the same source, target, and profile; its manifest
+completeness covers unchanged expected paths. Placeholder rewrites and pinned
+workflow actions are intentional; selected mirror-path content or mode
+mismatches remain failures.
 
 ### Recorded policies and selected companions
 
