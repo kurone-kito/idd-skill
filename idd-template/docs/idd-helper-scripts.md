@@ -1048,7 +1048,7 @@ future inventory reviews do not need to re-infer their role from code.
   JSON comparison, Markdown-only prose-reflow tolerance, git file-mode
   comparison, and deletion-matches-upstream recognition. Exits non-zero on
   any genuine mismatch (referenced in
-  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
   Source-repo internal helper; not exposed through the profile command
   catalog or an `idd-*` bin.
 
@@ -1092,8 +1092,12 @@ future inventory reviews do not need to re-infer their role from code.
   command runs under WSL. The nested `idd-template/` path is read from the
   filesystem rather than a Git tree, so native Windows cannot establish the
   imported executable bit reliably; use Linux, macOS, or WSL when hook mode
-  equivalence must also be verified (the mode rule is part of
-  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
+  equivalence must also be verified. Ensure
+  `core.fileMode` is not `false` and
+  `git ls-tree <upstream-commit> -- idd-template/.githooks/pre-commit` reports
+  `100755` before comparing modes. If modes differ, use a mode-preserving
+  checkout or omit `.githooks`. See
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
 
   Do not add a directory prefix merely because it exists upstream: use only
   roots and root-level files touched by the mirror-only commit. A later

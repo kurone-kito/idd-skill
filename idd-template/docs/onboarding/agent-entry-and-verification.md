@@ -321,7 +321,11 @@ On native Windows, omit `.githooks` from this content check unless the
 command runs under WSL. The nested `idd-template/` path is read from the
 filesystem rather than a Git tree, so native Windows cannot establish the
 imported executable bit reliably; use Linux, macOS, or WSL when hook mode
-equivalence must also be verified. The mode rule is part of
+equivalence must also be verified. Ensure
+`core.fileMode` is not `false` and
+`git ls-tree <upstream-commit> -- idd-template/.githooks/pre-commit` reports
+`100755` before comparing modes. If modes differ, use a mode-preserving
+checkout or omit `.githooks`. See
 [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
 
 For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
