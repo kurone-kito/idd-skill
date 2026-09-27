@@ -732,11 +732,9 @@ const NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN =
 const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 
 // Matches a Markdown reference-style link's opening usage at the start of
-// a string -- `[label][ref]` (the `ref` itself is defined elsewhere in
-// the body, e.g. `[ref]: https://...`, which this per-line function has
-// no access to; only the label is checked here, same limitation as
-// MARKDOWN_LINK_START_PATTERN's inline-link form above). Deliberately
-// does not require the `ref` to be non-empty, unlike
+// a string -- `[label][ref]`; the captured ref is resolved against the
+// whole-document definition map passed to looksLikeIssueMarkdownLink.
+// Deliberately does not require the `ref` to be non-empty, unlike
 // REFERENCE_STYLE_LINK_USAGE_PATTERN elsewhere in this file (which
 // excludes the shortcut `[text][]`/bare `[text]` forms for its own,
 // different purpose of resolving a real definition) -- here, any
@@ -744,7 +742,7 @@ const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 // a reference-style link", which is all this near-miss check needs to
 // decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
 // hazard as MARKDOWN_LINK_START_PATTERN immediately above.
-const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[[^\]\n]*\]/;
+const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
 
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
@@ -1673,11 +1671,15 @@ function checkDependencyMarkerRule(
  * `TOKEN_START` grammar has no Markdown-link alternative). Also
  * recognizes the reference-style form `[#12][ref]` by the same
  * label-contains-`#N` heuristic (`idd-skill#3285` final review round,
- * CodeRabbit): `Blocked by [#12][ref]` resolves no dependency under the
- * shared grammar either, so it must be caught here too, not only the
- * inline-link form.
+ * CodeRabbit), and resolves labels without `#N` through the definition
+ * map collected from the full body: `Blocked by [Issue 12][ref]` also
+ * resolves no dependency under the shared grammar, so it must be caught
+ * here too, not only the inline-link form.
  */
-function looksLikeIssueMarkdownLink(text: string): boolean {
+function looksLikeIssueMarkdownLink(
+  text: string,
+  referenceDefinitions: ReadonlyMap<string, string> = new Map(),
+): boolean {
   const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
   if (inlineMatch) {
     const [, label, target] = inlineMatch;
@@ -1686,7 +1688,13 @@ function looksLikeIssueMarkdownLink(text: string): boolean {
     }
   }
   const referenceMatch = text.match(MARKDOWN_REFERENCE_LINK_START_PATTERN);
-  return referenceMatch !== null && /#\d+/.test(referenceMatch[1]);
+  if (referenceMatch === null || /#\d+/.test(referenceMatch[1])) {
+    return referenceMatch !== null;
+  }
+  const target = referenceDefinitions.get(
+    normalizeLinkReferenceLabel(referenceMatch[2]),
+  );
+  return target !== undefined && /\/(?:issues|pull)\/\d+/.test(target);
 }
 
 /**
@@ -1728,7 +1736,10 @@ function stripDependencyLineDecoration(after: string): string {
  * line-anchored grammar (`matchDependencyKeywordLine`) does NOT already
  * accept the line -- a fully canonical line is never re-flagged here.
  */
-function findDependencyKeywordMisuse(line: string): string | undefined {
+function findDependencyKeywordMisuse(
+  line: string,
+  referenceDefinitions: ReadonlyMap<string, string>,
+): string | undefined {
   for (const match of line.matchAll(NEAR_MISS_DEPENDENCY_KEYWORD_PATTERN)) {
     const after = line.slice((match.index ?? 0) + match[0].length);
     const stripped = stripDependencyLineDecoration(after);
@@ -1743,7 +1754,7 @@ function findDependencyKeywordMisuse(line: string): string | undefined {
     const unwrapped = stripped.replace(/^</, '');
     if (
       hasDependencyReferenceListStart(unwrapped) ||
-      looksLikeIssueMarkdownLink(stripped)
+      looksLikeIssueMarkdownLink(stripped, referenceDefinitions)
     ) {
       return match[0].trim();
     }
@@ -1839,6 +1850,7 @@ function checkDependencyLineGrammar(
   const nearMissScanLines = text
     .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
     .split('\n');
+  const referenceDefinitions = collectReferenceStyleLinkDefinitions(text);
   // Maps a 1-based accepted line number to how many trailing characters of
   // that line the shared grammar's match left unconsumed (#3285 review,
   // Copilot): the grammar recognizes at most ONE dependency declaration
@@ -1973,7 +1985,7 @@ function checkDependencyLineGrammar(
         ? scanLine
         : scanLine.slice(0, matchStart) +
           scanLine.slice(scanLine.length - remainingLength);
-    const misuse = findDependencyKeywordMisuse(scanText);
+    const misuse = findDependencyKeywordMisuse(scanText, referenceDefinitions);
     if (misuse !== undefined) {
       issues.push(
         `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,
@@ -2788,7 +2800,9 @@ function unwrapAngleBracketDestination(target: string): string {
  * first definition, matching CommonMark's rule for duplicate link
  * reference definitions.
  */
-function resolveReferenceStyleLinks(text: string): string {
+function collectReferenceStyleLinkDefinitions(
+  text: string,
+): Map<string, string> {
   const definitions = new Map<string, string>();
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
     const key = normalizeLinkReferenceLabel(match[1]);
@@ -2796,6 +2810,11 @@ function resolveReferenceStyleLinks(text: string): string {
       definitions.set(key, unwrapAngleBracketDestination(match[2]));
     }
   }
+  return definitions;
+}
+
+function resolveReferenceStyleLinks(text: string): string {
+  const definitions = collectReferenceStyleLinkDefinitions(text);
   if (definitions.size === 0) {
     return text;
   }

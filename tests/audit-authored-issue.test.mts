@@ -1475,6 +1475,40 @@ test('dependency-line-grammar fails on a reference-style Markdown-link mention (
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar resolves a reference-style Markdown-link definition when the label has no issue number', () => {
+  const markerLine = 'Blocked by [Issue 12][ref]';
+  const body = childBody({
+    extraMarkers: `${markerLine}\n\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12`,
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  const lineNumber = body.split('\n').indexOf(markerLine) + 1;
+  assert.equal(report.passed, false);
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+});
+
+test('dependency-line-grammar leaves unresolved and non-issue reference-style links unchanged', () => {
+  for (const markerLine of [
+    'Blocked by [Issue 12][missing]',
+    'Blocked by [Issue 12][docs]',
+  ]) {
+    const definition = markerLine.endsWith('[docs]')
+      ? '\n\n[docs]: https://example.com/docs/12'
+      : '';
+    const body = childBody({ extraMarkers: `${markerLine}${definition}` });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding);
+    assert.equal(finding.result, 'pass', markerLine);
+  }
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',
