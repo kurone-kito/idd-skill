@@ -183,13 +183,23 @@ export function isAcceptedBlockReason(reason) {
     reason.startsWith('stale-claim-') || reason.startsWith('released-claim-')
   );
 }
+/** True only for a legacy claim explicitly classified as released. An
+ * active legacy claim also has a null claim-id, but its lockless recovery is
+ * not safe because the absence of a lock does not prove release. */
+function isLegacyReleasedRouting(routing) {
+  return (
+    routing.active_claim === null &&
+    routing.reason.startsWith('released-claim-')
+  );
+}
 /** Match a worktree-local lock to the claim recovered by routing. Legacy
  * releases may have no lock or an explicitly legacy/null holder, but a
- * non-null holder must never be treated as legacy. */
-function lockMatchesRecoveredClaim(lock, recoveredClaimId) {
+ * non-null holder must never be treated as legacy. Active legacy claims are
+ * never allowed through this lockless branch. */
+function lockMatchesRecoveredClaim(lock, recoveredClaimId, legacyRelease) {
   if (lock.malformed) return false;
   if (recoveredClaimId === null) {
-    return !lock.present || lock.holder?.claimId === null;
+    return legacyRelease && (!lock.present || lock.holder?.claimId === null);
   }
   return lock.present && lock.holder?.claimId === recoveredClaimId;
 }
@@ -1779,6 +1789,7 @@ export function runLocalWorktreeRecovery(args, deps) {
   const recovered = extractRecoveredClaim(routing);
   const recoveredClaimId = recovered.claimId;
   const recoveredBranch = recovered.branch;
+  const recoveredFromReleasedClaim = isLegacyReleasedRouting(routing);
   // A prunable record whose checkout is already absent is represented by the
   // routing helper as an explicit `absent` local-worktree probe, which keeps
   // the overall routing state stale rather than producing the ordinary
@@ -1821,6 +1832,13 @@ export function runLocalWorktreeRecovery(args, deps) {
     verdict.result = verdict.step1.reason;
     return verdict;
   }
+  if (recoveredClaimId === null && !recoveredFromReleasedClaim) {
+    verdict.step1.outcome = 'lock-mismatch';
+    verdict.step1.reason =
+      'the active legacy claim has no claim-id and is not explicitly released; refusing lockless recovery';
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   if (shortcut.eligible) {
     verdict.step1.outcome = 'blocked-prunable';
     verdict.step1.reason = 'prunable record, absent on disk, unlocked';
@@ -1849,7 +1867,13 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.step1.reason;
       return verdict;
     }
-    if (!lockMatchesRecoveredClaim(lock, recoveredClaimId)) {
+    if (
+      !lockMatchesRecoveredClaim(
+        lock,
+        recoveredClaimId,
+        recoveredFromReleasedClaim,
+      )
+    ) {
       verdict.step1.outcome = 'lock-mismatch';
       verdict.step1.reason = `lock holder claim-id (${lock.holder?.claimId ?? 'unknown'}) does not match the recovered claim-id (${recoveredClaimId ?? 'legacy'})`;
       verdict.result = verdict.step1.reason;
@@ -2114,9 +2138,13 @@ export function runLocalWorktreeRecovery(args, deps) {
     // remove the new claim's worktree while tagging preserved artifacts
     // under the OLD, no-longer-current claim-id.
     const freshRecovered = extractRecoveredClaim(recheck.routing);
+    const freshRecoveredFromReleasedClaim = isLegacyReleasedRouting(
+      recheck.routing,
+    );
     if (
       freshRecovered.claimId !== recoveredClaimId ||
-      freshRecovered.branch !== recoveredBranch
+      freshRecovered.branch !== recoveredBranch ||
+      freshRecoveredFromReleasedClaim !== recoveredFromReleasedClaim
     ) {
       verdict.plan.removal = {
         kind: verdict.primaryOrLinked ?? 'linked',
@@ -2143,6 +2171,7 @@ export function runLocalWorktreeRecovery(args, deps) {
       const lockStillMatches = lockMatchesRecoveredClaim(
         lockRecheck,
         recoveredClaimId,
+        freshRecoveredFromReleasedClaim,
       );
       if (!lockStillMatches) {
         verdict.plan.removal = {
@@ -2200,16 +2229,18 @@ export function runLocalWorktreeRecovery(args, deps) {
         return verdict;
       }
       const confirmAbsent = deps.confirmBlock(cwd);
-      const absentRecovered = confirmAbsent.routing
-        ? extractRecoveredClaim(confirmAbsent.routing)
+      const absentRouting = confirmAbsent.routing;
+      const absentRecovered = absentRouting
+        ? extractRecoveredClaim(absentRouting)
         : null;
       const nowAbsent =
         confirmAbsent.ok &&
-        confirmAbsent.routing !== null &&
+        absentRouting !== null &&
         absentRecovered?.claimId === recoveredClaimId &&
         absentRecovered.branch === recoveredBranch &&
-        confirmAbsent.routing.evidence?.local_worktree?.status === 'absent';
-      if (!nowAbsent) {
+        isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim &&
+        absentRouting.evidence?.local_worktree?.status === 'absent';
+      if (!nowAbsent || absentRouting === null) {
         verdict.plan.removal = {
           kind: 'primary',
           developmentBranch,
@@ -2251,7 +2282,7 @@ export function runLocalWorktreeRecovery(args, deps) {
       // silent best-effort no-op -- the CLI must not exit successfully
       // while a stale lock may still block recovery.
       if (!finalLockCheck.present) {
-        if (recoveredClaimId !== null) {
+        if (recoveredClaimId !== null || !recoveredFromReleasedClaim) {
           verdict.plan.removal = {
             kind: 'primary',
             developmentBranch,
@@ -2274,7 +2305,13 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = 'primary worktree released';
         return verdict;
       }
-      if (!lockMatchesRecoveredClaim(finalLockCheck, recoveredClaimId)) {
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLockCheck,
+          recoveredClaimId,
+          isLegacyReleasedRouting(absentRouting),
+        )
+      ) {
         verdict.plan.removal = {
           kind: 'primary',
           developmentBranch,
@@ -2326,6 +2363,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         !lockMatchesRecoveredClaim(
           immediatelyBeforeDeleteLock,
           recoveredClaimId,
+          isLegacyReleasedRouting(absentRouting),
         )
       ) {
         verdict.plan.removal = {
@@ -2461,6 +2499,9 @@ export function runLocalWorktreeRecovery(args, deps) {
     const finalLinkedRecovered = finalLinkedRouting
       ? extractRecoveredClaim(finalLinkedRouting)
       : null;
+    const finalLinkedFromReleasedClaim =
+      finalLinkedRouting !== null &&
+      isLegacyReleasedRouting(finalLinkedRouting);
     const finalLinkedReportsTargetPath =
       finalLinkedRouting !== null &&
       finalLinkedRouting.state === 'local_worktree_occupied' &&
@@ -2479,7 +2520,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       finalLinkedRouting !== null &&
       (finalLinkedReportsTargetPath || finalLinkedReportsPrunableAbsence) &&
       finalLinkedRecovered?.claimId === recoveredClaimId &&
-      finalLinkedRecovered.branch === recoveredBranch;
+      finalLinkedRecovered.branch === recoveredBranch &&
+      finalLinkedFromReleasedClaim === recoveredFromReleasedClaim;
     if (!finalLinkedStillMatches) {
       verdict.plan.removal = {
         kind: 'linked',
@@ -2495,7 +2537,13 @@ export function runLocalWorktreeRecovery(args, deps) {
     let finalLinkedLock = null;
     if (!shortcut.eligible) {
       finalLinkedLock = deps.checkLock(targetPath);
-      if (!lockMatchesRecoveredClaim(finalLinkedLock, recoveredClaimId)) {
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLinkedLock,
+          recoveredClaimId,
+          finalLinkedFromReleasedClaim,
+        )
+      ) {
         verdict.plan.removal = {
           kind: 'linked',
           developmentBranch: null,
@@ -2731,6 +2779,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       const forceRecovered = forceRouting
         ? extractRecoveredClaim(forceRouting)
         : null;
+      const forceFromReleasedClaim =
+        forceRouting !== null && isLegacyReleasedRouting(forceRouting);
       const forceStillMatches =
         forceConfirm.ok &&
         forceRouting !== null &&
@@ -2743,14 +2793,21 @@ export function runLocalWorktreeRecovery(args, deps) {
             targetComparisonPath,
         ) &&
         forceRecovered?.claimId === recoveredClaimId &&
-        forceRecovered.branch === recoveredBranch;
+        forceRecovered.branch === recoveredBranch &&
+        forceFromReleasedClaim === recoveredFromReleasedClaim;
       if (!forceStillMatches) {
         return recordRemovalFailure(
           'the forced-removal routing/claim identity no longer matches; stopping before removal',
         );
       }
       const forceLock = deps.checkLock(targetPath);
-      if (!lockMatchesRecoveredClaim(forceLock, recoveredClaimId)) {
+      if (
+        !lockMatchesRecoveredClaim(
+          forceLock,
+          recoveredClaimId,
+          forceFromReleasedClaim,
+        )
+      ) {
         return recordRemovalFailure(
           'the worktree-local claim lock no longer matches before forced removal; stopping before removal',
         );

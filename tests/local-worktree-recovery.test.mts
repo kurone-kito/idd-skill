@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { recordGeneratedClaimTokens } from '../src/scripts/claim-lock.mts';
 import {
   copyPathWithSafeSymlinks,
   countTaggedStashEntries,
@@ -1017,6 +1018,37 @@ test('step 1 refuses an active or stale claim whose local lock is absent', () =>
   );
   assert.equal(verdict.step1.outcome, 'lock-mismatch');
   assert.equal(removeCalled, false);
+});
+
+test('step 1 refuses a lockless active legacy claim', () => {
+  const deps = fakeDeps({
+    checkLock: () => ({
+      path: '/repo/linked/.git/idd-claim.lock',
+      present: false,
+    }),
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: { claim_id: null, branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/linked'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'lock-mismatch');
+  assert.match(verdict.result, /active legacy claim/);
 });
 
 test('step 4 proceeds when the worktree-local lock is absent at recheck time (legacy release)', () => {
@@ -2638,7 +2670,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
           ok: true,
           routing: {
             state: 'local_worktree_occupied',
-            reason: 'stale-claim-local-worktree-occupied',
+            reason: 'released-claim-local-worktree-occupied',
             active_claim: null,
             evidence: {
               released_claim: { claim_id: null, branch: 'issue/1-task' },
@@ -3426,6 +3458,11 @@ function runCli(
     ],
     { cwd: sandbox.primary, encoding: 'utf8' },
   );
+  recordGeneratedClaimTokens(sandbox.linked, {
+    agentId: 'agent-x',
+    claimId: `claim-${issueNumber}`,
+    nonce: `nonce-${issueNumber}`,
+  });
   return spawnSync(
     process.execPath,
     [
