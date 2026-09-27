@@ -3113,6 +3113,62 @@ export function runLocalWorktreeRecovery(
       return recordRemovalFailure(lateUninitializedError);
     }
 
+    // The late uninitialized-submodule refresh above copies filesystem data
+    // after the earlier routing and lock checks. A concurrent session can
+    // still change the remote claim while that copy runs, so repeat the
+    // complete ownership check before allowing the destructive remove.
+    if (verdict.plan.uninitializedSubmodules.length > 0) {
+      const postRefreshConfirm = deps.confirmBlock(cwd);
+      const postRefreshRouting = postRefreshConfirm.routing;
+      const postRefreshRecovered = postRefreshRouting
+        ? extractRecoveredClaim(postRefreshRouting)
+        : null;
+      const postRefreshFromReleasedClaim =
+        postRefreshRouting !== null &&
+        isLegacyReleasedRouting(postRefreshRouting);
+      const postRefreshReportsTargetPath =
+        postRefreshRouting !== null &&
+        postRefreshRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(postRefreshRouting.reason) &&
+        (postRefreshRouting.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      const postRefreshReportsPrunableAbsence =
+        shortcut.eligible &&
+        postRefreshRouting !== null &&
+        isPrunableShortcutRouting(postRefreshRouting) &&
+        postRefreshRouting.evidence?.local_worktree?.status === 'absent' &&
+        (postRefreshRouting.evidence.local_worktree.paths ?? []).length === 0;
+      const postRefreshStillMatches =
+        postRefreshConfirm.ok &&
+        postRefreshRouting !== null &&
+        (postRefreshReportsTargetPath || postRefreshReportsPrunableAbsence) &&
+        postRefreshRecovered?.claimId === recoveredClaimId &&
+        postRefreshRecovered.branch === recoveredBranch &&
+        postRefreshFromReleasedClaim === recoveredFromReleasedClaim;
+      if (!postRefreshStillMatches) {
+        return recordRemovalFailure(
+          'the routing/claim identity changed during late preservation; stopping before removal',
+        );
+      }
+      if (!shortcut.eligible) {
+        finalLinkedLock = deps.checkLock(targetPath);
+        if (
+          !lockMatchesRecoveredClaim(
+            finalLinkedLock,
+            recoveredClaimId,
+            postRefreshFromReleasedClaim,
+          )
+        ) {
+          return recordRemovalFailure(
+            'the worktree-local claim lock changed during late preservation; stopping before removal',
+          );
+        }
+      }
+    }
+
     if (shortcut.eligible) {
       const adminLookup = deps.findWorktreeAdminDir
         ? deps.findWorktreeAdminDir(repoPath, targetPath)
