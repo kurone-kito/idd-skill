@@ -2644,6 +2644,8 @@ function readHeldModule(
  */
 const DIRECTORY_SCAN_CALL_PATTERN =
   /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\([^'"`\r\n)]*?(['"`])([^'"`\r\n)]*)\1/giu;
+const DIRECTORY_SCAN_API_NAME_AT_START =
+  /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -2657,6 +2659,20 @@ function stripJavaScriptComments(text: string): string {
     const character = text[index] ?? '';
     const next = text[index + 1] ?? '';
     if (quote !== null) {
+      const apiName = text
+        .slice(index)
+        .match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0];
+      const previous = text[index - 1] ?? '';
+      const after = text[index + (apiName?.length ?? 0)] ?? '';
+      if (
+        apiName !== undefined &&
+        !/[A-Za-z0-9_$]/u.test(previous) &&
+        !/[A-Za-z0-9_$]/u.test(after)
+      ) {
+        result += ' '.repeat(apiName.length);
+        index += apiName.length - 1;
+        continue;
+      }
       result += character;
       if (escaped) {
         escaped = false;

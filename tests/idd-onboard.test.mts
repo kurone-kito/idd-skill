@@ -3666,6 +3666,19 @@ test('checkHeldSchemaDrift ignores commented directory scans', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores directory scans mentioned in strings', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    'const message = "call readdirSync(\'schemas\') for diagnostics";\n';
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift reads a nested Git target baseline from its target root', () => {
   const sourceRoot = makeFixtureDir();
   const outerRoot = makeFixtureDir();
