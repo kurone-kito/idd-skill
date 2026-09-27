@@ -506,8 +506,13 @@ The confirmed substitutions are:
   gh api "repos/<owner>/<repo>/issues/<number>"
   ```
 
-- For `gh issue create`, prepare the complete JSON request body and send
-  it through stdin rather than relying on shell field quoting.
+- For an ad hoc issue outside IDD authoring, prepare the complete JSON
+  request body and send it through stdin rather than relying on shell
+  field quoting. This is not a replacement for Stage 1 issue authoring:
+  that flow must use `issue-authoring` to apply the configured authoring
+  hold label and exact hidden publication token atomically, persist the
+  returned issue identity, and verify the owner marker and read-back
+  state. Do not use this bare REST POST for a new IDD proposal.
 
   ```sh
   gh api "repos/<owner>/<repo>/issues" -X POST --input issue.json
