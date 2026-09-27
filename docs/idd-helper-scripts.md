@@ -1081,6 +1081,10 @@ future inventory reviews do not need to re-infer their role from code.
     --target-root <target-repo> --target-ref <mirror-only-commit> \
     --upstream-path <idd-skill>/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
+    --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.fix-validate \
+    --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+    --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
     --path-prefix docs --path-prefix profiles \
     --path-prefix .githooks \
     --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
@@ -1129,6 +1133,10 @@ future inventory reviews do not need to re-infer their role from code.
     --target-root <target-repo> --target-ref <mirror-only-commit> \
     --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
+    --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.fix-validate \
+    --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+    --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
     --path-prefix docs --path-prefix profiles \
     --path-prefix .githooks \
     --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \

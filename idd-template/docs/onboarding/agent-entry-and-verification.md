@@ -289,39 +289,38 @@ supplied the mirror-only import; the helper reads the current files under
 `--upstream-path`, so a later working tree can produce false mismatches or
 falsely pass matching local edits.
 
-During a re-import, `idd-onboard --import` may restore the target's three
-validate-command rows in `.github/idd/config.json` after the template copy.
-Keep that file in scope with `--path-prefix .github/idd/config.json`, and
-repeat `--normalize-json-key` for only `commands.fix-validate`,
-`commands.pre-push-validate`, and `commands.post-fix-validate`. This replaces
-only those target values during comparison, so every other config field stays
-checked; never omit the whole file. This preservation behavior is tracked by
+During a re-import, `idd-onboard --import` may restore three validate-command
+rows in `.github/idd/config.json`. Keep the file in scope and repeat
+`--normalize-json-key` for only `commands.fix-validate`,
+`commands.pre-push-validate`, and `commands.post-fix-validate`; this replaces
+only those target values, so every other config field stays checked. Never omit
+the whole file. This preservation behavior is tracked by
 [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
 
-The helper is not an `idd-*` bin. For a source checkout, invoke it directly
-and restrict the check with one `--path-prefix` per imported root or root-level
-file that the target commit actually touched. The template core file set also
-includes `.cspell.config.yml`, `.markdownlint.yml`, and
-`.markdownlint-cli2.yaml`; the example includes them, but remove any prefix
-whose path was not touched by the mirror-only commit because an unmatched
-prefix produces no comparison:
+The helper is not an `idd-*` bin. Invoke it directly from a source checkout
+with one `--path-prefix` per touched imported root or root-level file. The
+example includes the template core files `.cspell.config.yml`,
+`.markdownlint.yml`, and `.markdownlint-cli2.yaml`; remove any untouched
+prefix because it produces no comparison:
 
 ```sh
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path <idd-skill>/idd-template \
   --path-prefix .github/instructions --path-prefix .github/workflows \
+  --path-prefix .github/idd/config.json \
+  --normalize-json-key .github/idd/config.json:commands.fix-validate \
+  --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+  --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
   --path-prefix docs --path-prefix profiles \
   --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-On native Windows, omit `.githooks` from this content check unless the
-command runs under WSL. The nested `idd-template/` path is read from the
-filesystem rather than a Git tree, so native Windows cannot establish the
-imported executable bit reliably; use Linux, macOS, or WSL when hook mode
-equivalence must also be verified. Ensure
+On native Windows, omit `.githooks` unless the command runs under WSL: the
+nested path is read from the filesystem, so mode equivalence requires Linux,
+macOS, or WSL. Ensure
 `core.fileMode` is not `false` and
 `git ls-tree <upstream-commit> -- idd-template/.githooks/pre-commit` reports
 `100755` before comparing modes. If modes differ, use a mode-preserving
@@ -338,18 +337,20 @@ node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
   --path-prefix .github/instructions --path-prefix .github/workflows \
+  --path-prefix .github/idd/config.json \
+  --normalize-json-key .github/idd/config.json:commands.fix-validate \
+  --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+  --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
   --path-prefix docs --path-prefix profiles \
   --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-This direct path is a deliberate package-manager-only runtime-manifest
-exception recorded under `packageManagerOnlyHelpers`; it is not a
-`commandCatalog` entry or a managed package.json script because this
-source-repository verification helper is not an adopter command. It applies
-only when the `node_modules` linker exposes the path. It does not apply to
-Yarn Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
+This direct path is a package-manager-only runtime-manifest exception under
+`packageManagerOnlyHelpers`, not a `commandCatalog` entry or managed script.
+It applies only when the `node_modules` linker exposes the path, not to Yarn
+Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
 Pin the installed package to the exact upstream revision that supplied the
 mirror-only import, using an immutable commit archive, tarball, or equivalent
 `helperRuntime.packageSpec`; do not resolve the package from a mutable default
