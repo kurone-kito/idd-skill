@@ -1555,6 +1555,212 @@ test('#2549: an ordinary (non-live-coverage-recovery) budget-exhausted instance 
   assert.notEqual(plan.rerunPolicyHoldNotice, '');
 });
 
+function passedSiblingRecoveryPlan(
+  heldOverrides: Partial<RerunPlanRawInstance> = {},
+  siblingOverrides: Partial<RerunPlanRawInstance> = {},
+) {
+  return computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'held',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+          ...heldOverrides,
+        }),
+        baseInstance({
+          checkRunId: 'passed',
+          runId: '8002',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:01:00Z',
+          ...siblingOverrides,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+}
+
+test('#3539: promotes the four PR 499 rows once per workflow run', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        // The two attempt-1 rows remain in the filter=all response. The
+        // run metadata describes the latest attempt, so the completedAt
+        // ordering selects the attempt-2 row for each workflow run.
+        baseInstance({
+          checkRunId: '10817762256-attempt-1',
+          runId: '36166762256',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T17:22:56Z',
+        }),
+        baseInstance({
+          checkRunId: '10817762668-attempt-1',
+          runId: '36166762668',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T17:22:56Z',
+        }),
+        baseInstance({
+          checkRunId: '108177401006',
+          runId: '36166762256',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T17:26:35Z',
+        }),
+        baseInstance({
+          checkRunId: '108177719036',
+          runId: '36166762668',
+          conclusion: 'success',
+          runAttempt: 2,
+          completedAt: '2026-07-16T17:27:33Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+
+  assert.deepEqual(
+    plan.passedSiblingRecoveryPlan.map((entry) => entry.runId),
+    ['36166762256'],
+  );
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.liveCoverageRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.instances[2]?.rerunBudgetHeld, false);
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+  assert.match(
+    plan.passedSiblingRecoveryPlan[0]?.originalHoldReason ?? '',
+    /rerun-budget-exhausted.*36166762668/,
+  );
+});
+
+test('#3539: a later pass on the held run removes the promotion', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'held-old',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'held-pass',
+          runId: '8001',
+          conclusion: 'success',
+          runAttempt: 3,
+          completedAt: '2026-07-16T11:02:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'sibling-pass',
+          runId: '8002',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:01:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+});
+
+test('#3539: requires a strictly later parseable sibling timestamp', () => {
+  for (const completedAt of [
+    '2026-07-16T10:59:00Z',
+    '2026-07-16T11:00:00Z',
+    'not-a-timestamp',
+  ]) {
+    const plan = passedSiblingRecoveryPlan({}, { completedAt });
+    assert.deepEqual(plan.passedSiblingRecoveryPlan, [], completedAt);
+    assert.equal(plan.counts.rerunBudgetHeld, 1, completedAt);
+  }
+});
+
+test('#3539: does not promote hold-policy, unknown-attempt, or same-run rows', () => {
+  const holdPlan = passedSiblingRecoveryPlan(
+    {},
+    { completedAt: '2026-07-16T11:01:00Z' },
+  );
+  assert.deepEqual(
+    computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            checkRunId: 'held',
+            runId: '8001',
+            conclusion: 'failure',
+            runAttempt: 2,
+            completedAt: '2026-07-16T11:00:00Z',
+          }),
+          baseInstance({
+            checkRunId: 'passed',
+            runId: '8002',
+            conclusion: 'success',
+            completedAt: '2026-07-16T11:01:00Z',
+          }),
+        ],
+      }),
+      baseOptions({ rerunPolicy: 'hold' }),
+    ).passedSiblingRecoveryPlan,
+    [],
+  );
+  assert.deepEqual(
+    computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            checkRunId: 'held',
+            runId: '8001',
+            conclusion: 'failure',
+            runAttempt: null,
+            completedAt: '2026-07-16T11:00:00Z',
+          }),
+          baseInstance({
+            checkRunId: 'passed',
+            runId: '8002',
+            conclusion: 'success',
+            completedAt: '2026-07-16T11:01:00Z',
+          }),
+        ],
+      }),
+      baseOptions(),
+    ).passedSiblingRecoveryPlan,
+    [],
+  );
+  assert.deepEqual(
+    computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            checkRunId: 'held',
+            runId: '8001',
+            conclusion: 'failure',
+            runAttempt: 2,
+            completedAt: '2026-07-16T11:00:00Z',
+          }),
+          baseInstance({
+            checkRunId: 'same-run-pass',
+            runId: '8001',
+            conclusion: 'success',
+            runAttempt: 2,
+            completedAt: '2026-07-16T11:01:00Z',
+          }),
+        ],
+      }),
+      baseOptions(),
+    ).passedSiblingRecoveryPlan,
+    [],
+  );
+  assert.equal(holdPlan.passedSiblingRecoveryPlan.length, 1);
+});
+
 test('#2549: applyRerunPlan executes a liveCoverageRecoveryPlan entry only after plan and recoveryRefreshPlan are exhausted, carrying originalHoldReason', () => {
   const initialPlan = computeRerunPlan(
     baseInput({
@@ -1615,6 +1821,83 @@ test('#2549: applyRerunPlan executes a liveCoverageRecoveryPlan entry only after
   assert.match(liveCoverageEntry?.originalHoldReason ?? '', /recovered/);
   assert.equal(result.resolved, true);
   assert.match(formatApplySummary(result), /originally held/);
+});
+
+test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage recovery', () => {
+  const initialPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '8101',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '8102',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:05:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'live-held',
+          runId: '8103',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '8104',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:01:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+
+  assert.deepEqual(initialPlan.plan, []);
+  assert.deepEqual(
+    initialPlan.recoveryRefreshPlan.map((entry) => entry.runId),
+    ['8102'],
+  );
+  assert.deepEqual(
+    initialPlan.liveCoverageRecoveryPlan.map((entry) => entry.runId),
+    ['8103'],
+  );
+  assert.deepEqual(
+    initialPlan.passedSiblingRecoveryPlan.map((entry) => entry.runId),
+    ['8104'],
+  );
+
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+  const queue = [
+    { ...initialPlan, recoveryRefreshPlan: [] },
+    { ...initialPlan, recoveryRefreshPlan: [], liveCoverageRecoveryPlan: [] },
+    resolvedPlan,
+  ];
+  const executed: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => executed.push(command.runId),
+    recomputePlan: () => queue.shift() ?? resolvedPlan,
+  });
+
+  assert.deepEqual(executed, ['8102', '8103', '8104']);
+  assert.deepEqual(
+    result.executed.map((entry) => entry.section),
+    [
+      'recoveryRefreshPlan',
+      'liveCoverageRecoveryPlan',
+      'passedSiblingRecoveryPlan',
+    ],
+  );
+  assert.match(formatApplySummary(result), /originally held/);
+  assert.equal(result.resolved, true);
 });
 
 // Issue #2549 acceptance criterion: MAX_APPLY_RERUNS still bounds the

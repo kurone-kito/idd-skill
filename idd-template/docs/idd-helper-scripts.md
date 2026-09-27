@@ -3864,18 +3864,32 @@ to post it is the consuming track's job.
   unconditional withholding unchanged; each promoted instance's
   original hold reason is named both in the plan document
   (`originalHoldReason`) and in the `--apply` summary
+- Also reports a `passedSiblingRecoveryPlan` (kurone-kito/idd-skill#3539):
+  under `rerun-once`, the latest row for a workflow run is promoted when
+  it is an ordinary `rerun-budget-held` instance and a different workflow
+  run for the same check and HEAD has a parseable `completedAt` that is
+  strictly later and classifies as `pass`. The check-runs response can
+  contain historical rows from the same workflow run, so this decision is
+  made once per run and older rows from a run whose latest row is already
+  pass-equivalent do not create a duplicate hold. Unknown attempts,
+  unparseable timestamps, equal or earlier passing siblings, same-run
+  passes, live-coverage cases already handled by #2549, and all other
+  non-qualifying holds remain withheld. Each promotion records its
+  `originalHoldReason`.
 - Without `--apply`, it never calls `gh run rerun` (or any other mutating
   command) itself. Pass `--apply` (#1766) to execute the printed plan:
   it reruns each rerun-eligible instance in order (recovery-refresh
-  first, then the sequential plan, then `liveCoverageRecoveryPlan`
-  last), waits for each to reach a genuinely new completed attempt
+  first, then the sequential plan, then `liveCoverageRecoveryPlan`, then
+  `passedSiblingRecoveryPlan` last), waits for each to reach a genuinely
+  new completed attempt
   (polled via the actions/runs API, not `gh run watch`, to avoid racing
   a just-issued rerun's stale pre-rerun status) before starting the
   next, and stops early once the recomputed plan is fully resolved --
   a `bot-gated-skip`, `awaiting-fresh-review`, or rerun-budget-held
   instance is never rerun outside the narrow `liveCoverageRecoveryPlan`
-  exception just above, and the same `MAX_APPLY_RERUNS` safety bound
-  covers all three plan sections together, not a second loop
+  and `passedSiblingRecoveryPlan` exceptions just above, and the same
+  `MAX_APPLY_RERUNS` safety bound covers all four plan sections together,
+  not a second loop
 - `--check-name <name>` (#1935) overrides the check-run name searched for
   and reported, defaulting to `idd-advisory-convergence` when omitted
   (byte-identical output to before this flag existed). Use it when the
@@ -3899,7 +3913,11 @@ withholding these instances from its own plan, and gains no
 above (#2549) is a separate, much narrower automated exception (a
 live-coverage-recovered instance with an already-passing sibling
 proving the rollup is otherwise resolved) -- it does not apply to the
-waiver-rebind case below, which still requires this manual procedure.
+waiver-rebind case below or any case without a qualifying newer
+same-HEAD passing sibling, which still requires this manual procedure.
+The `passedSiblingRecoveryPlan` exception above (#3539) is likewise
+bounded to its explicitly described newer-sibling evidence; it does not
+turn other budget-held cases into automatic reruns.
 A specific combination sits
 outside what the withholding alone can resolve: an
 `idd-advisory-convergence` instance already went `rerun-budget-held`
