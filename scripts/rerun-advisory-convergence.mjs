@@ -331,7 +331,6 @@ export function computeRerunPlan(input, options) {
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
   );
-  const plan = buildOrderedPlan(reRunningEligibleInstances, owner, repo);
   // #2549: narrow, separately-bounded exception to rule 1 below --
   // documented in full on {@link RerunAdvisoryConvergencePlan.liveCoverageRecoveryPlan}.
   // ALL four conditions gate this promotion; failing any one leaves the
@@ -461,24 +460,47 @@ export function computeRerunPlan(input, options) {
   const instanceByCheckRunId = new Map(
     instances.map((instance) => [instance.checkRunId, instance]),
   );
-  const isHandledRecoveryCheckRun = (checkRunId) =>
-    (() => {
-      const instance = instanceByCheckRunId.get(checkRunId);
-      const runId = String(instance?.runId ?? '').trim();
-      if (handledRecoveryRunIds.has(runId)) return true;
-      // `filter=all` also returns historical check-run rows from the same
-      // workflow run. Once that run's latest row is pass-equivalent, those
-      // older rows are superseded and must not keep the rollup looking
-      // budget-held or reintroduce a hold notice.
-      const latest = latestInstancesByRun.find(
-        (candidate) => String(candidate.runId ?? '').trim() === runId,
-      );
-      return (
-        Boolean(runId) &&
-        latest?.classification === 'pass' &&
-        latest.checkRunId !== checkRunId
-      );
-    })();
+  const isSupersededHistoricalCheckRun = (checkRunId) => {
+    const instance = instanceByCheckRunId.get(checkRunId);
+    if (!instance) return false;
+    const runId = String(instance?.runId ?? '').trim();
+    if (!runId) return false;
+    const latest = latestInstancesByRun.find(
+      (candidate) => String(candidate.runId ?? '').trim() === runId,
+    );
+    if (!latest || latest.checkRunId === checkRunId) return false;
+    if (latest.classification !== 'pass') return false;
+    // A later pass from the same run is not enough to discard another row:
+    // one workflow run can expose multiple jobs with the same check name.
+    // Only suppress a row when the workflow API proves that it completed
+    // before the latest attempt started; a current-attempt duplicate stays
+    // visible and can keep its own hold or plan.
+    const latestAttemptStartedAt = parseCompletedAt(latest.runStartedAt);
+    const rowCompletedAt = parseCompletedAt(instance.completedAt);
+    return (
+      latestAttemptStartedAt !== null &&
+      rowCompletedAt !== null &&
+      rowCompletedAt < latestAttemptStartedAt
+    );
+  };
+  const isHandledRecoveryCheckRun = (checkRunId) => {
+    const instance = instanceByCheckRunId.get(checkRunId);
+    const runId = String(instance?.runId ?? '').trim();
+    return (
+      handledRecoveryRunIds.has(runId) ||
+      isSupersededHistoricalCheckRun(checkRunId)
+    );
+  };
+  // A run promoted into either bounded recovery section must not also be
+  // rerun by the ordinary plan. Historical rows that are proven to belong
+  // to an older attempt are likewise excluded once their latest row passes.
+  const plan = buildOrderedPlan(
+    reRunningEligibleInstances.filter(
+      (instance) => !isHandledRecoveryCheckRun(instance.checkRunId),
+    ),
+    owner,
+    repo,
+  );
   const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
     instances,
     classifyOptions,
@@ -538,7 +560,7 @@ export function computeRerunPlan(input, options) {
   const anyEligibleHeld = eligibleInstances.some(
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun' &&
-      !handledRecoveryRunIds.has(String(instance.runId ?? '').trim()),
+      !isHandledRecoveryCheckRun(instance.checkRunId),
   );
   const everyReRunningEligibleIsBotTriggered = reRunningEligibleInstances.every(
     (instance) => isBotTriggered(instance, classifyOptions),
@@ -557,6 +579,7 @@ export function computeRerunPlan(input, options) {
     ? buildOrderedPlan(
         recoveryRefreshCandidates.filter(
           (instance) =>
+            !isHandledRecoveryCheckRun(instance.checkRunId) &&
             refreshDecisions.get(instance.checkRunId)?.action === 'rerun',
         ),
         owner,
@@ -2043,10 +2066,10 @@ const MAX_APPLY_RERUNS = 20;
  * last -- each is bounded cleanup of an already-provably-redundant run,
  * never a substitute for either mechanism above.
  * `bot-gated-skip`, `awaiting-fresh-review`, and rerun-budget-held
- * instances are never candidates here (except the narrow #2549 subset
- * promoted into `liveCoverageRecoveryPlan`): neither `plan` nor
- * `recoveryRefreshPlan` ever contains any other one of them (see {@link
- * computeRerunPlan}), so this loop cannot reach them regardless of
+ * instances are never candidates here (except the narrow #2549/#3539
+ * subsets promoted into the two bounded recovery plans): neither `plan`
+ * nor `recoveryRefreshPlan` ever contains any other one of them (see
+ * {@link computeRerunPlan}), so this loop cannot reach them regardless of
  * `deps.recomputePlan`'s output (#1775 keeps uncovered-HEAD failures out
  * of both plans).
  */
@@ -2433,6 +2456,9 @@ function collectFromGitHub(args) {
           Number.isInteger(runPayload.run_attempt)
             ? runPayload.run_attempt
             : null,
+        runStartedAt: runPayload.run_started_at
+          ? String(runPayload.run_started_at)
+          : null,
         status: runPayload.status ? String(runPayload.status) : null,
       });
     } catch {
@@ -2483,6 +2509,7 @@ function collectFromGitHub(args) {
       triggeringActorLogin: meta?.triggeringActorLogin ?? null,
       triggeringActorType: meta?.triggeringActorType ?? null,
       runAttempt: meta?.runAttempt ?? null,
+      runStartedAt: meta?.runStartedAt ?? null,
       verdictReasons:
         runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
       runStatus: meta?.status ?? null,

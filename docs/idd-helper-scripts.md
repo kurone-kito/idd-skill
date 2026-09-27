@@ -3859,9 +3859,9 @@ to post it is the consuming track's job.
   that already classifies `pass` -- proof the rollup is otherwise
   already resolved, so rerunning this one is bounded cleanup of a
   redundant stale sibling on an already-covered HEAD, never a second
-  automated rerun-budget grant. Every other `rerun-budget-held`
-  instance (including the waiver-rebind case below) keeps the
-  unconditional withholding unchanged; each promoted instance's
+  automated rerun-budget grant. Instances without a qualifying newer
+  same-HEAD passing sibling (including the waiver-rebind case below) keep
+  the unconditional withholding unchanged; each promoted instance's
   original hold reason is named both in the plan document
   (`originalHoldReason`) and in the `--apply` summary
 - Also reports a `passedSiblingRecoveryPlan` (kurone-kito/idd-skill#3539):

@@ -280,6 +280,11 @@ export interface RerunPlanRawInstance {
    * could not be parsed. A `null` here always fails closed to
    * `unresolved` -- see {@link classifyInstance}. */
   runId: string | null;
+  /** The underlying workflow run's latest `run_started_at`. Optional for
+   * injected callers; production collection uses it to distinguish a
+   * check-run row completed before the latest rerun attempt began from a
+   * distinct job in the current attempt. */
+  runStartedAt?: string | null;
   /** `true` when `runId` resolved but the per-run `gh api` lookup itself
    * failed (network/permission/transient). Distinct from `runId` being
    * unparseable; both fail closed to `unresolved` but are reported with a
@@ -485,8 +490,9 @@ export interface RerunAdvisoryConvergencePlan {
    * (they are being handled, not held) but a live-coverage-recovery
    * instance that fails the passing-sibling precondition still does,
    * unchanged. Executed by {@link applyRerunPlan} under the same
-   * {@link MAX_APPLY_RERUNS} bound as `plan` and `recoveryRefreshPlan`,
-   * after both are exhausted -- no separate loop.
+   * {@link MAX_APPLY_RERUNS} bound as `plan`, `recoveryRefreshPlan`, and
+   * `passedSiblingRecoveryPlan`, after the earlier sections are exhausted --
+   * no separate loop.
    */
   liveCoverageRecoveryPlan: RerunPlanCommand[];
   /** Guidance for `liveCoverageRecoveryPlan`, printed only when it is
@@ -673,7 +679,6 @@ export function computeRerunPlan(
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
   );
-  const plan = buildOrderedPlan(reRunningEligibleInstances, owner, repo);
 
   // #2549: narrow, separately-bounded exception to rule 1 below --
   // documented in full on {@link RerunAdvisoryConvergencePlan.liveCoverageRecoveryPlan}.
@@ -805,25 +810,49 @@ export function computeRerunPlan(
   const instanceByCheckRunId = new Map(
     instances.map((instance) => [instance.checkRunId, instance]),
   );
-  const isHandledRecoveryCheckRun = (checkRunId: string): boolean =>
-    (() => {
-      const instance = instanceByCheckRunId.get(checkRunId);
-      const runId = String(instance?.runId ?? '').trim();
-      if (handledRecoveryRunIds.has(runId)) return true;
+  const isSupersededHistoricalCheckRun = (checkRunId: string): boolean => {
+    const instance = instanceByCheckRunId.get(checkRunId);
+    if (!instance) return false;
+    const runId = String(instance?.runId ?? '').trim();
+    if (!runId) return false;
+    const latest = latestInstancesByRun.find(
+      (candidate) => String(candidate.runId ?? '').trim() === runId,
+    );
+    if (!latest || latest.checkRunId === checkRunId) return false;
+    if (latest.classification !== 'pass') return false;
 
-      // `filter=all` also returns historical check-run rows from the same
-      // workflow run. Once that run's latest row is pass-equivalent, those
-      // older rows are superseded and must not keep the rollup looking
-      // budget-held or reintroduce a hold notice.
-      const latest = latestInstancesByRun.find(
-        (candidate) => String(candidate.runId ?? '').trim() === runId,
-      );
-      return (
-        Boolean(runId) &&
-        latest?.classification === 'pass' &&
-        latest.checkRunId !== checkRunId
-      );
-    })();
+    // A later pass from the same run is not enough to discard another row:
+    // one workflow run can expose multiple jobs with the same check name.
+    // Only suppress a row when the workflow API proves that it completed
+    // before the latest attempt started; a current-attempt duplicate stays
+    // visible and can keep its own hold or plan.
+    const latestAttemptStartedAt = parseCompletedAt(latest.runStartedAt);
+    const rowCompletedAt = parseCompletedAt(instance.completedAt);
+    return (
+      latestAttemptStartedAt !== null &&
+      rowCompletedAt !== null &&
+      rowCompletedAt < latestAttemptStartedAt
+    );
+  };
+  const isHandledRecoveryCheckRun = (checkRunId: string): boolean => {
+    const instance = instanceByCheckRunId.get(checkRunId);
+    const runId = String(instance?.runId ?? '').trim();
+    return (
+      handledRecoveryRunIds.has(runId) ||
+      isSupersededHistoricalCheckRun(checkRunId)
+    );
+  };
+
+  // A run promoted into either bounded recovery section must not also be
+  // rerun by the ordinary plan. Historical rows that are proven to belong
+  // to an older attempt are likewise excluded once their latest row passes.
+  const plan = buildOrderedPlan(
+    reRunningEligibleInstances.filter(
+      (instance) => !isHandledRecoveryCheckRun(instance.checkRunId),
+    ),
+    owner,
+    repo,
+  );
 
   const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
     instances,
@@ -884,7 +913,7 @@ export function computeRerunPlan(
   const anyEligibleHeld = eligibleInstances.some(
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action !== 'rerun' &&
-      !handledRecoveryRunIds.has(String(instance.runId ?? '').trim()),
+      !isHandledRecoveryCheckRun(instance.checkRunId),
   );
   const everyReRunningEligibleIsBotTriggered = reRunningEligibleInstances.every(
     (instance) => isBotTriggered(instance, classifyOptions),
@@ -906,6 +935,7 @@ export function computeRerunPlan(
     ? buildOrderedPlan(
         recoveryRefreshCandidates.filter(
           (instance) =>
+            !isHandledRecoveryCheckRun(instance.checkRunId) &&
             refreshDecisions.get(instance.checkRunId)?.action === 'rerun',
         ),
         owner,
@@ -2740,10 +2770,10 @@ export interface RerunApplyDeps {
  * last -- each is bounded cleanup of an already-provably-redundant run,
  * never a substitute for either mechanism above.
  * `bot-gated-skip`, `awaiting-fresh-review`, and rerun-budget-held
- * instances are never candidates here (except the narrow #2549 subset
- * promoted into `liveCoverageRecoveryPlan`): neither `plan` nor
- * `recoveryRefreshPlan` ever contains any other one of them (see {@link
- * computeRerunPlan}), so this loop cannot reach them regardless of
+ * instances are never candidates here (except the narrow #2549/#3539
+ * subsets promoted into the two bounded recovery plans): neither `plan`
+ * nor `recoveryRefreshPlan` ever contains any other one of them (see
+ * {@link computeRerunPlan}), so this loop cannot reach them regardless of
  * `deps.recomputePlan`'s output (#1775 keeps uncovered-HEAD failures out
  * of both plans).
  */
@@ -2840,6 +2870,9 @@ interface RawWorkflowRunPayload {
   /** 1 for the original run; increments on the SAME run id after `gh run
    * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
   run_attempt?: number | null;
+  /** Start of the latest attempt, used to distinguish historical check-run
+   * rows returned by `filter=all` from distinct jobs in that attempt. */
+  run_started_at?: string | null;
   /** Consulted by {@link waitForNewAttempt} (the `--apply` polling loop)
    * and, via {@link RerunPlanRawInstance.runStatus}, by both
    * {@link classifyInstance} (default `--apply` / `computeRerunPlan`,
@@ -3195,6 +3228,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       triggeringActorLogin: string | null;
       triggeringActorType: string | null;
       runAttempt: number | null;
+      runStartedAt: string | null;
       /** See {@link RerunPlanRawInstance.runStatus}. */
       status: string | null;
     } | null // null means the per-run lookup itself failed
@@ -3227,6 +3261,9 @@ function collectFromGitHub(args: RerunPlanArgs): {
           Number.isInteger(runPayload.run_attempt)
             ? runPayload.run_attempt
             : null,
+        runStartedAt: runPayload.run_started_at
+          ? String(runPayload.run_started_at)
+          : null,
         status: runPayload.status ? String(runPayload.status) : null,
       });
     } catch {
@@ -3279,6 +3316,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       triggeringActorLogin: meta?.triggeringActorLogin ?? null,
       triggeringActorType: meta?.triggeringActorType ?? null,
       runAttempt: meta?.runAttempt ?? null,
+      runStartedAt: meta?.runStartedAt ?? null,
       verdictReasons:
         runId !== null ? (verdictReasonsByRunId.get(runId) ?? null) : null,
       runStatus: meta?.status ?? null,

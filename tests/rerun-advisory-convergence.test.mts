@@ -1610,6 +1610,7 @@ test('#3539: promotes the four PR 499 rows once per workflow run', () => {
           conclusion: 'failure',
           runAttempt: 2,
           completedAt: '2026-07-16T17:26:35Z',
+          runStartedAt: '2026-07-16T17:26:03Z',
         }),
         baseInstance({
           checkRunId: '108177719036',
@@ -1617,6 +1618,7 @@ test('#3539: promotes the four PR 499 rows once per workflow run', () => {
           conclusion: 'success',
           runAttempt: 2,
           completedAt: '2026-07-16T17:27:33Z',
+          runStartedAt: '2026-07-16T17:26:03Z',
         }),
       ],
     }),
@@ -1655,6 +1657,7 @@ test('#3539: a later pass on the held run removes the promotion', () => {
           conclusion: 'success',
           runAttempt: 3,
           completedAt: '2026-07-16T11:02:00Z',
+          runStartedAt: '2026-07-16T11:01:30Z',
         }),
         baseInstance({
           checkRunId: 'sibling-pass',
@@ -1759,6 +1762,48 @@ test('#3539: does not promote hold-policy, unknown-attempt, or same-run rows', (
     [],
   );
   assert.equal(holdPlan.passedSiblingRecoveryPlan.length, 1);
+});
+
+test('#3539: keeps a distinct current-attempt duplicate visible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'current-failure',
+          runId: '8301',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:04:00Z',
+          runStartedAt: '2026-07-16T11:03:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'current-pass',
+          runId: '8301',
+          conclusion: 'success',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T11:03:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'later-sibling-pass',
+          runId: '8302',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:06:00Z',
+          runStartedAt: '2026-07-16T11:05:30Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+  assert.equal(
+    plan.instances.find((instance) => instance.checkRunId === 'current-failure')
+      ?.rerunBudgetHeld,
+    true,
+  );
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
 });
 
 test('#2549: applyRerunPlan executes a liveCoverageRecoveryPlan entry only after plan and recoveryRefreshPlan are exhausted, carrying originalHoldReason', () => {
