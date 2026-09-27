@@ -3679,6 +3679,22 @@ test('checkHeldSchemaDrift ignores directory scans mentioned in strings', () => 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift surfaces Git discovery failures for Git targets', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeFileSync(join(targetRoot, '.git'), 'gitdir: /missing/fixture-repo\n');
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        hold: [DRIFT_MODULE],
+      }),
+    /unable to inspect Git target baseline/,
+  );
+});
+
 test('checkHeldSchemaDrift reads a nested Git target baseline from its target root', () => {
   const sourceRoot = makeFixtureDir();
   const outerRoot = makeFixtureDir();

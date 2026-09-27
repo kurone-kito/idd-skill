@@ -2773,6 +2773,29 @@ function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
+function hasGitMetadataInAncestors(targetRoot: string): boolean {
+  let current = resolve(targetRoot);
+  while (true) {
+    try {
+      lstatSync(join(current, '.git'));
+      return true;
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? error.code
+          : undefined;
+      if (code !== 'ENOENT') {
+        return true;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+
 /**
  * Resolve a target repository's pre-import Git tree. Non-Git target trees
  * keep the historical source-vs-current-target comparison so the exported
@@ -2795,7 +2818,13 @@ function resolveGitTargetBaseline(
         env: sanitizedGitEnvironment(),
       },
     ).trim();
-  } catch {
+  } catch (error) {
+    if (hasGitMetadataInAncestors(targetRoot)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `unable to inspect Git target baseline at ${targetRoot}: ${detail}`,
+      );
+    }
     return undefined;
   }
   const normalize = (path: string): string => {
