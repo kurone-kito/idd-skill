@@ -3232,6 +3232,25 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * matched an `--issue-number`-shaped edit, in both cases silently
  * treating an unsupported option as the canonical one the documented
  * invocation never actually carries.
+ *
+ * Two further precision gaps, both from Copilot review on PR #3531,
+ * closed here (#3533): first, a bare `--claim-id`/`--nonce`/`--worktree`
+ * mention with nothing after it used to count as present, even though
+ * the real CLI (`src/scripts/resume-claim-routing.mts`) requires a
+ * value for each -- a documentation edit that dropped a placeholder
+ * would leave the documented command invalid while these tests kept
+ * passing, because the end-to-end case injects hard-coded values
+ * regardless of what the parsed flags say. Each own-claim flag now also
+ * requires a well-formed `{value}`/`<value>` placeholder immediately
+ * after it on the same line. Second, `isInvocationLine` matched
+ * `resume-claim-routing.mjs` as a plain substring, so a corrupted
+ * executable name such as `resume-claim-routing.mjs.bak` or
+ * `legacy-resume-claim-routing.mjs` still counted as the target
+ * invocation and reported every flag present; the helper filename is
+ * now matched as a complete, word-boundary-aware token the same way
+ * the option tokens already are, with `.` folded into the boundary
+ * class on both sides so a `.bak`-style suffix cannot slip through the
+ * plain `[\w-]` boundary the option-token check uses.
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
@@ -3254,6 +3273,31 @@ function parseStepOneOwnClaimFlags(
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
   };
+  // #3533 (Copilot review, PR #3531): a bare flag mention is not enough --
+  // the real CLI requires a value after each own-claim flag, so require a
+  // well-formed `{value}`/`<value>` placeholder immediately after the
+  // token, not merely the token's own presence. Reusing `hasExactToken`'s
+  // boundary class up front keeps the same word-boundary guarantee
+  // (`--claim-id-extra` still can't match) before demanding the operand.
+  const hasOperandAfterToken = (line: string, token: string): boolean => {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+      `(?<![\\w-])${escaped}(?![\\w-])\\s+(?:\\{[^\\s{}<>]+\\}|<[^\\s{}<>]+>)`,
+    ).test(line);
+  };
+  // #3533 (Copilot review, PR #3531): match the documented helper filename
+  // as a complete token the same way the option tokens are matched below,
+  // not a plain substring -- `.includes('resume-claim-routing.mjs')` would
+  // still match inside a corrupted `resume-claim-routing.mjs.bak` or
+  // `legacy-resume-claim-routing.mjs`. `.` is folded into the boundary
+  // class on both sides (unlike the option-token boundary above) because
+  // the filename itself contains a literal `.`, so a `[\w-]`-only boundary
+  // would let a `.bak`-style suffix pass the lookahead unmatched.
+  const HELPER_SCRIPT_NAME = 'resume-claim-routing.mjs';
+  const isExactHelperScriptToken = (line: string): boolean => {
+    const escaped = HELPER_SCRIPT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\w.-])${escaped}(?![\\w.-])`).test(line);
+  };
   // Word-boundary-aware, not `.includes()`: an accidental `--issue-number`
   // or `--fresh-claim-gate-only` edit must not still count as the
   // required `--issue`/`--fresh-claim-gate` token (Codex review, #3480 --
@@ -3261,7 +3305,7 @@ function parseStepOneOwnClaimFlags(
   // own-claim flags below, now applied everywhere else this parser
   // matches a specific CLI token).
   const isInvocationLine = (line: string): boolean =>
-    line.includes('resume-claim-routing.mjs') && hasExactToken(line, '--issue');
+    isExactHelperScriptToken(line) && hasExactToken(line, '--issue');
   const isFreshClaimGateLine = (line: string): boolean =>
     hasExactToken(line, '--fresh-claim-gate');
   const ownSpanInvocationLines = lines
@@ -3287,7 +3331,7 @@ function parseStepOneOwnClaimFlags(
   const found = new Set<StepOneOwnClaimFlag>();
   for (const line of invocationLines) {
     for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
-      if (hasExactToken(line, flag)) {
+      if (hasOperandAfterToken(line, flag)) {
         found.add(flag);
       }
     }
@@ -3346,6 +3390,50 @@ concluding the claim is not inheritable.
 ## Step 2 — Locate or restore worktree
 `;
   const found = parseStepOneOwnClaimFlags(preIssue3273Fixture);
+  assert.deepEqual([...found], []);
+});
+
+test('parseStepOneOwnClaimFlags reports a bare own-claim flag as missing when no operand placeholder follows it (#3533)', () => {
+  // `--claim-id` here is immediately followed by another bracketed
+  // `[--flag ...]` group, not a `{value}`/`<value>` placeholder --
+  // deliberately not "nothing after it at all", so this also proves the
+  // check reads the actual next token rather than merely "the line has
+  // more text after the flag". `--nonce` and `--worktree` both keep
+  // well-formed placeholders, so a pass here can only come from the
+  // operand check itself, not from the line failing to be selected as
+  // an invocation at all (PR #3531 review comment
+  // https://github.com/kurone-kito/idd-skill/pull/3531#discussion_r4112343330).
+  const bareOperandFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} --claim-id [--nonce {nonce}] [--worktree {path}]
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(bareOperandFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not select a corrupted helper filename as a Step 1 invocation (#3533)', () => {
+  // The only invocation-shaped candidate anywhere in this fixture names
+  // `resume-claim-routing.mjs.bak`, carrying `--issue` and all three
+  // own-claim flags with well-formed operands -- if `isInvocationLine`
+  // ever regressed to a plain substring check, this line would still be
+  // selected and every flag would report present. There is no other
+  // invocation-shaped line before Step 1 either, so the fallback
+  // "nearest preceding" branch has nothing to mask a wrong result with
+  // (PR #3531 review comment
+  // https://github.com/kurone-kito/idd-skill/pull/3531#discussion_r4112412098).
+  const corruptedFilenameFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs.bak --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(corruptedFilenameFixture);
   assert.deepEqual([...found], []);
 });
 
