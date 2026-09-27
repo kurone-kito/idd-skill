@@ -646,6 +646,8 @@ function collectUnaddressedComments(
     // primary review keeps every historical finding fail-closed.
     if (
       isPrimaryBotFinding &&
+      !isChangesRequested &&
+      !hasOutsideDiffRange &&
       canSupersedeHistoricalPrimaryFindings &&
       reviewIndex < latestPrimaryReviewIndex
     ) {

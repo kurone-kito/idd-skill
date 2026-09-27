@@ -1049,6 +1049,48 @@ test('#3564: a later clean review on the same head supersedes an earlier thread-
   assert.equal(result.prs.length, 0);
 });
 
+test('#3564: a mixed CHANGES_REQUESTED primary review is not superseded', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3514,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({
+          commitOid: COPILOT_REVIEW_COMMIT,
+          state: 'CHANGES_REQUESTED',
+        }),
+        cleanCopilotReviewInput({ submittedAt: '2026-09-27T05:31:00Z' }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: a mixed outside-diff primary review is not superseded', () => {
+  const options = {
+    ...OPTIONS,
+    advisoryBotLogins: [COPILOT_LOGIN],
+  };
+  const prs: MergedPrInput[] = [
+    {
+      number: 3515,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({
+          commitOid: COPILOT_REVIEW_COMMIT,
+          body: `${V2_PREVIOUSLY_MISSED_1_BODY}\n\n<details><summary>⚠️ Outside diff range comments (1)</summary>\n\nsome finding\n\n</details>`,
+        }),
+        cleanCopilotReviewInput({ submittedAt: '2026-09-27T05:32:00Z' }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, options);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
 test('#3564: an off-head latest review does not supersede an older finding', () => {
   const prs: MergedPrInput[] = [
     {
