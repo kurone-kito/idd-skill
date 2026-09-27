@@ -36,17 +36,23 @@
 
 import { execFileSync } from 'node:child_process';
 import {
-  copyFileSync,
+  closeSync,
+  constants,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  readSync,
   realpathSync,
+  renameSync,
+  rmdirSync,
   statSync,
   symlinkSync,
   unlinkSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
@@ -4091,21 +4097,80 @@ export function copyPathWithSafeSymlinks(
       throw new Error(`unsupported special file in recovery source: ${source}`);
     }
 
+    // Copy into a private, no-follow temporary leaf and atomically rename it
+    // into place. A final lstat after copy cannot protect the destination
+    // leaf from being replaced with a symlink between the parent check and
+    // the copy; rename replaces that leaf rather than following it.
+    const canonicalDestination = join(parentReal, basename(destination));
+    const temporaryDirectory = mkdtempSync(join(parentReal, '.idd-lwr-copy-'));
+    const temporaryPath = join(
+      temporaryDirectory,
+      basename(canonicalDestination),
+    );
     try {
-      const existing = lstatSync(destination);
-      if (existing.isDirectory()) {
-        throw new Error(`destination is not a regular file: ${destination}`);
+      let sourceFd: number | null = null;
+      let temporaryFd: number | null = null;
+      try {
+        const noFollow = constants.O_NOFOLLOW ?? 0;
+        sourceFd = openSync(source, constants.O_RDONLY | noFollow);
+        temporaryFd = openSync(
+          temporaryPath,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
+          0o600,
+        );
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        for (;;) {
+          const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+          if (bytesRead === 0) break;
+          let offset = 0;
+          while (offset < bytesRead) {
+            offset += writeSync(
+              temporaryFd,
+              buffer,
+              offset,
+              bytesRead - offset,
+            );
+          }
+        }
+      } finally {
+        if (temporaryFd !== null) closeSync(temporaryFd);
+        if (sourceFd !== null) closeSync(sourceFd);
       }
-      if (existing.isSymbolicLink()) unlinkSync(destination);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    assertDestinationParentStable(destination, parentReal);
-    copyFileSync(source, destination);
-    assertDestinationParentStable(destination, parentReal);
-    const copied = lstatSync(destination);
-    if (copied.isDirectory() || copied.isSymbolicLink()) {
-      throw new Error(`destination is not a regular file: ${destination}`);
+      assertDestinationParentStable(destination, parentReal);
+      try {
+        const existing = lstatSync(canonicalDestination);
+        if (existing.isDirectory()) {
+          throw new Error(
+            `destination is not a regular file: ${canonicalDestination}`,
+          );
+        }
+        // Removing a replaced leaf is safe: a later rename targets the
+        // directory entry itself and cannot follow a newly inserted symlink.
+        unlinkSync(canonicalDestination);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      assertDestinationParentStable(destination, parentReal);
+      renameSync(temporaryPath, canonicalDestination);
+      assertDestinationParentStable(destination, parentReal);
+      const copied = lstatSync(canonicalDestination);
+      if (copied.isDirectory() || copied.isSymbolicLink()) {
+        throw new Error(
+          `destination is not a regular file: ${canonicalDestination}`,
+        );
+      }
+    } finally {
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // The copy failure itself is the authoritative safety result; a
+        // missing temporary leaf after rename is expected.
+      }
+      try {
+        rmdirSync(temporaryDirectory);
+      } catch {
+        // A successful rename leaves the private directory empty.
+      }
     }
   };
 

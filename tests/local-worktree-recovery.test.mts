@@ -113,6 +113,27 @@ test('copyPathWithSafeSymlinks refuses a symlinked destination parent', () => {
   }
 });
 
+test('copyPathWithSafeSymlinks replaces a destination leaf symlink safely', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-leaf-'));
+  const source = join(root, 'source.txt');
+  const outside = join(root, 'outside.txt');
+  const destination = join(root, 'preserve', 'copy.txt');
+  try {
+    writeFileSync(source, 'source\n');
+    writeFileSync(outside, 'outside\n');
+    mkdirSync(join(root, 'preserve'));
+    symlinkSync(outside, destination);
+
+    copyPathWithSafeSymlinks(source, destination);
+
+    assert.equal(lstatSync(destination).isSymbolicLink(), false);
+    assert.equal(readFileSync(destination, 'utf8'), 'source\n');
+    assert.equal(readFileSync(outside, 'utf8'), 'outside\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('copyPathWithSafeSymlinks refuses special files before copying', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-special-'));
   const source = join(root, 'source.pipe');
