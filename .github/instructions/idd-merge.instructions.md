@@ -536,13 +536,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --count --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --count --not --remotes; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
-   Discard only configured output; preserve all else.
-   Copy secrets (e.g. `.env`) outside `<path>` — never commit or push
-   them. Move other work. Before removal, `cd` to primary and stay.
-   While it exists, revalidate:
+   Discard only command output; preserve all else.
+   Copy secrets (`.env`) outside `<path>` — never commit or push them.
+   Preserve work in a backup ref or external path. Before removal, `cd`
+   to primary; stay. Revalidate while present:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
