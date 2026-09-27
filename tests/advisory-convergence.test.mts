@@ -7167,14 +7167,23 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
     'utf8',
   );
   const mutationAt = fallback.indexOf(
-    'requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true})',
+    'requestReviews(input:{pullRequestId:$id,botIds:$reviewer,union:true})',
+  );
+  const userMutationAt = fallback.indexOf(
+    'requestReviews(input:{pullRequestId:$id,userIds:$reviewer,union:true})',
   );
   const markerAt = fallback.indexOf(
     'node scripts/post-idd-marker.mjs --type advisory-recovery',
   );
-  assert.ok(mutationAt > 0 && markerAt > mutationAt);
+  assert.ok(
+    mutationAt > 0 && userMutationAt > mutationAt && markerAt > userMutationAt,
+  );
   assert.match(fallback, /requestedReviewer\{__typename/);
-  assert.match(fallback, /variables:\{id:\$id,botIds:\[\$bot\]\}/);
+  assert.match(fallback, /variables:\{id:\$id,reviewer:\[\$reviewer\]\}/);
+  assert.match(fallback, /botIds:\$reviewer/);
+  assert.match(fallback, /userIds:\$reviewer/);
+  assert.match(fallback, /REVIEWER_TYPE=.*ascii_downcase/);
+  assert.match(fallback, /type == "user" and \$l == \$configured/);
   assert.match(fallback, /claim_revalidate \|\| return 2[\s\S]*?jq -n/);
 });
 

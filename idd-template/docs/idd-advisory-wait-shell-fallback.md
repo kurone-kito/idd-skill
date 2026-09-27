@@ -254,22 +254,24 @@ request_event() {
   local result
   result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
   printf '%s' "$result" | jq -r -s '
-    def matches_configured_bot($login):
+    def matches_configured_reviewer($login):
       ($login.login // "" | ascii_downcase) as $l
       | ($login.type // "" | ascii_downcase) as $type
       | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
-      | ($type == "bot"
-         and ($l == $bare
-         or $l == ($bare + "[bot]")
-         or (($bare == "copilot"
-              or $bare == "copilot-pull-request-reviewer")
-             and ($l == "copilot"
-                  or $l == "copilot-pull-request-reviewer"
-                  or $l == "copilot-pull-request-reviewer[bot]"))));
+      | (env.BOT_REST_LOGIN | ascii_downcase) as $configured
+      | (($type == "user" and $l == $configured)
+         or ($type == "bot"
+             and ($l == $bare
+             or $l == ($bare + "[bot]")
+             or (($bare == "copilot"
+                  or $bare == "copilot-pull-request-reviewer")
+                 and ($l == "copilot"
+                      or $l == "copilot-pull-request-reviewer"
+                      or $l == "copilot-pull-request-reviewer[bot]")))));
     (add // [])
     | to_entries
     | map(select(.value.event == "review_requested"
-        and matches_configured_bot(.value.requested_reviewer)))
+        and matches_configured_reviewer(.value.requested_reviewer)))
     | last
     | if . == null then empty
       else [.value.id, .value.created_at, .key] | @tsv end' || return 1
@@ -279,20 +281,22 @@ request_nodes() {
   result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{__typename ... on Bot{login} ... on User{login}}}}}}}') || return 1
   printf '%s' "$result" |
     jq -r '
-      def matches_configured_bot($login):
+      def matches_configured_reviewer($login):
         ($login.login // "" | ascii_downcase) as $l
         | ($login.__typename // "" | ascii_downcase) as $type
         | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
-        | ($type == "bot"
-           and ($l == $bare
-           or $l == ($bare + "[bot]")
-           or (($bare == "copilot"
-                or $bare == "copilot-pull-request-reviewer")
-               and ($l == "copilot"
-                    or $l == "copilot-pull-request-reviewer"
-                    or $l == "copilot-pull-request-reviewer[bot]"))));
+        | (env.BOT_REST_LOGIN | ascii_downcase) as $configured
+        | (($type == "user" and $l == $configured)
+           or ($type == "bot"
+               and ($l == $bare
+               or $l == ($bare + "[bot]")
+               or (($bare == "copilot"
+                    or $bare == "copilot-pull-request-reviewer")
+                   and ($l == "copilot"
+                        or $l == "copilot-pull-request-reviewer"
+                        or $l == "copilot-pull-request-reviewer[bot]")))));
       .data.repository.pullRequest.reviewRequests.nodes[]
-      | select(matches_configured_bot(.requestedReviewer))
+      | select(matches_configured_reviewer(.requestedReviewer))
       | .id'
 }
 registration_attempt() {
@@ -347,12 +351,30 @@ EOF
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
-  # Resolve ids live; GraphQL user(login:) does not resolve a Bot.
-  BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id') || return 2
+  # Resolve the id and account type live. The GraphQL mutation has separate
+  # userIds and botIds inputs; user(login:) does not resolve a Bot, and using
+  # botIds for a User-typed configured reviewer silently loses the request.
+  REVIEWER_JSON=$(gh api "users/{primary-advisory-bot-rest-login}") || return 2
+  REVIEWER_NODE_ID=$(printf '%s' "$REVIEWER_JSON" | jq -r '.node_id // empty') || return 2
+  REVIEWER_TYPE=$(printf '%s' "$REVIEWER_JSON" | jq -r '(.type // "") | ascii_downcase') || return 2
+  [ -n "$REVIEWER_NODE_ID" ] || return 2
   claim_revalidate || return 2
-  jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
-    '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
-    gh api graphql --input - || :
+  case "$REVIEWER_TYPE" in
+    bot)
+      jq -n --arg id "$PR_NODE_ID" --arg reviewer "$REVIEWER_NODE_ID" \
+        '{query:"mutation($id:ID!,$reviewer:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$reviewer,union:true}){ clientMutationId } }",variables:{id:$id,reviewer:[$reviewer]}}' |
+        gh api graphql --input - || :
+      ;;
+    user)
+      jq -n --arg id "$PR_NODE_ID" --arg reviewer "$REVIEWER_NODE_ID" \
+        '{query:"mutation($id:ID!,$reviewer:[ID!]!){ requestReviews(input:{pullRequestId:$id,userIds:$reviewer,union:true}){ clientMutationId } }",variables:{id:$id,reviewer:[$reviewer]}}' |
+        gh api graphql --input - || :
+      ;;
+    *)
+      echo "configured reviewer account type is not Bot or User" >&2
+      return 2
+      ;;
+  esac
   if registration_ok; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
