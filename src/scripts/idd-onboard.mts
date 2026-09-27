@@ -3045,6 +3045,22 @@ function findDirectoryScanCalls(
         let closed = false;
         for (; openIndex < normalizedText.length; openIndex += 1) {
           const character = normalizedText[openIndex] ?? '';
+          if (character === "'" || character === '"' || character === '`') {
+            const quote = character;
+            let escaped = false;
+            openIndex += 1;
+            for (; openIndex < normalizedText.length; openIndex += 1) {
+              const quotedCharacter = normalizedText[openIndex] ?? '';
+              if (escaped) {
+                escaped = false;
+              } else if (quotedCharacter === '\\') {
+                escaped = true;
+              } else if (quotedCharacter === quote) {
+                break;
+              }
+            }
+            continue;
+          }
           if (character === '<') {
             angleDepth += 1;
           } else if (

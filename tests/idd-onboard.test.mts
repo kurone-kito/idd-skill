@@ -4621,6 +4621,20 @@ test('checkHeldSchemaDrift detects generic scan calls with function types', () =
   ]);
 });
 
+test('checkHeldSchemaDrift ignores angle brackets inside generic string types', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `scanDirectory<{ marker: ">" }>('schemas');\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift decodes JavaScript path escapes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
