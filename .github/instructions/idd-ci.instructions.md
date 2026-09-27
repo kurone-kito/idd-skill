@@ -357,10 +357,11 @@ requires — CI polling, bot/advisory review waits, and local
 build/test/lint runs alike (see the local-command guidance below,
 issue `#2798`).
 
-**Portability**: under supervisor/worker topologies, a background
-wait's completion notification often reaches only the supervisor, so
-the worker's turn stalls until re-prompted — the topology-safety
-condition below accounts for this.
+**Portability**: a background wait's completion notification may reach
+only the supervisor, so the worker can stall until re-prompted; the
+topology-safety condition below covers this.
+
+See [REST](../../docs/idd-helper-scripts.md#rest).
 
 - **No interim polling turns** — schedule one wake at the **expected**
   completion, or background only if the topology is confirmed to route

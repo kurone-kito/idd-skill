@@ -453,6 +453,195 @@ nothing about masking.
 this finding. See the function's own JSDoc for the same note attached
 directly to its contract.
 
+## REST
+
+When a GraphQL-backed `gh` command reports `API rate limit already
+exceeded for user ID <n>` while `gh api rate_limit --jq '.resources'`
+still shows healthy primary quotas, treat the failure as GitHub's
+secondary or abuse-detection limit, not as proof that the hourly quota
+is exhausted. This was recorded in a concurrent session's issue
+authoring run (observed 2026-09-27, #3560). The REST forms below were
+confirmed to work for the specific commands observed failing; this is
+not a claim that
+REST is an unconditional fallback for every GitHub API failure.
+
+The confirmed substitutions are:
+
+- For `gh issue list`, use the repository issues endpoint. It may also
+  return pull requests, so preserve the caller's issue-only filtering
+  when that distinction matters. Carry the original `--state` through
+  as `state=open`, `state=closed`, or `state=all`; carry `--search`
+  through the search endpoint below with its `repo:` and `is:issue`
+  qualifiers; and carry `--limit` through bounded pagination, because
+  REST returns at most 100 records per page. For a bounded list, fetch
+  one page at a time, discard objects with a `pull_request` field, stop
+  as soon as the requested number of issue objects has been collected
+  (or a page is empty), and apply the requested limit to the collected
+  objects. For an intentionally unbounded snapshot, `--paginate
+  --slurp` can combine all page arrays before filtering.
+
+  ```sh
+  state=all
+  limit=100
+  page=1
+  issues_file="$(mktemp)"
+  trap 'rm -f "$issues_file"' EXIT
+  set -euo pipefail
+  while :; do
+    if ! page_json="$(gh api "repos/<owner>/<repo>/issues?state=${state}&per_page=100&page=${page}")"; then
+      printf '%s\n' 'REST issue-list request failed' >&2
+      exit 1
+    fi
+    [ "$(jq 'length' <<<"$page_json")" -eq 0 ] && break
+    jq -c '[.[] | select(has("pull_request") | not)][]' <<<"$page_json" >>"$issues_file"
+    [ "$(wc -l <"$issues_file")" -ge "$limit" ] && break
+    page=$((page + 1))
+  done
+  jq -s --argjson limit "$limit" '.[0:$limit]' "$issues_file"
+  ```
+
+- For `gh issue view <number>`, use the individual issue endpoint for
+  scalar issue fields supported by REST. It is not equivalent for
+  GraphQL-only fields such as `closedByPullRequestsReferences`; if the
+  caller needs those fields to establish that a merged pull request
+  already delivered the issue, keep the GraphQL lookup or run a separate,
+  explicitly verified closing-PR lookup. Never infer merged delivery
+  from the REST issue object alone.
+
+  ```sh
+  gh api "repos/<owner>/<repo>/issues/<number>"
+  ```
+
+- For an ad hoc issue outside IDD authoring, prepare the complete JSON
+  request body and send it through stdin rather than relying on shell
+  field quoting. This is not a replacement for Stage 1 issue authoring:
+  that flow must use `issue-authoring` to apply the configured authoring
+  hold label and exact hidden publication token atomically, persist the
+  returned issue identity, and verify the owner marker and read-back
+  state. Do not use this bare REST POST for a new IDD proposal.
+
+  ```sh
+  gh api "repos/<owner>/<repo>/issues" -X POST --input issue.json
+  ```
+
+- For `gh search issues`, use the REST search endpoint and URL-encode
+  the same repository, issue, state, and text qualifiers. For
+  `--state open` or `--state closed`, add the corresponding
+  `state:open` or `state:closed` term; omit that term for `all`.
+  For a bounded `--limit`, fetch one response at a time, append each
+  response's `items`, stop when the requested number of items has been
+  collected (or `items` is empty), and apply the limit to the collected
+  items. For a snapshot up to the REST Search API's 1,000-result cap,
+  `--paginate --slurp` still needs a transformation such as
+  `jq '[.[].items[]]'` to flatten the page objects before consumers use
+  the results. Complete coverage of a broader match requires multiple
+  non-overlapping queries, such as disjoint `created:` date ranges;
+  merge and de-duplicate those result sets before applying any overall
+  limit.
+
+  ```sh
+  state=closed
+  limit=100
+  page=1
+  items_file="$(mktemp)"
+  trap 'rm -f "$items_file"' EXIT
+  set -euo pipefail
+  case "$state" in
+    open|closed) state_qualifier="+state:${state}" ;;
+    all) state_qualifier='' ;;
+    *) printf '%s\n' 'state must be open, closed, or all' >&2; exit 2 ;;
+  esac
+  while :; do
+    search_url="search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue${state_qualifier}+<url-encoded-query>&per_page=100&page=${page}"
+    if ! page_json="$(gh api "$search_url")"; then
+      printf '%s\n' 'REST issue-search request failed' >&2
+      exit 1
+    fi
+    if [ "$(jq -r '.incomplete_results // false' <<<"$page_json")" = true ]; then
+      printf '%s\n' 'REST issue-search response is incomplete' >&2
+      exit 1
+    fi
+    [ "$(jq '.items // [] | length' <<<"$page_json")" -eq 0 ] && break
+    jq -c '.items[]' <<<"$page_json" >>"$items_file"
+    [ "$(wc -l <"$items_file")" -ge "$limit" ] && break
+    page=$((page + 1))
+  done
+  jq -s --argjson limit "$limit" '.[0:$limit]' "$items_file"
+  ```
+
+- For `gh repo view`, use the repository endpoint directly. Helpers that
+  otherwise resolve the current repository through `gh repo view` can
+  avoid that GraphQL-backed lookup by receiving explicit `--owner` and
+  `--repo` values. Map requested fields from the REST schema before
+  substituting: for example, REST `.default_branch` is the equivalent of
+  GraphQL `defaultBranchRef.name`; do not reuse a GraphQL jq path against
+  the REST response.
+
+  ```sh
+  gh api "repos/<owner>/<repo>"
+  ```
+
+For `authoring-owner-provenance.mjs`, do not generalize these REST
+substitutions into a fallback for an existing authoring generation. Its
+verification is intentionally GraphQL-only because it must inspect
+`IssueComment.lastEditedAt` to detect a tampered earlier marker. REST
+issue-comment responses do not provide that field, and `updated_at` is
+not an equivalent. This boundary was established by #3174 and protects
+the tamper-detection fix in #2901.
+
+There is one narrow manual exception only for a standalone, self-anchor
+issue returned by an approved `issue-authoring` Stage 1 atomic create
+whose label, publication token, and returned identity were already
+recorded, and whose comment history was empty before creation: wait for
+the configured `claim.verifySettleDelay` (default `PT5S`), replay the
+complete paginated owner-marker log, then fetch the just-posted comment
+and issue with REST and recompute the issue body's digest from the raw
+JSON response. A multi-target child must instead use the normal
+anchor-heartbeat and anchor/child re-fetch gates; it cannot use this
+single-issue exception. Do not apply this exception to an arbitrary REST
+POST or use it to bypass the authoring flow. Parse the complete `gh api`
+response and read its `body` property; do not capture `gh api ... --jq
+'.body'` in a shell variable, because CLI output and shell command
+substitution can normalize trailing newlines and change the digest. This
+is a one-time read-back confidence check for that approved new issue,
+not a REST fallback for verification of an existing generation and not a
+change to the helper's GraphQL dependency. For this one standalone
+self-anchor, the REST read-back can provisionally confirm the atomic
+publication identity, hold label, trusted marker fields, and body digest
+after the settle delay and complete owner-log replay; an empty pre-create
+comment history also means there is no earlier owner marker for REST to
+hide. It is still not a membership or hold-release decision: REST does not
+expose `lastEditedAt`, so it cannot prove that even the just-posted marker
+was never edited. This exception must not be generalized to an existing
+generation, a later re-acquisition, or a multi-target child; those continue
+to require the normal GraphQL owner-marker verification, including
+`lastEditedAt: null` for the relevant comments. Before membership, re-fetch
+the active `claimed-by` state and open-PR state even when the label is
+present; if execution began, either read is inconclusive, or the GraphQL
+owner-marker check is unavailable, stop and leave the verified hold in
+place for recovery. The REST evidence must show that the
+fetched issue still carries the configured authoring hold label (normally
+`status:authoring`), the fetched comment is the just-posted trusted
+marker (expected author and canonical marker fields), and its recorded
+`body-sha256` equals the digest recomputed from the fetched issue body.
+If the hold label is absent, re-fetch the current claim and complete,
+paginated owner-marker log, and stop if a competing claim or marker is
+present. If no competitor is present, reapply the configured hold label
+through the authoring recovery path, then re-fetch and verify the label,
+body, claim, and owner-marker log. Continue only after that verification;
+if reapplication or any recovery read is uncertain, do not close or
+treat the issue as a member and leave it open for recovery. The same
+complete owner-marker reconciliation is required even when the label is
+present: a later trusted marker must not supersede the fetched comment.
+A single known comment ID is not enough to establish current ownership.
+The read-back requests are:
+
+```sh
+gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
+gh api "repos/<owner>/<repo>/issues/<number>"
+gh api --paginate "repos/<owner>/<repo>/issues/<number>/comments?per_page=100"
+```
+
 ## Decision
 
 In the idd-skill source repository, the following optional helpers were adopted:
