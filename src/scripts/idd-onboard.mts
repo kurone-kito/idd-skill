@@ -3028,6 +3028,21 @@ function normalizeManifestScanPath(path: string): string {
   return segments.join('/');
 }
 
+function resolveModuleRelativeScanPath(
+  path: string,
+  modulePath: string | undefined,
+): string {
+  if (modulePath === undefined || path.startsWith('/')) {
+    return path;
+  }
+  const moduleSlash = modulePath.lastIndexOf('/');
+  if (moduleSlash <= 0) {
+    return path;
+  }
+  const base = modulePath.slice(0, moduleSlash);
+  return normalizeManifestScanPath(`${base}/${path}`);
+}
+
 function isGlobPattern(text: string): boolean {
   return /[?*[\]{}]|[+@!]\(/u.test(text);
 }
@@ -3203,6 +3218,7 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
 function moduleScansManifestDirectory(
   text: string,
   targetPath: string,
+  modulePath?: string,
 ): boolean {
   const slash = targetPath.lastIndexOf('/');
   if (slash <= 0) {
@@ -3216,7 +3232,12 @@ function moduleScansManifestDirectory(
       /\brecursive\s*:\s*true\b/u.test(optionText) ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
-    const firstCandidates = pathExpressionCandidates(firstArgument);
+    const firstCandidates = pathExpressionCandidates(firstArgument).map(
+      (candidate) =>
+        firstArgument.includes('import.meta.dirname')
+          ? resolveModuleRelativeScanPath(candidate, modulePath)
+          : candidate,
+    );
     const cwdCandidates = (() => {
       const cwd = /\bcwd\s*:\s*/u.exec(argumentsText);
       return cwd === null
@@ -3226,6 +3247,15 @@ function moduleScansManifestDirectory(
           );
     })();
     const hasCwd = /\bcwd\s*:\s*/u.test(argumentsText);
+    const excludeMatch = /\bexclude\s*:\s*/u.exec(argumentsText);
+    const excludeCandidates =
+      excludeMatch === null
+        ? []
+        : scanStringLiterals(
+            firstCallArgument(
+              argumentsText.slice(excludeMatch.index + excludeMatch[0].length),
+            ),
+          );
     const candidates = (
       hasCwd
         ? firstCandidates.flatMap((candidate) =>
@@ -3237,18 +3267,34 @@ function moduleScansManifestDirectory(
     )
       .flat()
       .map(normalizeManifestScanPath);
+    const exclusions = (
+      hasCwd
+        ? excludeCandidates.flatMap((candidate) =>
+            cwdCandidates
+              .filter((cwd) => !isGlobPattern(cwd))
+              .map((cwd) => `${cwd}/${candidate}`),
+          )
+        : excludeCandidates
+    )
+      .flat()
+      .map(normalizeManifestScanPath);
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
     const normalizedDirectory = normalizeManifestScanPath(directory);
     if (
       candidates.some(
         (candidate) =>
-          globPatternMatchesPath(candidate, normalizedTargetPath) ||
-          (!isGlobPattern(candidate) &&
-            (recursive
-              ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
-                  normalizedTargetPath,
-                )
-              : candidate === normalizedDirectory)),
+          !exclusions.some(
+            (exclusion) =>
+              globPatternMatchesPath(exclusion, normalizedTargetPath) ||
+              exclusion === normalizedTargetPath,
+          ) &&
+          (globPatternMatchesPath(candidate, normalizedTargetPath) ||
+            (!isGlobPattern(candidate) &&
+              (recursive
+                ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
+                    normalizedTargetPath,
+                  )
+                : candidate === normalizedDirectory))),
       )
     ) {
       return true;
@@ -3260,12 +3306,13 @@ function moduleScansManifestDirectory(
 function moduleReferencesManifestPath(
   text: string,
   targetPath: string,
+  modulePath?: string,
 ): boolean {
   const basename = targetPath.slice(targetPath.lastIndexOf('/') + 1);
   return (
     text.includes(targetPath) ||
     text.includes(basename) ||
-    moduleScansManifestDirectory(text, targetPath)
+    moduleScansManifestDirectory(text, targetPath, modulePath)
   );
 }
 
@@ -3529,10 +3576,13 @@ export function checkHeldSchemaDrift(
     targetBaseRef?: string;
   } = {},
 ): HeldSchemaDriftResult {
+  const baseline =
+    targetBaseRef === undefined && hold.length === 0
+      ? undefined
+      : resolveGitTargetBaseline(targetRoot, targetBaseRef);
   if (hold.length === 0) {
     return { findings: [], warning: null };
   }
-  const baseline = resolveGitTargetBaseline(targetRoot, targetBaseRef);
   const resolved = resolveImportFiles(sourceRoot, profile);
   const holdSet = new Set(hold);
   if (resolved.missingSource.length === 0) {
@@ -3571,7 +3621,9 @@ export function checkHeldSchemaDrift(
       continue;
     }
     for (const file of changed) {
-      if (!moduleReferencesManifestPath(module.text, file.targetPath)) {
+      if (
+        !moduleReferencesManifestPath(module.text, file.targetPath, module.path)
+      ) {
         continue;
       }
       findings.push({

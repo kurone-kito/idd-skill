@@ -3613,6 +3613,37 @@ test('checkHeldSchemaDrift rejects an explicit baseline for a non-Git target', (
   );
 });
 
+test('checkHeldSchemaDrift validates an explicit baseline without held files', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', ''));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', ''));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        targetBaseRef: 'missing-ref',
+      }),
+    /--target-base-ref does not resolve to a commit/,
+  );
+});
+
 test('checkHeldSchemaDrift fails when an existing Git HEAD cannot resolve', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3920,6 +3951,23 @@ test('checkHeldSchemaDrift ignores recursive option text inside strings', () => 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift resolves module-relative directory scans', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "readdirSync(join(import.meta.dirname, '..', '..', 'schemas'));\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift preserves recursive options after nested path calls', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3988,6 +4036,19 @@ test('checkHeldSchemaDrift anchors basename globs to the scanned directory', () 
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift honors glob exclusions', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('schemas/*.json', { exclude: ['schemas/widget*.json'] });\n";
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
