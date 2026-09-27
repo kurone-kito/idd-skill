@@ -40,8 +40,9 @@ function comment(
   body: string,
   authorLogin = 'kurone-kito',
   lastEditedAt: string | null = null,
+  id = 1,
 ): SetMemberComment {
-  return { authorLogin, body, lastEditedAt, issueNumber };
+  return { authorLogin, body, lastEditedAt, issueNumber, id };
 }
 
 function page(
@@ -138,13 +139,16 @@ test('an edited trusted marker that no longer parses fails closed', () => {
     enumerationComplete: true,
     comments: [
       comment(3468, marker(3468)),
-      comment(3469, rewritten, 'kurone-kito', '2026-09-25T18:00:00Z'),
+      comment(3469, rewritten, 'kurone-kito', '2026-09-25T18:00:00Z', 8675),
     ],
   });
   assert.equal(result.complete, false);
   assert.equal(result.soleMember, false);
   assert.deepEqual(result.issues, []);
-  assert.equal(result.reason, 'edited trusted authoring-owner marker');
+  assert.equal(
+    result.reason,
+    'edited trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 8675)',
+  );
 });
 
 test('an edited trusted marker for a different set fails closed', () => {
@@ -177,12 +181,18 @@ test('an unedited unparseable trusted marker fails closed', () => {
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
-    comments: [comment(3468, marker(3468)), comment(3469, rewritten)],
+    comments: [
+      comment(3468, marker(3468)),
+      comment(3469, rewritten, 'kurone-kito', null, 9142),
+    ],
   });
   assert.equal(result.complete, false);
   assert.equal(result.soleMember, false);
   assert.deepEqual(result.issues, []);
-  assert.equal(result.reason, 'unparseable trusted authoring-owner marker');
+  assert.equal(
+    result.reason,
+    'unparseable trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 9142)',
+  );
 });
 
 test('a trusted marker whose target is a different issue fails closed', () => {
@@ -193,14 +203,17 @@ test('a trusted marker whose target is a different issue fails closed', () => {
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
     trustedMarkerLogins: ['kurone-kito'],
     enumerationComplete: true,
-    comments: [comment(3468, marker(3468)), comment(3468, misplaced)],
+    comments: [
+      comment(3468, marker(3468)),
+      comment(3468, misplaced, 'kurone-kito', null, 7301),
+    ],
   });
   assert.equal(result.complete, false);
   assert.equal(result.soleMember, false);
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'authoring-owner marker target does not match its host issue',
+    'authoring-owner marker target does not match its host issue (kurone-kito/idd-skill#3468, comment id 7301)',
   );
 });
 
