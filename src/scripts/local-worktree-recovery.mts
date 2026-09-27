@@ -1383,6 +1383,7 @@ function planAndMaybeStashScope(
     | 'readlinkOrNull'
   >,
   excludedDirtyPaths: readonly string[] = [],
+  targetGitDirForScope: string | null = null,
 ): StashPlanEntry {
   const status = deps.runGit(
     [
@@ -1501,7 +1502,12 @@ function planAndMaybeStashScope(
           allLanded = false;
           continue;
         }
-        deps.copyPath(from, to, targetPath);
+        deps.copyPath(
+          from,
+          to,
+          targetPath,
+          targetGitDirForScope ? [targetGitDirForScope] : undefined,
+        );
         if (!deps.pathExists(to)) {
           allLanded = false;
         }
@@ -1871,6 +1877,7 @@ function planAndMaybePreserve(
       path,
       preserveDeps,
       submodulePaths,
+      targetGitDirForScope,
     ),
   ];
   const uninitializedSubmodules: UninitializedSubmoduleEntry[] = [];
@@ -1936,6 +1943,7 @@ function planAndMaybePreserve(
         path,
         preserveDeps,
         nestedSubmodulePathsForScope(submodulePaths, submodule.path),
+        targetGitDirForScope,
       ),
     );
   }
@@ -2089,7 +2097,10 @@ function planAndMaybePreserve(
       continue;
     }
     try {
-      deps.copyPath(gitDir, destination, gitDir, [path]);
+      deps.copyPath(gitDir, destination, gitDir, [
+        path,
+        ...(targetGitDirForScope ? [targetGitDirForScope] : []),
+      ]);
     } catch {
       submoduleAdminCopyFailed = true;
       submoduleAdminCopies.push({
@@ -3373,6 +3384,47 @@ export function runLocalWorktreeRecovery(
           wouldRun: true,
           ran: false,
           detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const submoduleUpdate = deps.runGit(
+        ['submodule', 'update', '--init', '--recursive'],
+        targetPath,
+      );
+      if (!submoduleUpdate.ok) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `submodule update after checkout ${developmentBranch} failed: ${submoduleUpdate.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const postCheckoutStatus = deps.runGit(
+        [
+          'status',
+          '--porcelain',
+          '--ignored',
+          '--untracked-files=normal',
+          '--ignore-submodules=none',
+        ],
+        targetPath,
+      );
+      if (
+        !postCheckoutStatus.ok ||
+        hasWorkingTreeChanges(postCheckoutStatus.stdout)
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: postCheckoutStatus.ok
+            ? `checkout ${developmentBranch} left the primary worktree dirty after submodule update; stopping`
+            : `could not verify the primary worktree after submodule update: ${postCheckoutStatus.stderr}`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
@@ -4821,8 +4873,10 @@ export function assertRepositoryOverrideMatchesLocal(
     requested.owner.toLowerCase() !== local.owner.toLowerCase() ||
     requested.repo.toLowerCase() !== local.repo.toLowerCase()
   ) {
-    throw new Error(
-      `local-worktree-recovery: --owner/--repo (${requested.owner}/${requested.repo}) do not match the local repository (${local.owner}/${local.repo}); refusing recovery`,
+    throw markCliUsageError(
+      new Error(
+        `local-worktree-recovery: --owner/--repo (${requested.owner}/${requested.repo}) do not match the local repository (${local.owner}/${local.repo}); refusing recovery`,
+      ),
     );
   }
 }

@@ -4247,6 +4247,7 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
   let stashCreated = false;
   let confirmCalls = 0;
   let abortCalled = false;
+  let submoduleUpdateCalled = false;
   try {
     const deps = fakeDeps({
       cwd: () => root,
@@ -4296,6 +4297,13 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
+        if (
+          argv[0] === 'status' &&
+          stashCreated &&
+          argv.includes('--ignore-submodules=none')
+        ) {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
         if (argv[0] === 'status') {
           return {
             ok: true,
@@ -4338,6 +4346,10 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
         if (argv[0] === 'checkout') {
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          submoduleUpdateCalled = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
         return cleanRepoRunGit(argv, cwd);
       },
       checkLock: () => ({
@@ -4360,6 +4372,7 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
       deps,
     );
     assert.equal(abortCalled, false);
+    assert.equal(submoduleUpdateCalled, true);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
   } finally {
     rmSync(root, { recursive: true, force: true });
