@@ -1049,28 +1049,35 @@ future inventory reviews do not need to re-infer their role from code.
   comparison, and deletion-matches-upstream recognition. Exits non-zero on
   any genuine mismatch (referenced in
   [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
-  Source-repo internal helper; not distributed via the package-manager /
-  ephemeral-npx profiles.
+  Source-repo internal helper; not exposed through the profile command
+  catalog or an `idd-*` bin.
 
   For an adopter's template import, point `--upstream-path` at the
   checkout's `idd-template/` directory, not at the checkout root. The
   target commit must be the mirror-only commit made after copying the
-  upstream files and before `--substitute` rewrites placeholders. Restrict
-  the comparison to the imported roots present in that commit with repeated
-  `--path-prefix` options, for example:
+  upstream files and before `--substitute` rewrites placeholders. The
+  template core file set also includes the root-level
+  `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
+  Because an untouched prefix produces no comparison, retain each prefix
+  only when that file or root was touched by the mirror-only commit. Restrict
+  the comparison to those imported paths with repeated `--path-prefix`
+  options, for example:
 
   ```sh
   node <idd-skill>/scripts/verify-import-mirror.mjs \
     --target-root <target-repo> --target-ref <mirror-only-commit> \
     --upstream-path <idd-skill>/idd-template \
     --path-prefix .github --path-prefix docs --path-prefix profiles \
-    --path-prefix .githooks --path-prefix .claude
+    --path-prefix .githooks --path-prefix .claude \
+    --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+    --path-prefix .markdownlint-cli2.yaml
   ```
 
-  Do not add a prefix merely because it exists upstream: use only roots
-  touched by the mirror-only commit. A later substituted commit is expected
-  to differ in rewritten placeholders, pinned workflow references, and other
-  adopter-specific output, so it is not a pure-mirror target.
+  Do not add a directory prefix merely because it exists upstream: use only
+  roots and root-level files touched by the mirror-only commit. A later
+  substituted commit is expected to differ in rewritten placeholders, pinned
+  workflow references, and other adopter-specific output, so it is not a
+  pure-mirror target.
 
   For the `vendored-node` profile, compare helper and schema paths against
   the checkout root instead. The helper's source-root mapping uses the
@@ -1084,10 +1091,24 @@ future inventory reviews do not need to re-infer their role from code.
     --path-prefix schemas --path-prefix fixtures
   ```
 
-  `verify-import-mirror` is source-repository-only. It has no `idd-*` bin
-  in the package-manager or ephemeral-npx profiles; run it through the
-  direct `node <idd-skill>/scripts/verify-import-mirror.mjs` path shown
-  above.
+  For a `package-manager` adopter, run the installed package's copy directly
+  when the source checkout is unavailable:
+
+  ```sh
+  node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
+    --path-prefix .github --path-prefix docs --path-prefix profiles \
+    --path-prefix .githooks --path-prefix .claude \
+    --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+    --path-prefix .markdownlint-cli2.yaml
+  ```
+
+  `verify-import-mirror` is not an `idd-*` bin in the `package-manager` or
+  `ephemeral-npx` profiles. The installed-package path above is supported for
+  `package-manager`; `ephemeral-npx` does not install a supported copy of this
+  source-repository helper, so use a source checkout or the `vendored-node`
+  profile instead.
 
 ### Discover Roadmap Graph Contract
 

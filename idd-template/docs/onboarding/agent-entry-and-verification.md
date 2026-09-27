@@ -284,17 +284,40 @@ clone's `idd-template/` directory: using the repository root compares
 template paths such as `docs/idd-workflow.md` with source-repository paths
 and produces false mismatches.
 
-The helper is source-repository-only, so invoke it directly rather than
-looking for an `idd-*` package-manager bin. Restrict the check with one
-`--path-prefix` per imported root that the target commit actually touched:
+The helper is not an `idd-*` bin. For a source checkout, invoke it directly
+and restrict the check with one `--path-prefix` per imported root or root-level
+file that the target commit actually touched. The template core file set also
+includes `.cspell.config.yml`, `.markdownlint.yml`, and
+`.markdownlint-cli2.yaml`; the example includes them, but remove any prefix
+whose path was not touched by the mirror-only commit because an unmatched
+prefix produces no comparison:
 
 ```sh
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path <idd-skill>/idd-template \
   --path-prefix .github --path-prefix docs --path-prefix profiles \
-  --path-prefix .githooks --path-prefix .claude
+  --path-prefix .githooks --path-prefix .claude \
+  --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+  --path-prefix .markdownlint-cli2.yaml
 ```
+
+For a `package-manager` adopter without the source checkout, run the same
+helper from the installed package. It is intentionally not an `idd-*` bin:
+
+```sh
+node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
+  --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
+  --path-prefix .github --path-prefix docs --path-prefix profiles \
+  --path-prefix .githooks --path-prefix .claude \
+  --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+  --path-prefix .markdownlint-cli2.yaml
+```
+
+The `ephemeral-npx` profile does not install a supported copy of this
+source-repository helper, so use a source checkout or the `vendored-node`
+profile for this verification.
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes
