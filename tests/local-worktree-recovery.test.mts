@@ -980,8 +980,8 @@ test('step 4 returns a preservation verdict when clone-lock acquisition throws',
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(verdict.preserveDir, '/tmp/preserve');
-  assert.equal(verdict.plan.stashes[0]?.stashed, true);
+  assert.equal(verdict.preserveDir, null);
+  assert.equal(verdict.plan.stashes.length, 0);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /clone-scoped lock: clone lock timeout/);
 });
@@ -2385,6 +2385,7 @@ test('uses collision-safe destinations for uninitialized submodule paths', () =>
       }
       return cleanRepoRunGit(argv);
     },
+    pathExists: (path) => !path.includes('/.git/worktrees/linked/modules/'),
     copyPath: (_from, to) => copiedTo.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
@@ -2633,6 +2634,7 @@ test('late preservation refreshes uninitialized submodule copies before removal'
       }
       return cleanRepoRunGit(argv, cwd);
     },
+    pathExists: (path) => !path.includes('/.git/worktrees/linked/modules/'),
     copyPath: (_from, to) => copied.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
@@ -3017,8 +3019,8 @@ test('fresh preservation verification rejects a copied artifact redirected into 
     deps,
   );
   assert.equal(removeCalled, false);
-  assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /preservation artifact/);
+  assert.equal(verdict.plan.removal, null);
+  assert.match(verdict.result, /step 3 preservation/);
 });
 
 test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
@@ -3628,6 +3630,38 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('copies linked worktree admin data for top-level local-only refs', () => {
+  const copied: Array<{ from: string; to: string }> = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (
+        cwd === '/repo/linked' &&
+        argv[0] === 'rev-list' &&
+        argv.includes('--not')
+      ) {
+        return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (from, to) => copied.push({ from, to }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(verdict.plan.worktreeAdminCopy, {
+    copiedTo: '/tmp/preserve/worktree-gitdir',
+    plannedTo: '/tmp/preserve/worktree-gitdir',
+  });
+  assert.deepEqual(copied, [
+    {
+      from: '/repo/primary/.git/worktrees/linked',
+      to: '/tmp/preserve/worktree-gitdir',
+    },
+  ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('dry-run plans an initialized submodule admin export without copying it', () => {
   const copied: string[] = [];
   const deps = fakeDeps({
@@ -3913,8 +3947,9 @@ function runCli(
       'r',
       '--policy',
       sandbox.policyPath,
-      '--now',
-      '2026-09-25T01:00:00Z',
+      ...(extraArgs.includes('--apply')
+        ? []
+        : ['--now', '2026-09-25T01:00:00Z']),
       ...extraArgs,
     ],
     {

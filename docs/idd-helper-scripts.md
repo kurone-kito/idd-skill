@@ -3414,7 +3414,15 @@ still fails closed:
     carrying git's own `(describe)` suffix, which only initialized
     submodules ever emit. Ignored-file, uninitialized-submodule, and
     unmerged-path copies land under `--preserve-dir` (default: a temp
-    directory, created only when something needs copying).
+    directory, created only when something needs copying). For a linked
+    worktree, top-level local-only refs also cause the private worktree
+    git-admin directory to be copied under `worktree-gitdir/`; a
+    deinitialized submodule's private admin directory is copied under
+    `submodule-gitdir/` when it contains preservation-relevant data. Symlink
+    targets that resolve inside any source being removed are materialized in
+    the backup, while special files are rejected fail-closed instead of
+    being treated as ordinary files. These are preventive safeguards; no
+    observed incident yet.
   - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
     (`clone-lock.mts`) directly — in-process, not the manual
     `clone-lock.mjs --exec -- bash -c '...'` wrapper the procedure
@@ -3428,8 +3436,11 @@ still fails closed:
     possibly stale, in-memory snapshot) — all while the lock is held,
     immediately before mutating. Then `git worktree remove` (retrying
     `--force` only after a submodule-removal failure), or, for the
-    primary-worktree branch, `checkout {development-branch}` followed by
-    a confirmed-absent re-check and a SECOND, final lock re-check run
+    primary-worktree branch, `checkout {development-branch}`, cleanup of
+    any interrupted operation (`rebase --quit`, `merge --abort`,
+    `cherry-pick --abort`, or `bisect reset`), a bounded retry of the
+    confirmed-absent re-check (up to three total observations), and a SECOND,
+    final lock re-check run
     after that checkout (not only the earlier, now possibly stale,
     pre-checkout one) — deleting only the lock this final check
     positively observed, and reporting failure (never a silent
@@ -3437,7 +3448,10 @@ still fails closed:
 - Default mode is dry-run (no mutation): prints exactly what step 1 found
   and what step 3/4 would do (the full stash/backup-ref/removal plan),
   without mutating anything. `--apply` performs the mutation, still gated
-  on `--operator-confirmed-no-live-session`.
+  on `--operator-confirmed-no-live-session`. `--now` is accepted only in
+  dry-run mode to make the routing observation reproducible; combining it
+  with `--apply` is rejected so a mutation cannot use a synthetic clock.
+  This is preventive hardening; no observed incident yet.
 - Must be invoked from the primary worktree (or from the primary worktree
   itself, when that IS `--worktree`) — never from the linked worktree
   being recovered; refuses immediately otherwise.

@@ -551,7 +551,14 @@ the helper's dry-run output doesn't make self-explanatory.
    satisfy — (or the submodule-scoped equivalent) only where step 3
    found unpushed commits to back up, and any copied-out ignored
    files landed outside the worktree — before removing anything.
-   Stop and do not run `git worktree remove`, `--force` included, if
+   For a linked worktree, top-level local-only refs also require copying
+   its private worktree git-admin directory before removal; a deinitialized
+   submodule's private admin data is preserved under the same rule when it
+   contains relevant stashes, local-only refs, or an interrupted operation.
+   Symlink targets inside any soon-to-be-removed source are materialized in
+   the backup, and special files fail closed instead of being copied as
+   regular files. These are preventive safeguards; no observed incident
+   yet. Stop and do not run `git worktree remove`, `--force` included, if
    any of them failed.
 
    If `<path>` is the primary worktree — the path the first `worktree`
@@ -576,7 +583,10 @@ the helper's dry-run output doesn't make self-explanatory.
    this primary worktree's lock to the claim-id being recovered, or
    — for a legacy release — still finds no lock at all (matching
    step 1's own absent-lock finding): run `git -C <path> checkout
-   {development-branch}` there to release the branch — re-resolve
+   {development-branch}` there to release the branch, clear any interrupted
+   operation (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
+   `bisect reset`), and retry the confirmed-absent routing check up to three
+   total observations — re-resolve
    `{development-branch}` per §CSA's note above if this file is
    entered without a fresh B1 pass — confirm `resume-claim-routing.mjs`
    now reports this branch's `evidence.local_worktree.status` as
