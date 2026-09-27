@@ -17,24 +17,15 @@ standard file.
 
 ## Upstream-triage boundary
 
-This file only executes triage dispositions someone else already made.
-It never classifies, scores severity, or decides Accept/Reject itself —
-those are E4-E8 judgment calls, excluded from every lite profile.
+This file executes only prior E4-E8 dispositions; it never classifies
+severity or decides Accept/Reject.
 
-1. Before fixing anything, confirm every item from ReviewItems_snapshot
-   that this round acts on already carries an `**Accepted**` or
-   `**Rejected**` disposition from a prior E4-E8 pass.
-2. If a ReviewItems_snapshot item has no recorded disposition, stop and
-   ask. Do not triage it yourself, and do not guess its severity.
-3. Only act on ReviewItems_snapshot items already marked `**Accepted**`.
-   Leave `**Rejected**` items alone.
-4. This boundary covers ReviewItems_snapshot items only — the ones E9
-   fixes and E13 replies to. It does not cover E10's own critique
-   findings (E10 fixes those directly, per its own step, the same
-   self-review loop every phase uses) or E12's bounded cross-round
-   batching allowance (which explicitly permits folding in bot-sourced
-   comments not yet gone through triage, under its own separate
-   conditions).
+1. Before fixing, confirm every acted-on ReviewItems_snapshot item has an
+   `**Accepted**` or `**Rejected**` disposition from E4-E8.
+2. An undispositioned item is stop-and-ask; do not triage or guess it.
+3. Act only on `**Accepted**` items and leave `**Rejected**` items alone.
+4. This boundary covers E9 fixes and E13 replies only. E10 critique
+   findings and E12's bounded cross-round batching follow their own rules.
 
 ## Stop-and-ask conditions
 
@@ -330,15 +321,17 @@ self-critique and record risk.
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - `REQUEST_NEEDED`, `copilotPending` `false`: request the review with
-     `gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"`
-     (on a GraphQL login-resolution failure, retry via `gh api
-     repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers -X POST
-     -f "reviewers[]={primary-advisory-bot-rest-login}"`). If both
-     attempts fail, stop and ask instead of posting a marker. On
-     success, immediately post `advisory-wait: {agent-id} {PR_HEAD_SHA}
-     {ISO8601-requested-at}` as plain text, not an HTML comment, then go
-     to the polling loop below.
+   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer and
+     REST. Post
+     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
+     as plain text only after current-attempt evidence: a newer event
+     after HEAD or a fresh node absent from the pre-request snapshot;
+     exit status is not evidence (issue `#3500`). If absent, see
+     [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
+     use its account-typed fallback; never hard-code ids. Still absent:
+     stop and ask; poll only after success. Status `3` means claim/HEAD
+     guard failure: stop and return to E1. Status `1`/`2` means primary
+     registration is unproven/unreadable: stop/ask, not poll.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the
@@ -397,9 +390,9 @@ self-critique and record risk.
     `secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
-    the same gh-then-REST fallback as the primary in step 4. Post no
-    `advisory-wait:` marker for any — none satisfy the primary gate or
-    consume its cap, and none change the route already decided above.
+    the guarded procedure, replacing primary placeholders and
+    `BOT_REST_LOGIN`/bare form; type selects `botIds`/`userIds`;
+    `1`/`2` skip and `3` stops. No marker.
     Each review is ordinary advisory input, picked up by the next E1
     snapshot if it lands before merge. Skip this step entirely when
     `secondaryRequestNeeded` is `false`.

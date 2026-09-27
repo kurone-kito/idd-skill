@@ -6989,15 +6989,28 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const none = computeAdvisoryConvergenceVerdict(baseInputs(), baseOptions());
   const noneText = formatAssertNextActions(none);
   assert.match(noneText, /has not reviewed this PR/);
-  assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
-  // #2159: the gh add-reviewer form alone is not sufficient for the
-  // default bot login (GraphQL fails to resolve it) — the REST
-  // requested_reviewers fallback from E14 must also be present.
+  assert.match(noneText, /registration evidence/);
   assert.match(
     noneText,
-    /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
+    /snapshot the matching review_requested event and request node before mutation/,
   );
-  assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
+  assert.match(noneText, /newer event/);
+  assert.match(noneText, /review_requested/);
+  // #2159: add-reviewer alone is not a complete request. #3500: the
+  // executable next action must enter the guarded E14 procedure before any
+  // mutation, rather than emitting a sequence whose initial mutations can
+  // invalidate the procedure's before-snapshot.
+  assert.match(noneText, /E14 REQUEST_NEEDED/);
+  assert.match(noneText, /registration-proven-review-request/);
+  assert.match(noneText, /account-typed fallback/);
+  assert.match(noneText, /Do not run separate add-reviewer or REST commands/);
+  assert.doesNotMatch(noneText, /gh pr edit \d+ --add-reviewer/);
+  assert.match(noneText, /revalidate the claim and HEAD/);
+  assert.doesNotMatch(noneText, /requested_reviewers -X POST/);
+  assert.doesNotMatch(
+    noneText,
+    /<profile-selected-E14-guarded-registration-procedure>/,
+  );
   assert.doesNotMatch(
     noneText,
     /copilot has not reviewed this pull request yet/,
@@ -7195,6 +7208,78 @@ test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', ()
   assert.equal(verdict.ready, true);
   assert.deepEqual(verdict.nextActions, []);
   assert.deepEqual(collectAssertNextActions(verdict), []);
+});
+
+test('#3500 shell fallback guards the GraphQL request and marker order', () => {
+  const fallback = readFileSync(
+    new URL(
+      '../idd-template/docs/idd-advisory-wait-shell-fallback.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const mutationAt = fallback.indexOf(
+    'requestReviews(input:{pullRequestId:$id,botIds:$reviewer,union:true})',
+  );
+  const userMutationAt = fallback.indexOf(
+    'requestReviews(input:{pullRequestId:$id,userIds:$reviewer,union:true})',
+  );
+  const markerAt = fallback.indexOf(
+    'node scripts/post-idd-marker.mjs --type advisory-recovery',
+  );
+  assert.ok(
+    mutationAt > 0 && userMutationAt > mutationAt && markerAt > userMutationAt,
+  );
+  assert.match(fallback, /requestedReviewer\{__typename/);
+  assert.match(fallback, /variables:\{id:\$id,reviewer:\[\$reviewer\]\}/);
+  assert.match(fallback, /botIds:\$reviewer/);
+  assert.match(fallback, /userIds:\$reviewer/);
+  assert.match(fallback, /gh api graphql --input -/);
+  assert.match(fallback, /REVIEWER_TYPE=.*ascii_downcase/);
+  assert.match(fallback, /type == "user" and \$l == \$configured/);
+  assert.match(fallback, /registration_attempt aw3-s/);
+  assert.match(fallback, /registration_check\(\)[\s\S]*?max_attempts=3/);
+  assert.match(fallback, /AW3S_ENTRY.*pending|non-pending/);
+  assert.match(
+    fallback,
+    /if \[ "\$AW3S_ENTRY" = "pending" \][\s\S]*?--remove-reviewer/,
+  );
+  assert.match(
+    fallback,
+    /AW3S_ENTRY.*pending|non-pending[\s\S]*?if \[ "\$AW3S_ENTRY" = "pending" \]/,
+  );
+  assert.match(fallback, /command -v registration_attempt/);
+  assert.match(fallback, /AW3-S registration returned an unexpected status/);
+  assert.match(
+    fallback,
+    /case "\$REGISTRATION_STATUS"[\s\S]*?2\)[\s\S]*?exit 2/,
+  );
+  assert.match(
+    fallback,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \][\s\S]*?else/,
+  );
+  assert.doesNotMatch(
+    fallback,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?then\s+\[ "\$EVENT_NEW" = true \]\s+\|\|/,
+  );
+  assert.match(
+    fallback,
+    /NODES_BEFORE=\n\s*if \[ "\$evidence_mode" != "aw3-s" \]/,
+  );
+  assert.match(fallback, /NODES_AFTER=\$\(request_nodes\) \|\| return 2/);
+  const eventProofAt = fallback.indexOf('[ "$EVENT_NEW" = true ] && return 0');
+  const nodeRereadAt = fallback.indexOf('NODES_AFTER=$(request_nodes)');
+  assert.ok(eventProofAt > 0 && nodeRereadAt > eventProofAt);
+  assert.match(
+    fallback,
+    /<profile-selected-post-idd-marker-command> --type advisory/,
+  );
+  assert.doesNotMatch(
+    fallback,
+    /REGISTRATION_STATUS[\s\S]*?node scripts\/post-idd-marker\.mjs --type advisory --target pr/,
+  );
+  assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?return 0/);
+  assert.doesNotMatch(fallback, /IFS=\$'\\t'/);
 });
 
 test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#2143)', () => {

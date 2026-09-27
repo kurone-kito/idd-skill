@@ -311,7 +311,7 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 For an **advisory bot**, try the add-reviewer command with the bot's
 **login** first — on some `gh` versions the GraphQL mutation fails a
 bot login outright (`Could not resolve user with login '{login}'
-(requestReviewsByLogin)`); on failure, fall back to REST
+(requestReviewsByLogin)`); if registration evidence is absent, use REST
 `requested_reviewers` with the bot's real account login (REST also
 silently no-ops on a **display name**). See **Primary advisory bot**
 below for the exact login each path needs.
@@ -368,21 +368,15 @@ login).
      `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold from **AW4** and
      stop; otherwise (`phase-specific`, default) skip the wait,
      proceed to E15.
-   - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"` (cap not
-     exhausted): request the bot's review and immediately post:
+   - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"`: request via
+     add-reviewer/REST. Snapshot event/node before mutation; post only
+     with a newer event after HEAD or a fresh node absent from that
+     snapshot. Exit status is not evidence (issue `#3500`).
+     See the [registration fallback](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
+     if absent, stop/ask; status `3` returns to E1, and primary `1`/`2`
+     are unproven/unreadable (only secondary `1`/`2` are non-gating).
 
-     ```sh
-     gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-     # on GraphQL login-resolution failure:
-     gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-       -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
-     ```
-
-     ```text
-     advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
-     ```
-
-     Use `PR_HEAD_SHA` as `{head-SHA}`; post as plain text, not HTML.
+     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"true"` (unproven coverage —
      PR #1562): consult **`AW3-S`**'s `staleRequestRecovery` first —
      `"attempt"` runs its bounded remove/re-request/verify/mark cycle
@@ -397,9 +391,11 @@ login).
    every `apply step 5` reference in this file.**
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
-   fallback: every configured login not yet requested this HEAD) —
-   same gh-then-REST fallback as the primary, per login, no
-   `advisory-wait:` marker, no route change. Each review is ordinary
+   fallback: every configured login not yet requested this HEAD). Use the
+   guarded procedure per login, replacing primary placeholders and
+   `BOT_REST_LOGIN`/bare form, with REST type selecting `botIds`/`userIds`;
+   `1`/`2` record/skip, `3` stops. No primary marker.
+   Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;
    only F2's `secondary-quiet-window` blocker

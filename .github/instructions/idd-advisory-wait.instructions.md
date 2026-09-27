@@ -114,7 +114,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | Outcome | D4 | E14 | F2 | F3 |
 | --- | --- | --- | --- | --- |
 | `SATISFIED` | `lastCopilotCommit` matches HEAD: rerun `idd-advisory-convergence`; resume D4. Elapsed-window `SATISFIED`: exit CI-wait; proceed to E1 | proceed to E15 | continue to CI check | proceed with merge |
-| `REQUEST_NEEDED` | `copilotPending` false: request review + marker; resume D4. `copilotPending` true: exit CI-wait; proceed to E1 | request Copilot + marker + poll | return to E14 | return to E14 |
+| `REQUEST_NEEDED` | `copilotPending` false: E14 guarded registration, then marker after evidence; resume D4. `copilotPending` true: exit CI-wait; proceed to E1 | request Copilot + marker + poll | return to E14 | return to E14 |
 | `RECOVERY_NEEDED` | exit CI-wait; proceed to E1 | post recovery marker + poll | post recovery marker + poll | post recovery marker; return to F2 |
 | `CAP_EXHAUSTED` | exit CI-wait; proceed to E1 | use `CAP_EXHAUSTED_ROUTE` | post cap-exhausted hold and stop | post cap-exhausted hold and stop |
 | `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |
@@ -285,8 +285,8 @@ re-verify the active claim
 ([claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate))
 and that HEAD hasn't moved since the attempt started; either failure
 aborts without mutating or counting a cycle — discard and restart from
-E1 against the new HEAD. Commands for every step (same gh-then-REST
-pattern as E14's **Primary advisory bot**):
+E1 against the new HEAD. Commands for every step (same request as
+E14's **Primary advisory bot**):
 [shell fallback AW3-S](../../docs/idd-advisory-wait-shell-fallback.md#aw3-s).
 
 1. **Remove** the stale request. Skip this step for a non-pending entry
@@ -298,24 +298,21 @@ pattern as E14's **Primary advisory bot**):
    any other failure, or that retry's exhaustion, posts the
    `AW4` pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
-3. **Request** Copilot again, same fallback pattern.
-4. **Verify association**: confirm `review_requested` follows HEAD's
-   `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). Not
-   yet true is ordinary lag, not failure — do **not** redo steps 1-3;
-   re-check alone after a brief pause (default: 3 attempts, a few
-   seconds apart). Disposition after that budget depends on entry type:
-   - **Pending entry**: still unproven → abort without posting a
-     marker or counting a cycle, return to the polling loop (or E1) —
-     never tight-loop on unresolved lag.
-   - **Non-pending entry** (`#2327`): the event appearing proves this
-     re-request actually registered — abort without counting; the next
-     pass's `COPILOT_PENDING_COVERS_HEAD` check picks it up normally. No
-     event within the same short budget is itself the proof this
-     re-request _also_ failed to register — the entry condition already
-     spent a full `SETTLED_WINDOW_MINUTES` confirming the original
-     request's silence before this cycle started, so the short budget is
-     sufficient here, not a redundant wait — proceed to step 5 and count
-     the cycle.
+3. **Request** Copilot again, same fallback pattern; preserve its return
+   status for step 4's bounded rechecks.
+4. **Verify association**: retain step 3's baselines, but require a new
+   matching `review_requested` event after HEAD's `committed` event (the
+   `COPILOT_PENDING_COVERS_HEAD` proof). A fresh request node is not tied
+   to a commit and is insufficient for AW3-S. If absent, recheck only
+   readable evidence (default: 3 attempts); unreadable is indeterminate —
+   use AW4, with no marker or cycle count. Then:
+   - **Pending entry**: still unproven → abort without marker/count and
+     return to polling or E1; never tight-loop on lag.
+   - **Non-pending entry** (`#2327`): a fresh event proves registration →
+     abort without count; the next `COPILOT_PENDING_COVERS_HEAD` check
+     picks it up. No fresh event in the short budget proves failure; the
+     entry already spent `SETTLED_WINDOW_MINUTES` confirming silence, so
+     proceed to step 5 and count the cycle.
 5. **Post exactly one** bound marker, once step 4 concludes in a
    counted disposition — proven re-registration for a pending entry, or
    proven failure-to-register for a non-pending entry (`#2327`). `<n>`

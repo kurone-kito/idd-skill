@@ -4621,8 +4621,6 @@ export function collectAssertNextActions(
   const pr = verdict.prNumber;
   const sha = verdict.prHeadSha;
   const bot = verdict.primaryBotLogin || 'copilot';
-  const restLogin =
-    bot === 'copilot' ? 'copilot-pull-request-reviewer[bot]' : bot;
   const T = ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN;
   const items: AdvisoryConvergenceNextAction[] = [];
 
@@ -4642,15 +4640,14 @@ export function collectAssertNextActions(
   }
 
   if (!verdict.review.found) {
-    const reviewer = bot === 'copilot' ? 'copilot' : restLogin;
     items.push({
       token: T.REQUEST_REVIEW,
-      summary: `${bot} has not reviewed this PR. Request a review (E14) then post an advisory-wait marker:`,
+      summary:
+        `${bot} has not reviewed this PR. Request a review (E14) and post an advisory-wait marker only after registration evidence ` +
+        `(snapshot the matching review_requested event and request node before mutation; require a newer event after the current HEAD commit or a fresh node absent from that snapshot). Exit status is not evidence:`,
       pointer: [
-        `gh pr edit ${pr} --add-reviewer ${reviewer}`,
-        `# on GraphQL login-resolution failure ("Could not resolve user with login '${reviewer}'"):`,
-        `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
-        `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
+        `E14 REQUEST_NEEDED: follow the profile-selected guarded registration procedure in docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request`,
+        `It must snapshot the matching event and request node before any mutation, perform the account-typed fallback, revalidate the claim and HEAD, and post the advisory-wait marker only after status 0 evidence. Do not run separate add-reviewer or REST commands before entering E14.`,
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {
