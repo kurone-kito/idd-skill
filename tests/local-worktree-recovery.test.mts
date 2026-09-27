@@ -111,7 +111,7 @@ test('extractIgnoredPaths decodes quoted and NUL-delimited porcelain paths', () 
   ]);
 });
 
-test('countTaggedStashEntries counts only entries whose subject contains the tag', () => {
+test('countTaggedStashEntries counts only entries whose final message is the tag', () => {
   const stashList = [
     'stash@{0}: On issue/1-task: idd-lwr claim-x',
     'stash@{1}: On main: unrelated',
@@ -119,6 +119,14 @@ test('countTaggedStashEntries counts only entries whose subject contains the tag
   ].join('\n');
   assert.equal(countTaggedStashEntries(stashList, 'idd-lwr claim-x'), 2);
   assert.equal(countTaggedStashEntries('', 'idd-lwr claim-x'), 0);
+  assert.equal(
+    countTaggedStashEntries(
+      'stash@{0}: On issue/1-task: idd-lwr claim-x2\n',
+      'idd-lwr claim-x',
+    ),
+    0,
+    'a claim-id prefix must not count as this recovery attempt',
+  );
 });
 
 test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching branch', () => {
@@ -1104,6 +1112,33 @@ test('refuses a dangling preserve-dir symlink into the target worktree', () => {
     deps,
   );
   assert.equal(verdict.step1.outcome, 'preserve-dir-inside-target');
+  assert.equal(verdict.mutated, false);
+});
+
+test('refuses a preserve directory inside the linked worktree private gitdir', () => {
+  const deps = fakeDeps({
+    realpathOrNull: (p) => p,
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: '/repo/primary/.git/worktrees/linked/preserve',
+    }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'preserve-dir-inside-target-gitdir');
   assert.equal(verdict.mutated, false);
 });
 

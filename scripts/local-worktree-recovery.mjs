@@ -580,12 +580,13 @@ function resolveEffectiveRealpathInternal(
   }
   return join(parentReal, basename(path));
 }
-/** Count of stash entries whose subject contains `tag` verbatim. */
+/** Count of stash entries whose final message field is exactly `tag`. */
 export function countTaggedStashEntries(stashList, tag) {
   if (stashList.trim().length === 0) {
     return 0;
   }
-  return stashList.split('\n').filter((line) => line.includes(tag)).length;
+  return stashList.split('\n').filter((line) => line.endsWith(`: ${tag}`))
+    .length;
 }
 // ---------------------------------------------------------------------------
 // Orchestration (pure over injected deps -- unit-testable without a real
@@ -1326,8 +1327,46 @@ export function runLocalWorktreeRecovery(args, deps) {
   // destination already exists, and via the nearest-existing-ancestor
   // realpath otherwise -- all through the same platform-aware
   // `isPathContainedIn` the cwd guard above uses.
+  // A linked worktree's private gitdir is outside `targetPath`, but
+  // `git worktree remove` deletes it along with the worktree. Resolve it
+  // separately so an explicit preserve directory (or the generated temp
+  // directory base) cannot put the only backup inside that soon-to-be-deleted
+  // admin directory (Codex review #4114245289).
+  const targetGitDirResult =
+    verdict.primaryOrLinked === 'linked'
+      ? deps.runGit(['rev-parse', '--absolute-git-dir'], targetPath)
+      : null;
+  const targetGitDir =
+    targetGitDirResult?.ok && targetGitDirResult.stdout.trim().length > 0
+      ? resolve(targetGitDirResult.stdout.trim())
+      : null;
+  const targetGitDirEffectiveReal = targetGitDir
+    ? resolveEffectiveRealpath(
+        targetGitDir,
+        deps.realpathOrNull,
+        deps.readlinkOrNull,
+      )
+    : null;
+  const preserveRootResolved = args.preserveDir
+    ? resolve(cwd, args.preserveDir)
+    : resolve(tmpdir());
+  const preserveRootEffectiveReal = resolveEffectiveRealpath(
+    preserveRootResolved,
+    deps.realpathOrNull,
+    deps.readlinkOrNull,
+  );
+  const preserveRootInsideGitDir =
+    targetGitDirEffectiveReal !== null && preserveRootEffectiveReal !== null
+      ? isPathContainedIn(preserveRootEffectiveReal, targetGitDirEffectiveReal)
+      : false;
+  if (preserveRootInsideGitDir) {
+    verdict.step1.outcome = 'preserve-dir-inside-target-gitdir';
+    verdict.step1.reason = `backup destination (${preserveRootResolved}) must be outside the target worktree's private git directory (${targetGitDir}) -- worktree removal deletes that directory too`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   if (args.preserveDir) {
-    const preserveDirResolved = resolve(cwd, args.preserveDir);
+    const preserveDirResolved = preserveRootResolved;
     const targetReal = deps.realpathOrNull(targetPath);
     const preserveDirEffectiveReal = resolveEffectiveRealpath(
       preserveDirResolved,
@@ -1860,8 +1899,10 @@ export function runLocalWorktreeRecovery(args, deps) {
       isAcceptedBlockReason(finalLinkedRouting.reason) &&
       (shortcut.eligible ||
         !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable')) &&
-      (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).includes(
-        targetPath,
+      (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).some(
+        (reportedPath) =>
+          normalizeGitWorktreePathForComparison(reportedPath) ===
+          targetComparisonPath,
       ) &&
       finalLinkedRecovered?.claimId === recoveredClaimId &&
       finalLinkedRecovered.branch === recoveredBranch;
