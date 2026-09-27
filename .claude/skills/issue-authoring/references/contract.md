@@ -560,7 +560,10 @@ Ask these checks:
    bundle containing a changed file, compare its measured,
    banner-stripped total with its `bundleBudgets.limitBytes` and apply the
    `contextCeiling.maxUtilizationPct` constraint before claiming byte-budget
-   headroom. Also check the context ceiling's absolute
+   headroom. Apply the same check when a draft adds a file to a bundle or
+   changes the `bundleBudgets` or `contextCeiling` policy: evaluate the
+   proposed post-change bundle memberships and limits in addition to current
+   manifest entries. Also check the context ceiling's absolute
    `maxBundleLimitBytes` and honor its `exemptBundles` rules where they are
    defined; utilization alone is not sufficient. Record each bundle's
    measured total, configured limit, utilization, applicable ceiling, and

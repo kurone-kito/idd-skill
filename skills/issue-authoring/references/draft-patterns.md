@@ -166,7 +166,9 @@ one through `syncPairs` (or an equivalent source-to-target mapping), including
 onboarding documents — also apply the contract's
 [context-ceiling check](contract.md#codebase-fidelity-validation) before treating
 `bundleBudgets.limitBytes` as available headroom; that limit is not the
-only constraint.
+only constraint. Apply the same check when the proposed issue adds a bundle
+member or changes the `bundleBudgets` or `contextCeiling` policy, evaluating
+the proposed post-change memberships and limits as well as current entries.
 
 **No helper runtime available (`instructions-only` profile):** the
 linter cannot run. `instructions-only` is a first-class supported
