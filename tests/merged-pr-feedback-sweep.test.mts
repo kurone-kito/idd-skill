@@ -665,6 +665,11 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
           createdAt: '2026-06-09T00:00:00Z',
           author: { login: 'coderabbitai[bot]' },
         },
+        {
+          body: '**Accepted** — coderabbitai[bot] summary walkthrough at HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n<!-- idd-skill-review-reply -->',
+          createdAt: '2026-06-09T00:05:00Z',
+          author: { login: 'kurone-kito' },
+        },
       ],
     },
   ];

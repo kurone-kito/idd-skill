@@ -5772,7 +5772,12 @@ export function matchTrustedAdvisoryStickyDispositions<
         : undefined,
     },
     {
-      isSticky: (body: string) => isReviewSummaryComment(body),
+      // A mixed CodeRabbit summary + non-review notice is governed by the
+      // notice path above. Treating it as a completed summary as well would
+      // let an older summary acceptance hide an undispositioned rate-limit
+      // notice (#3572).
+      isSticky: (body: string) =>
+        isReviewSummaryComment(body) && !isAdvisoryNonReviewNotice(body),
       isDisposition: (body: string) => isReviewSummaryDisposition({ body }),
       requireNewerDisposition: true,
     },
