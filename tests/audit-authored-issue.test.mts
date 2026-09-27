@@ -1682,6 +1682,19 @@ test('dependency-line-grammar keeps trailing junk from activating a definition',
   }
 });
 
+test('dependency-line-grammar resolves collapsed references through their visible label', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][]\n\n[Issue 12]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar keeps a continuation in the same block container', () => {
   const activeBody = childBody({
     extraMarkers:
@@ -1702,6 +1715,19 @@ test('dependency-line-grammar keeps a continuation in the same block container',
     assert.ok(finding);
     assert.equal(finding.result, expected);
   }
+});
+
+test('dependency-line-grammar does not continue a definition into a sibling list item', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n- [ref]:\n- https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
 });
 
 test('dependency-line-grammar recognizes short hyphen setext headings', () => {

@@ -1686,8 +1686,10 @@ function looksLikeIssueMarkdownLink(
   if (referenceMatch === null || /#\d+/.test(referenceMatch[1])) {
     return referenceMatch !== null;
   }
+  const definitionLabel =
+    referenceMatch[2].length === 0 ? referenceMatch[1] : referenceMatch[2];
   const target = referenceDefinitions.get(
-    normalizeLinkReferenceLabel(referenceMatch[2]),
+    normalizeLinkReferenceLabel(definitionLabel),
   );
   return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
 }
@@ -2939,6 +2941,12 @@ function matchesReferenceDefinitionContinuationContainer(
   pendingContainerKinds: string[],
 ): boolean {
   if (currentContainerKinds.join('/') === pendingContainerKinds.join('/')) {
+    if (
+      currentContainerKinds.includes('list') &&
+      pendingContainerKinds.includes('list')
+    ) {
+      return false;
+    }
     return true;
   }
   const currentPrefix = currentContainerKinds.join('/');
