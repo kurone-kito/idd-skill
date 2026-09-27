@@ -3594,6 +3594,36 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
   assert.equal(verify.heldSchemaDrift.findings.length, 1);
 });
 
+test('checkHeldSchemaDrift resolves a peeled pre-import ref only once', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  commitFixtureBaseline(targetRoot);
+  execFileSync(
+    'git',
+    [
+      '-C',
+      targetRoot,
+      'commit',
+      '--allow-empty',
+      '--no-gpg-sign',
+      '-m',
+      'checkpoint',
+    ],
+    { stdio: 'ignore', env: fixtureGitEnv() },
+  );
+  writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+    targetBaseRef: 'HEAD^',
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift treats Git baseline paths with glob characters literally', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

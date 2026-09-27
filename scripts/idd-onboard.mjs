@@ -3591,6 +3591,21 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
   const baselineRef = targetBaseRef ?? 'HEAD';
   let baselineCommit;
   try {
+    const resolvedBaselineRef = execFileSync(
+      'git',
+      [
+        '-C',
+        targetRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        baselineRef,
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
+    )
+      .toString('utf8')
+      .trim();
     baselineCommit = execFileSync(
       'git',
       [
@@ -3600,7 +3615,7 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
         '--verify',
         '--quiet',
         '--end-of-options',
-        `${baselineRef}^{commit}`,
+        `${resolvedBaselineRef}^{commit}`,
       ],
       { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
     )
