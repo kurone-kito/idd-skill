@@ -474,6 +474,8 @@ when a fresh E1 snapshot follows before F2. Set `Phase` to `E triage`,
 summarize remaining Accepted PATH A work or `none` in `Open blockers`,
 `Next action` to E9 or F2 as appropriate, and cite the disposition
 replies plus the trusted review-watermark in `Authoritative by`. If
+Step 2 was skipped for incomplete CI or expected advisory review, cite
+the E1 Step 1 SHA plus `watermark deferred, CI incomplete` instead. If
 ReviewItems_snapshot is empty and the next step is F2, defer the digest
 update unless you intentionally return to E1 afterward.
 

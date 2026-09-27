@@ -56,18 +56,18 @@ GitHub side effect, confirm all of the following:
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
-### CI-completion precondition (before Step 1)
+### CI-completion precondition (for Step 2)
 
-Before taking the Step 1 snapshot, confirm every CI run counting toward
-the merge gate has completed, including any opt-in/label-triggered job
-enabled here. If the primary advisory bot already reviewed an earlier
+Before posting the Step 2 watermark, confirm every CI run counting
+toward the merge gate has completed, including any opt-in/label-triggered
+job enabled here. If the primary advisory bot already reviewed an earlier
 head, expect an automatic same-head re-review — run the
 advisory-wait-state helper and check its `lastCopilotCommit ==
 prHeadSha` fast-path fields (from
-`idd-advisory-wait-lite.instructions.md`; read fresh from the helper,
-not Step 1's `{head-SHA}` below, not yet captured here), and wait,
-bounded by that file's advisory-wait windows if it never lands. Only
-then continue to Step 1.
+`idd-advisory-wait-lite.instructions.md`; read fresh from the helper),
+and wait, bounded by that file's advisory-wait windows if it never lands.
+Step 2 waits: take Steps 1 and 3 regardless of CI/advisory-review
+state, and defer the watermark to the next full E1 entry if needed.
 
 ### Step 1 — Snapshot the activity universe
 
