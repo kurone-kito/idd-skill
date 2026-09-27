@@ -16,6 +16,10 @@ const OPTIONS = {
   iddAgentLogins: ['kurone-kito'],
 };
 
+const RATE_LIMIT_NOTICE = `${CODERABBIT_SUMMARY_MARKER}\n\n> ## Review limit reached`;
+const RATE_LIMIT_DISPOSITION =
+  '**Rejected** — coderabbitai[bot] did not review HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (review limit reached / rate limited); this is not a completed review (source: #issuecomment-100)\n\n<!-- idd-skill-review-reply -->';
+
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
 test('parseArgs: parses --pr (repeatable), --days, and --limit', () => {
@@ -476,30 +480,29 @@ test('excludes a trusted historical live-status digest', () => {
   assert.equal(result.prs.length, 0);
 });
 
-test('surfaces a github-actions claimed-by comment when that login is an IDD agent', () => {
-  const prs: MergedPrInput[] = [
-    {
-      number: 16,
-      comments: [
-        {
-          body: '<!-- claimed-by: github-actions[bot] claim-abc supersedes: none 2026-06-09T00:00:00Z branch: issue/1-test -->\n\n_note_',
-          createdAt: '2026-06-09T00:00:00Z',
-          author: { login: 'github-actions[bot]' },
-        },
-      ],
-    },
-  ];
-  const result = buildMergedPrFeedbackSweep(prs, {
-    ...OPTIONS,
-    trustedMarkerActors: ['kurone-kito', 'github-actions[bot]'],
-    iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
-  });
-  assert.equal(result.prs.length, 1);
-  assert.equal(result.prs[0].unaddressedComments.length, 1);
-  assert.equal(
-    result.prs[0].unaddressedComments[0].author,
-    'github-actions[bot]',
-  );
+test('surfaces a GitHub Actions claimed-by comment when either login is an IDD agent', () => {
+  for (const login of ['github-actions[bot]', 'github-actions']) {
+    const prs: MergedPrInput[] = [
+      {
+        number: 16,
+        comments: [
+          {
+            body: `<!-- claimed-by: ${login} claim-abc supersedes: none 2026-06-09T00:00:00Z branch: issue/1-test -->\n\n_note_`,
+            createdAt: '2026-06-09T00:00:00Z',
+            author: { login },
+          },
+        ],
+      },
+    ];
+    const result = buildMergedPrFeedbackSweep(prs, {
+      ...OPTIONS,
+      trustedMarkerActors: ['kurone-kito', login],
+      iddAgentLogins: ['kurone-kito', login],
+    });
+    assert.equal(result.prs.length, 1);
+    assert.equal(result.prs[0].unaddressedComments.length, 1);
+    assert.equal(result.prs[0].unaddressedComments[0].author, login);
+  }
 });
 
 test('still excludes github-actions cleanup evidence when that login is an IDD agent', () => {
@@ -520,6 +523,28 @@ test('still excludes github-actions cleanup evidence when that login is an IDD a
     iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
   });
   assert.equal(result.prs.length, 0);
+});
+
+test('excludes GraphQL github-actions waiver and cleanup evidence from the merged-PR sweep', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3566,
+      comments: [
+        {
+          body: '<!-- idd-external-check-waiver: idd-advisory-convergence head:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reason:self-referential-bootstrap-auto expires:2099-01-01T00:00:00Z run-id:123456789 claim:none -->',
+          createdAt: '2026-09-27T00:00:00Z',
+          author: { login: 'github-actions' },
+        },
+        {
+          body: '<!-- idd-cleanup-evidence: complete applied:1 failed:0 skipped:0 viewer-cannot-minimize:0 retry-attempts:0 retry-bound-exhausted:false -->',
+          createdAt: '2026-09-27T00:01:00Z',
+          author: { login: 'github-actions' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.deepEqual(result.prs, []);
 });
 
 test('surfaces an untrusted <!-- idd- comment instead of unconditionally dropping it', () => {
@@ -640,6 +665,11 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
           createdAt: '2026-06-09T00:00:00Z',
           author: { login: 'coderabbitai[bot]' },
         },
+        {
+          body: '**Accepted** — coderabbitai[bot] summary walkthrough at HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n<!-- idd-skill-review-reply -->',
+          createdAt: '2026-06-09T00:05:00Z',
+          author: { login: 'kurone-kito' },
+        },
       ],
     },
   ];
@@ -649,6 +679,247 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
   assert.equal(
     result.prs[0].unaddressedComments[0].author,
     'coderabbitai[bot]',
+  );
+});
+
+test('#3572 carries a trusted notice rejection across a restamped updatedAt', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.deepEqual(result.prs, []);
+});
+
+test('#3572 keeps a notice visible without a trusted rejection', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 does not carry a rejection to a notice with another source id', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 101,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 does not carry a known bot rejection when the bot is unconfigured', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    {
+      ...OPTIONS,
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 excludes the trusted disposition when its actor is not an IDD agent', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'reviewer' },
+          },
+        ],
+      },
+    ],
+    {
+      ...OPTIONS,
+      iddAgentLogins: ['codex-agent'],
+    },
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 2);
+});
+
+test('#3572 keeps a notice visible when its rejection was edited', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: '2026-09-27T08:00:00Z',
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 keeps a changed notice visible even when its old rejection is intact', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            body: `${RATE_LIMIT_NOTICE}\n\nA changed notice body`,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T08:02:07Z',
+            lastEditedAt: '2026-09-27T08:02:00Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 still surfaces a genuine review that replaces a dispositioned notice', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+          {
+            body: 'Please address this genuine review finding.',
+            createdAt: '2026-09-27T08:10:00Z',
+            updatedAt: '2026-09-27T08:10:00Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].bodyExcerpt,
+    'Please address this genuine review finding.',
   );
 });
 

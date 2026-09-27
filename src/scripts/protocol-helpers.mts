@@ -877,16 +877,17 @@ const IDD_CLEANUP_EVIDENCE_PREFIX = '<!-- idd-cleanup-evidence:';
  * ALSO trusted from this same actor (checked separately, since it is also
  * trusted from a configured trustedMarkerActor, unlike this one). Deliberately
  * NOT `PR_OPERATIONAL_COMMENT_PREFIXES` or `OPERATIONAL_MARKERS` -- this is
- * narrow trust for this ONE actor, for exactly this one shape, never a
- * blanket trust grant for every operational marker that actor's login
- * could theoretically post (a `github-actions[bot]` comment starting with
- * any OTHER operational prefix, e.g. `<!-- claimed-by:`, is not trusted by
- * this path and counts as ordinary activity).
+ * narrow trust for this ONE actor identity, for exactly this one shape, never
+ * a blanket trust grant for every operational marker that actor's login could
+ * theoretically post (a `github-actions[bot]` or GraphQL `github-actions`
+ * comment starting with any OTHER operational prefix, e.g.
+ * `<!-- claimed-by:`, is not trusted by this path and counts as ordinary
+ * activity).
  */
 const GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX =
   '<!-- idd-external-check-waiver:';
 
-/** The GitHub Actions bot identity the two constants above scope trust to. */
+/** The canonical GitHub Actions bot login the two constants above scope to. */
 const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 
 export type IddPrCommentClassification =
@@ -923,8 +924,8 @@ export type IddPrCommentClassification =
  *    review feedback -- OR its first line is one of the three
  *    live-status digest forms (current/historical/repair-evidence) OR it
  *    starts with `IDD_CLEANUP_EVIDENCE_PREFIX`);
- *  - the author is exactly `github-actions[bot]` and the body starts with
- *    `IDD_CLEANUP_EVIDENCE_PREFIX` or
+ *  - the author is `github-actions[bot]` or the GraphQL `github-actions`
+ *    variant, and the body starts with `IDD_CLEANUP_EVIDENCE_PREFIX` or
  *    `GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX` -- independent of
  *    `trustedMarkerLogins`/`iddAgentLogins` membership.
  *
@@ -965,20 +966,24 @@ export function classifyIddPrComment(
   ]);
   const isTrustedAuthor = trustedLogins.has(authorLogin);
 
-  // #3267 (Copilot review, PR #3437): dispatch the github-actions[bot]
+  // #3267 (Copilot review, PR #3437): dispatch the GitHub Actions
   // narrow-trust check FIRST, unconditionally -- never fold into the
   // `isTrustedAuthor` branch below. That account can be posted as by ANY
-  // same-repository GitHub Actions workflow via `GITHUB_TOKEN`, so it must
-  // never gain the FULL trusted-marker-actor grant just because some
-  // caller's `trustedMarkerLogins`/`iddAgentLogins` set happens to also
+  // same-repository GitHub Actions workflow via `GITHUB_TOKEN`, so neither
+  // identity variant may gain the FULL trusted-marker-actor grant merely
+  // because a caller's `trustedMarkerLogins`/`iddAgentLogins` set happens to
   // include it for an unrelated reason (for example,
   // `idd-doctor.mts`'s `readCleanupEvidenceTrustedLogins` always unions it
   // in for its own cleanup-evidence check). Checking `isTrustedAuthor`
   // first here would let a general-purpose marker (e.g. `<!-- claimed-by:`)
   // slip through as `idd-operational` from that shared identity, contrary
   // to the issue's "no other operational-marker family is trusted from
-  // github-actions[bot]" rule -- true regardless of trust configuration.
-  if (authorLogin === GITHUB_ACTIONS_BOT_LOGIN) {
+  // the GitHub Actions identity" rule -- true regardless of trust
+  // configuration.
+  if (
+    advisoryBotIdentityToken(authorLogin) ===
+    advisoryBotIdentityToken(GITHUB_ACTIONS_BOT_LOGIN)
+  ) {
     const trimmedBody = body.trimStart();
     if (
       trimmedBody.startsWith(IDD_CLEANUP_EVIDENCE_PREFIX) ||
@@ -5149,6 +5154,23 @@ export function isNonReviewNoticeDisposition(comment: {
   );
 }
 
+const NON_REVIEW_NOTICE_SOURCE_ID_RE = /\(source:\s*#issuecomment-(\d+)\)/i;
+
+export interface NonReviewNoticeDisposition {
+  sourceCommentId: string;
+}
+
+/** Parse the source comment id from a canonical non-review disposition. */
+export function parseNonReviewNoticeDisposition(
+  body: unknown,
+): NonReviewNoticeDisposition | null {
+  if (!isNonReviewNoticeDisposition({ body: String(body ?? '') })) {
+    return null;
+  }
+  const match = NON_REVIEW_NOTICE_SOURCE_ID_RE.exec(String(body ?? ''));
+  return match ? { sourceCommentId: match[1] ?? '' } : null;
+}
+
 // #1833 diagnostic-only hint text: single-sourced so
 // `summarizeDispositionEvidenceForGate`'s `missingRegularComments[].hint`
 // names the exact phrase `isNonReviewNoticeDisposition` requires, instead of
@@ -5672,7 +5694,7 @@ export function foldSecondaryAdvisoryReviewSettlements(
 // into any generic disposition pool, so an absent or already-resolved sticky
 // leaves the disposition unused: it can never clear an unrelated human comment.
 // Returns the set of `sortedIndex` values of the stickies that are dispositioned.
-function matchTrustedAdvisoryStickyDispositions<
+export function matchTrustedAdvisoryStickyDispositions<
   T extends {
     id: string;
     authorLogin: string;
@@ -5687,6 +5709,27 @@ function matchTrustedAdvisoryStickyDispositions<
   trustedMarkerLogins: Set<string>,
   iddAgentLogins: Set<string>,
   currentHeadSha?: string | null,
+  options: {
+    /**
+     * Allow the resolved IDD-agent identity to author the disposition. The
+     * merge-gate callers keep this disabled because their own disposition
+     * pool already accounts for those comments; read-only merged-PR sweeps
+     * have no such pool and must carry the same machine disposition forward.
+     */
+    allowIddAgentNoticeDisposition?: boolean;
+    /**
+     * Require the source notice to be explicitly unedited before carrying a
+     * disposition forward. `updatedAt` can advance when GitHub restamps a
+     * comment during minimization, so it is not an edit signal.
+     */
+    requireUneditedNotice?: boolean;
+    /** Restrict sticky matching to the configured advisory-bot identities. */
+    requireConfiguredAdvisoryBotLogin?: boolean;
+    /** Require non-review dispositions to name the exact source comment. */
+    requireNoticeSourceCommentId?: boolean;
+    /** Collect the matched disposition indexes for a read-only caller. */
+    matchedDispositionIndexes?: Set<number>;
+  } = {},
 ): Set<number> {
   const dispositionedStickyIndexes = new Set<number>();
   // #3249: an edited (or edit-state-unresolved) trusted disposition must
@@ -5712,6 +5755,7 @@ function matchTrustedAdvisoryStickyDispositions<
     isStickyAuthor?: (authorLogin: string) => boolean;
     isDisposition: (body: string) => boolean;
     requireNewerDisposition: boolean;
+    requireUneditedSticky?: boolean;
     allowIddAgentDisposition?: boolean;
     matchesDisposition?: (sticky: T, disposition: T) => boolean;
   }[] = [
@@ -5719,9 +5763,21 @@ function matchTrustedAdvisoryStickyDispositions<
       isSticky: (body: string) => isAdvisoryNonReviewNotice(body),
       isDisposition: (body: string) => isNonReviewNoticeDisposition({ body }),
       requireNewerDisposition: false,
+      allowIddAgentDisposition: options.allowIddAgentNoticeDisposition,
+      requireUneditedSticky: options.requireUneditedNotice,
+      matchesDisposition: options.requireNoticeSourceCommentId
+        ? (sticky, disposition) =>
+            parseNonReviewNoticeDisposition(disposition.body)
+              ?.sourceCommentId === String(sticky.id)
+        : undefined,
     },
     {
-      isSticky: (body: string) => isReviewSummaryComment(body),
+      // A mixed CodeRabbit summary + non-review notice is governed by the
+      // notice path above. Treating it as a completed summary as well would
+      // let an older summary acceptance hide an undispositioned rate-limit
+      // notice (#3572).
+      isSticky: (body: string) =>
+        isReviewSummaryComment(body) && !isAdvisoryNonReviewNotice(body),
       isDisposition: (body: string) => isReviewSummaryDisposition({ body }),
       requireNewerDisposition: true,
     },
@@ -5749,8 +5805,16 @@ function matchTrustedAdvisoryStickyDispositions<
     const stickiesByBot = new Map<string, T[]>();
     for (const comment of comments) {
       if (
-        !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
+        (options.requireConfiguredAdvisoryBotLogin
+          ? !isConfiguredAdvisoryBotLogin(
+              comment.authorLogin,
+              advisoryBotLogins,
+            )
+          : !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) ||
         !kind.isSticky(comment.body) ||
+        (kind.requireUneditedSticky &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'unedited') ||
         (kind.isStickyAuthor && !kind.isStickyAuthor(comment.authorLogin))
       ) {
         continue;
@@ -5809,6 +5873,7 @@ function matchTrustedAdvisoryStickyDispositions<
         if (match) {
           dispositionedStickyIndexes.add(sticky.sortedIndex);
           consumedDispositionIndexes.add(match.sortedIndex);
+          options.matchedDispositionIndexes?.add(match.sortedIndex);
         }
       }
     }

@@ -700,16 +700,28 @@ error), so an agent can gate on the exit code without parsing prose.
   ```
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
-  check after `--import` and `--substitute`. It covers manifest
-  completeness (`--hold` does not shrink the import set), placeholder
-  residue, helper loads, stale-import/package-pin advisories, and held-schema
-  drift (a held module names or scans a file `--import` would update). The
-  last three are non-blocking. Git targets require pre-import
-  `--target-base-ref`; checkpoint `HEAD` is post-import. Unborn targets use
-  the current-target fallback. Git failures are errors; non-Git targets use
-  the source-vs-current fallback. Missing manifests, placeholders, or
-  helper-load failures block. Repeat `--hold` for unchanged manifest paths;
-  unknown paths are usage errors.
+  check for a target tree after `--import` and `--substitute` have run,
+  replacing a manual walkthrough of the checklist below with six check
+  groups: manifest completeness (reusing `--import`'s own file-set
+  resolution; held targets are exempt), placeholder residue
+  (reusing `--substitute`'s scanner), a helper-load check
+  (`vendored-node` only: spawns each cataloged helper under `--target`
+  with `--help`), an informational stale-import signal, a non-blocking
+  package-pin advisory (flags an `ephemeral-npx`/`package-manager`
+  helper runtime profile with no configured `helperRuntime.packageSpec`
+  — see
+  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
+  and a non-blocking held-schema drift advisory (a schema or fixture
+  `--import` would update, while a held `src/scripts` module or a held
+  vendored `scripts` module still names it). A missing manifest file,
+  leftover placeholder, or helper-load failure is blocking; the
+  stale-import signal, package-pin
+  advisory, and held-schema drift advisory are never blocking. Repeat
+  `--hold` with a manifest target path to name content left unchanged;
+  an unknown path is a usage error.
+  Git targets require pre-import `--target-base-ref`; checkpoint `HEAD` is
+  post-import. Unborn targets use the current-target fallback. Git failures
+  are errors; non-Git targets use the source-vs-current fallback.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \

@@ -30,6 +30,7 @@ import {
 const TRUSTED_LOGIN = 'idd-agent';
 const UNTRUSTED_LOGIN = 'some-human';
 const GITHUB_ACTIONS_LOGIN = 'github-actions[bot]';
+const GITHUB_ACTIONS_LOGINS = [GITHUB_ACTIONS_LOGIN, 'github-actions'] as const;
 const TRUSTED = [TRUSTED_LOGIN];
 const SHA = 'a'.repeat(40);
 const TS = '2026-05-01T00:00:00Z';
@@ -544,51 +545,52 @@ test('classifyIddPrComment classifies a disposition-shaped body from an untruste
 });
 
 // ---------------------------------------------------------------------------
-// github-actions[bot] narrow trust.
+// GitHub Actions login-variant narrow trust.
 // ---------------------------------------------------------------------------
 
-test('classifyIddPrComment trusts github-actions[bot] only for the two named CI-bookkeeping prefixes', () => {
-  // #2657 auto-waiver shape, PR #3196-like: github-actions[bot], not itself
-  // named in trustedMarkerLogins.
-  const waiverBody = markerHelpers.renderExternalCheckWaiverComment({
-    agentId: GITHUB_ACTIONS_LOGIN,
-    claimId: 'none',
-    headSha: SHA,
-    checkSelector: 'idd-advisory-convergence',
-    reason: 'self-referential-bootstrap-auto',
-    expiresAt: TS,
-    runId: '123456789',
-  });
-  assert.equal(
-    classify(waiverBody, GITHUB_ACTIONS_LOGIN, { trustedMarkerLogins: [] }),
-    'idd-operational',
-  );
+test('classifyIddPrComment trusts GitHub Actions login variants only for the two named CI-bookkeeping prefixes', () => {
+  for (const login of GITHUB_ACTIONS_LOGINS) {
+    // #2657 auto-waiver shape, PR #3196-like: neither GitHub Actions login
+    // is itself named in trustedMarkerLogins.
+    const waiverBody = markerHelpers.renderExternalCheckWaiverComment({
+      agentId: login,
+      claimId: 'none',
+      headSha: SHA,
+      checkSelector: 'idd-advisory-convergence',
+      reason: 'self-referential-bootstrap-auto',
+      expiresAt: TS,
+      runId: '123456789',
+    });
+    assert.equal(
+      classify(waiverBody, login, { trustedMarkerLogins: [] }),
+      'idd-operational',
+    );
 
-  const cleanupEvidenceBody =
-    '<!-- idd-cleanup-evidence: complete applied:1 failed:0 skipped:0 viewer-cannot-minimize:0 retry-attempts:0 retry-bound-exhausted:false -->';
-  assert.equal(
-    classify(cleanupEvidenceBody, GITHUB_ACTIONS_LOGIN, {
-      trustedMarkerLogins: [],
-    }),
-    'idd-operational',
-  );
+    const cleanupEvidenceBody =
+      '<!-- idd-cleanup-evidence: complete applied:1 failed:0 skipped:0 viewer-cannot-minimize:0 retry-attempts:0 retry-bound-exhausted:false -->';
+    assert.equal(
+      classify(cleanupEvidenceBody, login, { trustedMarkerLogins: [] }),
+      'idd-operational',
+    );
 
-  // Any OTHER operational prefix from github-actions[bot] is NOT trusted by
-  // this narrow path -- counts as ordinary activity.
-  const claimedByBody = markerHelpers.renderClaimedByMarker({
-    agentId: GITHUB_ACTIONS_LOGIN,
-    claimId: CLAIM,
-    supersedes: 'none',
-    timestamp: TS,
-    branch: 'issue/1-test',
-  });
-  assert.equal(
-    classify(claimedByBody, GITHUB_ACTIONS_LOGIN, { trustedMarkerLogins: [] }),
-    'review',
-  );
+    // Any OTHER operational prefix from either GitHub Actions login is NOT
+    // trusted by this narrow path -- it counts as ordinary activity.
+    const claimedByBody = markerHelpers.renderClaimedByMarker({
+      agentId: login,
+      claimId: CLAIM,
+      supersedes: 'none',
+      timestamp: TS,
+      branch: 'issue/1-test',
+    });
+    assert.equal(
+      classify(claimedByBody, login, { trustedMarkerLogins: [] }),
+      'review',
+    );
+    assert.equal(classify('ordinary review prose', login), 'review');
+  }
 });
 
-test('classifyIddPrComment keeps github-actions[bot] narrow-trusted even when that login is itself present in trustedMarkerLogins or iddAgentLogins (Copilot review, PR #3437)', () => {
+test('classifyIddPrComment keeps GitHub Actions login variants narrow-trusted even when listed as trusted actors (Copilot review, PR #3437)', () => {
   // #3267: a general-purpose marker from github-actions[bot] must stay
   // `review` even when a caller's trusted-set happens to also name that
   // login (e.g. idd-doctor.mts's readCleanupEvidenceTrustedLogins always
@@ -691,29 +693,31 @@ test('buildActivitySnapshotSummary counts the same bodies from an untrusted auth
   }
 });
 
-test('buildActivitySnapshotSummary counts a github-actions[bot] comment with an unrelated operational prefix', () => {
-  const claimedByBody = markerHelpers.renderClaimedByMarker({
-    agentId: GITHUB_ACTIONS_LOGIN,
-    claimId: CLAIM,
-    supersedes: 'none',
-    timestamp: TS,
-    branch: 'issue/1-test',
-  });
-  const summary = buildActivitySnapshotSummary(
-    {
-      comments: [
-        {
-          id: '1',
-          body: claimedByBody,
-          author: { login: GITHUB_ACTIONS_LOGIN },
-          createdAt: TS,
-        },
-      ],
-    },
-    { trustedMarkerLogins: TRUSTED },
-  );
-  assert.equal(summary.totalItemCount, 1);
-  assert.equal(summary.maxActivityUpdatedAt, TS);
+test('buildActivitySnapshotSummary counts either github-actions login with an unrelated operational prefix', () => {
+  for (const login of GITHUB_ACTIONS_LOGINS) {
+    const claimedByBody = markerHelpers.renderClaimedByMarker({
+      agentId: login,
+      claimId: CLAIM,
+      supersedes: 'none',
+      timestamp: TS,
+      branch: 'issue/1-test',
+    });
+    const summary = buildActivitySnapshotSummary(
+      {
+        comments: [
+          {
+            id: '1',
+            body: claimedByBody,
+            author: { login },
+            createdAt: TS,
+          },
+        ],
+      },
+      { trustedMarkerLogins: TRUSTED },
+    );
+    assert.equal(summary.totalItemCount, 1);
+    assert.equal(summary.maxActivityUpdatedAt, TS);
+  }
 });
 
 // ---------------------------------------------------------------------------
