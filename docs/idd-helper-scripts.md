@@ -473,7 +473,9 @@ The confirmed substitutions are:
   as `state=open`, `state=closed`, or `state=all`; carry `--search`
   through the search endpoint below with its `repo:` and `is:issue`
   qualifiers; and carry `--limit` through pagination, because REST
-  returns at most 100 records per page.
+  returns at most 100 records per page. With `--paginate --slurp`,
+  combine the page arrays, discard objects with a `pull_request` field,
+  and apply the requested limit after filtering.
 
   ```sh
   gh api --paginate "repos/<owner>/<repo>/issues?state=all&per_page=100"
@@ -493,10 +495,14 @@ The confirmed substitutions are:
   ```
 
 - For `gh search issues`, use the REST search endpoint and URL-encode
-  the same repository, issue, and text qualifiers.
+  the same repository, issue, state, and text qualifiers. For
+  `--state open` or `--state closed`, add the corresponding
+  `state%3Aopen` or `state%3Aclosed` term; omit that term for `all`.
+  Use `--paginate --slurp`, flatten each response's `items`, and apply
+  the requested limit after pagination.
 
   ```sh
-  gh api "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+<url-encoded-query>"
+  gh api --paginate --slurp "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state%3Aclosed+<url-encoded-query>"
   ```
 
 - For `gh repo view`, use the repository endpoint directly. Helpers that
