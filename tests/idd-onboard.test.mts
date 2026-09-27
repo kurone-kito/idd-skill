@@ -3832,6 +3832,24 @@ test('checkHeldSchemaDrift detects multi-segment join-based directory scans', ()
   ]);
 });
 
+test('checkHeldSchemaDrift combines literal directory-scan path fragments', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync('fixtures/' + 'schemas');\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects multiline directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4015,6 +4033,32 @@ test('checkHeldSchemaDrift detects glob scans that set cwd', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('*.json', { cwd: join(root, 'schemas') });\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift does not treat a literal glob directory as recursive', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift detects opendir directory scans', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "opendirSync('schemas');\n";
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {

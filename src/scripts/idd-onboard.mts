@@ -2643,10 +2643,10 @@ function readHeldModule(
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*\()/gu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
-  /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
+  /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -3010,6 +3010,9 @@ function scanStringLiterals(text: string): string[] {
 
 function pathExpressionCandidates(text: string): string[] {
   const literals = scanStringLiterals(text);
+  if (/\+\s*/u.test(text)) {
+    return literals.length === 0 ? [] : [literals.join('')];
+  }
   if (text.includes('(')) {
     return literals.length === 0 ? [] : [literals.join('/')];
   }
@@ -3371,6 +3374,7 @@ function moduleScansManifestDirectory(
       .map(normalizeManifestScanPath);
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
     const normalizedDirectory = normalizeManifestScanPath(directory);
+    const readsDirectoryEntries = !/^glob(?:Sync)?$/u.test(apiName);
     if (
       candidates.some(
         (candidate) =>
@@ -3387,7 +3391,7 @@ function moduleScansManifestDirectory(
                 ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
                     normalizedTargetPath,
                   )
-                : candidate === normalizedDirectory))),
+                : readsDirectoryEntries && candidate === normalizedDirectory))),
       )
     ) {
       return true;
@@ -3649,7 +3653,7 @@ function formatHeldSchemaDriftWarning(
  * The scan is a static text match against the entry's manifest path or
  * its basename — the same grep-level proxy the Groom hearing adopted —
  * plus a narrow set of directory-enumeration consumers. It recognizes
- * the supported `readdir*`/`glob*` call forms, literal path composition,
+ * the supported `readdir*`/`opendir*`/`glob*` call forms, literal path composition,
  * recursive and `cwd`/`exclude` options, and the bounded glob syntax
  * implemented by `globPatternToRegex`. It remains conservative: it cannot
  * see a semantic dependency that no source text names, or arbitrary
