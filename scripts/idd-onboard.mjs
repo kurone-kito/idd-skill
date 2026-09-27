@@ -2141,6 +2141,27 @@ function isFunctionClosingParenthesis(text, index) {
   }
   return false;
 }
+function isFunctionDeclarationPrefix(text) {
+  const trimmed = text.trimEnd();
+  if (!trimmed.endsWith(')')) {
+    return false;
+  }
+  let depth = 0;
+  for (let current = trimmed.length - 1; current >= 0; current -= 1) {
+    const character = trimmed[current] ?? '';
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?$/u.test(
+          trimmed.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
 function isBlockClosingBrace(text, index) {
   let depth = 0;
   for (let current = index; current >= 0; current -= 1) {
@@ -2153,6 +2174,7 @@ function isBlockClosingBrace(text, index) {
         const openingPrefix = text.slice(0, current);
         return (
           /(?:^|[;}])\s*(?:else|do|try|finally)\s*$/u.test(openingPrefix) ||
+          isFunctionDeclarationPrefix(openingPrefix) ||
           (/\)\s*$/u.test(openingPrefix) &&
             !isFunctionClosingParenthesis(
               openingPrefix,
@@ -3996,10 +4018,12 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
         // would add the source entry while the held module remains old.
         return null;
       }
-      const entryType = treeEntry
-        .slice(0, treeEntry.indexOf('\t'))
-        .split(' ')[1];
-      if (entryType !== 'blob') {
+      const entryHeader = treeEntry.slice(0, treeEntry.indexOf('\t'));
+      const [entryMode, entryType] = entryHeader.split(' ');
+      if (
+        entryType !== 'blob' ||
+        (entryMode !== '100644' && entryMode !== '100755')
+      ) {
         throw new Error(
           `Git target baseline path is not a regular file: ${treePath}`,
         );

@@ -229,6 +229,17 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
+   For an unborn target, inspect untracked files and create the baseline
+   before the clean-target check:
+
+   ```sh
+   if ! git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1; then
+     git -C <target-repo> status --short
+     git -C <target-repo> add -A && \
+     git -C <target-repo> commit --allow-empty -m "chore: record baseline"
+   fi
+   ```
+
    Require a clean target:
 
    ```sh
@@ -236,16 +247,6 @@ below instead.
    test "$root" = "$(cd <target-repo> && pwd -P)" &&
    status=$(git -C <target-repo> status --short --untracked-files=all) &&
    test -z "$status" || exit 1
-   ```
-
-   If the target has no commit yet, create its pre-import baseline after
-   confirming that it is clean:
-
-   ```sh
-   if ! git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1; then
-     git -C <target-repo> add -A && \
-     git -C <target-repo> commit --allow-empty -m "chore: record pre-import baseline"
-   fi
    ```
 
 3. Import the core template file set (add `--profile vendored-node`

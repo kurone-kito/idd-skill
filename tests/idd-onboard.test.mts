@@ -4282,6 +4282,19 @@ test('checkHeldSchemaDrift ignores regex literals after class declarations', () 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after function declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "function helper() {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift keeps directory-scan API matching case-sensitive', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -6313,6 +6326,30 @@ test('checkHeldSchemaDrift ignores Git baseline non-file collisions', () => {
     targetBaseRef: 'HEAD',
   });
   assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift rejects Git baseline symlinks', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const outsideRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const targetSchema = join(targetRoot, DRIFT_SCHEMA);
+  const outsideSchema = join(outsideRoot, 'baseline-schema.json');
+  writeFileSync(outsideSchema, '{ "version": 1 }\n');
+  rmSync(targetSchema);
+  symlinkSync(outsideSchema, targetSchema);
+  commitFixtureBaseline(targetRoot);
+  rmSync(targetSchema);
+  writeFileSync(targetSchema, '{ "version": 1 }\n');
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        hold: [DRIFT_MODULE],
+      }),
+    /Git target baseline path is not a regular file/,
+  );
 });
 
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
