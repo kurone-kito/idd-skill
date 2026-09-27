@@ -2491,6 +2491,27 @@ function unwrapAngleBracketDestination(target) {
     ? target.slice(1, -1)
     : target;
 }
+function decodeMarkdownCharacterReferences(value) {
+  return value.replace(
+    /&#(?:x([0-9a-f]+)|([0-9]+));/giu,
+    (whole, hexadecimal, decimal) => {
+      const rawCodePoint = hexadecimal ?? decimal;
+      if (rawCodePoint === undefined) {
+        return whole;
+      }
+      const codePoint = Number.parseInt(rawCodePoint, hexadecimal ? 16 : 10);
+      if (
+        !Number.isInteger(codePoint) ||
+        codePoint <= 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return whole;
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+}
 /**
  * Remove the block-container prefixes that can precede a reference
  * definition. The input has already had code and HTML-comment regions
@@ -2581,6 +2602,23 @@ function isReferenceDefinitionTitleSuffix(suffix) {
     )
   );
 }
+function referenceDefinitionHasTitle(suffix) {
+  const trimmed = suffix.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (trimmed.startsWith('<')) {
+    const closingBracket = trimmed.indexOf('>');
+    return (
+      closingBracket >= 0 && trimmed.slice(closingBracket + 1).trim() !== ''
+    );
+  }
+  const destination = trimmed.match(/^\S+/u)?.[0];
+  return (
+    destination !== undefined &&
+    trimmed.slice(destination.length).trim().length > 0
+  );
+}
 function parseReferenceDefinitionCandidate(line) {
   const { content, containerKinds, canListContainerInterruptParagraph } =
     stripReferenceDefinitionContainers(line);
@@ -2594,9 +2632,37 @@ function parseReferenceDefinitionCandidate(line) {
   return {
     label: match[1],
     destination: readReferenceDefinitionDestination(match[2]),
+    hasTitle: referenceDefinitionHasTitle(match[2]),
     containerKinds,
     canListContainerInterruptParagraph,
   };
+}
+function mergeMultilineReferenceDefinitionLabels(text) {
+  const lines = text.split('\n');
+  const mergedLines = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const current = stripReferenceDefinitionContainers(line);
+    const nextLine = lines[index + 1];
+    if (nextLine !== undefined) {
+      const next = stripReferenceDefinitionContainers(nextLine);
+      if (
+        /^\[[^\]\n]*$/u.test(current.content) &&
+        /^[^\u005B\u005D\n]+\u005D:[ \t]*/u.test(next.content) &&
+        current.containerKinds.join('/') === next.containerKinds.join('/')
+      ) {
+        const currentPrefix = line.slice(
+          0,
+          line.length - current.content.length,
+        );
+        mergedLines.push(`${currentPrefix}${current.content} ${next.content}`);
+        index += 1;
+        continue;
+      }
+    }
+    mergedLines.push(line);
+  }
+  return mergedLines;
 }
 function isReferenceDefinitionBlockBoundary(content, paragraphOpen) {
   return (
@@ -2607,7 +2673,7 @@ function isReferenceDefinitionBlockBoundary(content, paragraphOpen) {
   );
 }
 function isReferenceDefinitionTitleContinuation(content) {
-  return /^(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\))[ \t]*$/u.test(content);
+  return isReferenceDefinitionTitleSuffix(content);
 }
 function hasReferenceDefinitionContinuationIndent(line) {
   return /^(?: {0,3}>[ \t]?)+[ \t]+/u.test(line) || /^[ \t]+/u.test(line);
@@ -2654,14 +2720,16 @@ function collectReferenceStyleLinkDefinitions(text) {
   const definitions = new Map();
   let paragraphOpen = false;
   let previousDefinition = false;
+  let previousDefinitionTitleConsumed = false;
   let previousContainerKinds = [];
   let pendingContinuation;
-  for (const line of text.split('\n')) {
+  for (const line of mergeMultilineReferenceDefinitionLabels(text)) {
     const { content, containerKinds } =
       stripReferenceDefinitionContainers(line);
     if (content.trim().length === 0) {
       paragraphOpen = false;
       previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
       previousContainerKinds = [];
       pendingContinuation = undefined;
       continue;
@@ -2680,17 +2748,24 @@ function collectReferenceStyleLinkDefinitions(text) {
       ) {
         const key = normalizeLinkReferenceLabel(pendingContinuation.label);
         if (!definitions.has(key)) {
-          definitions.set(key, unwrapAngleBracketDestination(destination));
+          definitions.set(
+            key,
+            decodeMarkdownCharacterReferences(
+              unwrapAngleBracketDestination(destination),
+            ),
+          );
         }
         pendingContinuation = undefined;
         paragraphOpen = false;
         previousDefinition = true;
+        previousDefinitionTitleConsumed = false;
         previousContainerKinds = containerKinds;
         continue;
       }
       pendingContinuation = undefined;
       paragraphOpen = true;
       previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
     }
     const candidate = parseReferenceDefinitionCandidate(line);
     if (candidate) {
@@ -2714,11 +2789,14 @@ function collectReferenceStyleLinkDefinitions(text) {
           if (!definitions.has(key)) {
             definitions.set(
               key,
-              unwrapAngleBracketDestination(candidate.destination),
+              decodeMarkdownCharacterReferences(
+                unwrapAngleBracketDestination(candidate.destination),
+              ),
             );
           }
           paragraphOpen = false;
           previousDefinition = true;
+          previousDefinitionTitleConsumed = candidate.hasTitle;
           previousContainerKinds = candidate.containerKinds;
           continue;
         } else if (candidate.destination === undefined) {
@@ -2728,6 +2806,7 @@ function collectReferenceStyleLinkDefinitions(text) {
           };
           paragraphOpen = false;
           previousDefinition = false;
+          previousDefinitionTitleConsumed = false;
           previousContainerKinds = candidate.containerKinds;
           continue;
         }
@@ -2735,6 +2814,7 @@ function collectReferenceStyleLinkDefinitions(text) {
     }
     if (
       previousDefinition &&
+      !previousDefinitionTitleConsumed &&
       isReferenceDefinitionTitleContinuation(content) &&
       matchesReferenceDefinitionContinuationContainer(
         line,
@@ -2744,11 +2824,13 @@ function collectReferenceStyleLinkDefinitions(text) {
     ) {
       paragraphOpen = false;
       previousDefinition = true;
+      previousDefinitionTitleConsumed = true;
       previousContainerKinds = containerKinds;
       continue;
     }
     paragraphOpen = !isReferenceDefinitionBlockBoundary(content, paragraphOpen);
     previousDefinition = false;
+    previousDefinitionTitleConsumed = false;
     previousContainerKinds = containerKinds;
   }
   return definitions;
