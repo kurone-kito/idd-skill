@@ -443,6 +443,7 @@ could ever observe it as 'alive'".
    unpushed work is otherwise invisible here
    (`idd-merge.instructions.md`); tag-only detached history is not
    counted, but local refs are:
+   See issue `#3540` for the observed upstream-tag incident.
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> log @{u}..HEAD` (or all commits when there is no
