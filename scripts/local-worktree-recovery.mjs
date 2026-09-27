@@ -3186,6 +3186,9 @@ export function copyPathWithSafeSymlinks(from, to, sourceRoot = from) {
       }
       return;
     }
+    if (!sourceStat.isFile()) {
+      throw new Error(`unsupported special file in recovery source: ${source}`);
+    }
     try {
       const existing = lstatSync(destination);
       if (existing.isDirectory() || existing.isSymbolicLink()) {

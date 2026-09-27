@@ -113,6 +113,22 @@ test('copyPathWithSafeSymlinks refuses a symlinked destination parent', () => {
   }
 });
 
+test('copyPathWithSafeSymlinks refuses special files before copying', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-special-'));
+  const source = join(root, 'source.pipe');
+  const destination = join(root, 'preserve', 'copy');
+  try {
+    execFileSync('mkfifo', [source]);
+    assert.throws(
+      () => copyPathWithSafeSymlinks(source, destination),
+      /unsupported special file in recovery source/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery refuses malformed local config before default-branch lookup', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-config-'));
   try {
