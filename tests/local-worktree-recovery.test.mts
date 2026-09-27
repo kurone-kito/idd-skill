@@ -1289,6 +1289,79 @@ test('prunable shortcut rechecks claim identity after copying private admin data
   assert.match(verdict.result, /final prunable-worktree routing/);
 });
 
+test('prunable shortcut re-verifies the admin backup immediately before removal', () => {
+  let confirmCalls = 0;
+  let backupExists = false;
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: (path) => {
+      if (path === '/repo/linked') return false;
+      if (path === '/tmp/preserve/prunable-gitdir') return backupExists;
+      return true;
+    },
+    confirmBlock: () => {
+      confirmCalls += 1;
+      if (confirmCalls >= 4) backupExists = false;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: 'unreadable',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: () => {
+      backupExists = true;
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 4);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /admin-data backup disappeared or moved/);
+});
+
 test('prunable shortcut stops when private admin-directory ownership cannot be established', () => {
   let removeCalled = false;
   const deps = fakeDeps({
@@ -1853,8 +1926,8 @@ test('uses collision-safe destinations for uninitialized submodule paths', () =>
     deps,
   );
   assert.equal(verdict.plan.removal?.ran, true);
-  assert.equal(copiedTo.length, 2);
-  assert.notEqual(copiedTo[0], copiedTo[1]);
+  assert.equal(copiedTo.length, 4);
+  assert.equal(new Set(copiedTo).size, 2);
 });
 
 test('refuses a fresh routing state of `-local-worktree-unreadable` outside the prunable shortcut (Copilot review finding)', () => {
@@ -2066,6 +2139,37 @@ test('late preservation rescans initialized submodule ignored files before remov
   );
   assert.deepEqual(copied, ['/tmp/preserve/ignored/submodule/cache.tmp']);
   assert.equal(submoduleIgnoredScans, 2);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('late preservation refreshes uninitialized submodule copies before removal', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 uninitialized\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(copied.length, 2);
+  assert.equal(copied[0], copied[1]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 

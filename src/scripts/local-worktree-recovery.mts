@@ -1946,6 +1946,44 @@ function reverifyPreservationArtifactsFresh(
   return true;
 }
 
+/** Refresh uninitialized-submodule copies immediately before linked-worktree
+ * removal. Unlike an initialized submodule, an uninitialized one has no Git
+ * status or stash scope to rescan; files can still appear in its plain
+ * checkout directory after the initial step-3 copy. Re-copying into the same
+ * destination preserves both the original backup and any late-arriving
+ * entries, while the containment and existence checks fail closed if the
+ * source or destination becomes unsafe. */
+function refreshUninitializedSubmoduleCopies(
+  entries: readonly UninitializedSubmoduleEntry[],
+  targetPath: string,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'copyPath' | 'pathExists' | 'runGit' | 'realpathOrNull' | 'readlinkOrNull'
+  >,
+): string | null {
+  for (const entry of entries) {
+    if (entry.copiedTo === null) {
+      return `late preservation for uninitialized submodule ${entry.path} has no verified destination; stopping before removal`;
+    }
+    if (!deps.pathExists(join(targetPath, entry.path))) continue;
+    if (!isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)) {
+      return `late preservation for uninitialized submodule ${entry.path} has an unsafe destination; stopping before removal`;
+    }
+    try {
+      deps.copyPath(join(targetPath, entry.path), entry.copiedTo, targetPath);
+    } catch {
+      return `late preservation for uninitialized submodule ${entry.path} could not be copied; stopping before removal`;
+    }
+    if (
+      !deps.pathExists(entry.copiedTo) ||
+      !isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)
+    ) {
+      return `late preservation for uninitialized submodule ${entry.path} could not be verified; stopping before removal`;
+    }
+  }
+  return null;
+}
+
 /**
  * Run the full §LWR steps 1/3/4 sequence. Pure over injected `deps` so a
  * unit test can assert exact call order (acquire-lock before recheck,
@@ -2982,6 +3020,15 @@ export function runLocalWorktreeRecovery(
       return verdict;
     }
 
+    const lateUninitializedError = refreshUninitializedSubmoduleCopies(
+      verdict.plan.uninitializedSubmodules,
+      targetPath,
+      deps,
+    );
+    if (lateUninitializedError !== null) {
+      return recordRemovalFailure(lateUninitializedError);
+    }
+
     if (shortcut.eligible) {
       const adminLookup = deps.findWorktreeAdminDir
         ? deps.findWorktreeAdminDir(repoPath, targetPath)
@@ -3068,6 +3115,21 @@ export function runLocalWorktreeRecovery(
       if (!finalShortcutStillMatches) {
         return recordRemovalFailure(
           'the final prunable-worktree routing/claim identity no longer matches; stopping before forced removal',
+        );
+      }
+      const prunableAdminCopy = verdict.plan.prunableAdminCopy;
+      if (
+        prunableAdminCopy !== null &&
+        prunableAdminCopy.copiedTo !== null &&
+        (!deps.pathExists(prunableAdminCopy.copiedTo) ||
+          !isCopyDestinationOutsideKnownPaths(
+            prunableAdminCopy.copiedTo,
+            [targetPath, prunableAdminCopy.source],
+            deps,
+          ))
+      ) {
+        return recordRemovalFailure(
+          'the prunable worktree admin-data backup disappeared or moved before forced removal; stopping before removal',
         );
       }
     }
