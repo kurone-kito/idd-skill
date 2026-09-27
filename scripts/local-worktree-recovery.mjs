@@ -3556,7 +3556,12 @@ export function copyPathWithSafeSymlinks(
       let sourceFd = null;
       let temporaryFd = null;
       try {
-        const noFollow = constants.O_NOFOLLOW ?? 0;
+        const noFollow = constants.O_NOFOLLOW;
+        if (noFollow === undefined) {
+          throw new Error(
+            'recovery source copy requires a platform-supported no-follow open',
+          );
+        }
         sourceFd = openSync(source, constants.O_RDONLY | noFollow);
         temporaryFd = openSync(
           temporaryPath,

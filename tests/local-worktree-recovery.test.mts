@@ -52,7 +52,11 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Pure-function unit tests
 // ---------------------------------------------------------------------------
 
-test('copyPathWithSafeSymlinks materializes in-tree links and preserves external links', () => {
+test('copyPathWithSafeSymlinks materializes in-tree links and preserves external links', {
+  // Windows does not expose a no-reparse open flag through Node's standard
+  // fs API, so production code fails closed before copying regular files.
+  skip: process.platform === 'win32',
+}, () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-'));
   const source = join(root, 'source');
   const destination = join(root, 'preserve', 'destination');
@@ -113,7 +117,10 @@ test('copyPathWithSafeSymlinks refuses a symlinked destination parent', () => {
   }
 });
 
-test('copyPathWithSafeSymlinks replaces a destination leaf symlink safely', () => {
+test('copyPathWithSafeSymlinks replaces a destination leaf symlink safely', {
+  // See the platform note on the materialization test above.
+  skip: process.platform === 'win32',
+}, () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-leaf-'));
   const source = join(root, 'source.txt');
   const outside = join(root, 'outside.txt');
