@@ -2102,7 +2102,6 @@ function readHeldModule(targetRoot, targetPath) {
  */
 const DIRECTORY_SCAN_API_PATTERN =
   /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\)?\s*\()/gu;
-const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
 function escapeRegExp(text) {
@@ -2661,9 +2660,40 @@ function decodeJavaScriptStringLiteral(text) {
   return result;
 }
 function scanStringLiterals(text) {
-  return [...text.matchAll(DIRECTORY_SCAN_STRING_PATTERN)].map((literal) =>
-    decodeJavaScriptStringLiteral(literal[2] ?? ''),
-  );
+  const literals = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const quote = text[index];
+    if (quote !== "'" && quote !== '"' && quote !== '`') {
+      continue;
+    }
+    let content = '';
+    let closed = false;
+    for (let cursor = index + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor] ?? '';
+      if (character === '\\') {
+        content += character;
+        const escaped = text[cursor + 1];
+        if (escaped !== undefined) {
+          content += escaped;
+          cursor += 1;
+        }
+        continue;
+      }
+      if (character === quote) {
+        literals.push(decodeJavaScriptStringLiteral(content));
+        index = cursor;
+        closed = true;
+        break;
+      }
+      if (character === '\n' || character === '\r') {
+        break;
+      }
+      content += character;
+    }
+    if (!closed) {
+    }
+  }
+  return literals;
 }
 function unwrapParenthesizedExpression(text) {
   let expression = text.trim();

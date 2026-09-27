@@ -5090,6 +5090,27 @@ test('checkHeldSchemaDrift treats escaped class hyphens literally', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift parses escaped delimiters in scan literals', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const schemaPath = "schemas/foo'bar.schema.json";
+  const moduleText = `${String.raw`globSync('schemas/foo\'bar*.json');`}\n`;
+  writeDriftManifest(sourceRoot, {
+    [schemaPath]: '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [schemaPath]: '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: schemaPath, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift preserves UTF-16 code-unit ordinary class semantics', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
