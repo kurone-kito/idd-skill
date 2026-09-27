@@ -352,6 +352,11 @@ test('isPathContainedIn is platform-portable, not a hardcoded `/`-prefix check (
   assert.equal(isPathContainedIn('/target', '/target/sub'), false);
   assert.equal(isPathContainedIn('/target/..backup', '/target'), true);
   assert.equal(isPathContainedIn('/target/../other', '/target'), false);
+  assert.equal(
+    isPathContainedIn('/target/safe\\..\\backup', '/target'),
+    process.platform !== 'win32',
+    'backslashes are filename characters on POSIX but separators on Windows',
+  );
 });
 
 test('resolveEffectiveRealpath walks up to the nearest existing ancestor and re-appends the missing suffix', () => {
@@ -714,6 +719,48 @@ test('step 4 still releases the clone lock when removal fails', () => {
   );
   assert.equal(verdict.mutated, false);
   assert.deepEqual(callOrder, ['acquire', 'remove-failed', 'release']);
+});
+
+test('step 4 returns a preservation verdict when clone-lock acquisition throws', () => {
+  let stashListCalls = 0;
+  const deps = fakeDeps({
+    ensurePreserveDir: () => '/tmp/preserve',
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
+        return { ok: true, status: 0, stdout: '!! .env\0', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashListCalls === 1
+              ? ''
+              : 'stash@{0}: On issue/1-task: idd-lwr claim-x',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    acquireCloneLock: () => {
+      throw new Error('clone lock timeout');
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.preserveDir, '/tmp/preserve');
+  assert.equal(verdict.plan.stashes[0]?.stashed, true);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /clone-scoped lock: clone lock timeout/);
 });
 
 test('regression: a successful step-3 stash before a failed step-4 removal must not report success (CodeRabbit finding)', () => {
@@ -1614,8 +1661,9 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     checkLock: () => {
       checkLockCalls += 1;
       // Call 1 = step 1's own check; call 2 = step 4's pre-checkout
-      // recheck; call 3 = the FINAL, post-checkout check. All three must
-      // observe the recovered claim's lock before deletion is authorized.
+      // recheck; call 3 = the FINAL, post-checkout check; call 4 = the
+      // immediately-before-delete check. All four must observe the
+      // recovered claim's lock before deletion is authorized.
       return {
         path: '/repo/primary/.git/idd-claim.lock',
         present: true,
@@ -1667,7 +1715,7 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 3);
+  assert.equal(checkLockCalls, 4);
   assert.equal(
     unlinkAttempted,
     true,
@@ -2186,7 +2234,17 @@ function runCli(
       '2026-09-25T01:00:00Z',
       ...extraArgs,
     ],
-    { cwd: sandbox.primary, encoding: 'utf8' },
+    {
+      cwd: sandbox.primary,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: GIT_ENV.GIT_AUTHOR_NAME,
+        GIT_AUTHOR_EMAIL: GIT_ENV.GIT_AUTHOR_EMAIL,
+        GIT_COMMITTER_NAME: GIT_ENV.GIT_COMMITTER_NAME,
+        GIT_COMMITTER_EMAIL: GIT_ENV.GIT_COMMITTER_EMAIL,
+      },
+    },
   );
 }
 

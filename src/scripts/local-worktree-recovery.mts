@@ -773,7 +773,9 @@ export function isPathContainedIn(child: string, parent: string): boolean {
   return (
     rel !== '' &&
     !isAbsolute(rel) &&
-    !rel.split(/[\\/]+/).some((segment) => segment === '..')
+    !rel
+      .split(sep === '\\' ? /[\\/]+/ : /[/]+/)
+      .some((segment) => segment === '..')
   );
 }
 
@@ -1206,6 +1208,7 @@ function planAndMaybePreserve(
     | 'readlinkOrNull'
   >,
 ): {
+  preserveDir: string | null;
   inProgressOperation: InProgressOperation | null;
   stashes: StashPlanEntry[];
   uninitializedSubmodules: UninitializedSubmoduleEntry[];
@@ -1222,6 +1225,14 @@ function planAndMaybePreserve(
    * top-level status-probe finding). */
   submoduleListFailed: boolean;
 } {
+  let preserveDir: string | null = null;
+  const preserveDeps = {
+    ...deps,
+    ensurePreserveDir: (): string => {
+      preserveDir = deps.ensurePreserveDir();
+      return preserveDir;
+    },
+  };
   const readFile = (p: string): string | null => {
     try {
       return readFileSync(p, 'utf8');
@@ -1265,7 +1276,7 @@ function planAndMaybePreserve(
     '.',
     apply,
     path,
-    deps,
+    preserveDeps,
   );
   ignoredFilesCopied = ignoredFilesCopied.concat(topLevelIgnored.copied);
   ignoredFilesScanFailed = ignoredFilesScanFailed || topLevelIgnored.scanFailed;
@@ -1276,7 +1287,7 @@ function planAndMaybePreserve(
       submodule.path,
       apply,
       path,
-      deps,
+      preserveDeps,
     );
     ignoredFilesCopied = ignoredFilesCopied.concat(submoduleIgnored.copied);
     ignoredFilesScanFailed =
@@ -1284,7 +1295,15 @@ function planAndMaybePreserve(
   }
 
   const stashes: StashPlanEntry[] = [
-    planAndMaybeStashScope(path, '.', tag, apply, path, deps, submodulePaths),
+    planAndMaybeStashScope(
+      path,
+      '.',
+      tag,
+      apply,
+      path,
+      preserveDeps,
+      submodulePaths,
+    ),
   ];
   const uninitializedSubmodules: UninitializedSubmoduleEntry[] = [];
   const submoduleOperations = new Map<string, InProgressOperation | null>();
@@ -1299,9 +1318,9 @@ function planAndMaybePreserve(
         // directory (and copy into it) when actually applying.
         let destination: string | null = null;
         if (apply) {
-          const preserveDir = deps.ensurePreserveDir();
+          const preserveDirForSubmodule = preserveDeps.ensurePreserveDir();
           destination = join(
-            preserveDir,
+            preserveDirForSubmodule,
             `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
           );
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
@@ -1336,7 +1355,7 @@ function planAndMaybePreserve(
         tag,
         apply,
         path,
-        deps,
+        preserveDeps,
         nestedSubmodulePathsForScope(submodulePaths, submodule.path),
       ),
     );
@@ -1376,7 +1395,7 @@ function planAndMaybePreserve(
       const operation = submoduleOperations.get(submodule.path);
       if (!stash?.stashed && !ref?.written && operation === null) continue;
       const submodulePath = join(path, submodule.path);
-      const gitDir = deps.runGit(
+      const gitDir = preserveDeps.runGit(
         ['rev-parse', '--absolute-git-dir'],
         submodulePath,
       );
@@ -1385,9 +1404,9 @@ function planAndMaybePreserve(
         submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
         continue;
       }
-      const preserveDir = deps.ensurePreserveDir();
+      const preserveDirForAdmin = preserveDeps.ensurePreserveDir();
       const destination = join(
-        preserveDir,
+        preserveDirForAdmin,
         'submodule-gitdir',
         Buffer.from(submodule.path).toString('base64url'),
       );
@@ -1411,6 +1430,7 @@ function planAndMaybePreserve(
   }
 
   return {
+    preserveDir,
     inProgressOperation,
     stashes,
     uninitializedSubmodules,
@@ -1648,6 +1668,21 @@ export function runLocalWorktreeRecovery(
     mutated: false,
     result: '',
   };
+  const errorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+  const recordRemovalFailure = (
+    detail: string,
+  ): LocalWorktreeRecoveryVerdict => {
+    verdict.plan.removal = {
+      kind: verdict.primaryOrLinked ?? 'linked',
+      developmentBranch: null,
+      wouldRun: true,
+      ran: false,
+      detail,
+    };
+    verdict.result = detail;
+    return verdict;
+  };
 
   const records = deps.listWorktreeRecords(cwd);
   if (records === null || records.length === 0) {
@@ -1771,7 +1806,15 @@ export function runLocalWorktreeRecovery(
   // --force... Otherwise run the... claim-lock helper's check form"): the
   // prunable-record shortcut below only ever skips the claim-lock check,
   // never the confirm-the-block spawn itself.
-  const confirmed = deps.confirmBlock(cwd);
+  let confirmed: ConfirmBlockOutcome;
+  try {
+    confirmed = deps.confirmBlock(cwd);
+  } catch (error) {
+    verdict.step1.outcome = 'confirm-failed';
+    verdict.step1.reason = `confirm-the-block threw: ${errorMessage(error)}`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   if (!confirmed.ok || !confirmed.routing) {
     verdict.step1.outcome = 'confirm-failed';
     verdict.step1.reason = confirmed.error ?? 'confirm-the-block check failed';
@@ -1874,6 +1917,7 @@ export function runLocalWorktreeRecovery(
         false,
         deps,
       );
+      verdict.preserveDir = preserve.preserveDir;
       verdict.plan.inProgressOperation = preserve.inProgressOperation;
       verdict.plan.stashes = preserve.stashes;
       verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
@@ -1883,12 +1927,19 @@ export function runLocalWorktreeRecovery(
       verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
       verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
     }
+    let dryRunDevelopmentBranch: string | null = null;
+    if (verdict.primaryOrLinked === 'primary') {
+      try {
+        dryRunDevelopmentBranch = deps.resolveDevelopmentBranch();
+      } catch (error) {
+        return recordRemovalFailure(
+          `could not plan primary-worktree release: ${errorMessage(error)}`,
+        );
+      }
+    }
     verdict.plan.removal = {
       kind: verdict.primaryOrLinked ?? 'linked',
-      developmentBranch:
-        verdict.primaryOrLinked === 'primary'
-          ? deps.resolveDevelopmentBranch()
-          : null,
+      developmentBranch: dryRunDevelopmentBranch,
       wouldRun: true,
       ran: false,
       detail:
@@ -1918,6 +1969,7 @@ export function runLocalWorktreeRecovery(
       true,
       deps,
     );
+    verdict.preserveDir = preserve.preserveDir;
     verdict.plan.inProgressOperation = preserve.inProgressOperation;
     verdict.plan.stashes = preserve.stashes;
     verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
@@ -1943,7 +1995,14 @@ export function runLocalWorktreeRecovery(
   }
 
   const repoPath = verdict.primaryWorktree ?? cwd;
-  const lockHandle = deps.acquireCloneLock(repoPath, args.agentId);
+  let lockHandle: CloneLockHandle;
+  try {
+    lockHandle = deps.acquireCloneLock(repoPath, args.agentId);
+  } catch (error) {
+    return recordRemovalFailure(
+      `could not acquire the clone-scoped lock: ${errorMessage(error)}`,
+    );
+  }
   try {
     const recheck = deps.confirmBlock(cwd);
     if (!recheck.ok || !recheck.routing) {
@@ -2224,6 +2283,30 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      // The preservation re-check above is another concurrency window:
+      // claim-lock.mts can replace the worktree-local lock without taking
+      // this clone lock. Re-read the lock after the final artifact check and
+      // immediately before resolving and unlinking it, so this release can
+      // never delete a replacement claim's lock.
+      const immediatelyBeforeDeleteLock = deps.checkLock(targetPath);
+      if (
+        immediatelyBeforeDeleteLock.malformed ||
+        !lockMatchesRecoveredClaim(
+          immediatelyBeforeDeleteLock,
+          recoveredClaimId,
+        )
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'the primary-worktree lock no longer matches the recovered claim-id immediately before deletion; stopping before lock removal',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const lockPath = deps.runGit(
         ['rev-parse', '--absolute-git-dir'],
         targetPath,
@@ -2392,6 +2475,10 @@ export function runLocalWorktreeRecovery(
     verdict.mutated = true;
     verdict.result = 'linked worktree removed';
     return verdict;
+  } catch (error) {
+    return recordRemovalFailure(
+      `step 4 dependency failed: ${errorMessage(error)}`,
+    );
   } finally {
     deps.releaseCloneLock(lockHandle);
   }
