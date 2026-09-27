@@ -770,7 +770,7 @@ export function computeRerunPlan(
       rowCompletedAt < latestAttemptStartedAt
     );
   };
-  const hasUnsupersededNonPassRow = (runId: string): boolean =>
+  const hasRemainingNonPassRow = (runId: string): boolean =>
     instances.some(
       (candidate) =>
         String(candidate.runId ?? '').trim() === runId &&
@@ -796,7 +796,7 @@ export function computeRerunPlan(
       PULL_REQUEST_FAMILY_EVENTS.has(siblingRunEvent) &&
       siblingCompletedAt !== null &&
       siblingCompletedAt > heldCompletedAt &&
-      !hasUnsupersededNonPassRow(siblingRunId)
+      !hasRemainingNonPassRow(siblingRunId)
     );
   };
   const liveCoverageRecoveryRunIds = new Set(

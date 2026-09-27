@@ -1806,7 +1806,7 @@ test('#3539: keeps a distinct current-attempt duplicate visible', () => {
   assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
 });
 
-test('#3539: rejects a passing sibling run with an unsuperseded current-attempt failure', () => {
+test('#3539: rejects a passing sibling run with a remaining current-attempt failure', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
