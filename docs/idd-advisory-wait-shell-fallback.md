@@ -229,51 +229,72 @@ export BOT_REST_LOGIN
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
 HEAD_COMMITTED_AT=$(gh pr view {pr-number} --json commits --jq '.commits[-1].committedDate')
 request_event() {
-  gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate --jq \
-    '.[] | select(.event == "review_requested" and .reviewer.login == env.BOT_REST_LOGIN) | [.id, .created_at] | @tsv' | tail -1
+  local result
+  result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate --jq \
+    '.[] | select(.event == "review_requested" and .requested_reviewer.login == env.BOT_REST_LOGIN) | [.id, .created_at] | @tsv') || return 1
+  printf '%s\n' "$result" | tail -1
 }
 request_nodes() {
-  gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}' |
+  local result
+  result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}') || return 1
+  printf '%s' "$result" |
     jq -r '.data.repository.pullRequest.reviewRequests.nodes[] | select(.requestedReviewer.login == env.BOT_REST_LOGIN) | .id'
 }
-EVENT_BEFORE=$(request_event)
-NODES_BEFORE=$(request_nodes)
-registration_ok() {
-  EVENT_AFTER=$(request_event)
-  NODES_AFTER=$(request_nodes)
-  EVENT_ID=${EVENT_AFTER%%$'\t'*}; EVENT_AT=${EVENT_AFTER#*$'\t'}
-  EVENT_NEW=false
-  if [ -n "$EVENT_ID" ] && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
-    && [ "$EVENT_AT" \> "$HEAD_COMMITTED_AT" ]; then EVENT_NEW=true; fi
-  NODE_FRESH=false
-  while IFS= read -r node; do
-    [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
-  done <<EOF
+registration_attempt() {
+  EVENT_BEFORE=$(request_event) || { echo "event snapshot unreadable" >&2; return 2; }
+  NODES_BEFORE=$(request_nodes) || { echo "request-node snapshot unreadable" >&2; return 2; }
+  registration_ok() {
+    EVENT_AFTER=$(request_event) || return 2
+    NODES_AFTER=$(request_nodes) || return 2
+    EVENT_ID=${EVENT_AFTER%%$'\t'*}; EVENT_AT=${EVENT_AFTER#*$'\t'}
+    EVENT_NEW=false
+    if [ -n "$EVENT_ID" ] && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
+      && [ "$EVENT_AT" \> "$HEAD_COMMITTED_AT" ]; then EVENT_NEW=true; fi
+    NODE_FRESH=false
+    while IFS= read -r node; do
+      [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
+    done <<EOF
 $NODES_AFTER
 EOF
-  [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
-}
+    [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
+  }
 
-gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-registration_ok || {
+  gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
+  registration_ok; status=$?
+  [ "$status" -eq 0 ] && return 0
+  [ "$status" -eq 2 ] && return 2
+
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-    -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
-  registration_ok || {
+    -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
+  registration_ok; status=$?
+  [ "$status" -eq 0 ] && return 0
+  [ "$status" -eq 2 ] && return 2
+
   # Resolve ids live; GraphQL user(login:) does not resolve a Bot.
-  BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
+  BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id') || return 2
   jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
     '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
-    gh api graphql --input -
-    registration_ok || { echo "registration evidence absent" >&2; exit 1; }
-  }
+    gh api graphql --input - || :
+  registration_ok; status=$?
+  [ "$status" -eq 0 ] && return 0
+  [ "$status" -eq 2 ] && return 2
+  echo "registration evidence absent" >&2
+  return 1
 }
+
+# E14 stops/asks on status 1 or 2. AW3-S preserves the status and continues
+# to its step 4 bounded rechecks instead of aborting this shared procedure.
+REGISTRATION_STATUS=0
+registration_attempt || REGISTRATION_STATUS=$?
 ```
 
 The post-request reads must run after each mutating attempt. The
 `EVENT_BEFORE`/`NODES_BEFORE` values are the AW3-S baselines; carry a
 fresh node proof into step 4 and step 5 rather than discarding it when
-the event is delayed. E14 then posts its `advisory-wait` marker.
-AW3-S keeps its own step 4 disposition, but uses either fresh proof.
+the event is delayed. E14 posts its `advisory-wait` marker only when
+`REGISTRATION_STATUS` is `0`; statuses `1`/`2` stop and ask. AW3-S
+keeps its step 4 disposition and uses either fresh proof, even when the
+shared routine returned an unresolved status.
 
 ## AW3-S
 

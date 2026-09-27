@@ -298,7 +298,8 @@ E14's **Primary advisory bot**):
    any other failure, or that retry's exhaustion, posts the
    `AW4` pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
-3. **Request** Copilot again, same fallback pattern.
+3. **Request** Copilot again, same fallback pattern; preserve its return
+   status for step 4's bounded rechecks.
 4. **Verify association**: keep step 3's event/node baselines. A node
    absent from the baseline is fresh proof through step 5; do not discard
    node-only proof. Otherwise require `review_requested` after HEAD's
