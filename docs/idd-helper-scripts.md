@@ -343,24 +343,25 @@ other eleven return `0` on success and throw on failure, so they do
 not produce `gate` today. `discover-orphan-filter.mjs` with no
 arguments reaches `gh repo view` and is `transport`, not `usage`.
 
-| Helper                             | `usage`                                                                     | `gate`                                                                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                                                                |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                                                              |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                                                              |
-| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                                                              |
-| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
-| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens` |
-| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                 |
-| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                                                              |
-| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
-| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                                                              |
-| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                                                              |
-| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`                                                   |
-| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                                                             |
-| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                                                             |
-| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                                                              |
-| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                                                              |
+| Helper                             | `usage`                                                                                | `gate`                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                                   | none today (no arguments is `transport`)                                                                                |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag            | none today                                                                                                              |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                              |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                              |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                              |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                    | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens` |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                           | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                 |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                             | none today                                                                                                              |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                                | none today                                                                                                              |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                                   | none today                                                                                                              |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                                | none today                                                                                                              |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                              | exit `1` when the verdict is not ready, or not closed under `--apply`                                                   |
+| `local-worktree-recovery.mjs`      | a missing `--issue` or `--worktree`, mismatched `--owner`/`--repo`, or an unknown flag | exit `1` when the verdict is not ready, or not mutated under `--apply`                                                  |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)                      | exit `1` when the audit report did not pass                                                                             |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                             | the helper's own non-zero verdict exit code                                                                             |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                                  | none today                                                                                                              |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                                   | none today                                                                                                              |
 
 ### Migrated helpers (marker, handoff, provider, and misc batch)
 
@@ -3314,6 +3315,96 @@ still fails closed:
   add`/`remove`/`fetch` by giving each worker its own clone instead
   (see the Orchestrator fan-out variant linked above), rather than
   hand-rolling this lock's protocol.
+
+### Local worktree recovery
+
+- Source repo / vendored-node command:
+
+  ```sh
+  node scripts/local-worktree-recovery.mjs --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Package-manager command: run the profile-selected
+  `idd:local-worktree-recovery` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:local-worktree-recovery -- --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd:local-worktree-recovery` command from the helper runtime manifest
+  wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-local-worktree-recovery --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Consolidates `idd-resume-detail.md`'s §LWR (Local Worktree Recovery)
+  steps 1 ("confirm the block"), 3 ("preserve"), and 4 ("remove") into one
+  invocation, composed from the existing building-block helpers rather
+  than reimplementing their logic:
+  - **Step 1** always spawns the compiled `resume-claim-routing.mjs` CLI
+    first (its own documented `--issue <n>` invocation, never this
+    helper's own `--worktree` — that flag has an unrelated, documented
+    meaning there) for the `local_worktree_occupied` /
+    `stale-claim-*` / `released-claim-*` verdict, exactly as the written
+    procedure's own step 1 does. A `git worktree list --porcelain -z`
+    record for `--worktree` that is prunable, absent on disk, not locked,
+    and names the recovered branch (a detached record is never shortcut,
+    since which branch it held can no longer be confirmed once its path
+    is gone) then skips only the worktree-local claim-lock check
+    (`claim-lock.mts`'s `checkClaimLock`, called directly — no subprocess,
+    no network) and goes straight to step 4's removal (nothing to
+    preserve) — the `locked` and branch-matching guards are this
+    implementation's own added margin over the written procedure's own
+    shortcut text, not a literal transcription of it. Otherwise
+    `checkClaimLock` confirms the lock's holder matches the claim-id
+    being recovered.
+  - **Step 2** (rule out a live session) is never checked mechanically —
+    `claim-lock.mts`'s own header documents why no local process-liveness
+    signal is recorded. `--operator-confirmed-no-live-session` is your own
+    explicit attestation for this step; every mutation refuses without it,
+    regardless of `--apply` or what step 1 finds.
+  - **Step 3** detects an in-progress merge/rebase/cherry-pick/bisect
+    (backing up the pre-operation tip — `orig-head` for rebase, else
+    `HEAD`), then tag-stashes tracked/untracked changes
+    (`idd-lwr <claim-id-or-legacy>`) for the worktree and every dirty
+    submodule, copies out an uninitialized (`-`) submodule's files and any
+    unmerged-path stash failure, and writes `refs/idd-lwr/<branch>` for
+    unpushed commits (worktree- and submodule-scoped). Ignored-file,
+    uninitialized-submodule, and unmerged-path copies land under
+    `--preserve-dir` (default: a temp directory, created only when
+    something needs copying).
+  - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
+    (`clone-lock.mts`) directly — in-process, not the manual
+    `clone-lock.mjs --exec -- bash -c '...'` wrapper the procedure
+    otherwise requires — to wrap a fresh re-check (re-running step 1's two
+    checks) plus verification that every step 3 preservation action
+    actually landed, then `git worktree remove` (retrying `--force` only
+    after a submodule-removal failure), or, for the primary-worktree
+    branch, `checkout {development-branch}` followed by a confirmed-absent
+    re-check and a hand-removed lock file.
+- Default mode is dry-run (no mutation): prints exactly what step 1 found
+  and what step 3/4 would do (the full stash/backup-ref/removal plan),
+  without mutating anything. `--apply` performs the mutation, still gated
+  on `--operator-confirmed-no-live-session`.
+- Must be invoked from the primary worktree (or from the primary worktree
+  itself, when that IS `--worktree`) — never from the linked worktree
+  being recovered; refuses immediately otherwise.
+- The written §LWR procedure in `idd-resume-detail.md` stays the canonical
+  spec and the `instructions-only` fallback; this helper's own behavior is
+  tested against it, not the other way around.
 
 ### Canonical branch name
 
