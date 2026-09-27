@@ -1523,10 +1523,10 @@ test('#2549: rerunPolicy "hold" withholds the live-coverage-recovery promotion t
 // which was NEVER reclassified via #1806 live-coverage recovery (e.g. the
 // waiver-rebind case, or simply a plain non-passing conclusion that used
 // its rerun already) is a wholly different `rerun-budget-held` cause and
-// must keep today's manual-decision behavior unchanged -- the #2549
-// exception is scoped exactly to the live-coverage-recovery
-// classification, never wider.
-test('#2549: an ordinary (non-live-coverage-recovery) budget-exhausted instance is NOT promoted, even with a passing sibling', () => {
+// must keep today's manual-decision behavior unchanged when no strictly
+// later sibling exists -- the #2549 exception is scoped exactly to the
+// live-coverage-recovery classification, never wider.
+test('#3539: an ordinary budget-held instance is not promoted without a later sibling', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [
