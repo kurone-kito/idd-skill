@@ -3555,11 +3555,14 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
     ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
     { stdio: 'ignore' },
   );
+  execFileSync('git', ['-C', targetRoot, 'branch', 'release+candidate'], {
+    stdio: 'ignore',
+  });
   // Simulate --import copying the non-held schema after the baseline commit.
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
-    targetBaseRef: 'HEAD',
+    targetBaseRef: 'release+candidate',
   });
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
@@ -3569,7 +3572,7 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
     targetRoot,
     undefined,
     [DRIFT_MODULE],
-    'HEAD',
+    'release+candidate',
   );
   assert.equal(verify.heldSchemaDrift.findings.length, 1);
 });
@@ -3591,6 +3594,82 @@ test('checkHeldSchemaDrift falls back for an unborn Git target', () => {
   ]);
   assert.doesNotThrow(() =>
     runVerify(sourceRoot, targetRoot, undefined, [DRIFT_MODULE]),
+  );
+});
+
+test('checkHeldSchemaDrift fails when an existing Git HEAD cannot resolve', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  writeFileSync(
+    join(targetRoot, '.git', 'refs', 'heads', 'main'),
+    `${'0'.repeat(40)}\n`,
+  );
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        hold: [DRIFT_MODULE],
+      }),
+    /unable to resolve Git target baseline/,
+  );
+});
+
+test('checkHeldSchemaDrift fails when a Git baseline blob cannot be read', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  const blobOid = execFileSync(
+    'git',
+    ['-C', targetRoot, 'rev-parse', `HEAD:${DRIFT_SCHEMA}`],
+    { encoding: 'utf8' },
+  ).trim();
+  rmSync(
+    join(targetRoot, '.git', 'objects', blobOid.slice(0, 2), blobOid.slice(2)),
+  );
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        hold: [DRIFT_MODULE],
+      }),
+    /Command failed:.*git.*show/iu,
   );
 });
 

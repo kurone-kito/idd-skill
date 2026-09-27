@@ -2245,7 +2245,6 @@ function moduleReferencesManifestPath(text, targetPath) {
     moduleScansManifestDirectory(text, targetPath)
   );
 }
-const SAFE_GIT_REF = /^[A-Za-z0-9._/-]+$/u;
 /**
  * Keep target baseline reads tied to the requested repository instead of
  * ambient Git overrides inherited from a hook, wrapper, or parent process.
@@ -2284,6 +2283,36 @@ function hasGitMetadataInAncestors(targetRoot) {
       return false;
     }
     current = parent;
+  }
+}
+function isUnbornGitHead(targetRoot) {
+  let headRef;
+  try {
+    headRef = execFileSync(
+      'git',
+      ['-C', targetRoot, 'symbolic-ref', '--quiet', 'HEAD'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: sanitizedGitEnvironment(),
+      },
+    ).trim();
+  } catch {
+    return false;
+  }
+  try {
+    execFileSync(
+      'git',
+      ['-C', targetRoot, 'show-ref', '--verify', '--quiet', headRef],
+      { stdio: ['ignore', 'ignore', 'ignore'], env: sanitizedGitEnvironment() },
+    );
+    return false;
+  } catch (error) {
+    const status =
+      typeof error === 'object' && error !== null && 'status' in error
+        ? error.status
+        : undefined;
+    return status === 1;
   }
 }
 /**
@@ -2333,26 +2362,34 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
   ) {
     return undefined;
   }
-  if (targetBaseRef !== undefined && !SAFE_GIT_REF.test(targetBaseRef)) {
-    throw new Error(
-      `invalid --target-base-ref (expected a simple Git ref): ${targetBaseRef}`,
-    );
-  }
   const baselineRef = targetBaseRef ?? 'HEAD';
   let baselineCommit;
   try {
     baselineCommit = execFileSync(
       'git',
-      ['-C', targetRoot, 'rev-parse', '--verify', `${baselineRef}^{commit}`],
+      [
+        '-C',
+        targetRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        `${baselineRef}^{commit}`,
+      ],
       { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
     )
       .toString('utf8')
       .trim();
   } catch {
-    if (targetBaseRef === undefined) {
+    if (targetBaseRef === undefined && isUnbornGitHead(targetRoot)) {
       // A freshly initialized target has no HEAD commit yet. The advisory
       // must retain the historical working-tree comparison in that case.
       return undefined;
+    }
+    if (targetBaseRef === undefined) {
+      throw new Error(
+        `unable to resolve Git target baseline at ${targetRoot}: HEAD does not resolve to a commit`,
+      );
     }
     throw new Error(
       `--target-base-ref does not resolve to a commit in --target: ${targetBaseRef}`,
@@ -2360,24 +2397,49 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
   }
   return {
     read: (targetPath) => {
-      try {
-        const treePath = targetPrefix
-          ? `${targetPrefix}/${targetPath}`
-          : targetPath;
-        return execFileSync(
-          'git',
-          ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
-          {
-            encoding: null,
-            stdio: ['ignore', 'pipe', 'ignore'],
-            env: sanitizedGitEnvironment(),
-          },
-        );
-      } catch {
+      const treePath = targetPrefix
+        ? `${targetPrefix}/${targetPath}`
+        : targetPath;
+      const treeEntry = execFileSync(
+        'git',
+        [
+          '-C',
+          normalizedGitRoot,
+          'ls-tree',
+          '-z',
+          '--full-tree',
+          baselineCommit,
+          '--',
+          treePath,
+        ],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      );
+      if (treeEntry.length === 0) {
         // A path absent from the baseline is meaningful drift: --import
         // would add the source entry while the held module remains old.
         return null;
       }
+      const entryType = treeEntry
+        .slice(0, treeEntry.indexOf('\t'))
+        .split(' ')[1];
+      if (entryType !== 'blob') {
+        throw new Error(
+          `Git target baseline path is not a regular file: ${treePath}`,
+        );
+      }
+      return execFileSync(
+        'git',
+        ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
+        {
+          encoding: null,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      );
     },
   };
 }
