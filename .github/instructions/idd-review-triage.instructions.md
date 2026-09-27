@@ -12,10 +12,10 @@ dispositions, and counting accepted items.
 
 Before any E-phase side effect, apply the [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
-**Skip condition E8**: if the Accepted PATH A count is zero, proceed to
-the **E-phase branch-sync check** below (its
-no-sync-required `clean`/`behind-no-conflict` exit applies the
-**Zero-Accepted-PATH-A advisory re-review gate**).
+**Skip condition E8**: zero Accepted PATH A → branch-sync below when
+Step 2 was not deferred (its `clean`/`behind-no-conflict` exit applies
+the **Zero-Accepted-PATH-A advisory re-review gate**). If deferred, use
+the E15/E14 route in `idd-review-snapshot.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -482,8 +482,8 @@ next F2, defer digest unless returning E1.
 
 ## E8 — Accepted PATH A count check
 
-Zero Accepted PATH A + deferred Step 2 → E15/E14 wait route in
-`idd-review-snapshot.instructions.md`; otherwise branch-sync. Non-zero →
+Zero Accepted PATH A + deferred Step 2 → E15/E14 route in snapshot;
+otherwise branch-sync. Non-zero →
 `idd-review-fix.instructions.md`.
 
 ## E-phase branch-sync check

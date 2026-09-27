@@ -55,9 +55,9 @@ GitHub side effect, confirm all of the following:
 
 Before Step 2, confirm all merge-gate CI runs, including opt-in jobs,
 have completed. If the primary advisory bot reviewed an earlier head,
-run `advisory-wait-state`, check its `lastCopilotCommit == prHeadSha`
-fast-path, and wait within its bounded windows if needed. Take Steps 1
-and 3 regardless; if incomplete, skip Step 2, use E15/E14 before
+run `advisory-wait-state`, and check its `lastCopilotCommit == prHeadSha`
+fast-path; do not wait here. Take Steps 1 and 3 regardless; if incomplete,
+skip Step 2, use E15/E14 before
 branch-sync/F2, and return to E1 to post the watermark.
 
 ### Step 1 — Snapshot the activity universe
