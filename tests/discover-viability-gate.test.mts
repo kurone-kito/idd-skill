@@ -3451,3 +3451,27 @@ test('keeps removal after a past investigation autonomous (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let terminal pending approval pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 207,
+    title: 'document credential storage',
+    body: 'Implementation is pending maintainer approval. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps approval-source documentation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 208,
+    title: 'document approval representation',
+    body:
+      'Document how approval from maintainer is represented. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});

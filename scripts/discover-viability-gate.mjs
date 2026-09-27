@@ -130,7 +130,7 @@ const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
   'i',
 );
 const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN = new RegExp(
-  String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+(?:by|pending)|pending)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
+  String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+(?:by|pending)|pending)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bpending\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
   'gi',
 );
 const REMOVAL_FRAMING_CUE_PATTERN =
@@ -728,7 +728,7 @@ function isDescribedExternalCoordinationExample(corpus, matchIndex) {
   const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
   const sameClause = before.split(CUE_HARD_BREAK_PATTERN).at(-1) ?? before;
   if (
-    /\b(?:document(?:s|ed|ing)?|describe(?:s|d|ing)?|explain(?:s|ed|ing)?|outline(?:s|d|ing)?|specif(?:y|ies|ied|ying)|parse(?:s|d|ing)?|display(?:s|ed|ing)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:workflow|behavior|process|requirement|approval(?:-gated)?|access[- ]control|status|message|value|literal)\b[^.;:!?]{0,40}$/i.test(
+    /\b(?:document(?:s|ed|ing)?|describe(?:s|d|ing)?|explain(?:s|ed|ing)?|outline(?:s|d|ing)?|specif(?:y|ies|ied|ying)|parse(?:s|d|ing)?|display(?:s|ed|ing)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:how|workflow|behavior|process|requirement|approval(?:-gated)?|access[- ]control|status|message|value|literal)\b[^.;:!?]{0,40}$/i.test(
       sameClause,
     )
   ) {
