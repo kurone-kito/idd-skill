@@ -2437,6 +2437,7 @@ function findDirectoryScanCalls(text) {
           );
           const isDeclaration =
             text[afterCall] === '{' ||
+            text[afterCall] === ':' ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
           if (!isDeclaration) {
             calls.push({
@@ -2634,7 +2635,11 @@ function expandGlobRange(text) {
   }
   return null;
 }
-function globPatternToRegex(pattern, initialSegmentStart = true) {
+function globPatternToRegex(
+  pattern,
+  initialSegmentStart = true,
+  inheritedSuffix = '',
+) {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index] ?? '';
@@ -2646,11 +2651,14 @@ function globPatternToRegex(pattern, initialSegmentStart = true) {
         expression += escapeRegExp(character);
         continue;
       }
+      const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
       const inner = splitGlobAlternatives(
         pattern.slice(index + 2, closing),
         '|',
       )
-        .map((alternative) => globPatternToRegex(alternative, segmentStart))
+        .map((alternative) =>
+          globPatternToRegex(alternative, segmentStart, trailingPattern),
+        )
         .join('|');
       if (character === '!') {
         const explicitlyMatchesDot = splitGlobAlternatives(
@@ -2659,10 +2667,10 @@ function globPatternToRegex(pattern, initialSegmentStart = true) {
         ).some((alternative) =>
           globPatternExplicitlyMatchesLeadingDot(alternative),
         );
-        const slash = pattern.indexOf('/', closing + 1);
-        const suffix = pattern.slice(
-          closing + 1,
-          slash === -1 ? pattern.length : slash,
+        const slash = trailingPattern.indexOf('/');
+        const suffix = trailingPattern.slice(
+          0,
+          slash === -1 ? trailingPattern.length : slash,
         );
         expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
       } else {

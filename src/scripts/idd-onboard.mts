@@ -3001,6 +3001,7 @@ function findDirectoryScanCalls(
           );
           const isDeclaration =
             text[afterCall] === '{' ||
+            text[afterCall] === ':' ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
           if (!isDeclaration) {
             calls.push({
@@ -3223,6 +3224,7 @@ function expandGlobRange(text: string): string[] | null {
 function globPatternToRegex(
   pattern: string,
   initialSegmentStart = true,
+  inheritedSuffix = '',
 ): string {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -3235,11 +3237,14 @@ function globPatternToRegex(
         expression += escapeRegExp(character);
         continue;
       }
+      const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
       const inner = splitGlobAlternatives(
         pattern.slice(index + 2, closing),
         '|',
       )
-        .map((alternative) => globPatternToRegex(alternative, segmentStart))
+        .map((alternative) =>
+          globPatternToRegex(alternative, segmentStart, trailingPattern),
+        )
         .join('|');
       if (character === '!') {
         const explicitlyMatchesDot = splitGlobAlternatives(
@@ -3248,10 +3253,10 @@ function globPatternToRegex(
         ).some((alternative) =>
           globPatternExplicitlyMatchesLeadingDot(alternative),
         );
-        const slash = pattern.indexOf('/', closing + 1);
-        const suffix = pattern.slice(
-          closing + 1,
-          slash === -1 ? pattern.length : slash,
+        const slash = trailingPattern.indexOf('/');
+        const suffix = trailingPattern.slice(
+          0,
+          slash === -1 ? trailingPattern.length : slash,
         );
         expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
       } else {

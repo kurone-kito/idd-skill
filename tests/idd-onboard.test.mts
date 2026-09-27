@@ -4073,6 +4073,25 @@ test('checkHeldSchemaDrift ignores directory-scan declarations', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores typed method declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "const scanner = { readdirSync(path = 'fixtures'): string[] { return []; } };\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift detects opendir directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4585,6 +4604,25 @@ test('checkHeldSchemaDrift excludes dotfiles from negative extglobs', () => {
   });
   writeDriftManifest(targetRoot, {
     'fixtures/.hidden.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift preserves suffixes in nested negative extglobs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('@(widget|!(other)).schema.json', { cwd: 'schemas' });\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/other.schema.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/other.schema.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
