@@ -3262,7 +3262,18 @@ function expandGlobRange(text: string): string[] | null {
   return null;
 }
 
-function expandGlobBracePatterns(text: string): string[] {
+const MAX_GLOB_BRACE_EXPANSIONS = 1024;
+const MAX_GLOB_BRACE_EXPANSION_DEPTH = 32;
+
+function expandGlobBracePatternsBounded(
+  text: string,
+  depth: number,
+  maxExpansions: number,
+  maxDepth: number,
+): string[] | null {
+  if (depth > maxDepth) {
+    return null;
+  }
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== '{') {
       continue;
@@ -3278,8 +3289,28 @@ function expandGlobBracePatterns(text: string): string[] {
       index = closing;
       continue;
     }
-    const prefixes = expandGlobBracePatterns(text.slice(0, index));
-    const suffixes = expandGlobBracePatterns(text.slice(closing + 1));
+    if (alternatives.length > maxExpansions) {
+      return null;
+    }
+    const prefixes = expandGlobBracePatternsBounded(
+      text.slice(0, index),
+      depth + 1,
+      maxExpansions,
+      maxDepth,
+    );
+    const suffixes = expandGlobBracePatternsBounded(
+      text.slice(closing + 1),
+      depth + 1,
+      maxExpansions,
+      maxDepth,
+    );
+    if (
+      prefixes === null ||
+      suffixes === null ||
+      prefixes.length * alternatives.length * suffixes.length > maxExpansions
+    ) {
+      return null;
+    }
     return prefixes.flatMap((prefix) =>
       alternatives.flatMap((alternative) =>
         suffixes.map((suffix) => `${prefix}${alternative}${suffix}`),
@@ -3306,9 +3337,18 @@ function globPatternToRegex(
         continue;
       }
       const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
-      const innerExpressions = expandGlobBracePatterns(
+      const expandedGroups = expandGlobBracePatternsBounded(
         pattern.slice(index + 2, closing),
-      ).map((expandedGroup) =>
+        0,
+        MAX_GLOB_BRACE_EXPANSIONS,
+        MAX_GLOB_BRACE_EXPANSION_DEPTH,
+      );
+      if (expandedGroups === null) {
+        expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+        index = closing;
+        continue;
+      }
+      const innerExpressions = expandedGroups.map((expandedGroup) =>
         splitGlobAlternatives(expandedGroup, '|')
           .map((alternative) =>
             globPatternToRegex(alternative, segmentStart, trailingPattern),

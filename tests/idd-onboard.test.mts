@@ -5152,6 +5152,30 @@ test('checkHeldSchemaDrift expands braces before repeating extglobs', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift bounds large extglob brace expansions', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const repeatedAlternatives = '{a,b}'.repeat(11);
+  const moduleText = `globSync('schemas/+(${repeatedAlternatives}).json');\n`;
+  writeDriftManifest(sourceRoot, {
+    'schemas/aaaaaaaaaaa.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/aaaaaaaaaaa.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/aaaaaaaaaaa.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects directory scans inside template interpolations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
