@@ -602,8 +602,17 @@ response and read its `body` property; do not capture `gh api ... --jq
 substitution can normalize trailing newlines and change the digest. This
 is a one-time read-back confidence check for that approved new issue, not
 a REST fallback for verification of an existing generation and not a
-change to the helper's GraphQL dependency. Pass only when the fetched
-issue still carries the configured authoring hold label (normally
+change to the helper's GraphQL dependency. These REST checks are
+preliminary evidence only: REST does not expose `lastEditedAt`, so it
+cannot prove that the owner-marker comment was never edited. Before
+membership, re-fetch the active `claimed-by` state and open-PR state even
+when the label is present; if execution began, or either read is
+inconclusive, stop and leave the verified hold in place. Final pass still
+requires the normal GraphQL owner-marker verification, including
+`lastEditedAt: null` for the relevant comments. If that GraphQL check is
+unavailable, do not treat the REST read-back as membership evidence;
+leave the issue held for recovery. The REST evidence must show that the
+fetched issue still carries the configured authoring hold label (normally
 `status:authoring`), the fetched comment is the just-posted trusted
 marker (expected author and canonical marker fields), and its recorded
 `body-sha256` equals the digest recomputed from the fetched issue body.
