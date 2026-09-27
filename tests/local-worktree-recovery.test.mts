@@ -881,6 +881,9 @@ function cleanRepoRunGit(
   ) {
     return { ok: false, status: 1, stdout: '', stderr: '' };
   }
+  if (argv[0] === 'symbolic-ref' && argv.includes('--short')) {
+    return { ok: true, status: 0, stdout: 'main\n', stderr: '' };
+  }
   return { ok: true, status: 0, stdout: '', stderr: '' };
 }
 
@@ -4708,6 +4711,91 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
   }
 });
 
+test('primary recovery stops when checkout leaves a detached or different branch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-branch-verify-'));
+  let confirmCalls = 0;
+  let lockRemoved = false;
+  let checkoutAttempted = false;
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 4;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'checkout') {
+          checkoutAttempted = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'symbolic-ref') {
+          return { ok: true, status: 0, stdout: 'release\n', stderr: '' };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(checkoutAttempted, true);
+    assert.equal(lockRemoved, false);
+    assert.equal(verdict.plan.removal?.ran, false);
+    assert.match(verdict.result, /landed on release, not the configured/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery removes initialized submodules deleted by the target branch', () => {
   const root = mkdtempSync(
     join(tmpdir(), 'idd-lwr-primary-deleted-submodule-'),
@@ -5779,6 +5867,43 @@ test('copies linked worktree admin data for top-level local refs', () => {
     },
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('retains a partial top-level worktree admin copy and blocks removal', () => {
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/worktree/private-ref\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked' &&
+        argv[0] === 'rev-list' &&
+        argv.includes('--not')
+      ) {
+        return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: () => {
+      throw new Error('copy interrupted');
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(verdict.plan.worktreeAdminCopy, {
+    copiedTo: '/tmp/preserve/worktree-gitdir',
+    plannedTo: '/tmp/preserve/worktree-gitdir',
+  });
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal, null);
+  assert.match(verdict.result, /preservation could not be fully verified/);
 });
 
 test('copies linked worktree admin data for top-level private bisect refs', () => {

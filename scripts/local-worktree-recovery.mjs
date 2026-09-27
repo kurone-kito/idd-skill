@@ -1743,6 +1743,10 @@ function planAndMaybePreserve(
           );
           worktreeAdminCopy.copiedTo = destination;
         } catch {
+          // Retain the attempted destination so a partial recursive copy is
+          // visible to the verdict and counts as a mutation, while the
+          // separate failure flag keeps preservation verification fail-closed.
+          worktreeAdminCopy.copiedTo = destination;
           worktreeAdminCopyFailed = true;
         }
       }
@@ -3289,6 +3293,26 @@ export function runLocalWorktreeRecovery(args, deps) {
           wouldRun: true,
           ran: false,
           detail: `submodule update after checkout ${developmentBranch} failed: ${submoduleUpdate.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const symbolicBranch = deps.runGit(
+        ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+        targetPath,
+      );
+      const actualBranch = symbolicBranch.ok
+        ? symbolicBranch.stdout.trim()
+        : '';
+      if (!symbolicBranch.ok || actualBranch !== developmentBranch) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: symbolicBranch.ok
+            ? `checkout ${developmentBranch} landed on ${actualBranch || 'detached HEAD'}, not the configured development branch; stopping`
+            : `checked out ${developmentBranch}, but could not verify the symbolic branch: ${symbolicBranch.stderr}`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
