@@ -337,6 +337,7 @@ function collectUnaddressedComments(
     sortedIndex: inputIndex,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const matchedDispositionIndexes = new Set();
   const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
     normalizedComments,
     new Set(advisoryBotLogins.map((login) => login.toLowerCase())),
@@ -348,6 +349,7 @@ function collectUnaddressedComments(
       requireUneditedNotice: true,
       requireConfiguredAdvisoryBotLogin: true,
       requireNoticeSourceCommentId: true,
+      matchedDispositionIndexes,
     },
   );
   // A non-IDD item counts as addressed only when a later IDD-agent
@@ -459,7 +461,10 @@ function collectUnaddressedComments(
     ) {
       continue;
     }
-    if (dispositionedStickyIndexes.has(commentIndex)) {
+    if (
+      dispositionedStickyIndexes.has(commentIndex) ||
+      matchedDispositionIndexes.has(commentIndex)
+    ) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, commentTimestamp(comment))) {

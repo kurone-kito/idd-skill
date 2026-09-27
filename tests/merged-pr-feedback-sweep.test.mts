@@ -789,6 +789,38 @@ test('#3572 does not carry a known bot rejection when the bot is unconfigured', 
   assert.equal(result.prs[0].unaddressedComments.length, 1);
 });
 
+test('#3572 excludes the trusted disposition when its actor is not an IDD agent', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    {
+      ...OPTIONS,
+      iddAgentLogins: ['codex-agent'],
+    },
+  );
+  assert.deepEqual(result.prs, []);
+});
+
 test('#3572 keeps a notice visible when its rejection was edited', () => {
   const result = buildMergedPrFeedbackSweep(
     [

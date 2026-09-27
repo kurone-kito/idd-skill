@@ -508,6 +508,7 @@ function collectUnaddressedComments(
     sortedIndex: inputIndex,
     lastEditedAt: comment.lastEditedAt,
   }));
+  const matchedDispositionIndexes = new Set<number>();
   const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
     normalizedComments,
     new Set(advisoryBotLogins.map((login) => login.toLowerCase())),
@@ -519,6 +520,7 @@ function collectUnaddressedComments(
       requireUneditedNotice: true,
       requireConfiguredAdvisoryBotLogin: true,
       requireNoticeSourceCommentId: true,
+      matchedDispositionIndexes,
     },
   );
 
@@ -634,7 +636,10 @@ function collectUnaddressedComments(
     ) {
       continue;
     }
-    if (dispositionedStickyIndexes.has(commentIndex)) {
+    if (
+      dispositionedStickyIndexes.has(commentIndex) ||
+      matchedDispositionIndexes.has(commentIndex)
+    ) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, commentTimestamp(comment))) {

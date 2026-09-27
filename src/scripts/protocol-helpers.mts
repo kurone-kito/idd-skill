@@ -5727,6 +5727,8 @@ export function matchTrustedAdvisoryStickyDispositions<
     requireConfiguredAdvisoryBotLogin?: boolean;
     /** Require non-review dispositions to name the exact source comment. */
     requireNoticeSourceCommentId?: boolean;
+    /** Collect the matched disposition indexes for a read-only caller. */
+    matchedDispositionIndexes?: Set<number>;
   } = {},
 ): Set<number> {
   const dispositionedStickyIndexes = new Set<number>();
@@ -5866,6 +5868,7 @@ export function matchTrustedAdvisoryStickyDispositions<
         if (match) {
           dispositionedStickyIndexes.add(sticky.sortedIndex);
           consumedDispositionIndexes.add(match.sortedIndex);
+          options.matchedDispositionIndexes?.add(match.sortedIndex);
         }
       }
     }

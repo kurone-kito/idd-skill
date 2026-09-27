@@ -4452,6 +4452,7 @@ export function matchTrustedAdvisoryStickyDispositions(
         if (match) {
           dispositionedStickyIndexes.add(sticky.sortedIndex);
           consumedDispositionIndexes.add(match.sortedIndex);
+          options.matchedDispositionIndexes?.add(match.sortedIndex);
         }
       }
     }
