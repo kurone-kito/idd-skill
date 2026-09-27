@@ -3353,8 +3353,11 @@ function globPatternToRegex(
           index = closing;
           continue;
         }
+        const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
         expression += `(?:${alternatives
-          .map((alternative) => globPatternToRegex(alternative, segmentStart))
+          .map((alternative) =>
+            globPatternToRegex(alternative, segmentStart, trailingPattern),
+          )
           .join('|')})`;
         index = closing;
       }
@@ -3426,12 +3429,14 @@ function moduleScansManifestDirectory(
               argumentsText.slice(excludeMatch.index + excludeMatch[0].length),
             ),
           );
+    const joinScanPath = (base: string, path: string): string =>
+      base === '' ? path : `${base}/${path}`;
     const candidates = (
       hasCwd
         ? firstCandidates.flatMap((candidate) =>
             cwdCandidates
               .filter((cwd) => !isGlobPattern(cwd))
-              .map((cwd) => `${cwd}/${candidate}`),
+              .map((cwd) => joinScanPath(cwd, candidate)),
           )
         : firstCandidates
     )
@@ -3444,7 +3449,7 @@ function moduleScansManifestDirectory(
         ? excludeCandidates.flatMap((candidate) =>
             cwdCandidates
               .filter((cwd) => !isGlobPattern(cwd))
-              .map((cwd) => `${cwd}/${candidate}`),
+              .map((cwd) => joinScanPath(cwd, candidate)),
           )
         : excludeCandidates
     )
