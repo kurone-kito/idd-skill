@@ -469,10 +469,14 @@ The confirmed substitutions are:
 
 - For `gh issue list`, use the repository issues endpoint. It may also
   return pull requests, so preserve the caller's issue-only filtering
-  when that distinction matters.
+  when that distinction matters. Carry the original `--state` through
+  as `state=open`, `state=closed`, or `state=all`; carry `--search`
+  through the search endpoint below with its `repo:` and `is:issue`
+  qualifiers; and carry `--limit` through pagination, because REST
+  returns at most 100 records per page.
 
   ```sh
-  gh api "repos/<owner>/<repo>/issues?state=open&per_page=100"
+  gh api --paginate "repos/<owner>/<repo>/issues?state=all&per_page=100"
   ```
 
 - For `gh issue view <number>`, use the individual issue endpoint.
@@ -520,7 +524,10 @@ the raw JSON response. Parse the complete `gh api` response and read its
 variable, because the added newline can change the digest. This is a
 one-time read-back confidence check for a new issue, not a REST fallback
 for verification of an existing generation and not a change to the
-helper's GraphQL dependency. The two read-back requests are:
+helper's GraphQL dependency. Pass only when the fetched comment is the
+just-posted trusted marker (expected author and canonical marker fields)
+and its recorded `body-sha256` equals the digest recomputed from the
+fetched issue body. The two read-back requests are:
 
 ```sh
 gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
