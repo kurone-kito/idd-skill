@@ -2748,6 +2748,43 @@ test('prose-dependency resolves a reference-style link whose ref label differs i
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not resolve an unindented top-level definition continuation', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]:\n' +
+      'https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not treat an unindented quoted paragraph as a definition title', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[previous]: https://github.com/acme/other-repo/pull/1390\n' +
+      '"ordinary paragraph"\n' +
+      '[upstream]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
 // --- prose-dependency: nested list item parent-scope loss (#1472) ---
 
 test('prose-dependency recognizes a nested list item reference alongside its parent bullet coordination language', () => {

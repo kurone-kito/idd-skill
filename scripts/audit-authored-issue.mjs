@@ -2521,6 +2521,9 @@ function matchesReferenceDefinitionContinuationContainer(
   pendingContainerKinds,
 ) {
   if (currentContainerKinds.join('/') === pendingContainerKinds.join('/')) {
+    if (currentContainerKinds.length === 0) {
+      return hasReferenceDefinitionContinuationIndent(line);
+    }
     if (
       currentContainerKinds.includes('list') &&
       pendingContainerKinds.includes('list')
@@ -2636,7 +2639,15 @@ function collectReferenceStyleLinkDefinitions(text) {
         }
       }
     }
-    if (previousDefinition && isReferenceDefinitionTitleContinuation(content)) {
+    if (
+      previousDefinition &&
+      isReferenceDefinitionTitleContinuation(content) &&
+      matchesReferenceDefinitionContinuationContainer(
+        line,
+        containerKinds,
+        previousContainerKinds,
+      )
+    ) {
       paragraphOpen = false;
       previousDefinition = true;
       previousContainerKinds = containerKinds;
