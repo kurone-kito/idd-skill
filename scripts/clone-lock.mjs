@@ -266,6 +266,19 @@ export function acquireCloneLock(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ) {
   const path = resolveCloneLockPath(repoPath);
+  return acquireCloneLockAtPath(path, agentId, timeoutMs);
+}
+/**
+ * Acquire a clone lock when the caller already resolved its path. This is
+ * useful for a worktree operation that may remove the worktree while waiting:
+ * resolving the path before blocking keeps the mutex usable after that
+ * worktree disappears.
+ */
+export function acquireCloneLockAtPath(
+  path,
+  agentId,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
   const token = randomToken();
   const deadline = Date.now() + timeoutMs;
   for (;;) {

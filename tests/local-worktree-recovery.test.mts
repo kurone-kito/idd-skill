@@ -393,6 +393,12 @@ test('submoduleStatusEntries keeps a parenthesized uninitialized submodule path 
   ]);
 });
 
+test('submoduleStatusEntries strips nested parentheses from an initialized describe suffix (Copilot review finding)', () => {
+  const raw =
+    ' abc123def456abc123def456abc123def456abcd lib (heads/feature(foo))';
+  assert.deepEqual(submoduleStatusEntries(raw), [{ status: ' ', path: 'lib' }]);
+});
+
 test('submoduleStatusEntries accepts SHA-256 object ids (Copilot review finding)', () => {
   const sha256 = 'a'.repeat(64);
   assert.deepEqual(
@@ -1188,6 +1194,55 @@ test('forced retry uses the identity-bound removal guard', () => {
   assert.match(verdict.result, /identity-bound forced removal/);
 });
 
+test('legacy lockless claims may complete the forced retry through the guard', () => {
+  let guardCalls = 0;
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'released-claim-local-worktree-occupied',
+        active_claim: null,
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/linked'],
+            reason: null,
+          },
+          released_claim: { claim_id: null, branch: 'issue/1-task' },
+        },
+      },
+      error: null,
+    }),
+    checkLock: () => ({
+      path: '/repo/linked/.git/idd-claim.lock',
+      present: false,
+    }),
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
+      guardCalls += 1;
+      return force
+        ? {
+            ok: true,
+            status: 0,
+            stdout: '',
+            stderr: '',
+          }
+        : {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'submodules cannot be moved or removed',
+          };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(guardCalls, 2);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('verified prunable shortcuts may keep unreadable routing at final check', () => {
   let removeCalled = false;
   const record = {
@@ -1585,6 +1640,102 @@ test('an unstaged submodule HEAD difference is handled by the submodule scope', 
     false,
     'a `+` submodule status is an unstaged submodule-only change for the parent scope',
   );
+});
+
+test('a `+` submodule preserves its private admin data even when no ref is unpushed', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '+abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir')
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/linked/.git/modules/submodule\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(copied, ['/tmp/preserve/submodule-gitdir/c3VibW9kdWxl']);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('late preservation rescans initialized submodule ignored files before removal', () => {
+  const copied: string[] = [];
+  let submoduleIgnoredScans = 0;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        if (cwd === '/repo/linked/submodule') {
+          submoduleIgnoredScans += 1;
+          return {
+            ok: true,
+            status: 0,
+            stdout: submoduleIgnoredScans === 1 ? '' : '!! cache.tmp\0',
+            stderr: '',
+          };
+        }
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(copied, ['/tmp/preserve/ignored/submodule/cache.tmp']);
+  assert.equal(submoduleIgnoredScans, 2);
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('a staged superproject gitlink is not excluded as a submodule-only change', () => {

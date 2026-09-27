@@ -161,6 +161,15 @@ function lockMatchesRecoveredClaim(lock, recoveredClaimId) {
   return lock.present && lock.holder?.claimId === recoveredClaimId;
 }
 function sameClaimLock(left, right) {
+  if (
+    left.path === right.path &&
+    !left.present &&
+    !right.present &&
+    !left.malformed &&
+    !right.malformed
+  ) {
+    return true;
+  }
   return (
     left.path === right.path &&
     left.present &&
@@ -666,7 +675,25 @@ export function countTaggedStashEntries(stashList, tag) {
 // uninitialized path that itself ends in a parenthesized component, e.g.
 // `lib (foo)`, down to `lib`.
 const SUBMODULE_STATUS_LINE_PATTERN = /^([ +\-U])([0-9a-f]{4,64}) (.+)$/;
-const SUBMODULE_DESCRIBE_SUFFIX_PATTERN = / \([^()]*\)$/;
+function stripSubmoduleDescribeSuffix(path) {
+  if (!path.endsWith(')')) return path;
+  let depth = 0;
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const character = path[index];
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return index > 0 && path[index - 1] === ' '
+          ? path.slice(0, index - 1)
+          : path;
+      }
+      if (depth < 0) return path;
+    }
+  }
+  return path;
+}
 export function submoduleStatusEntries(raw) {
   const entries = [];
   for (const line of raw.split('\n')) {
@@ -676,7 +703,7 @@ export function submoduleStatusEntries(raw) {
     const status = match[1];
     let path = match[3];
     if (status !== '-') {
-      path = path.replace(SUBMODULE_DESCRIBE_SUFFIX_PATTERN, '');
+      path = stripSubmoduleDescribeSuffix(path);
     }
     entries.push({ status, path });
   }
@@ -1137,6 +1164,7 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
       const ref = backupRefs.find((entry) => entry.scope === submodule.path);
       const operation = submoduleOperations.get(submodule.path);
       if (
+        submodule.status !== '+' &&
         !stash?.stashed &&
         !stash?.hasStashes &&
         !ref?.written &&
@@ -2139,6 +2167,32 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.mutated ||= lateIgnored.copied.some(
         (ignored) => ignored.copiedTo !== null,
       );
+      for (const stash of verdict.plan.stashes) {
+        if (stash.scope === '.') continue;
+        const lateSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          join(targetPath, stash.scope),
+          stash.scope,
+          true,
+          targetPath,
+          deps,
+        );
+        verdict.plan.ignoredFilesCopied.push(...lateSubmoduleIgnored.copied);
+        verdict.plan.ignoredFilesScanFailed ||= lateSubmoduleIgnored.scanFailed;
+        verdict.mutated ||= lateSubmoduleIgnored.copied.some(
+          (ignored) => ignored.copiedTo !== null,
+        );
+        if (
+          lateSubmoduleIgnored.scanFailed ||
+          lateSubmoduleIgnored.copied.some(
+            (ignored) =>
+              ignored.copiedTo === null || !deps.pathExists(ignored.copiedTo),
+          )
+        ) {
+          return recordRemovalFailure(
+            `late preservation for initialized submodule ${stash.scope} could not be fully verified; stopping before removal`,
+          );
+        }
+      }
       if (
         lateIgnored.scanFailed ||
         lateIgnored.copied.some(
@@ -2400,11 +2454,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
       const forceLock = deps.checkLock(targetPath);
-      if (
-        !lockMatchesRecoveredClaim(forceLock, recoveredClaimId) ||
-        !forceLock.present ||
-        forceLock.malformed
-      ) {
+      if (!lockMatchesRecoveredClaim(forceLock, recoveredClaimId)) {
         return recordRemovalFailure(
           'the worktree-local claim lock no longer matches before forced removal; stopping before removal',
         );

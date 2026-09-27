@@ -54,13 +54,13 @@
 // needs no Windows-specific recovery branch -- `CreateHardLinkW` fails
 // cleanly with `EEXIST` there too when the destination already exists.
 //
-// This lock intentionally does not try to perfectly serialize two
-// concurrent authorized takeovers of the same worktree -- that is a much
-// narrower race than the collision above, and the claim revalidation gate
-// (re-reading the GitHub claim-id before every mutation, independent of this
-// lock) is the real authority there: GitHub claim parsing is deterministic,
-// so only one concurrent takeover's claim-id can actually be the active one,
-// regardless of what this local lock file happens to contain.
+// Authorized takeovers also acquire the clone-scoped mutex from
+// `clone-lock.mts` before replacing this file. Local-worktree recovery holds
+// that same mutex across its final ownership check and `git worktree remove`,
+// so a takeover cannot replace the lock after recovery checks it but before
+// Git removes the private admin directory. The GitHub claim revalidation gate
+// remains the authority for whether a takeover is authorized; the clone lock
+// only serializes this same-machine filesystem operation.
 //
 // Generated-tokens record (#2719): a second, sibling on-disk artifact in
 // the same admin directory, answering a narrower question than the lock
@@ -173,6 +173,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
+  existsSync,
   linkSync,
   openSync,
   readFileSync,
@@ -186,6 +187,11 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  acquireCloneLockAtPath,
+  releaseCloneLock,
+  resolveCloneLockPath,
+} from './clone-lock.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -718,6 +724,7 @@ function createLockFileExclusively(path, agentId, claimId) {
 export function acquireClaimLock(worktree, agentId, claimId, takeover) {
   const facts = resolveAcquireWorktreeFacts(worktree);
   const { path } = facts;
+  const adminDir = resolve(path, '..');
   const refused = facts.isPrimary
     ? {
         mode: 'primary-worktree-refused',
@@ -725,72 +732,101 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
       }
     : undefined;
-  for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
-    const read = readLock(path);
-    if (read.status === 'present' && read.lock.claimId === claimId) {
-      return attempt === 0
-        ? { mode: 'acquired', path, reacquired: true }
-        : { mode: 'acquired', path, reacquired: true, racedCreate: true };
+  let takeoverCloneLock = null;
+  if (takeover) {
+    // Resolve before waiting: local-worktree recovery may remove the linked
+    // worktree while this authorized takeover waits for the clone mutex.
+    takeoverCloneLock = acquireCloneLockAtPath(
+      resolveCloneLockPath(worktree),
+      `claim-lock-takeover:${agentId}`,
+    );
+  }
+  try {
+    for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
+      const read = readLock(path);
+      // Never recreate a lock in an admin directory that disappeared while
+      // this takeover waited for a recovery operation to finish.
+      if (read.status === 'absent' && takeoverCloneLock !== null) {
+        if (!existsSync(adminDir)) {
+          throw new Error(
+            `worktree private admin directory disappeared while waiting for clone lock: ${adminDir}`,
+          );
+        }
+      }
+      if (read.status === 'present' && read.lock.claimId === claimId) {
+        return attempt === 0
+          ? { mode: 'acquired', path, reacquired: true }
+          : { mode: 'acquired', path, reacquired: true, racedCreate: true };
+      }
+      if (read.status === 'absent') {
+        if (refused) {
+          return refused;
+        }
+        if (createLockFileExclusively(path, agentId, claimId) === 'created') {
+          return { mode: 'acquired', path };
+        }
+        // Raced with a concurrent fresh acquire between the read above and
+        // this create; loop around to re-read and re-decide. Any
+        // `reacquired: true` this call reports from here on is no longer
+        // from its own first look, so it also carries `racedCreate: true`
+        // (see the function-level doc comment above).
+        continue;
+      }
+      // Either a different claim-id, or a malformed body whose holder can't
+      // be determined safely: always a same-machine collision either way.
+      // Local state (including how old the lock is) never authorizes an
+      // override -- only an explicit, GitHub-reverified `takeover` may.
+      const holder = read.status === 'present' ? read.lock : undefined;
+      if (!takeover) {
+        return { mode: 'collision', path, holder };
+      }
+      overwriteLockAtomically(path, agentId, claimId);
+      return { mode: 'acquired', path, forcedTakeover: true, holder };
     }
-    if (read.status === 'absent') {
+    // Exhausted retries on the narrow absent-then-raced-create loop above.
+    // Re-read once after the final EEXIST so a well-formed winner is reported
+    // to the caller instead of being returned as an unexplained collision. If
+    // the winner disappeared before this read, make one last create attempt
+    // so a transiently absent lock is not reported as a false collision.
+    const finalRead = readLock(path);
+    if (finalRead.status === 'present' && finalRead.lock.claimId === claimId) {
+      return { mode: 'acquired', path, reacquired: true, racedCreate: true };
+    }
+    if (finalRead.status === 'absent') {
+      if (takeoverCloneLock !== null && !existsSync(adminDir)) {
+        throw new Error(
+          `worktree private admin directory disappeared while waiting for clone lock: ${adminDir}`,
+        );
+      }
       if (refused) {
         return refused;
       }
       if (createLockFileExclusively(path, agentId, claimId) === 'created') {
         return { mode: 'acquired', path };
       }
-      // Raced with a concurrent fresh acquire between the read above and
-      // this create; loop around to re-read and re-decide. Any
-      // `reacquired: true` this call reports from here on is no longer
-      // from its own first look, so it also carries `racedCreate: true`
-      // (see the function-level doc comment above).
-      continue;
-    }
-    // Either a different claim-id, or a malformed body whose holder can't
-    // be determined safely: always a same-machine collision either way.
-    // Local state (including how old the lock is) never authorizes an
-    // override — only an explicit, GitHub-reverified `takeover` may.
-    const holder = read.status === 'present' ? read.lock : undefined;
-    if (!takeover) {
-      return { mode: 'collision', path, holder };
-    }
-    overwriteLockAtomically(path, agentId, claimId);
-    return { mode: 'acquired', path, forcedTakeover: true, holder };
-  }
-  // Exhausted retries on the narrow absent-then-raced-create loop above.
-  // Re-read once after the final EEXIST so a well-formed winner is reported
-  // to the caller instead of being returned as an unexplained collision. If
-  // the winner disappeared before this read, make one last create attempt so
-  // a transiently absent lock is not reported as a false collision. Every
-  // return below is reached only after this call's own first read already
-  // found the lock absent (that is how the loop above was entered at all),
-  // so every `reacquired: true` from here on carries `racedCreate: true`.
-  const finalRead = readLock(path);
-  if (finalRead.status === 'present' && finalRead.lock.claimId === claimId) {
-    return { mode: 'acquired', path, reacquired: true, racedCreate: true };
-  }
-  if (finalRead.status === 'absent') {
-    if (refused) {
-      return refused;
-    }
-    if (createLockFileExclusively(path, agentId, claimId) === 'created') {
-      return { mode: 'acquired', path };
-    }
-    const racedRead = readLock(path);
-    if (racedRead.status === 'present' && racedRead.lock.claimId === claimId) {
-      return { mode: 'acquired', path, reacquired: true, racedCreate: true };
+      const racedRead = readLock(path);
+      if (
+        racedRead.status === 'present' &&
+        racedRead.lock.claimId === claimId
+      ) {
+        return { mode: 'acquired', path, reacquired: true, racedCreate: true };
+      }
+      return {
+        mode: 'collision',
+        path,
+        holder: racedRead.status === 'present' ? racedRead.lock : undefined,
+      };
     }
     return {
       mode: 'collision',
       path,
-      holder: racedRead.status === 'present' ? racedRead.lock : undefined,
+      holder: finalRead.status === 'present' ? finalRead.lock : undefined,
     };
+  } finally {
+    if (takeoverCloneLock !== null) {
+      releaseCloneLock(takeoverCloneLock);
+    }
   }
-  return {
-    mode: 'collision',
-    path,
-    holder: finalRead.status === 'present' ? finalRead.lock : undefined,
-  };
 }
 /** Read-only lock inspection: never creates, mutates, or deletes the lock. */
 export function checkClaimLock(worktree) {
