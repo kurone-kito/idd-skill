@@ -5,6 +5,7 @@ import {
   spawnSync,
 } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -64,6 +65,8 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
   try {
     mkdirSync(source);
     writeFileSync(join(source, 'inside.txt'), 'inside\n');
+    writeFileSync(join(source, 'executable.sh'), '#!/bin/sh\n');
+    chmodSync(join(source, 'executable.sh'), 0o755);
     writeFileSync(external, 'external\n');
     symlinkSync(join(source, 'inside.txt'), join(source, 'inside-link'));
     symlinkSync(external, join(source, 'external-link'));
@@ -79,6 +82,10 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
     assert.equal(
       readFileSync(join(destination, 'inside-link'), 'utf8'),
       'inside\n',
+    );
+    assert.equal(
+      lstatSync(join(destination, 'executable.sh')).mode & 0o111,
+      0o111,
     );
     assert.equal(
       lstatSync(join(destination, 'external-link')).isSymbolicLink(),

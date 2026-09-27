@@ -4191,7 +4191,7 @@ export function copyPathWithSafeSymlinks(
         temporaryFd = openSync(
           temporaryPath,
           constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
-          0o600,
+          0o600 | (sourceStat.mode & 0o111),
         );
         const buffer = Buffer.allocUnsafe(64 * 1024);
         for (;;) {
