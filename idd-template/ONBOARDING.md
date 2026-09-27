@@ -235,7 +235,16 @@ below instead.
    root=$(git -C <target-repo> rev-parse --show-toplevel) &&
    test "$root" = "$(cd <target-repo> && pwd -P)" &&
    status=$(git -C <target-repo> status --short --untracked-files=all) &&
-   test -z "$status"
+   test -z "$status" || exit 1
+   ```
+
+   For an initialized Git target with no commit, create a pre-import
+   baseline before Step 3; otherwise the checkpoint cannot provide `HEAD^`:
+
+   ```sh
+   git -C <target-repo> add -A &&
+   git -C <target-repo> commit --allow-empty -m "chore: record pre-import baseline" &&
+   pre_import_ref=$(git -C <target-repo> rev-parse HEAD)
    ```
 
 3. Import the core template file set (add `--profile vendored-node`
@@ -690,18 +699,15 @@ error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check after `--import` and `--substitute`. It covers manifest
-  completeness (the `--import` file set; `--hold` does not shrink it),
-  placeholder residue, `vendored-node` helper loads, stale-import and
-  package-pin advisories, and held-schema drift (a held `src/scripts` or
-  vendored `scripts` module still names or scans a schema/fixture that
-  `--import` would update). The last three are non-blocking. Git targets
-  must compare drift with an explicit pre-import ref passed through
-  `--target-base-ref`; after the checkpoint commit, `HEAD` is the
-  post-import tree. An unborn `HEAD` uses the current-target fallback.
-  Git discovery/configuration failures are errors; non-Git targets use the
-  source-vs-current-target fallback. Missing manifests, placeholders, or
-  helper-load failures block. Repeat `--hold` to name unchanged manifest
-  paths; unknown paths are usage errors.
+  completeness (`--hold` does not shrink the import set), placeholder
+  residue, helper loads, stale-import/package-pin advisories, and held-schema
+  drift (a held module names or scans a file `--import` would update). The
+  last three are non-blocking. Git targets require pre-import
+  `--target-base-ref`; checkpoint `HEAD` is post-import. Unborn targets use
+  the current-target fallback. Git failures are errors; non-Git targets use
+  the source-vs-current fallback. Missing manifests, placeholders, or
+  helper-load failures block. Repeat `--hold` for unchanged manifest paths;
+  unknown paths are usage errors.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
