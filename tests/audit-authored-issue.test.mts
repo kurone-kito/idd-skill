@@ -1665,6 +1665,61 @@ test('dependency-line-grammar ignores definitions inside raw HTML blocks', () =>
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar keeps trailing junk from activating a definition', () => {
+  for (const definition of [
+    '[ref]: https://github.com/kurone-kito/idd-skill/issues/12 garbage',
+    '[ref]: <https://github.com/kurone-kito/idd-skill/issues/12> garbage',
+  ]) {
+    const body = childBody({
+      extraMarkers: `Blocked by [Issue 12][ref]\n\n${definition}`,
+    });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding, definition);
+    assert.equal(finding.result, 'pass', definition);
+  }
+});
+
+test('dependency-line-grammar keeps a continuation in the same block container', () => {
+  const activeBody = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n> [ref]:\n>   https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const escapedBody = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n> [ref]:\nhttps://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  for (const [body, expected] of [
+    [activeBody, 'fail'],
+    [escapedBody, 'pass'],
+  ] as const) {
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding);
+    assert.equal(finding.result, expected);
+  }
+});
+
+test('dependency-line-grammar recognizes short hyphen setext headings', () => {
+  for (const underline of ['-', '--']) {
+    const body = childBody({
+      extraMarkers:
+        `Heading\n${underline}\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n\n` +
+        'Blocked by [Issue 12][ref]',
+    });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding, underline);
+    assert.equal(finding.result, 'fail', underline);
+  }
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',

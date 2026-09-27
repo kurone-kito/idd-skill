@@ -1346,12 +1346,7 @@ function looksLikeIssueMarkdownLink(text, referenceDefinitions = new Map()) {
   const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
   if (inlineMatch) {
     const [, label, target] = inlineMatch;
-    if (
-      /#\d+/.test(label) ||
-      GITHUB_ISSUE_OR_PR_URL_PATTERN.test(
-        unwrapAngleBracketDestination(target.trim()),
-      )
-    ) {
+    if (/#\d+/.test(label) || /\/(?:issues|pull)\/\d+/.test(target)) {
       return true;
     }
   }
@@ -2451,6 +2446,9 @@ function readReferenceDefinitionDestination(suffix) {
     if (closingBracket <= 1) {
       return null;
     }
+    if (!isReferenceDefinitionTitleSuffix(suffix.slice(closingBracket + 1))) {
+      return null;
+    }
     return suffix.slice(0, closingBracket + 1);
   }
   const destination = suffix.match(/^\S+/u)?.[0];
@@ -2473,7 +2471,19 @@ function readReferenceDefinitionDestination(suffix) {
       parenthesisDepth -= 1;
     }
   }
-  return parenthesisDepth === 0 ? destination : null;
+  return parenthesisDepth === 0 &&
+    isReferenceDefinitionTitleSuffix(suffix.slice(destination.length))
+    ? destination
+    : null;
+}
+function isReferenceDefinitionTitleSuffix(suffix) {
+  const trimmed = suffix.trim();
+  return (
+    trimmed.length === 0 ||
+    /^(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\((?:\\.|[^)\\\n])*\))$/u.test(
+      trimmed,
+    )
+  );
 }
 function parseReferenceDefinitionCandidate(line) {
   const { content, containerKinds, canListContainerInterruptParagraph } =
@@ -2494,11 +2504,35 @@ function isReferenceDefinitionBlockBoundary(content) {
     /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
     /^=+[ \t]*$/u.test(content) ||
     /^(`{3,}|~{3,})/u.test(content) ||
-    /^(?:\*\s*){3,}$|^(?:-\s*){3,}$|^(?:_\s*){3,}$/u.test(content)
+    /^(?:\*\s*){3,}$|^-+[ \t]*$|^(?:_\s*){3,}$/u.test(content)
   );
 }
 function isReferenceDefinitionTitleContinuation(content) {
   return /^(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\))[ \t]*$/u.test(content);
+}
+function hasReferenceDefinitionContinuationIndent(line) {
+  return /^(?: {0,3}>[ \t]?)+[ \t]+/u.test(line) || /^[ \t]+/u.test(line);
+}
+function matchesReferenceDefinitionContinuationContainer(
+  line,
+  currentContainerKinds,
+  pendingContainerKinds,
+) {
+  if (currentContainerKinds.join('/') === pendingContainerKinds.join('/')) {
+    return true;
+  }
+  const currentPrefix = currentContainerKinds.join('/');
+  const pendingPrefix = pendingContainerKinds.join('/');
+  if (
+    currentContainerKinds.filter((kind) => kind === 'quote').length !==
+    pendingContainerKinds.filter((kind) => kind === 'quote').length
+  ) {
+    return false;
+  }
+  return (
+    pendingPrefix.startsWith(currentPrefix ? `${currentPrefix}/` : '') &&
+    hasReferenceDefinitionContinuationIndent(line)
+  );
 }
 /**
  * Resolves every `[text][ref]` reference-style link usage in `text`
@@ -2532,7 +2566,12 @@ function collectReferenceStyleLinkDefinitions(text) {
       if (
         destination !== undefined &&
         destination !== null &&
-        !content.trim().startsWith('[')
+        !content.trim().startsWith('[') &&
+        matchesReferenceDefinitionContinuationContainer(
+          line,
+          containerKinds,
+          pendingContinuation.containerKinds,
+        )
       ) {
         const key = normalizeLinkReferenceLabel(pendingContinuation.label);
         if (!definitions.has(key)) {
