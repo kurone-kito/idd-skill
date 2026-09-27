@@ -4628,7 +4628,13 @@ export function collectAssertNextActions(
         `# re-read both proofs; accept only a newer event after HEAD or a fresh node absent from the snapshot`,
         `# if REST leaves evidence absent, stop this pointer and resume E14's guarded registration-proven procedure; it resolves bot ids live and revalidates the claim before every mutation`,
         `# confirm the same evidence for ${restLogin}, then:`,
-        `# do not paste an independent marker command here: the guarded E14 procedure owns the claim/HEAD revalidation and posts the advisory-wait marker only after registration status 0`,
+        `# the guarded E14 procedure must return REGISTRATION_STATUS=0 before this final mutation:`,
+        `if [ "\${REGISTRATION_STATUS:-}" -eq 0 ]; then`,
+        `  claim_revalidate || exit 2`,
+        `  node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
+        `else`,
+        `  exit 2`,
+        `fi`,
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {

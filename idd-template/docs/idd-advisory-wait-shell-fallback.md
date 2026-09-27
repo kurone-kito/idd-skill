@@ -339,8 +339,9 @@ registration_attempt() {
       ''|*[!0-9]*) ;;
       *)
         if [ -n "$EVENT_ID" ] \
+          && [ -n "$HEAD_TIMELINE_INDEX" ] \
           && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
-          && { [ -z "$HEAD_TIMELINE_INDEX" ] || [ "$EVENT_INDEX" -gt "$HEAD_TIMELINE_INDEX" ]; }; then
+          && [ "$EVENT_INDEX" -gt "$HEAD_TIMELINE_INDEX" ]; then
           EVENT_NEW=true
         fi
         ;;
@@ -430,6 +431,24 @@ EOF
 # but status 2 is unreadable evidence: hold via AW4 and never count a cycle.
 REGISTRATION_STATUS=0
 registration_attempt e14 || REGISTRATION_STATUS=$?
+
+case "$REGISTRATION_STATUS" in
+  0)
+    # The marker is a separate GitHub mutation. Revalidate after registration
+    # evidence is proven and immediately before posting it.
+    claim_revalidate || exit 2
+    node scripts/post-idd-marker.mjs --type advisory --target pr <pr-number> \
+      --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply
+    ;;
+  1 | 2 | 3)
+    echo "E14 registration did not prove a safe marker step; stop and ask" >&2
+    exit 2
+    ;;
+  *)
+    echo "E14 registration returned an unexpected status" >&2
+    exit 2
+    ;;
+esac
 ```
 
 The post-request reads must run after each mutating attempt. The

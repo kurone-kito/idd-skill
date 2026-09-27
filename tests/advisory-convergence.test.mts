@@ -6949,8 +6949,9 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(noneText, /fresh node absent from that snapshot/);
   assert.match(noneText, /resume E14's guarded registration-proven procedure/);
-  assert.match(noneText, /do not paste an independent marker command here/);
-  assert.doesNotMatch(noneText, /post-idd-marker\.mjs --type advisory/);
+  assert.match(noneText, /REGISTRATION_STATUS.*0/);
+  assert.match(noneText, /claim_revalidate \|\| exit 2/);
+  assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(noneText, /<<EOF/);
   const snapshotAt = noneText.indexOf(
     'snapshot the matching event and request node before either mutation',
@@ -6958,10 +6959,11 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const requestAt = noneText.indexOf('gh pr edit');
   assert.ok(snapshotAt > 0 && requestAt > snapshotAt);
   const payloadAt = noneText.indexOf('guarded registration-proven');
-  const guardedPointerAt = noneText.indexOf(
-    'do not paste an independent marker command here',
+  const guardedPointerAt = noneText.indexOf('claim_revalidate || exit 2');
+  const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
+  assert.ok(
+    payloadAt > 0 && guardedPointerAt > payloadAt && markerAt > guardedPointerAt,
   );
-  assert.ok(payloadAt > 0 && guardedPointerAt > payloadAt);
   assert.doesNotMatch(
     noneText,
     /copilot has not reviewed this pull request yet/,
