@@ -478,7 +478,7 @@ The confirmed substitutions are:
   and apply the requested limit after filtering.
 
   ```sh
-  gh api --paginate "repos/<owner>/<repo>/issues?state=all&per_page=100"
+  gh api --paginate --slurp "repos/<owner>/<repo>/issues?state=all&per_page=100"
   ```
 
 - For `gh issue view <number>`, use the individual issue endpoint.
@@ -533,11 +533,15 @@ for verification of an existing generation and not a change to the
 helper's GraphQL dependency. Pass only when the fetched comment is the
 just-posted trusted marker (expected author and canonical marker fields)
 and its recorded `body-sha256` equals the digest recomputed from the
-fetched issue body. The two read-back requests are:
+fetched issue body. Also fetch the complete, paginated owner-marker log
+and reconcile it before passing: a later trusted marker must not
+supersede the fetched comment. A single known comment ID is not enough
+to establish current ownership. The read-back requests are:
 
 ```sh
 gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
 gh api "repos/<owner>/<repo>/issues/<number>"
+gh api --paginate "repos/<owner>/<repo>/issues/<number>/comments?per_page=100"
 ```
 
 ## Decision
