@@ -231,14 +231,25 @@ HEAD_COMMITTED_AT=$(gh pr view {pr-number} --json commits --jq '.commits[-1].com
 request_event() {
   local result
   result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate --jq \
-    '.[] | select(.event == "review_requested" and .requested_reviewer.login == env.BOT_REST_LOGIN) | [.id, .created_at] | @tsv') || return 1
+    '.[] | select(.event == "review_requested" and (((.requested_reviewer.login // "" | ascii_downcase) as $l
+      | $l == (env.BOT_REST_LOGIN | ascii_downcase)
+        or $l == "copilot"
+        or $l == "copilot-pull-request-reviewer"
+        or $l == "copilot-pull-request-reviewer[bot]"))) | [.id, .created_at] | @tsv') || return 1
   printf '%s\n' "$result" | tail -1
 }
 request_nodes() {
   local result
   result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}') || return 1
   printf '%s' "$result" |
-    jq -r '.data.repository.pullRequest.reviewRequests.nodes[] | select(.requestedReviewer.login == env.BOT_REST_LOGIN) | .id'
+    jq -r --arg configured "$BOT_REST_LOGIN" '
+      .data.repository.pullRequest.reviewRequests.nodes[]
+      | select((((.requestedReviewer.login // "") | ascii_downcase) as $l
+        | $l == ($configured | ascii_downcase)
+          or $l == "copilot"
+          or $l == "copilot-pull-request-reviewer"
+          or $l == "copilot-pull-request-reviewer[bot]"))
+      | .id'
 }
 registration_attempt() {
   EVENT_BEFORE=$(request_event) || { echo "event snapshot unreadable" >&2; return 2; }
