@@ -495,52 +495,48 @@ completion.
    D4.
 
 7. **Scan the branch's own commit messages**: GitHub's merge-time
-   closing-keyword scan also reads commit messages (subject and body),
-   not only the PR body, so a stray keyword there can auto-close an
-   issue outside the deliberate set even when the PR body is clean.
-   List the branch's own commits, using a visible delimiter rather
-   than a NUL byte so common terminals and search tools don't treat
-   the output as binary:
+   closing-keyword scan reads commit subjects and bodies as well as the
+   PR body. List them with a visible delimiter, then apply step 3's
+   keyword regex to any issue number:
 
    ```sh
    git log origin/{development-branch}..HEAD --pretty=format:'%H%n%B%n===commit-boundary==='
    ```
 
-   For each commit's full message, search using step 3's same keyword
-   alternation, generalized to any issue number instead of the fixed
-   `<N>`:
-
    ```text
    (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)\b
    ```
 
-   A match against any issue number in the deliberate closing set from
-   D3 is expected (deliberate — this covers both the single-issue `<N>`
-   case and "Multiple closing issues" above); only a captured number
-   **outside** that set is a stray commit-message close.
+   Numbers in D3's deliberate closing set are expected; any other
+   number is a stray commit-message close. When rewording a stray match,
+   use `git commit --amend` for the tip or an interactive rebase for an
+   earlier commit. Preserve merge commits with `--rebase-merges`, and
+   use the D1 signing wrapper (including its continuation) when primary
+   signing is non-interactive-hostile. Force-push with
+   `--force-with-lease` only when repository policy permits it; otherwise
+   hold. Amend before merge, repeat this step once, and if the match
+   remains, post a hold note on the issue citing the PR URL and stop
+   before D4.
 
-   **On a stray match**: amend the offending commit (`git commit
-   --amend` for the tip commit, or an interactive rebase for an
-   earlier one) using the same safe reordering as the Mirror
-   false-positive example above. If the branch already carries a merge
-   commit (for example, from an E-phase `{development-branch}` sync), rebase with
-   `--rebase-merges` instead of a plain interactive rebase, so the
-   merge and its recorded conflict resolution aren't silently
-   linearized or dropped. On a signed-commit repo whose primary
-   signing is non-interactive-hostile, run the amend or rebase through
-   the same D1 fallback-signing wrapper noted above, including any
-   rebase continuation — the plain command can stall the same way D1
-   already documents. Then force-push the correction (`git push
-   --force-with-lease`) only when repository policy permits
-   force-pushing a published branch, mirroring D2's own force-push
-   restriction; if it does not, hold for operator intervention instead
-   of rewriting published history. **Amend before merge** — this scan
-   runs at merge time, so the fix must land before the PR merges; a
-   commit message caught only after merge cannot be amended, and
-   recovery requires reopening the affected issue by hand. Repeat this
-   step once after the amendment. If it still finds a stray match,
-   post a hold note on the issue citing the PR URL and stop. Do not
-   proceed to D4.
+   **Scripted-rebase hazards**: `rebase.abbreviateCommands=true` can
+   make a non-interactive todo list use `p`/`r` instead of
+   `pick`/`reword`; check `git config --get rebase.abbreviateCommands` or
+   match both forms. Disable `rebase.updateRefs` process-wide so an
+   inner rebase launched by a signing wrapper cannot move a safety
+   backup or sibling branch:
+
+   ```sh
+   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rebase.updateRefs \
+   GIT_CONFIG_VALUE_0=false GIT_SEQUENCE_EDITOR='...' git rebase -i ...
+   ```
+
+   An outer `-c rebase.updateRefs=false` may not reach that subprocess.
+   After any scripted reword or rebase, verify that the target message
+   changed and rerun the stray-keyword scan; do not trust only the exit
+   status or `Successfully rebased` text.
+
+   These hazards were observed while recovering [PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431)
+   for issue #3285; the field report is tracked in issue #3552.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
