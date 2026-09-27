@@ -2541,6 +2541,7 @@ function reverifyPreservationArtifactsFresh(
     LocalWorktreeRecoveryDeps,
     'runGit' | 'pathExists' | 'realpathOrNull' | 'readlinkOrNull'
   >,
+  scopesMissingFromCurrentTree: ReadonlySet<string> = new Set(),
 ): boolean {
   const scopePath = (scope: string): string =>
     scope === '.' ? targetPath : join(targetPath, scope);
@@ -2554,6 +2555,14 @@ function reverifyPreservationArtifactsFresh(
     { entries: StashPlanEntry[]; list: string }
   >();
   for (const stash of preserve.stashes) {
+    // Primary recovery may deliberately remove an initialized submodule
+    // before checking out a development branch that no longer contains its
+    // gitlink. Its stash lives in the submodule's private gitdir, but the
+    // removed checkout is no longer a usable cwd for `git stash list`.
+    // The same artifact was freshly verified immediately before that
+    // deliberate removal; keep verifying its copied admin data below while
+    // skipping only the now-unreachable checkout probe.
+    if (scopesMissingFromCurrentTree.has(stash.scope)) continue;
     if (stash.stashListReadFailed) return false;
     if (!stash.stashed) continue;
     const key = `${stash.scope}\0${stash.tag}`;
@@ -2615,6 +2624,10 @@ function reverifyPreservationArtifactsFresh(
     }
   }
   for (const ref of preserve.backupRefs) {
+    // See the stash-scope exception above. A removed initialized submodule
+    // cannot be used as `cwd` for `git rev-parse`, while its backup copy was
+    // verified before checkout and is still checked below.
+    if (scopesMissingFromCurrentTree.has(ref.scope)) continue;
     if (!ref.written) continue;
     const verify = deps.runGit(
       ['rev-parse', '--verify', ref.ref],
@@ -4063,6 +4076,30 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      const scopesMissingFromCurrentTree = new Set<string>();
+      if (verdict.plan.stashes.some((stash) => stash.scope !== '.')) {
+        const currentTree = deps.runGit(
+          ['ls-tree', '-r', '-z', '--full-tree', 'HEAD'],
+          targetPath,
+        );
+        if (!currentTree.ok) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `could not inspect the checked-out development tree before final preservation verification: ${currentTree.stderr}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const currentGitlinks = gitlinkPathsAtRevision(currentTree.stdout);
+        for (const stash of verdict.plan.stashes) {
+          if (stash.scope !== '.' && !currentGitlinks.has(stash.scope)) {
+            scopesMissingFromCurrentTree.add(stash.scope);
+          }
+        }
+      }
       // The checkout and final identity/lock checks above are themselves a
       // concurrency window. Re-read every preservation artifact once more
       // after those checks and immediately before deleting the primary lock;
@@ -4080,6 +4117,7 @@ export function runLocalWorktreeRecovery(
           },
           targetPath,
           deps,
+          scopesMissingFromCurrentTree,
         )
       ) {
         verdict.plan.removal = {

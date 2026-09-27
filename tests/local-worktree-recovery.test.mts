@@ -4847,6 +4847,9 @@ test('primary recovery removes initialized submodules deleted by the target bran
     join(tmpdir(), 'idd-lwr-primary-deleted-submodule-'),
   );
   const submodulePath = join(root, 'submodule');
+  let submodulePresent = true;
+  let submoduleStashCreated = false;
+  let checkedOut = false;
   let confirmCalls = 0;
   const events: string[] = [];
   try {
@@ -4865,7 +4868,12 @@ test('primary recovery removes initialized submodules deleted by the target bran
         },
       ],
       pathExists: (path) =>
-        path === root || path === join(root, '.git') || existsSync(path),
+        path === root ||
+        path === join(root, '.git') ||
+        path === join(root, '.git/modules/submodule') ||
+        path.startsWith('/tmp/preserve') ||
+        (submodulePresent && path === submodulePath) ||
+        existsSync(path),
       confirmBlock: () => {
         confirmCalls += 1;
         const occupied = confirmCalls < 4;
@@ -4889,6 +4897,19 @@ test('primary recovery removes initialized submodules deleted by the target bran
         };
       },
       runGit: (argv, cwd) => {
+        if (
+          cwd === submodulePath &&
+          !submodulePresent &&
+          argv[0] === 'stash' &&
+          argv[1] === 'list'
+        ) {
+          return {
+            ok: false,
+            status: 128,
+            stdout: '',
+            stderr: 'submodule checkout was removed',
+          };
+        }
         if (argv[0] === 'submodule' && argv[1] === 'status') {
           return {
             ok: true,
@@ -4900,13 +4921,58 @@ test('primary recovery removes initialized submodules deleted by the target bran
             stderr: '',
           };
         }
-        if (argv[0] === 'status') {
+        if (argv[0] === 'stash' && argv[1] === 'push') {
+          submoduleStashCreated = true;
           return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (
+          argv[0] === 'stash' &&
+          argv[1] === 'list' &&
+          cwd === submodulePath &&
+          submoduleStashCreated
+        ) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: 'stash@{0}: idd-lwr claim-x\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              argv[1] === '--porcelain=v1'
+                ? ''
+                : cwd === root
+                  ? checkedOut
+                    ? ''
+                    : ' M submodule\n'
+                  : cwd === submodulePath
+                    ? ' M changed.txt\n'
+                    : '',
+            stderr: '',
+          };
         }
         if (argv[0] === 'ls-tree') {
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
-        if (argv[0] === 'checkout') events.push('checkout');
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === root
+                ? `${root}/.git\n`
+                : `${root}/.git/modules/submodule\n`,
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'checkout') {
+          checkedOut = true;
+          events.push('checkout');
+        }
         if (argv[0] === 'submodule' && argv[1] === 'update') {
           events.push('submodule-update');
         }
@@ -4914,7 +4980,13 @@ test('primary recovery removes initialized submodules deleted by the target bran
       },
       removePath: (path) => {
         events.push('remove-submodule');
+        submodulePresent = false;
         rmSync(path, { recursive: true, force: true });
+      },
+      copyPath: (_from, _to, sourceRoot) => {
+        if (sourceRoot === `${root}/.git/modules/submodule`) {
+          events.push('copy-submodule-admin');
+        }
       },
       checkLock: () => ({
         path: join(root, '.git/idd-claim.lock'),
@@ -4935,7 +5007,8 @@ test('primary recovery removes initialized submodules deleted by the target bran
       }),
       deps,
     );
-    assert.deepEqual(events, [
+    assert.equal(events.includes('copy-submodule-admin'), true);
+    assert.deepEqual(events.slice(-3), [
       'remove-submodule',
       'checkout',
       'submodule-update',
