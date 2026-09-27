@@ -520,6 +520,1728 @@ test('passes autonomous completion when a trigger phrase is negated nearby (#271
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('passes autonomous completion when a credential is descriptive security vocabulary (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 67,
+    title: 'document protected authentication material',
+    body:
+      'This issue concerns a credential. The change is limited to the ' +
+      'documentation wording and has focused unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion when credential handling and disclosure policy are descriptive (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 68,
+    title: 'clarify protected material handling',
+    body:
+      'Document credential handling and disclosure policy for the existing ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a maintainer must supply the credential (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 69,
+    title: 'wire external credential approval',
+    body:
+      'A credential must be supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when credentials must be supplied by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 154,
+    title: 'wire external credential approval',
+    body:
+      'Credentials must be supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when keys are necessary before implementation (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 155,
+    title: 'wire external key approval',
+    body: 'A key is necessary before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let production key wording hide a live prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 159,
+    title: 'document deployment requirements',
+    body: 'The deploy needs production keys from ops. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when token vocabulary is descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 156,
+    title: 'document token terminology',
+    body:
+      'Document token handling and disclosure policy for the existing ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not hide a missing authentication credential behind descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 162,
+    title: 'document authentication handling',
+    body: 'The authentication credential is missing. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps parser tokens and cache keys separate from security blockers (#3522)', () => {
+  for (const body of [
+    'The parser needs a lookahead token to disambiguate the grammar. Verification: add unit tests.',
+    'The cache requires a stable key for deterministic lookup. Verification: add unit tests.',
+  ]) {
+    const result = evaluateA4Viability({
+      number: 163,
+      title: 'clarify implementation details',
+      body,
+      state: 'OPEN',
+    });
+
+    assert.equal(result.passed, true);
+    assert.deepEqual(result.failedCriteria, []);
+  }
+});
+
+test('treats obtain credentials as a live prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 164,
+    title: 'document credential acquisition',
+    body: 'Obtain credentials from the maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('recognizes singular credential wording as descriptive with positive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 165,
+    title: 'document authentication terminology',
+    body: 'A credential is used for authentication. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('passes autonomous completion for actorless application authorization (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 160,
+    title: 'document application authorization',
+    body:
+      'The handler cannot be called without authorization. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not classify application-owner authorization as external coordination (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 161,
+    title: 'document application authorization',
+    body:
+      'The handler cannot be called without owner authorization. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('still fails autonomous completion when a credential is necessary (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 91,
+    title: 'wire external credential approval',
+    body:
+      'A credential is necessary before implementation. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a customer supplies the credential (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 94,
+    title: 'wire external credential approval',
+    body:
+      'This issue documents a credential that will be supplied by the customer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion for has-to credential handling (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 96,
+    title: 'wire external credential handling',
+    body:
+      'Credential handling has to be performed by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when credential handling is itself required (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 70,
+    title: 'wire external credential handling',
+    body:
+      'The change requires credential handling before it can ship. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when handling a credential is imperative (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 72,
+    title: 'wire external credential handling',
+    body:
+      'Handle a credential supplied by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat a distant noun as a credential description (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 73,
+    title: 'obtain external credential access',
+    body:
+      'Obtain a credential to access storage managed by the maintainer. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when discussing a credential is imperative (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 75,
+    title: 'document external credential coordination',
+    body:
+      'Discuss a credential with the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a credential will be performed by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 76,
+    title: 'document external credential handling',
+    body:
+      'Credential handling will be performed by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('still fails autonomous completion when a credential is supplied by a maintainer (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 77,
+    title: 'document external credential access',
+    body:
+      'Document a credential supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a generic credential noun mask a maintainer prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 81,
+    title: 'document credential pattern',
+    body:
+      'Document a credential pattern supplied by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a credential mention mask a follow-on prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 78,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation cannot begin until ' +
+      'the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a sentence-boundary credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 82,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 83,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation may begin only after ' +
+      'the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let credential dependencies pass as descriptive storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 85,
+    title: 'document credential storage',
+    body:
+      'Credential storage depends on the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a maintainer-subject follow-on requirement pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 87,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The maintainer must create it before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let credential creation by a maintainer pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 97,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It must be created by the maintainer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a maintainer prerequisite without punctuation pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 98,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential and the maintainer must create it ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a relative-clause credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 99,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential, which must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a credential prerequisite with bounded modifiers pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 100,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential for production that must be supplied ' +
+      'by the maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a customer follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 101,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The customer must create it before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a passive follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 102,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It is required before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a has-to follow-on credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 105,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It has to be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a plain actor credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 106,
+    title: 'document protected material',
+    body:
+      'This issue documents a credential pattern. The maintainer must provide ' +
+      'it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a later actor prerequisite hide behind harmless context (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 114,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The change is limited to ' +
+      'documentation. The maintainer must create it before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let question-boundary credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 115,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential? It must be supplied by the maintainer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let conjunction-bound credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 116,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential, and it must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let list-item credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 117,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential:\n- It must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let unqualified credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 118,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It must be supplied by the ' +
+      'maintainer. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let awaited maintainer approval hide behind credential handling (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 119,
+    title: 'document protected material',
+    body:
+      'Credential handling awaits maintainer approval before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let approval nouns hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 120,
+    title: 'document protected material',
+    body:
+      'This issue documents credential storage. Maintainer approval is ' +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let passive approval blockers hide behind a credential title (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 143,
+    title: 'document credential storage',
+    body:
+      'Maintainer approval is required before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let possessive approval nouns hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 124,
+    title: 'document protected material',
+    body:
+      "This issue concerns a credential. A maintainer's approval is " +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps an affirmative credential prerequisite after a negated clause (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 138,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential that must not require maintainer ' +
+      'access but must be supplied by the customer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a negated credential detail mask a required credential (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 141,
+    title: 'document protected material',
+    body:
+      'Implementation requires a credential that must not require maintainer ' +
+      'access. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let possessive approval prerequisites hide behind credential storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 139,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. Implementation requires the ' +
+      "maintainer's approval before implementation. Verification: add unit " +
+      'tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not bind a credential mention to unrelated temporal test wording (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 140,
+    title: 'document credential terminology',
+    body:
+      'Document credential rotation and add necessary tests before merging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps credential handling purpose wording descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 125,
+    title: 'document credential terminology',
+    body:
+      'Document credential handling that is necessary for secure storage. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let that-relative credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 126,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential that the maintainer must supply ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an attached credential requirement hide behind a purpose clause (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 128,
+    title: 'document protected material',
+    body:
+      'Document a credential that is necessary for authentication and must ' +
+      'be supplied by the maintainer before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let bare approval prerequisites hide behind credential mentions (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 129,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. Approval is required before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let emphasized credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 130,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential that **must** be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let dash-separated credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 131,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential — it must be supplied by the ' +
+      'maintainer before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let parenthesized credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 132,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential (which must be supplied by the ' +
+      'maintainer before implementation). Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let future credential providers pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 133,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The customer will supply it before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let subject-to approval dependencies pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 134,
+    title: 'document protected material',
+    body:
+      'This issue documents a credential policy subject to maintainer ' +
+      'approval. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects approval blockers outside descriptive credential paragraphs (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 135,
+    title: 'document credential storage',
+    body:
+      'Implementation requires maintainer approval. Verification: add unit ' +
+      'tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects quoted independent approval blockers (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 142,
+    title: 'wire external approval gate',
+    body:
+      'The change "requires maintainer approval" before merging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps removed approval dependencies from blocking autonomous work (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 143,
+    title: 'automate the deployment flow',
+    body:
+      'Replace the deployment flow that requires maintainer approval with an ' +
+      'automated check. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an unrelated removal verb hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 144,
+    title: 'document deployment requirements',
+    body:
+      'Remove the legacy deployment notes while maintainer approval is ' +
+      'required before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an adjective removal cue hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 157,
+    title: 'document deployment requirements',
+    body:
+      'The automated release requires maintainer approval before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects approval-from actor blockers across descriptive credential paragraphs (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 148,
+    title: 'document credential storage',
+    body:
+      'Implementation requires approval from the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let causal removal framing hide a later approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 149,
+    title: 'document deployment requirements',
+    body:
+      'Remove the old fallback because implementation requires maintainer ' +
+      'approval before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat actorless application authorization as external coordination (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 150,
+    title: 'test authorization responses',
+    body:
+      'Add a unit test where authorization is required and assert a 403 ' +
+      'response. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a cross-paragraph cannot-without dependency pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 151,
+    title: 'document credential storage',
+    body:
+      "Implementation cannot continue without the maintainer's access.\n\n" +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an indefinite external actor hide an approval dependency (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 152,
+    title: 'document credential storage',
+    body:
+      "Implementation requires a maintainer's approval before implementation. " +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('passes autonomous completion when a quoted independent requirement is an explicit example (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 153,
+    title: 'document review examples',
+    body:
+      'For example, "requires maintainer approval" describes the old ' +
+      'workflow. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a completed investigation hide a remaining approval blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 145,
+    title: 'document deployment requirements',
+    body:
+      'We already verified that the release requires maintainer approval ' +
+      'before shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not carry independent coordination regex state across issues (#3528)', () => {
+  const first = evaluateA4Viability({
+    number: 146,
+    title: 'x',
+    body:
+      'Implementation requires maintainer approval. Verification: add unit ' +
+      'tests.',
+    state: 'OPEN',
+  });
+  const second = evaluateA4Viability({
+    number: 147,
+    title: 'x',
+    body:
+      'Maintainer approval is required before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(first.passed, false);
+  assert.equal(second.passed, false);
+  assert.ok(second.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let vendor credential providers pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 136,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. A vendor must supply it before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let preceding approval clauses hide credential requirements (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 137,
+    title: 'document protected material',
+    body:
+      'Implementation requires maintainer approval for credential handling ' +
+      'before work begins. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps explicitly negated credential requirements autonomous (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 138,
+    title: 'document protected material',
+    body:
+      'Credential handling must not require maintainer access. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let progressive awaiting dependencies pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 139,
+    title: 'document protected material',
+    body:
+      'Credential handling is awaiting maintainer approval before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let plural credential providers pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 140,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. The maintainers must supply it ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let approval action prerequisites hide behind credential mentions (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 127,
+    title: 'document protected material',
+    body:
+      "This issue concerns a credential. The maintainer's approval must be " +
+      'granted before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let cannot-without credential prerequisites pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 121,
+    title: 'document protected material',
+    body:
+      'Credential handling cannot proceed without maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a vendor credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 107,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential. It will be provided by a vendor ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a passive relative credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 110,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential, which is required before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let customer dependency hide behind descriptive storage (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 111,
+    title: 'document credential storage',
+    body:
+      'Credential storage depends on the customer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not associate a later pronoun prerequisite with a credential mention (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 112,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern. A local fixture supports ' +
+      'tests. It is required before tests run. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an actor-bearing relative credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 113,
+    title: 'document protected material',
+    body:
+      'Document a credential which the maintainer must supply before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after in a later unrelated sentence block descriptive text (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 86,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern. Only after reviewing the ' +
+      'code did we notice a typo. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a title prerequisite cross the title-body paragraph boundary (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 103,
+    title: 'document credential terminology',
+    body:
+      'Only after the maintainer reviewed the code did we notice a typo. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps internal credential dependencies descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 88,
+    title: 'document credential terminology',
+    body:
+      'This issue documents credential storage that depends on platform ' +
+      'encryption. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps internal only-after sequencing descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 89,
+    title: 'document credential terminology',
+    body:
+      'This issue documents credential storage that initializes only after ' +
+      'platform encryption loads. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps internal cannot-until sequencing descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 92,
+    title: 'document credential terminology',
+    body:
+      'This issue documents credential storage that cannot initialize until ' +
+      'platform encryption loads. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a soft-wrapped only-after prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 90,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential; implementation may begin\n' +
+      'only after the maintainer creates it. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps provided contextual credential text descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 79,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern provided below for context. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps already provided credential material descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 84,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential provided by the maintainer in the ' +
+      'current implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat a work assertion as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 93,
+    title: 'document credential terminology',
+    body:
+      'Tests must verify credential rotation behavior. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat a later test assertion as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 95,
+    title: 'document credential terminology',
+    body:
+      'Document credential rotation and add necessary tests. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat necessary generic context as a credential prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 104,
+    title: 'document credential terminology',
+    body:
+      'Document a credential pattern that is necessary for explaining the ' +
+      'current terminology. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not treat a credential purpose clause as a live prerequisite (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 122,
+    title: 'document credential terminology',
+    body:
+      'Document a credential that is necessary for explaining the current ' +
+      'terminology. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a direct post-boundary credential prerequisite pass (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 123,
+    title: 'document protected material',
+    body:
+      'This issue concerns a credential: must be supplied by the maintainer ' +
+      'before implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps application administrator authorization autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 166,
+    title: 'document application authorization',
+    body:
+      'The handler requires administrator authorization. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an actorless cannot-without credential blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 168,
+    title: 'document credential storage',
+    body: 'We cannot proceed without a credential. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('checks provider requirements before parser token exclusions (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 169,
+    title: 'document parser token handling',
+    body:
+      'The parser token must be provided by the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test("detects plural possessive maintainers' approval blockers (#3522)", () => {
+  const result = evaluateA4Viability({
+    number: 170,
+    title: 'document credential storage',
+    body:
+      "Implementation requires maintainers' approval before work starts. " +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an impossible-without credential blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 171,
+    title: 'document credential storage',
+    body:
+      'Implementation is impossible without a credential. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let parser requirements from a maintainer pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 172,
+    title: 'document parser token handling',
+    body:
+      'The parser requires a token from the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let cache-key acquisition from a maintainer pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 173,
+    title: 'document cache key handling',
+    body:
+      'The cache key must be obtained from the maintainer before ' +
+      'implementation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps ordinary key bindings autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 174,
+    title: 'document key bindings',
+    body: 'Add support for key bindings. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps token pagination autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 175,
+    title: 'document token pagination',
+    body: 'Add support for token-based pagination. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps local authentication-token redaction autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 176,
+    title: 'redact authentication tokens',
+    body:
+      'The authentication token must be redacted before logging. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('detects customer approval as an implementation prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 177,
+    title: 'document credential storage',
+    body:
+      'Implementation requires customer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects follow-on cannot-without credential prerequisites (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 178,
+    title: 'document credential storage',
+    body:
+      'This issue concerns a credential. We cannot proceed without it. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a local operation hide an external credential prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 179,
+    title: 'document credential storage',
+    body:
+      'The credential must be stored by the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('detects stakeholder approval as an external prerequisite (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 180,
+    title: 'document credential storage',
+    body:
+      'Implementation requires stakeholder approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local token feature work autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 181,
+    title: 'add refresh token support',
+    body: 'Targeted change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps approval requirements in test scenarios autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 182,
+    title: 'add approval-flow coverage',
+    body:
+      'Add a unit test for a workflow that requires maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps quoted UI requirement text autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 183,
+    title: 'document ui output',
+    body:
+      'Assert that the UI renders "requires maintainer approval" for the ' +
+      'fixture. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('detects waiting-on approval blockers independently (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 184,
+    title: 'document credential storage',
+    body:
+      'Implementation is waiting on maintainer approval. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let verification prose hide a later customer blocker (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 185,
+    title: 'document credential storage',
+    body:
+      'Verification: add unit tests. Implementation requires customer ' +
+      'approval before work begins.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let local token features hide provider dependencies (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 186,
+    title: 'document credential storage',
+    body:
+      'Store tokens from the maintainer before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let comma-separated test work hide an approval blocker (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 187,
+    title: 'document credential storage',
+    body:
+      'Add unit tests, but implementation requires maintainer approval before ' +
+      'work begins.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let an earlier no clause hide a later waiting credential (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 167,
+    title: 'document credential handling',
+    body:
+      'No tests exist. We are waiting for a credential. Verification: add ' +
+      'unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a necessary credential prerequisite hide behind generic context (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 108,
+    title: 'document protected material',
+    body:
+      'Document a credential pattern that is necessary before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps paragraph boundaries independent across multiple credentials (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 109,
+    title: 'document credential terminology',
+    body:
+      'This issue documents a credential pattern.\n\n' +
+      'This issue documents a credential pattern.\n\n' +
+      'The maintainer must create it before implementation. Verification: ' +
+      'add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps provided contextual external-system text descriptive (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 80,
+    title: 'document external-system terminology',
+    body:
+      'This issue describes an external system pattern provided by the ' +
+      'documentation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a distant descriptive verb mask a later credential request (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 71,
+    title: 'wire external credential approval',
+    body:
+      'Document the existing behavior, then a credential is needed before ' +
+      'shipping. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let descriptive title context mask a credential body blocker (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 74,
+    title: 'document protected material',
+    body:
+      'A credential will be provided by the maintainer before shipping. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
 test("passes autonomous completion when a trigger phrase is quoted as another artifact's own content (#2711 shape)", () => {
   const result = evaluateA4Viability({
     number: 31,
@@ -1013,6 +2735,20 @@ test('passes autonomous completion when a blockquoted example is not a requireme
   assert.deepEqual(result.failedCriteria, []);
 });
 
+test('passes autonomous completion when a blockquoted independent requirement is an explicit example (#3528)', () => {
+  const result = evaluateA4Viability({
+    number: 158,
+    title: 'fix docs example formatting',
+    body:
+      '> Example: "requires maintainer approval" describes the old ' +
+      'workflow.\n\nSingle docs-only change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
 // --- PR #2757 review round 5 (Copilot/Codex): a fenced-code opener with
 // an info string, and a past-investigation cue unrelated to a later,
 // still-open dependency -----------------------------------------------
@@ -1463,4 +3199,377 @@ test('clear_verification still passes when the only verification command is insi
     (c) => c.id === 'clear_verification',
   );
   assert.equal(clearVerification?.result, 'pass');
+});
+
+test('does not let vendor credential dependencies hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 188,
+    title: 'document credential storage',
+    body:
+      'Implementation is waiting for a vendor credential before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local token expiration behavior autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 189,
+    title: 'document token lifecycle behavior',
+    body: 'Authentication token expiration must trigger reauthentication. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a maintainer credential request hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 190,
+    title: 'document credential storage',
+    body: 'Request the credential from the maintainer for the build. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps ordinary plural credential feature work autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 191,
+    title: 'add credential support',
+    body: 'Add support for multiple credentials. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps documentation of approval-gated behavior autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 192,
+    title: 'document approval workflow',
+    body: 'Document the workflow that requires maintainer approval. Verification: run docs lint.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an until-based approval blocker hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 193,
+    title: 'document credential storage',
+    body:
+      'Implementation cannot start until maintainer approval is granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let blocked pending credentials hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 194,
+    title: 'document credential storage',
+    body:
+      'Implementation is blocked pending a credential from the vendor. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let approval-gated local credential features hide in the feature exception (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 195,
+    title: 'add credential rotation',
+    body:
+      'Add credential rotation only once maintainer approval for implementation has been granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a paragraph-separated maintainer approval dependency pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 196,
+    title: 'document credential storage',
+    body:
+      'Implementation depends on maintainer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let actor-subject approval prerequisites pass (#3522)', () => {
+  for (const actor of ['customer', 'maintainer']) {
+    const result = evaluateA4Viability({
+      number: 197,
+      title: 'document credential storage',
+      body:
+        `The ${actor} must approve before implementation. ` +
+        'Verification: add unit tests.',
+      state: 'OPEN',
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('does not let a vendor access prerequisite pass in actor-subject form (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 198,
+    title: 'document credential storage',
+    body:
+      'The vendor must grant access before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let maintainer sign-off prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 199,
+    title: 'document credential storage',
+    body:
+      'Implementation requires maintainer sign-off before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local signing-key generation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 200,
+    title: 'Generate a signing key',
+    body:
+      'Make a targeted change in a single file to generate a new signing key locally. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let application-role approval prerequisites pass (#3522)', () => {
+  for (const actor of ['administrator', 'owner', 'team']) {
+    const result = evaluateA4Viability({
+      number: 201,
+      title: 'document credential storage',
+      body:
+        `Implementation requires ${actor} approval before work begins. ` +
+        'Verification: add unit tests.',
+      state: 'OPEN',
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('does not let a blocker after removal framing conjunction pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 202,
+    title: 'document credential storage',
+    body:
+      'Remove the old fallback yet implementation requires maintainer ' +
+      'approval before work begins. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after approval prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 203,
+    title: 'document credential storage',
+    body:
+      'Implementation can begin only after maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps quoted status approval text descriptive (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 204,
+    title: 'parse API status values',
+    body:
+      'Parse the status "requires maintainer approval" from the API. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let pending approval prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 205,
+    title: 'document credential storage',
+    body:
+      'Implementation is blocked pending maintainer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps removal after a past investigation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 206,
+    title: 'automate deployment approval',
+    body:
+      'Investigation found that deployment requires maintainer approval. ' +
+      'Replace that flow with automation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let terminal pending approval pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 207,
+    title: 'document credential storage',
+    body: 'Implementation is pending maintainer approval. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps approval-source documentation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 208,
+    title: 'document approval representation',
+    body:
+      'Document how approval from maintainer is represented. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let an external credential request pass as description (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 209,
+    title: 'document credential acquisition',
+    body: 'Ask the vendor for API keys before deploying. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps parser token provisioning local (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 210,
+    title: 'parse token input',
+    body:
+      'The parser token must be provided before parsing. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let missing credential possession pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 211,
+    title: 'document credential storage',
+    body: 'We do not have the credential. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a required approval receipt pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 212,
+    title: 'document credential storage',
+    body:
+      'Implementation must receive maintainer approval before work begins. ' +
+      'Make a targeted change in a single file. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat a production drop as removal framing (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 213,
+    title: 'document credential storage',
+    body:
+      'The production drop requires maintainer approval before deployment. ' +
+      'Make a targeted change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a negative-modal approval prerequisite pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 214,
+    title: 'document credential storage',
+    body: 'Work will not begin without maintainer approval. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps approval-gate defect descriptions autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 215,
+    title: 'Fix deployment approval bug',
+    body:
+      'Fix the bug where deployment requires maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a quoted completion blocker pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 216,
+    title: 'document credential storage',
+    body:
+      'The current blocker is "Implementation is pending maintainer approval." ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
