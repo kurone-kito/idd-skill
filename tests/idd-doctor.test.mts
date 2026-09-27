@@ -124,6 +124,154 @@ test('autopilot-suitability consistency: score 1 without blocked-by-human warns'
   );
 });
 
+test('autopilot-suitability consistency: needs-decision bucket uses its own label semantics', () => {
+  const body = `human decision\n${ap(1)}\n<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const coherent = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 3497, body, labels: ['status:needs-decision'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(coherent.warnings, []);
+
+  const missingLabel = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 3497, body, labels: [] }],
+    { floor: 3 },
+  );
+  assert.equal(missingLabel.warnings.length, 1);
+  assert.match(
+    missingLabel.warnings[0],
+    /issue #3497 has an authoring-bucket: needs-decision marker but is missing the status:needs-decision label/,
+  );
+});
+
+test('autopilot-suitability consistency: blocked-by-human bucket requires its label', () => {
+  const body = `human-only\n${ap(1)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const missingLabel = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 40, body, labels: [] }],
+    { floor: 3 },
+  );
+  assert.equal(missingLabel.warnings.length, 1);
+  assert.match(
+    missingLabel.warnings[0],
+    /issue #40 has an authoring-bucket: blocked-by-human marker but is missing the status:blocked-by-human label/,
+  );
+
+  const coherent = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 40, body, labels: ['status:blocked-by-human'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(coherent.warnings, []);
+});
+
+test('autopilot-suitability consistency: validates buckets without a suitability footer', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 45,
+        body: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+        labels: [],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /issue #45 has an authoring-bucket: needs-decision marker but is missing the status:needs-decision label/,
+  );
+});
+
+test('autopilot-suitability consistency: needs-decision does not suppress score contradictions', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 46,
+        body: `task\n${ap(4)}\n<!-- idd-skill-authoring-bucket: needs-decision -->`,
+        labels: ['status:needs-decision', 'status:blocked-by-human'],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /issue #46 is scored 4 \(>= floor 3\) but carries status:blocked-by-human/,
+  );
+});
+
+test('autopilot-suitability consistency: blocked-by-human bucket suppresses legacy score contradictions', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 48,
+        body: `task\n${ap(4)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`,
+        labels: ['status:blocked-by-human'],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: malformed buckets retain legacy score checks', () => {
+  const malformed = `legacy\n${ap(1)}\n<!-- idd-skill-authoring-bucket: unknown -->`;
+  const conflicting = `legacy\n${ap(1)}\n<!-- idd-skill-authoring-bucket: needs-decision -->\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      { number: 41, body: malformed, labels: [] },
+      { number: 42, body: conflicting, labels: [] },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every((warning) => /scored 1/.test(warning)));
+});
+
+// Copilot review (PR #3548): escaped marker examples are literal prose, not
+// live authoring-bucket declarations.
+test('autopilot-suitability consistency: ignores escaped authoring-bucket examples', () => {
+  const body = `legacy\n${ap(1)}\n\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 44, body, labels: ['status:blocked-by-human'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: accepts an authoring bucket after an even backslash run', () => {
+  const body = `legacy\n${ap(1)}\n\\\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 47, body, labels: ['status:needs-decision'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: escaped opener cannot hide a later live marker', () => {
+  const body =
+    `legacy\n${ap(1)}\n` +
+    '\\<!-- idd-skill-authoring-bucket: needs-decision ' +
+    '<!-- idd-skill-authoring-bucket: needs-decision -->';
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 49, body, labels: ['status:needs-decision'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: authoring-bucket honors configured prefix and labels case-insensitively', () => {
+  const body =
+    'human decision\n<!-- custom-autopilot-suitability: 1 -->\n<!-- custom-authoring-bucket: needs-decision -->';
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 43, body, labels: ['Status:Needs-Decision'] }],
+    {
+      floor: 3,
+      markerPrefix: 'custom',
+      needsDecisionLabelName: 'STATUS:NEEDS-DECISION',
+    },
+  );
+  assert.deepEqual(warnings, []);
+});
+
 test('autopilot-suitability consistency: score >= floor with blocked-by-human warns', () => {
   const { warnings } = evaluateAutopilotSuitabilityConsistency(
     [
@@ -371,7 +519,7 @@ test('roadmap-identity consistency: matches the configured label name case-insen
   );
 });
 
-test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName from the canonical config (idd-skill#2028)', () => {
+test('resolveAutopilotSuitabilityPolicy reads canonical labels and feeds live suitability checks (idd-skill#2028)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-suitability-policy-'));
   try {
     mkdirSync(join(dir, '.github/idd'), { recursive: true });
@@ -379,13 +527,35 @@ test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName 
       join(dir, '.github/idd/config.json'),
       JSON.stringify({
         autopilotSuitability: { floor: 3 },
-        labels: { blockedByHumanLabelName: 'status:human-only' },
+        labels: {
+          blockedByHumanLabelName: 'status:human-only',
+          needsDecisionLabelName: 'triage:decision-needed',
+        },
       }),
     );
-    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+    const policy = resolveAutopilotSuitabilityPolicy(dir);
+    assert.deepEqual(policy, {
       floor: 3,
       blockedByHumanLabelName: 'status:human-only',
+      needsDecisionLabelName: 'triage:decision-needed',
     });
+
+    const { warnings } = evaluateAutopilotSuitabilityConsistency(
+      [
+        {
+          number: 3543,
+          body: `decision\n${ap(1)}\n<!-- custom-authoring-bucket: needs-decision -->`,
+          labels: ['triage:decision-needed'],
+        },
+      ],
+      {
+        floor: policy.floor,
+        markerPrefix: 'custom',
+        blockedByHumanLabelName: policy.blockedByHumanLabelName,
+        needsDecisionLabelName: policy.needsDecisionLabelName,
+      },
+    );
+    assert.deepEqual(warnings, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -403,6 +573,7 @@ test('resolveAutopilotSuitabilityPolicy also reads the legacy idd-policy.json pa
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: 2,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -418,6 +589,7 @@ test('resolveAutopilotSuitabilityPolicy returns undefined fields when config is 
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: undefined,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
 
     // Malformed canonical JSON must fail closed, not fall through to a
@@ -431,6 +603,7 @@ test('resolveAutopilotSuitabilityPolicy returns undefined fields when config is 
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: undefined,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

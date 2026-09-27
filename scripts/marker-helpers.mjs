@@ -1932,6 +1932,17 @@ export function countMarkerOccurrences(text, markerPrefix, suffix) {
 export function isAuthoringBucketValue(value) {
   return value === 'needs-decision' || value === 'blocked-by-human';
 }
+function isEscapedMarkerOpener(text, index) {
+  let backslashCount = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && text[cursor] === '\\';
+    cursor -= 1
+  ) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
 /**
  * Canonical parser for the authored
  * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
@@ -1946,28 +1957,44 @@ export function isAuthoringBucketValue(value) {
  * value-less marker like `<!-- {prefix}-authoring-bucket: -->` would
  * otherwise never match it at all and read as `present: false` --
  * indistinguishable from no marker (#2648 review, Copilot).
- * `countMarkerOccurrences`'s detection-only regex matches regardless of
- * value, so comparing the two counts recovers the distinction.
+ * The opener scan is deliberately independent from the closing-comment
+ * match: filtering an escaped opener after a non-greedy full-comment regex
+ * has matched can consume a later live opener inside the same match.
+ * Scanning every opener first keeps that later marker observable (#3548
+ * review, Copilot).
  */
 export function parseAuthoringBucketMarker(text, markerPrefix) {
-  const rawCount = countMarkerOccurrences(
-    text,
-    markerPrefix,
-    'authoring-bucket',
+  // A backslash-escaped opener renders as literal text in CommonMark, so it
+  // must not turn an issue's documented marker syntax into a live bucket.
+  // Count the full preceding run: an even run leaves the opener live. Keep
+  // this scan independent from the closing-comment match; a malformed or
+  // escaped opener must not consume a later live opener.
+  const openerRegex = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket\\b`,
+    'gi',
   );
+  const rawMatches = [...text.matchAll(openerRegex)].filter(
+    (match) => !isEscapedMarkerOpener(text, match.index ?? 0),
+  );
+  const rawCount = rawMatches.length;
   if (rawCount === 0) {
     return { present: false, value: null, malformed: false };
   }
-  const regex = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
-    'gi',
-  );
   let coherentCount = 0;
   let value = null;
-  let match = regex.exec(text);
-  while (match) {
+  for (const match of rawMatches) {
+    const openerIndex = match.index ?? 0;
+    const closeIndex = text.indexOf('-->', openerIndex + match[0].length);
+    if (closeIndex < 0) {
+      continue;
+    }
+    const content = text.slice(openerIndex + match[0].length, closeIndex);
+    const tokenMatch = /^:\s*([^\s>]+)\s*$/u.exec(content);
+    if (!tokenMatch) {
+      continue;
+    }
     coherentCount += 1;
-    const raw = match[1];
+    const raw = tokenMatch[1];
     const parsed = isAuthoringBucketValue(raw) ? raw : null;
     // Fail-safe: any invalid token, or a value disagreeing with an
     // earlier coherent one, yields no bucket.
@@ -1975,7 +2002,6 @@ export function parseAuthoringBucketMarker(text, markerPrefix) {
       return { present: true, value: null, malformed: true };
     }
     value = parsed;
-    match = regex.exec(text);
   }
   if (coherentCount !== rawCount) {
     // At least one occurrence matched the raw (any-value) scan but not
