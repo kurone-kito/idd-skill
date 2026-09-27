@@ -4575,6 +4575,24 @@ test('checkHeldSchemaDrift applies negative extglob suffixes', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift excludes dotfiles from negative extglobs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/!(foo).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/.hidden.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/.hidden.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift detects directory scans inside template interpolations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

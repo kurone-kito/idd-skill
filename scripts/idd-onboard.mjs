@@ -2540,6 +2540,33 @@ function splitGlobAlternatives(text, separator) {
   alternatives.push(text.slice(start));
   return alternatives;
 }
+function globPatternExplicitlyMatchesLeadingDot(pattern) {
+  if (pattern.startsWith('.')) {
+    return true;
+  }
+  if (pattern.startsWith('[')) {
+    const closing = pattern.indexOf(']', 1);
+    if (closing !== -1) {
+      const characterClass = pattern.slice(1, closing);
+      return !characterClass.startsWith('!') && characterClass.includes('.');
+    }
+  }
+  if (/[+@!?*{]/u.test(pattern[0] ?? '')) {
+    const opening = pattern[0] === '{' ? '{' : '(';
+    const closing = opening === '{' ? '}' : ')';
+    const groupStart = opening === '{' ? 0 : 1;
+    const groupEnd = findGlobGroupEnd(pattern, groupStart, opening, closing);
+    if (groupEnd !== -1) {
+      return splitGlobAlternatives(
+        pattern.slice(groupStart + 1, groupEnd),
+        opening === '{' ? ',' : '|',
+      ).some((alternative) =>
+        globPatternExplicitlyMatchesLeadingDot(alternative),
+      );
+    }
+  }
+  return false;
+}
 function expandGlobRange(text) {
   const numeric =
     /^(?<start>-?\d+)\.\.(?<end>-?\d+)(?:\.\.(?<step>-?\d+))?$/u.exec(text);
@@ -2626,12 +2653,18 @@ function globPatternToRegex(pattern, initialSegmentStart = true) {
         .map((alternative) => globPatternToRegex(alternative, segmentStart))
         .join('|');
       if (character === '!') {
+        const explicitlyMatchesDot = splitGlobAlternatives(
+          pattern.slice(index + 2, closing),
+          '|',
+        ).some((alternative) =>
+          globPatternExplicitlyMatchesLeadingDot(alternative),
+        );
         const slash = pattern.indexOf('/', closing + 1);
         const suffix = pattern.slice(
           closing + 1,
           slash === -1 ? pattern.length : slash,
         );
-        expression += `(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
+        expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
       } else {
         const quantifier = character === '@' ? '' : character;
         expression += `(?:${inner})${quantifier}`;
