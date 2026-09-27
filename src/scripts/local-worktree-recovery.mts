@@ -297,7 +297,9 @@ export interface LocalWorktreeRecoveryVerdict {
       | 'confirm-failed'
       | 'path-mismatch'
       | 'cwd-inside-target'
+      | 'cwd-outside-primary'
       | 'preserve-dir-inside-target-gitdir'
+      | 'target-gitdir-unresolved'
       | 'blocked-unreadable'
       | 'preserve-dir-inside-target'
       | 'worktree-list-failed';
@@ -1019,7 +1021,7 @@ function planAndMaybeStashScope(
     // index state stash would have captured is not equivalent
     // preservation, so this must fail closed instead of silently
     // "succeeding" via the fallback.
-    if (!/unmerged/i.test(stash.stderr)) {
+    if (!/unmerged|needs merge/i.test(`${stash.stdout}\n${stash.stderr}`)) {
       entry.hardStashFailure = true;
       return entry;
     }
@@ -1748,6 +1750,24 @@ export function runLocalWorktreeRecovery(
     }
   }
 
+  const primaryPath = primary ? resolve(primary.path) : null;
+  const invokingCwd = resolve(cwd);
+  const invokingCwdReal = deps.realpathOrNull(invokingCwd);
+  const primaryPathReal = primaryPath ? deps.realpathOrNull(primaryPath) : null;
+  const invokingCwdInsidePrimary =
+    primaryPath !== null &&
+    (isPathContainedIn(invokingCwd, primaryPath) ||
+      (invokingCwdReal !== null &&
+        primaryPathReal !== null &&
+        isPathContainedIn(invokingCwdReal, primaryPathReal)));
+  if (!invokingCwdInsidePrimary) {
+    verdict.step1.outcome = 'cwd-outside-primary';
+    verdict.step1.reason =
+      'must be invoked from the primary worktree (or a directory beneath it), never from another linked worktree';
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
+
   // Copilot/Codex review: `--preserve-dir` was passed through with no
   // check that it names a location OUTSIDE the target worktree, and no
   // platform-portable containment logic at all (a hardcoded `/` prefix
@@ -1775,6 +1795,17 @@ export function runLocalWorktreeRecovery(
     targetGitDirResult?.ok && targetGitDirResult.stdout.trim().length > 0
       ? resolve(targetGitDirResult.stdout.trim())
       : null;
+  if (
+    verdict.primaryOrLinked === 'linked' &&
+    deps.pathExists(targetPath) &&
+    targetGitDir === null
+  ) {
+    verdict.step1.outcome = 'target-gitdir-unresolved';
+    verdict.step1.reason =
+      'could not resolve the linked worktree private git directory while the target still exists; refusing recovery';
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   const targetGitDirEffectiveReal = targetGitDir
     ? resolveEffectiveRealpath(
         targetGitDir,
@@ -2470,6 +2501,98 @@ export function runLocalWorktreeRecovery(
       !remove.ok &&
       /submodules cannot be moved or removed/i.test(remove.stderr)
     ) {
+      // `git worktree remove --force` can delete content that appeared after
+      // step 3. Re-run the complete preservation scan while the clone lock is
+      // still held, then re-confirm the claim and worktree-local lock before
+      // authorizing the destructive retry (Codex review #4114311005).
+      const latePreserve = planAndMaybePreserve(
+        targetPath,
+        recoveredBranch ?? '',
+        tag,
+        true,
+        deps,
+      );
+      verdict.preserveDir = latePreserve.preserveDir ?? verdict.preserveDir;
+      verdict.plan.stashes.push(...latePreserve.stashes);
+      verdict.plan.uninitializedSubmodules.push(
+        ...latePreserve.uninitializedSubmodules,
+      );
+      verdict.plan.backupRefs.push(...latePreserve.backupRefs);
+      verdict.plan.ignoredFilesCopied.push(...latePreserve.ignoredFilesCopied);
+      verdict.plan.ignoredFilesScanFailed ||=
+        latePreserve.ignoredFilesScanFailed;
+      verdict.plan.submoduleListFailed ||= latePreserve.submoduleListFailed;
+      verdict.plan.submoduleAdminCopies.push(
+        ...latePreserve.submoduleAdminCopies,
+      );
+      verdict.mutated ||=
+        latePreserve.stashes.some((stash) => stash.stashed) ||
+        latePreserve.backupRefs.some((ref) => ref.written) ||
+        latePreserve.uninitializedSubmodules.some(
+          (submodule) => submodule.copiedTo !== null,
+        ) ||
+        latePreserve.ignoredFilesCopied.some(
+          (ignored) => ignored.copiedTo !== null,
+        ) ||
+        latePreserve.stashes.some(
+          (stash) => stash.unmergedFallbackCopiedTo !== null,
+        ) ||
+        latePreserve.submoduleAdminCopies.some(
+          (admin) => admin.copiedTo !== null,
+        );
+      if (!preservationVerified(latePreserve, deps.pathExists)) {
+        return recordRemovalFailure(
+          'late preservation before forced removal could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+          },
+          targetPath,
+          deps.runGit,
+          deps.pathExists,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a late preservation artifact disappeared before forced removal; stopping before removal',
+        );
+      }
+      const forceConfirm = deps.confirmBlock(cwd);
+      const forceRouting = forceConfirm.routing;
+      const forceRecovered = forceRouting
+        ? extractRecoveredClaim(forceRouting)
+        : null;
+      const forceStillMatches =
+        forceConfirm.ok &&
+        forceRouting !== null &&
+        forceRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(forceRouting.reason) &&
+        !forceRouting.reason.endsWith('-local-worktree-unreadable') &&
+        (forceRouting.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        ) &&
+        forceRecovered?.claimId === recoveredClaimId &&
+        forceRecovered.branch === recoveredBranch;
+      if (!forceStillMatches) {
+        return recordRemovalFailure(
+          'the forced-removal routing/claim identity no longer matches; stopping before removal',
+        );
+      }
+      if (
+        !lockMatchesRecoveredClaim(deps.checkLock(targetPath), recoveredClaimId)
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock no longer matches before forced removal; stopping before removal',
+        );
+      }
       remove = deps.runGit(
         ['worktree', 'remove', '--force', targetPath],
         repoPath,

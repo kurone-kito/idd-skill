@@ -613,7 +613,7 @@ test('never mutates without --operator-confirmed-no-live-session, regardless of 
     if (argv[0] === 'worktree' && argv[1] === 'remove') gitCalls += 1;
     if (argv[0] === 'stash' && argv[1] === 'push') gitCalls += 1;
     if (argv[0] === 'update-ref') gitCalls += 1;
-    return { ok: true, status: 0, stdout: '', stderr: '' };
+    return cleanRepoRunGit(argv);
   };
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: false }),
@@ -638,7 +638,7 @@ test('default (no --apply) never mutates, and reports the full plan', () => {
     if (argv[0] === 'status') {
       return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
     }
-    return { ok: true, status: 0, stdout: '', stderr: '' };
+    return cleanRepoRunGit(argv);
   };
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: false, operatorConfirmedNoLiveSession: true }),
@@ -999,7 +999,7 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         removeCalled = true;
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -1117,7 +1117,7 @@ test('dry-run never creates the preserve directory for an uninitialized submodul
       if (argv[0] === 'submodule' && argv[1] === 'status') {
         return { ok: true, status: 0, stdout: '-abc123 sub\n', stderr: '' };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -1139,6 +1139,42 @@ test('refuses the cwd-inside-target invariant before step 1 ever runs', () => {
   });
   const verdict = runLocalWorktreeRecovery(baseArgs({ apply: false }), deps);
   assert.equal(verdict.step1.outcome, 'cwd-inside-target');
+  assert.equal(confirmCalls, 0);
+});
+
+test('refuses invocation from a linked worktree even when targeting the primary', () => {
+  let confirmCalls = 0;
+  const deps = fakeDeps({
+    cwd: () => '/repo/linked',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return { ok: true, routing: null, error: null };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ worktree: '/repo/primary' }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'cwd-outside-primary');
+  assert.equal(confirmCalls, 0);
+});
+
+test('refuses a present linked worktree when its private gitdir cannot be resolved', () => {
+  let confirmCalls = 0;
+  const deps = fakeDeps({
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return { ok: true, routing: null, error: null };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        return { ok: false, status: 1, stdout: '', stderr: 'probe failed' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(baseArgs(), deps);
+  assert.equal(verdict.step1.outcome, 'target-gitdir-unresolved');
   assert.equal(confirmCalls, 0);
 });
 
@@ -1336,7 +1372,7 @@ test('a failed status probe blocks removal even with no other changes detected (
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         removeCalled = true;
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -1521,7 +1557,7 @@ test('a failed `git submodule status` list blocks removal instead of silently re
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         removeCalled = true;
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -2043,8 +2079,8 @@ test('a genuinely unmerged-path stash failure still takes the copy-out fallback'
         return {
           ok: false,
           status: 1,
-          stdout: '',
-          stderr: 'error: You have unmerged paths.',
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
         };
       }
       return cleanRepoRunGit(argv);
