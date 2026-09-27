@@ -4588,6 +4588,26 @@ test('checkHeldSchemaDrift keeps glob array patterns separate from path joins', 
   ]);
 });
 
+test('checkHeldSchemaDrift routes star extglobs through the regex matcher', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/*(a|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/aa.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/aa.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/aa.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift keeps extglob separators inside character classes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5064,6 +5084,26 @@ test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', 
     });
     assert.deepEqual(result.findings, expected);
   }
+});
+
+test('checkHeldSchemaDrift keeps fixed-width question globs beyond the risk cap', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?????.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/abcde.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/abcde.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/abcde.json', heldModulePath: DRIFT_MODULE },
+  ]);
 });
 
 test('checkHeldSchemaDrift bounds pathological ordinary-star globs', () => {

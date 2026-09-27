@@ -3481,7 +3481,7 @@ function matchSimpleStarGlob(
   pattern: string,
   targetPath: string,
 ): boolean | null {
-  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?]\(/u.test(pattern)) {
+  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?*]\(/u.test(pattern)) {
     return null;
   }
   let patternIndex = 0;
@@ -3551,7 +3551,11 @@ function hasBoundedGlobRegexComplexity(
       wildcardsInSegment = 0;
       continue;
     }
-    if (character === '*' || character === '+' || character === '?') {
+    const isExtglobOperator =
+      /[+@!?*]/u.test(character) && pattern[index + 1] === '(';
+    const countsTowardBacktrackingRisk =
+      (character === '*' && pattern[index + 1] !== '*') || isExtglobOperator;
+    if (countsTowardBacktrackingRisk) {
       wildcardsInSegment += 1;
       if (wildcardsInSegment > MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT) {
         return false;

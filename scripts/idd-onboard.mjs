@@ -2881,7 +2881,7 @@ function expandGlobBracePatternsBounded(text, depth, maxExpansions, maxDepth) {
   return [text];
 }
 function matchSimpleStarGlob(pattern, targetPath) {
-  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?]\(/u.test(pattern)) {
+  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?*]\(/u.test(pattern)) {
     return null;
   }
   let patternIndex = 0;
@@ -2947,7 +2947,11 @@ function hasBoundedGlobRegexComplexity(pattern, targetPath) {
       wildcardsInSegment = 0;
       continue;
     }
-    if (character === '*' || character === '+' || character === '?') {
+    const isExtglobOperator =
+      /[+@!?*]/u.test(character) && pattern[index + 1] === '(';
+    const countsTowardBacktrackingRisk =
+      (character === '*' && pattern[index + 1] !== '*') || isExtglobOperator;
+    if (countsTowardBacktrackingRisk) {
       wildcardsInSegment += 1;
       if (wildcardsInSegment > MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT) {
         return false;
