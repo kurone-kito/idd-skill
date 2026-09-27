@@ -27,7 +27,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { globFiles } from '../src/scripts/consistency-helpers.mts';
-import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
+import {
+  buildHelperRuntimeManifest,
+  PACKAGE_MANAGER_ONLY_HELPERS,
+} from '../src/scripts/helper-runtime-manifest.mts';
 import { readJson } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -40,7 +43,12 @@ interface FileInput {
 interface Violation {
   file: string;
   rule: 'unbacked-helper' | 'distributed-bin-path';
-  form: 'node-scripts' | 'bin-mjs' | 'package-script' | 'bare-bin-command';
+  form:
+    | 'node-scripts'
+    | 'package-manager-entry'
+    | 'bin-mjs'
+    | 'package-script'
+    | 'bare-bin-command';
   name: string;
   message: string;
 }
@@ -66,6 +74,11 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   'scripts/verify-install-deps.mjs',
   'scripts/audit-docs.mjs',
   'scripts/audit-code-span-wrap.mjs',
+  // verify-import-mirror.mjs is deliberately source-checkout-only: the
+  // distributed recipes invoke it from an idd-skill clone, while the
+  // separate package-manager path is registered above. Its invocation
+  // must retain the explicit `<idd-skill>/` checkout prefix below.
+  'scripts/verify-import-mirror.mjs',
   // check-pnpm-boundary.mjs: a `docs/customization.md` example row only
   // (no profile-selected claim anywhere) -- a CI/lint-authoring tool for
   // this repo's own Project commands table, not an adopter helper.
@@ -189,6 +202,15 @@ const NON_ADOPTER_BIN_NAMES = new Set(['idd-emit-authoring-marker']);
 // has a home and the violation message below stays accurate.
 const NON_ADOPTER_SCRIPT_NAMES = new Set<string>();
 
+// `verify-import-mirror` is intentionally not an adopter command catalog
+// entry: it is a source-repository verification helper with one narrowly
+// supported package-manager path. The machine-readable exception lives in
+// helper-runtime-manifest.mts; this test consumes that same declaration so a
+// new direct installed-package path cannot bypass the manifest contract.
+const PACKAGE_MANAGER_ONLY_ENTRY_PATHS = new Set<string>(
+  PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
+);
+
 // Both copies discuss `bin/idd-merge-execute.mjs` as a Bash-permission
 // deny-pattern string (see docs/permissions.md around line 447), not as
 // a prescribed invocation for a reader to run -- the opposite of what
@@ -201,7 +223,10 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
   'idd-template/docs/permissions.md',
 ]);
 
-const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
+const NODE_SCRIPTS_RE =
+  /\bnode\s+((?:\.\/|<idd-skill>\/)?scripts\/[a-z0-9-]+\.mjs)\b/g;
+const PACKAGE_MANAGER_ENTRY_RE =
+  /\bnode\s+(?:\.\/)?(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
 const PACKAGE_SCRIPT_RE =
   /(?:npm run|pnpm(?: run)?|yarn(?: run)?)\s+(idd:[a-zA-Z0-9-]+)/g;
@@ -226,11 +251,15 @@ const FENCED_LANGS = new Set(['', 'sh', 'bash', 'shell', 'console']);
 /** Scans one file's text for all four invocation forms (raw matches, no manifest cross-check). */
 function scanInvocations(content: string): {
   nodeScripts: string[];
+  packageManagerEntries: string[];
   binMjs: string[];
   packageScripts: string[];
   bareBinCommands: string[];
 } {
   const nodeScripts = [...content.matchAll(NODE_SCRIPTS_RE)].map((m) => m[1]);
+  const packageManagerEntries = [
+    ...content.matchAll(PACKAGE_MANAGER_ENTRY_RE),
+  ].map((m) => m[1]);
   const binMjs = [...content.matchAll(BIN_MJS_RE)].map((m) => m[1]);
   const packageScripts = [...content.matchAll(PACKAGE_SCRIPT_RE)].map(
     (m) => m[1],
@@ -260,7 +289,13 @@ function scanInvocations(content: string): {
     }
   }
 
-  return { nodeScripts, binMjs, packageScripts, bareBinCommands };
+  return {
+    nodeScripts,
+    packageManagerEntries,
+    binMjs,
+    packageScripts,
+    bareBinCommands,
+  };
 }
 
 /**
@@ -284,13 +319,30 @@ function collectHelperInvocationViolations(
   const violations: Violation[] = [];
 
   for (const file of files) {
-    const { nodeScripts, binMjs, packageScripts, bareBinCommands } =
-      scanInvocations(file.content);
+    const {
+      nodeScripts,
+      packageManagerEntries,
+      binMjs,
+      packageScripts,
+      bareBinCommands,
+    } = scanInvocations(file.content);
 
-    for (const entryPath of nodeScripts) {
+    for (const invokedPath of nodeScripts) {
+      const normalizedPath = invokedPath.startsWith('./')
+        ? invokedPath.slice(2)
+        : invokedPath;
+      const hasSourceCheckoutPrefix = normalizedPath.startsWith('<idd-skill>/');
+      const entryPath = hasSourceCheckoutPrefix
+        ? normalizedPath.slice('<idd-skill>/'.length)
+        : normalizedPath;
+      const isSourceCheckoutOnly =
+        entryPath === 'scripts/verify-import-mirror.mjs';
       if (
         !entryPaths.has(entryPath) &&
-        !SOURCE_REPO_INTERNAL_ENTRY_PATHS.has(entryPath)
+        !(
+          SOURCE_REPO_INTERNAL_ENTRY_PATHS.has(entryPath) &&
+          (!isSourceCheckoutOnly || hasSourceCheckoutPrefix)
+        )
       ) {
         violations.push({
           file: file.path,
@@ -298,6 +350,18 @@ function collectHelperInvocationViolations(
           form: 'node-scripts',
           name: entryPath,
           message: `\`node ${entryPath}\` names no HELPER_COMMANDS entryPath and is not in the source-repo-internal allowlist`,
+        });
+      }
+    }
+
+    for (const entryPath of packageManagerEntries) {
+      if (!PACKAGE_MANAGER_ONLY_ENTRY_PATHS.has(entryPath)) {
+        violations.push({
+          file: file.path,
+          rule: 'unbacked-helper',
+          form: 'package-manager-entry',
+          name: entryPath,
+          message: `\`node ${entryPath}\` names no package-manager-only helper exception in the runtime manifest`,
         });
       }
     }
@@ -525,6 +589,25 @@ test('fails on a helper invocation naming no HELPER_COMMANDS entry and no allowl
   assert.equal(violations[0]?.name, 'scripts/totally-fake-helper.mjs');
 });
 
+test('rejects an adopter-root invocation of a source-repository helper', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content: 'Run `node ./scripts/verify-import-mirror.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/verify-import-mirror.mjs');
+});
+
 test('does not fail on a backed or allowlisted helper invocation (rule 2 negative case)', () => {
   const commandCatalog: ManifestCommand[] = [
     {
@@ -547,6 +630,104 @@ test('does not fail on a backed or allowlisted helper invocation (rule 2 negativ
   });
 
   assert.deepEqual(violations, []);
+});
+
+test('accepts a registered package-manager-only helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/idd-helper-scripts.md',
+        content:
+          'Run `node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs` for the package-manager exception.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.deepEqual(violations, []);
+});
+
+test('rejects an unregistered package-manager-only helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content:
+          'Run `node ./node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'package-manager-entry');
+  assert.equal(
+    violations[0]?.name,
+    'node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs',
+  );
+});
+
+test('accepts the registered source-checkout helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/onboarding/agent-entry-and-verification.md',
+        content:
+          'Run `node <idd-skill>/scripts/verify-import-mirror.mjs` from a source checkout.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.deepEqual(violations, []);
+});
+
+test('rejects the source-checkout helper without its checkout prefix', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content:
+          'Run `node scripts/verify-import-mirror.mjs` from the adopter root.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/verify-import-mirror.mjs');
+});
+
+test('rejects an unregistered source-checkout helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content: 'Run `node <idd-skill>/scripts/not-a-helper.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/not-a-helper.mjs');
 });
 
 test('fails on a bin/idd-* path prescribed in a distributed file, and not in a source-repo-only file (rule 3)', () => {
