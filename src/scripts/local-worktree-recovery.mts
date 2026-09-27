@@ -2064,8 +2064,32 @@ function planAndMaybePreserve(
   };
 }
 
-/** Verify every step-3 preservation action that claimed a change actually
- * landed, before step 4 is ever allowed to remove anything. */
+/** Check read-only preservation probes before dry-run reports removal ready. */
+function preservationPlanReady(preserve: {
+  stashes: StashPlanEntry[];
+  backupRefs: BackupRefPlanEntry[];
+  ignoredFilesScanFailed: boolean;
+  submoduleListFailed: boolean;
+  submoduleAdminCopyFailed: boolean;
+  worktreeAdminCopyFailed: boolean;
+}): boolean {
+  if (
+    preserve.ignoredFilesScanFailed ||
+    preserve.submoduleListFailed ||
+    preserve.submoduleAdminCopyFailed ||
+    preserve.worktreeAdminCopyFailed
+  ) {
+    return false;
+  }
+  for (const stash of preserve.stashes) {
+    if (stash.statusReadFailed || stash.stashListReadFailed) return false;
+  }
+  for (const ref of preserve.backupRefs) {
+    if (ref.localRefsQueryFailed || ref.unpushedQueryFailed) return false;
+  }
+  return true;
+}
+
 function preservationVerified(
   preserve: {
     stashes: StashPlanEntry[];
@@ -2081,7 +2105,7 @@ function preservationVerified(
   },
   pathExists: (path: string) => boolean,
 ): boolean {
-  if (preserve.ignoredFilesScanFailed) return false;
+  if (!preservationPlanReady(preserve)) return false;
   // A failed `git submodule status --recursive` must never silently
   // degrade to "no submodules" -- an unbacked-up dirty/uninitialized
   // submodule would otherwise be indistinguishable from one that
@@ -2767,6 +2791,11 @@ export function runLocalWorktreeRecovery(
       verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
       verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
       verdict.plan.worktreeAdminCopy = preserve.worktreeAdminCopy;
+      if (!preservationPlanReady(preserve)) {
+        return recordRemovalFailure(
+          'dry-run preservation probes were incomplete or failed; stopping before removal',
+        );
+      }
     }
     let dryRunDevelopmentBranch: string | null = null;
     if (verdict.primaryOrLinked === 'primary') {

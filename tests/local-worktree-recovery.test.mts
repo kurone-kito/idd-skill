@@ -1965,6 +1965,27 @@ test('dry-run planning failures clear the ready gate', () => {
   assert.match(verdict.result, /could not plan the prunable/);
 });
 
+test('dry-run preservation probe failures clear the ready gate', () => {
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: false, status: 128, stdout: '', stderr: 'status failed' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(
+    verdict.result,
+    /dry-run preservation probes were incomplete or failed/,
+  );
+});
+
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
