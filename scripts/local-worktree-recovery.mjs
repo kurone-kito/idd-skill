@@ -3680,9 +3680,11 @@ export function runLocalWorktreeRecovery(args, deps) {
         /submodules cannot be moved or removed/i.test(remove.stderr))
     ) {
       // `git worktree remove --force` can delete content that appeared after
-      // step 3. Re-run the complete preservation scan while the clone lock is
-      // still held, then re-confirm the claim and worktree-local lock before
-      // authorizing the destructive retry (Codex review #4114311005).
+      // step 3, and a verified unmerged fallback can leave the ordinary
+      // removal unable to delete a still-dirty worktree. Re-run the complete
+      // preservation scan while the clone lock is still held, then
+      // re-confirm the claim and worktree-local lock before authorizing the
+      // destructive retry (Codex review #4114311005).
       const latePreserve = planAndMaybePreserve(
         targetPath,
         recoveredBranch ?? '',
