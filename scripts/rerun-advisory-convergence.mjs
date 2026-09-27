@@ -412,9 +412,12 @@ export function computeRerunPlan(input, options) {
     // before the latest attempt started; a current-attempt duplicate stays
     // visible and can keep its own hold or plan.
     const latestAttemptStartedAt = parseCompletedAt(latest.runStartedAt);
+    const latestCompletedAt = parseCompletedAt(latest.completedAt);
     const rowCompletedAt = parseCompletedAt(instance.completedAt);
     return (
       latestAttemptStartedAt !== null &&
+      latestCompletedAt !== null &&
+      latestCompletedAt >= latestAttemptStartedAt &&
       rowCompletedAt !== null &&
       rowCompletedAt < latestAttemptStartedAt
     );
@@ -662,7 +665,7 @@ export function computeRerunPlan(input, options) {
   // (`run-attempt-unknown`) keeps the maintainer sentence, as does any
   // other withheld instance and a `"hold"` policy. Default `--apply`
   // still executes only `plan` / `recoveryRefreshPlan` /
-  // `liveCoverageRecoveryPlan`.
+  // `liveCoverageRecoveryPlan` / `passedSiblingRecoveryPlan`.
   const everyWithheldIsSpentLiveCoverageRecovery =
     withheldEntries.length > 0 &&
     withheldEntries.every(([checkRunId, decision]) => {

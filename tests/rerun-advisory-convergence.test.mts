@@ -1911,7 +1911,7 @@ test('#3539: rejects tied latest rows in the held workflow run', () => {
     baseInput({
       instances: [
         baseInstance({
-          checkRunId: 'held-z-failure',
+          checkRunId: 'held-a-failure',
           runId: '8001',
           conclusion: 'failure',
           runAttempt: 2,
@@ -1919,7 +1919,7 @@ test('#3539: rejects tied latest rows in the held workflow run', () => {
           runStartedAt: '2026-07-16T10:59:00Z',
         }),
         baseInstance({
-          checkRunId: 'held-a-pass',
+          checkRunId: 'held-z-pass',
           runId: '8001',
           conclusion: 'success',
           runAttempt: 2,
