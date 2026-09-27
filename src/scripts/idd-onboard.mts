@@ -2648,7 +2648,7 @@ function readHeldModule(
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.)?\s*\()/gu;
+  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.)?\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2708,6 +2708,12 @@ function isRegexLiteralStart(text: string, index: number): boolean {
     return true;
   }
   const previous = text[previousIndex] ?? '';
+  if (
+    (previous === '+' && /\+\+\s*$/u.test(text.slice(0, previousIndex + 1))) ||
+    (previous === '-' && /--\s*$/u.test(text.slice(0, previousIndex + 1)))
+  ) {
+    return false;
+  }
   if (/[=([{,:;!?&|+\-*%^~<>]/u.test(previous)) {
     return true;
   }
@@ -3120,7 +3126,10 @@ function usesModuleRelativePathExpression(text: string): boolean {
 }
 
 function isModuleRelativeFragmentExpression(text: string): boolean {
-  return /import\.meta\.dirname\s*\+\s*['"`]/u.test(text);
+  return (
+    /import\.meta\.dirname\s*\+\s*['"`]/u.test(text) ||
+    /\bjoin\s*\(\s*import\.meta\.dirname\s*,\s*['"`]/u.test(text)
+  );
 }
 
 function isBareModuleDirectoryExpression(text: string): boolean {
