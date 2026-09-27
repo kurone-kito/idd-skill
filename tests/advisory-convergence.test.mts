@@ -7189,6 +7189,9 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.match(fallback, /REVIEWER_TYPE=.*ascii_downcase/);
   assert.match(fallback, /type == "user" and \$l == \$configured/);
   assert.match(fallback, /registration_attempt aw3-s/);
+  assert.match(fallback, /registration_check\(\)[\s\S]*?max_attempts=3/);
+  assert.match(fallback, /AW3S_ENTRY.*pending|non-pending/);
+  assert.match(fallback, /REGISTRATION_STATUS.*-eq 2[\s\S]*?exit 2/);
   assert.match(
     fallback,
     /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \]/,

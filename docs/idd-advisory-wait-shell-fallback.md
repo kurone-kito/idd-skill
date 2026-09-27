@@ -347,19 +347,31 @@ EOF
       [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
     fi
   }
+  registration_check() {
+    local max_attempts=1 attempt=1 status=1
+    [ "$evidence_mode" = "aw3-s" ] && max_attempts=3
+    while [ "$attempt" -le "$max_attempts" ]; do
+      if registration_ok; then return 0; else status=$?; fi
+      [ "$status" -eq 2 ] && return 2
+      [ "$attempt" -eq "$max_attempts" ] && return 1
+      sleep 1
+      attempt=$((attempt + 1))
+    done
+    return "$status"
+  }
 
   # Re-run the shared claim revalidation gate immediately before every
   # reviewer-request mutation. A failed gate must stop this attempt.
   claim_revalidate || return 3
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
-  if registration_ok; then status=0; else status=$?; fi
+  if registration_check; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
   claim_revalidate || return 3
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
-  if registration_ok; then status=0; else status=$?; fi
+  if registration_check; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
@@ -387,7 +399,7 @@ EOF
       return 2
       ;;
   esac
-  if registration_ok; then status=0; else status=$?; fi
+  if registration_check; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
   echo "registration evidence absent" >&2
@@ -450,6 +462,27 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # a fresh review_requested event after HEAD's committed event.
 REGISTRATION_STATUS=0
 registration_attempt aw3-s || REGISTRATION_STATUS=$?
+
+# Set AW3S_ENTRY to "pending" or "non-pending" from AW3's decision.
+# Pending success is counted; pending status 1 returns without a marker.
+# Non-pending status 0 is ordinary success and also returns without a
+# marker; only its status 1 failure reaches the counted marker below.
+if [ "$REGISTRATION_STATUS" -eq 2 ]; then
+  echo "AW3-S evidence unreadable; route to AW4" >&2
+  exit 2
+fi
+if [ "$REGISTRATION_STATUS" -eq 3 ]; then
+  echo "AW3-S claim/HEAD guard failed; restart from E1" >&2
+  exit 2
+fi
+if [ "$AW3S_ENTRY" = "pending" ] && [ "$REGISTRATION_STATUS" -eq 1 ]; then
+  echo "AW3-S pending request still unproven; return to polling" >&2
+  exit 1
+fi
+if [ "$AW3S_ENTRY" = "non-pending" ] && [ "$REGISTRATION_STATUS" -eq 0 ]; then
+  echo "AW3-S re-request registered; return without counting" >&2
+  exit 0
+fi
 
 # Step 5 -- post exactly one bound marker, only once step 4 reaches a
 # counted disposition: proven re-registration for a pending entry, or
