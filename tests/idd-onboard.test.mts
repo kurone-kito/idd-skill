@@ -4089,6 +4089,21 @@ test('checkHeldSchemaDrift keeps scans visible after an object literal', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift keeps scans visible after a function expression', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "const ratio = function () {} / readdirSync('schemas').length / divisor;\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift keeps scans visible after an else-if block', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

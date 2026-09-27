@@ -2677,6 +2677,24 @@ function isControlFlowClosingParenthesis(text: string, index: number): boolean {
   return false;
 }
 
+function isFunctionClosingParenthesis(text: string, index: number): boolean {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return /\bfunction(?:\s*\*)?(?:\s+[$\w]+)?\s*$/u.test(
+          text.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
+
 function isBlockClosingBrace(text: string, index: number): boolean {
   let depth = 0;
   for (let current = index; current >= 0; current -= 1) {
@@ -2689,7 +2707,12 @@ function isBlockClosingBrace(text: string, index: number): boolean {
         const openingPrefix = text.slice(0, current);
         return (
           /(?:^|[;}])\s*(?:else|do|try|finally)\s*$/u.test(openingPrefix) ||
-          /(?:\)\s*$|=>\s*$)/u.test(openingPrefix) ||
+          (/\)\s*$/u.test(openingPrefix) &&
+            !isFunctionClosingParenthesis(
+              openingPrefix,
+              openingPrefix.trimEnd().length - 1,
+            )) ||
+          /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
           /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
             openingPrefix,
