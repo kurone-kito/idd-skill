@@ -736,7 +736,7 @@ export function computeRerunPlan(
       .join('; '),
   }));
 
-  // #3539: promote a budget-held latest row when a different workflow run
+  // #3539: promote an unambiguous budget-held latest row when a different workflow run
   // for this check and HEAD has a strictly later, verified passing latest
   // row. The check-runs API is fetched with `filter=all`, so several rows can
   // belong to one workflow run. Decide once per run, never once per
@@ -777,6 +777,19 @@ export function computeRerunPlan(
         !isSupersededHistoricalCheckRun(candidate.checkRunId) &&
         candidate.classification !== 'pass',
     );
+  const hasAmbiguousLatestEvidence = (runId: string): boolean => {
+    const rows = instances.filter(
+      (candidate) => String(candidate.runId ?? '').trim() === runId,
+    );
+    if (rows.length < 2) return false;
+    const latest = rows.reduce((current, candidate) =>
+      compareRunEvidence(candidate, current) > 0 ? candidate : current,
+    );
+    return (
+      rows.filter((candidate) => compareRunEvidence(candidate, latest) === 0)
+        .length > 1
+    );
+  };
   const isCurrentRunAttemptCheckRun = (
     instance: RerunPlanClassifiedInstance,
   ): boolean => {
@@ -795,19 +808,16 @@ export function computeRerunPlan(
   ): boolean => {
     const siblingRunId = String(sibling.runId ?? '').trim();
     const siblingCompletedAt = parseCompletedAt(sibling.completedAt);
-    const siblingRunEvent = String(sibling.runEvent ?? '')
-      .trim()
-      .toLowerCase();
     return (
       siblingRunId !== '' &&
       siblingRunId !== heldRunId &&
       sibling.classification === 'pass' &&
       !sibling.runLookupFailed &&
       typeof sibling.runAttempt === 'number' &&
-      PULL_REQUEST_FAMILY_EVENTS.has(siblingRunEvent) &&
       isCurrentRunAttemptCheckRun(sibling) &&
       siblingCompletedAt !== null &&
       siblingCompletedAt > heldCompletedAt &&
+      !hasAmbiguousLatestEvidence(siblingRunId) &&
       !hasRemainingNonPassRow(siblingRunId)
     );
   };
@@ -828,7 +838,11 @@ export function computeRerunPlan(
         return false;
       }
       const heldCompletedAt = parseCompletedAt(instance.completedAt);
-      if (heldCompletedAt === null || !isCurrentRunAttemptCheckRun(instance)) {
+      if (
+        heldCompletedAt === null ||
+        !isCurrentRunAttemptCheckRun(instance) ||
+        hasAmbiguousLatestEvidence(runId)
+      ) {
         return false;
       }
       return latestInstancesByRun.some((sibling) =>
@@ -2178,7 +2192,7 @@ function selectLatestInstancesByRun(
   return [...latest.values()];
 }
 
-function compareRunRows(
+function compareRunEvidence(
   left: RerunPlanClassifiedInstance,
   right: RerunPlanClassifiedInstance,
 ): number {
@@ -2211,7 +2225,17 @@ function compareRunRows(
     if (rightStartedAt === null) return -1;
     return leftStartedAt - rightStartedAt;
   }
-  return left.checkRunId.localeCompare(right.checkRunId);
+  return 0;
+}
+
+function compareRunRows(
+  left: RerunPlanClassifiedInstance,
+  right: RerunPlanClassifiedInstance,
+): number {
+  const evidenceComparison = compareRunEvidence(left, right);
+  return evidenceComparison !== 0
+    ? evidenceComparison
+    : left.checkRunId.localeCompare(right.checkRunId);
 }
 
 /**

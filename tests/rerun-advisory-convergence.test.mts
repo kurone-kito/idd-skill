@@ -1893,6 +1893,54 @@ test('#3539: rejects a held row from before its latest run attempt started', () 
   assert.equal(plan.counts.rerunBudgetHeld, 1);
 });
 
+test('#3539: accepts a same-HEAD passing workflow-dispatch sibling', () => {
+  const plan = passedSiblingRecoveryPlan(
+    {},
+    {
+      runEvent: 'workflow_dispatch',
+    },
+  );
+  assert.deepEqual(
+    plan.passedSiblingRecoveryPlan.map((entry) => entry.runId),
+    ['8001'],
+  );
+});
+
+test('#3539: rejects tied latest rows in the held workflow run', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'held-z-failure',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'held-a-pass',
+          runId: '8001',
+          conclusion: 'success',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'sibling-pass',
+          runId: '8002',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:01:00Z',
+          runStartedAt: '2026-07-16T10:59:30Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+});
+
 test('#2549: excludes a handled refresh candidate from hold totals', () => {
   const plan = computeRerunPlan(
     baseInput({

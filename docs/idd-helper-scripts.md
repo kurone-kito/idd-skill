@@ -3872,11 +3872,12 @@ to post it is the consuming track's job.
   must have a parseable completion at or after their workflow run's
   `run_started_at`; this prevents a stale pre-rerun check-run row from being
   used as current-attempt evidence. The sibling also needs verified workflow
-  metadata and no remaining non-pass row in its same-run check group. The
-  check-runs response can contain historical rows from the same workflow run,
-  so this decision is made once per run and older rows from a run whose
-  latest row is already pass-equivalent do not create a duplicate hold.
-  Unknown attempts,
+  metadata and no remaining non-pass row in its same-run check group. Tied
+  latest rows in either workflow run are treated as ambiguous and remain
+  withheld. The check-runs response can contain historical rows from the
+  same workflow run, so this decision is made once per run and older rows
+  from a run whose latest row is already pass-equivalent do not create a
+  duplicate hold. Unknown attempts,
   unparseable timestamps, equal or earlier passing siblings, same-run
   passes, live-coverage cases already handled by #2549, and all other
   non-qualifying holds remain withheld. Each promotion records its
