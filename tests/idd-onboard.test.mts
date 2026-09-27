@@ -4610,8 +4610,25 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
     );
   }
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
-  const previousGitDir = process.env.GIT_DIR;
+  const previousGitEnvironment = {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES:
+      process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+    GIT_NAMESPACE: process.env.GIT_NAMESPACE,
+    GIT_QUARANTINE_PATH: process.env.GIT_QUARANTINE_PATH,
+    GIT_REPLACE_REF_BASE: process.env.GIT_REPLACE_REF_BASE,
+    GIT_NO_REPLACE_OBJECTS: process.env.GIT_NO_REPLACE_OBJECTS,
+  };
   process.env.GIT_DIR = join(overrideRoot, '.git');
+  process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = join(
+    overrideRoot,
+    '.git',
+    'objects',
+  );
+  process.env.GIT_NAMESPACE = 'outside-target';
+  process.env.GIT_QUARANTINE_PATH = join(overrideRoot, '.git', 'objects');
+  process.env.GIT_REPLACE_REF_BASE = 'refs/replace/';
+  process.env.GIT_NO_REPLACE_OBJECTS = '0';
   try {
     const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
       hold: [DRIFT_MODULE],
@@ -4621,10 +4638,12 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
       { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
     ]);
   } finally {
-    if (previousGitDir === undefined) {
-      delete process.env.GIT_DIR;
-    } else {
-      process.env.GIT_DIR = previousGitDir;
+    for (const [key, value] of Object.entries(previousGitEnvironment)) {
+      if (value === undefined) {
+        delete process.env[key as keyof NodeJS.ProcessEnv];
+      } else {
+        process.env[key as keyof NodeJS.ProcessEnv] = value;
+      }
     }
   }
 });

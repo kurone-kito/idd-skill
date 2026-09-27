@@ -2836,6 +2836,11 @@ function sanitizedGitEnvironment() {
   delete env.GIT_WORK_TREE;
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_NAMESPACE;
+  delete env.GIT_QUARANTINE_PATH;
+  delete env.GIT_REPLACE_REF_BASE;
+  delete env.GIT_NO_REPLACE_OBJECTS;
   return env;
 }
 function hasGitMetadataInAncestors(targetRoot) {
