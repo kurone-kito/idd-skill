@@ -2807,7 +2807,9 @@ export interface RerunApplyDeps {
   rerunAndWait: (command: RerunPlanCommand) => void;
   /** Re-fetches evidence and recomputes the plan from scratch, so each
    * loop iteration's decision reflects live state instead of the
-   * snapshot the loop started with. */
+   * snapshot the loop started with. Passed-sibling recovery also invokes
+   * this immediately before its rerun to close the final planning-to-
+   * execution race. */
   recomputePlan: () => RerunAdvisoryConvergencePlan;
 }
 
@@ -2846,7 +2848,19 @@ export function applyRerunPlan(
     const fromRefresh = plan.recoveryRefreshPlan[0];
     const fromPlan = plan.plan[0];
     const fromLiveCoverageRecovery = plan.liveCoverageRecoveryPlan[0];
-    const fromPassedSiblingRecovery = plan.passedSiblingRecoveryPlan[0];
+    let fromPassedSiblingRecovery = plan.passedSiblingRecoveryPlan[0];
+    if (
+      !fromRefresh &&
+      !fromPlan &&
+      !fromLiveCoverageRecovery &&
+      fromPassedSiblingRecovery
+    ) {
+      // A newer attempt of the passing sibling can start after the plan
+      // snapshot above. Re-fetch immediately before rerunning the held run
+      // so this bounded recovery cannot cancel that newer live attempt.
+      plan = deps.recomputePlan();
+      fromPassedSiblingRecovery = plan.passedSiblingRecoveryPlan[0];
+    }
     const next =
       fromRefresh ??
       fromPlan ??

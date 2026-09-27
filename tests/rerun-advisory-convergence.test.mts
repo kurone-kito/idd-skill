@@ -2094,6 +2094,7 @@ test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage rec
   const queue = [
     { ...initialPlan, recoveryRefreshPlan: [] },
     { ...initialPlan, recoveryRefreshPlan: [], liveCoverageRecoveryPlan: [] },
+    { ...initialPlan, recoveryRefreshPlan: [], liveCoverageRecoveryPlan: [] },
     resolvedPlan,
   ];
   const executed: string[] = [];
@@ -2112,6 +2113,56 @@ test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage rec
     ],
   );
   assert.match(formatApplySummary(result), /originally held/);
+  assert.equal(result.resolved, true);
+});
+
+test('#3539: revalidates passed-sibling recovery immediately before rerun', () => {
+  const computedPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '8201',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '8202',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T10:59:30Z',
+        }),
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '8203',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:01:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const initialPlan = { ...computedPlan, recoveryRefreshPlan: [] };
+
+  assert.deepEqual(
+    initialPlan.passedSiblingRecoveryPlan.map((entry) => entry.runId),
+    ['8203'],
+  );
+
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+  const executed: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => executed.push(command.runId),
+    recomputePlan: () => resolvedPlan,
+  });
+
+  assert.deepEqual(executed, []);
+  assert.deepEqual(result.executed, []);
   assert.equal(result.resolved, true);
 });
 
