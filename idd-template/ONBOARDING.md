@@ -684,10 +684,12 @@ error), so an agent can gate on the exit code without parsing prose.
   `--import` would update, while a held `src/scripts` module or a held
   vendored `scripts` module still names it or scans its containing
   directory). For Git targets, the advisory compares against the
-  pre-import target tree at `HEAD`; pass `--target-base-ref <ref>` when
-  the import was based on another commit. Non-Git targets retain the
-  source-vs-current-target fallback. A missing manifest file,
-  leftover placeholder, or helper-load failure is blocking; the
+  pre-import target tree at `HEAD`; a freshly initialized Git target with an
+  unborn `HEAD` retains the current-target fallback. Pass
+  `--target-base-ref <ref>` when the import was based on another commit.
+  Other Git discovery or configuration failures are reported as errors;
+  non-Git targets retain the source-vs-current-target fallback. A missing
+  manifest file, leftover placeholder, or helper-load failure is blocking; the
   stale-import signal, package-pin
   advisory, and held-schema drift advisory are never blocking. Repeat
   `--hold` with a manifest target path to name content left unchanged;

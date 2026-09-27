@@ -2094,11 +2094,28 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_CALL_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\([^'"`\r\n)]*?(['"`])([^'"`\r\n)]*)\1/giu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)\r\n]*)\)/giu;
+const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n)]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+function isRegexLiteralStart(text, index) {
+  let previousIndex = index - 1;
+  while (previousIndex >= 0 && /\s/u.test(text[previousIndex] ?? '')) {
+    previousIndex -= 1;
+  }
+  if (previousIndex < 0) {
+    return true;
+  }
+  const previous = text[previousIndex] ?? '';
+  if (/[=([{,:;!?&|+\-*%^~<>]/u.test(previous)) {
+    return true;
+  }
+  return /\b(?:return|case|throw|else|do)$/u.test(
+    text.slice(0, previousIndex + 1),
+  );
 }
 function stripJavaScriptComments(text) {
   let result = '';
@@ -2160,6 +2177,42 @@ function stripJavaScriptComments(text) {
       }
       continue;
     }
+    if (
+      character === '/' &&
+      next !== '/' &&
+      next !== '*' &&
+      isRegexLiteralStart(text, index)
+    ) {
+      result += ' ';
+      index += 1;
+      let inCharacterClass = false;
+      let regexEscaped = false;
+      while (index + 1 < text.length) {
+        index += 1;
+        const regexCharacter = text[index] ?? '';
+        if (regexCharacter === '\n' || regexCharacter === '\r') {
+          result += regexCharacter;
+          break;
+        }
+        if (regexEscaped) {
+          regexEscaped = false;
+          continue;
+        }
+        if (regexCharacter === '\\') {
+          regexEscaped = true;
+        } else if (regexCharacter === '[') {
+          inCharacterClass = true;
+        } else if (regexCharacter === ']') {
+          inCharacterClass = false;
+        } else if (regexCharacter === '/' && !inCharacterClass) {
+          while (/[A-Za-z]/u.test(text[index + 1] ?? '')) {
+            index += 1;
+          }
+          break;
+        }
+      }
+      continue;
+    }
     result += character;
   }
   return result;
@@ -2174,7 +2227,11 @@ function moduleScansManifestDirectory(text, targetPath) {
   for (const match of stripJavaScriptComments(text).matchAll(
     DIRECTORY_SCAN_CALL_PATTERN,
   )) {
-    if (directoryPrefix.test(match[2] ?? '')) {
+    const literals = [
+      ...(match[1] ?? '').matchAll(DIRECTORY_SCAN_STRING_PATTERN),
+    ].map((literal) => literal[2] ?? '');
+    const candidate = literals.join('/');
+    if (directoryPrefix.test(candidate)) {
       return true;
     }
   }
@@ -4459,8 +4516,9 @@ configuration error.
                                       error (exit 2).
   --target-base-ref <ref>            Git ref containing the target's
                                       pre-import tree (default: HEAD for a
-                                      Git target; non-Git targets use the
-                                      current target tree)
+                                      Git target; an unborn HEAD and
+                                      non-Git targets use the current tree;
+                                      other Git discovery failures are errors)
   --help, -h                         show this help
 
 --hear (#2281): the operator-facing hearing CLI over the catalog and
