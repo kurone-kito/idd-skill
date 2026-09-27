@@ -1048,7 +1048,7 @@ future inventory reviews do not need to re-infer their role from code.
   JSON comparison, Markdown-only prose-reflow tolerance, git file-mode
   comparison, and deletion-matches-upstream recognition. Exits non-zero on
   any genuine mismatch (referenced in
-  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
   Source-repo internal helper; not exposed through the profile command
   catalog or an `idd-*` bin.
 
