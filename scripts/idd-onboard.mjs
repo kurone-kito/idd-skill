@@ -3519,7 +3519,11 @@ function globPatternToRegex(
           expression += `${classPrefix}[${characterClass}]`;
         } else {
           const captureName = `__iddQuestion${questionCaptures.length}`;
-          questionCaptures.push({ name: captureName, codeUnitCount: 1 });
+          questionCaptures.push({
+            name: captureName,
+            codeUnitCount: 1,
+            allowsAstralCodePoint: pattern[closing + 1] === '*',
+          });
           expression += `(?<${captureName}>${classPrefix}[${characterClass}])`;
         }
         index = closing;
@@ -3611,10 +3615,16 @@ function globPatternMatchesPath(pattern, targetPath) {
     if (match === null) {
       return false;
     }
-    return questionCaptures.every(({ name, codeUnitCount }) => {
-      const captured = match.groups?.[name];
-      return captured === undefined || captured.length === codeUnitCount;
-    });
+    return questionCaptures.every(
+      ({ name, codeUnitCount, allowsAstralCodePoint }) => {
+        const captured = match.groups?.[name];
+        return (
+          captured === undefined ||
+          captured.length === codeUnitCount ||
+          (allowsAstralCodePoint && captured.length === 2)
+        );
+      },
+    );
   } catch {
     return false;
   }

@@ -3862,7 +3862,11 @@ function hasAmbiguousRepeatingExtglob(pattern: string): boolean {
   return false;
 }
 
-type GlobQuestionCapture = { name: string; codeUnitCount: number };
+type GlobQuestionCapture = {
+  name: string;
+  codeUnitCount: number;
+  allowsAstralCodePoint?: boolean;
+};
 
 function matchSimpleStarGlob(
   pattern: string,
@@ -4139,7 +4143,11 @@ function globPatternToRegex(
           expression += `${classPrefix}[${characterClass}]`;
         } else {
           const captureName = `__iddQuestion${questionCaptures.length}`;
-          questionCaptures.push({ name: captureName, codeUnitCount: 1 });
+          questionCaptures.push({
+            name: captureName,
+            codeUnitCount: 1,
+            allowsAstralCodePoint: pattern[closing + 1] === '*',
+          });
           expression += `(?<${captureName}>${classPrefix}[${characterClass}])`;
         }
         index = closing;
@@ -4232,10 +4240,16 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
     if (match === null) {
       return false;
     }
-    return questionCaptures.every(({ name, codeUnitCount }) => {
-      const captured = match.groups?.[name];
-      return captured === undefined || captured.length === codeUnitCount;
-    });
+    return questionCaptures.every(
+      ({ name, codeUnitCount, allowsAstralCodePoint }) => {
+        const captured = match.groups?.[name];
+        return (
+          captured === undefined ||
+          captured.length === codeUnitCount ||
+          (allowsAstralCodePoint && captured.length === 2)
+        );
+      },
+    );
   } catch {
     return false;
   }

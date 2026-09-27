@@ -5485,6 +5485,26 @@ test('checkHeldSchemaDrift preserves Unicode POSIX graph matches', () => {
   }
 });
 
+test('checkHeldSchemaDrift preserves astral ordinary character-class matches', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a]*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/🙂.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift preserves Unicode POSIX punctuation matches', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
