@@ -1559,7 +1559,7 @@ function planAndMaybeBackupRef(
   let hasUnpushed = false;
   const refNamespaces =
     scopeLabel === '.'
-      ? ['refs/worktree']
+      ? ['refs/worktree', 'refs/bisect']
       : ['refs/heads', 'refs/tags', 'refs/notes', 'refs/replace'];
   const localRefs = runGit(
     ['for-each-ref', '--format=%(refname)', ...refNamespaces],
@@ -1570,9 +1570,9 @@ function planAndMaybeBackupRef(
   // repositories: a local tag or branch can point at an object already
   // reachable from a remote while its ref name remains private to the
   // worktree's disposable admin directory. Top-level linked worktrees use
-  // only Git's worktree-specific ref namespace because ordinary top-level
-  // branches and tags are shared by the clone and must not trigger a full
-  // admin-directory copy.
+  // only Git's worktree-specific and private bisect ref namespaces because
+  // ordinary top-level branches and tags are shared by the clone and must
+  // not trigger a full admin-directory copy.
   const hasLocalOnlyRefs = localRefs.ok && localRefs.stdout.trim().length > 0;
   // Copilot/Codex review: a failed `git log @{u}..HEAD` (or `git rev-parse
   // HEAD`) probe must never read as "no unpushed commits" -- unlike the
@@ -3504,7 +3504,7 @@ export function runLocalWorktreeRecovery(
         return verdict;
       }
       const submoduleUpdate = deps.runGit(
-        ['submodule', 'update', '--init', '--recursive'],
+        ['submodule', 'update', '--recursive'],
         targetPath,
       );
       if (!submoduleUpdate.ok) {
@@ -4257,23 +4257,16 @@ export function runLocalWorktreeRecovery(
       }
       remove = guardedRemove;
     }
-    const verifiedUnmergedFallback = verdict.plan.stashes.some(
-      (stash) =>
-        stash.unmergedFallbackCopiedTo !== null &&
-        stash.unmergedFallbackAllPreserved === true,
-    );
     if (
       !shortcut.eligible &&
       !remove.ok &&
-      (verifiedUnmergedFallback ||
-        /submodules cannot be moved or removed/i.test(remove.stderr))
+      /submodules cannot be moved or removed/i.test(remove.stderr)
     ) {
       // `git worktree remove --force` can delete content that appeared after
-      // step 3, and a verified unmerged fallback can leave the ordinary
-      // removal unable to delete a still-dirty worktree. Re-run the complete
-      // preservation scan while the clone lock is still held, then
-      // re-confirm the claim and worktree-local lock before authorizing the
-      // destructive retry (Codex review #4114311005).
+      // step 3. Re-run the complete preservation scan while the clone lock is
+      // still held, then re-confirm the claim and worktree-local lock before
+      // authorizing the destructive retry after Git's confirmed submodule
+      // removal diagnostic (Codex review #4114311005).
       const latePreserve = planAndMaybePreserve(
         targetPath,
         recoveredBranch ?? '',

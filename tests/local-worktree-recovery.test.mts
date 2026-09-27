@@ -2345,7 +2345,7 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
-test('forced retry covers a verified unmerged fallback after a generic removal failure', () => {
+test('generic removal failures do not authorize forced retry after an unmerged fallback', () => {
   let guardCalls = 0;
   const deps = fakeDeps({
     runGit: (argv) => {
@@ -2378,9 +2378,9 @@ test('forced retry covers a verified unmerged fallback after a generic removal f
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(guardCalls, 2);
+  assert.equal(guardCalls, 1);
   assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, true);
-  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(verdict.plan.removal?.ran, false);
 });
 
 test('legacy lockless claims may complete the forced retry through the guard', () => {
@@ -4467,6 +4467,7 @@ test('primary recovery removes preserved ignored files before reporting release'
   const ignoredPath = join(root, 'stale.env');
   let ignoredPresent = true;
   let confirmCalls = 0;
+  let submoduleUpdateArgs: string[] = [];
   const events: string[] = [];
   try {
     mkdirSync(join(root, '.git'), { recursive: true });
@@ -4542,6 +4543,7 @@ test('primary recovery removes preserved ignored files before reporting release'
         }
         if (argv[0] === 'submodule' && argv[1] === 'update') {
           events.push('submodule-update');
+          submoduleUpdateArgs = argv;
         }
         return cleanRepoRunGit(argv, cwd);
       },
@@ -4570,6 +4572,11 @@ test('primary recovery removes preserved ignored files before reporting release'
       'submodule-update',
     ]);
     assert.equal(ignoredPresent, false);
+    assert.deepEqual(submoduleUpdateArgs, [
+      'submodule',
+      'update',
+      '--recursive',
+    ]);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -5285,6 +5292,46 @@ test('copies linked worktree admin data for top-level local refs', () => {
     copiedTo: '/tmp/preserve/worktree-gitdir',
     plannedTo: '/tmp/preserve/worktree-gitdir',
   });
+  assert.deepEqual(copied, [
+    {
+      from: '/repo/primary/.git/worktrees/linked',
+      to: '/tmp/preserve/worktree-gitdir',
+    },
+  ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('copies linked worktree admin data for top-level private bisect refs', () => {
+  const copied: Array<{ from: string; to: string }> = [];
+  let queriedBisectRefs = false;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+        queriedBisectRefs = argv.includes('refs/bisect');
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/bisect/private-ref\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked' &&
+        argv[0] === 'rev-list' &&
+        argv.includes('--not')
+      ) {
+        return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (from, to) => copied.push({ from, to }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(queriedBisectRefs, true);
+  assert.notEqual(verdict.plan.worktreeAdminCopy, null);
   assert.deepEqual(copied, [
     {
       from: '/repo/primary/.git/worktrees/linked',
