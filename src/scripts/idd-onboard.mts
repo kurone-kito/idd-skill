@@ -3054,6 +3054,12 @@ function resolveModuleRelativeScanPath(
   return normalizeManifestScanPath(`${base}/${path}`);
 }
 
+function usesModuleRelativePathExpression(text: string): boolean {
+  return (
+    text.includes('import.meta.dirname') || text.includes('import.meta.url')
+  );
+}
+
 function isGlobPattern(text: string): boolean {
   return /[?*[\]{}]|[+@!]\(/u.test(text);
 }
@@ -3168,6 +3174,7 @@ function globPatternToRegex(pattern: string): string {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index] ?? '';
+    const segmentStart = index === 0 || pattern[index - 1] === '/';
     if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
       const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
       if (closing === -1) {
@@ -3194,16 +3201,16 @@ function globPatternToRegex(pattern: string): string {
       index = closing;
     } else if (character === '*' && pattern[index + 1] === '*') {
       index += 1;
-      if (pattern[index + 1] === '/') {
+      if (segmentStart && pattern[index + 1] === '/') {
         index += 1;
-        expression += '(?:.*/)?';
+        expression += '(?:(?!\\.)[^/]+/)*';
       } else {
-        expression += '.*';
+        expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
       }
     } else if (character === '*') {
-      expression += '[^/]*';
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
     } else if (character === '?') {
-      expression += '[^/]';
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]`;
     } else if (character === '[') {
       let closing = index + 1;
       while (closing < pattern.length) {
@@ -3298,7 +3305,7 @@ function moduleScansManifestDirectory(
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument).map(
       (candidate) =>
-        firstArgument.includes('import.meta.dirname')
+        usesModuleRelativePathExpression(firstArgument)
           ? resolveModuleRelativeScanPath(candidate, modulePath)
           : candidate,
     );
@@ -3307,9 +3314,11 @@ function moduleScansManifestDirectory(
       if (cwd === null) {
         return [];
       }
-      const cwdExpression = argumentsText.slice(cwd.index + cwd[0].length);
+      const cwdExpression = firstCallArgument(
+        argumentsText.slice(cwd.index + cwd[0].length),
+      );
       return pathExpressionCandidates(cwdExpression).map((candidate) =>
-        cwdExpression.includes('import.meta.dirname')
+        usesModuleRelativePathExpression(cwdExpression)
           ? resolveModuleRelativeScanPath(candidate, modulePath)
           : candidate,
       );
@@ -3624,10 +3633,15 @@ function formatHeldSchemaDriftWarning(
  * path a vendored-node import actually copies — is read directly.
  *
  * The scan is a static text match against the entry's manifest path or
- * its basename — the same grep-level proxy the Groom hearing adopted.
- * It cannot see a semantic dependency that no source text names. An
- * empty `hold` list short-circuits to no findings, so a verify that
- * never passes `--hold` keeps the previous cost and result.
+ * its basename — the same grep-level proxy the Groom hearing adopted —
+ * plus a narrow set of directory-enumeration consumers. It recognizes
+ * the supported `readdir*`/`glob*` call forms, literal path composition,
+ * recursive and `cwd`/`exclude` options, and the bounded glob syntax
+ * implemented by `globPatternToRegex`. It remains conservative: it cannot
+ * see a semantic dependency that no source text names, or arbitrary
+ * runtime-computed paths. An empty `hold` list short-circuits to no
+ * findings, so a verify that never passes `--hold` keeps the previous cost
+ * and result.
  *
  * An unknown `--hold` path throws the same usage error
  * `buildImportPlan` throws, including the skip when manifest resolution
