@@ -1177,6 +1177,56 @@ test('prunable shortcut accepts the explicit absent probe from routing', () => {
   assert.equal(removeCalled, true);
 });
 
+test('prunable shortcut refuses a fresh non-stale absent routing result', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'non_inheritable',
+        reason: 'active-claim-non-stale',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: { status: 'absent', paths: [], reason: null },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'not-blocked');
+  assert.equal(removeCalled, false);
+  assert.match(verdict.result, /state=non_inheritable/);
+});
+
 test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not just step 1s stale read (CodeRabbit finding)', () => {
   // The window between step 1's read and the clone-scoped lock acquisition
   // is exactly what the lock exists to close -- the shortcut path must be
@@ -1225,6 +1275,63 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
   );
   assert.equal(verdict.step1.outcome, 'blocked-prunable');
   assert.equal(removeCalled, false, 'must never remove on a stale shortcut');
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /no longer matches at recheck time/);
+});
+
+test('prunable shortcut rechecks takeover eligibility before removal', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      const stale = confirmCalls === 1;
+      return {
+        ok: true,
+        routing: {
+          state: stale ? 'stale' : 'non_inheritable',
+          reason: stale ? 'active-claim-stale' : 'active-claim-non-stale',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: { status: 'absent', paths: [], reason: null },
+          },
+        },
+        error: null,
+      };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 2);
+  assert.equal(verdict.step1.outcome, 'blocked-prunable');
+  assert.equal(removeCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /no longer matches at recheck time/);
 });
@@ -2317,7 +2424,7 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
 });
 
 test('late preservation rescans initialized submodule ignored files before removal', () => {
-  const copied: string[] = [];
+  const copied: Array<{ to: string; sourceRoot: string | undefined }> = [];
   let submoduleIgnoredScans = 0;
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
@@ -2354,13 +2461,18 @@ test('late preservation rescans initialized submodule ignored files before remov
       }
       return cleanRepoRunGit(argv, cwd);
     },
-    copyPath: (_from, to) => copied.push(to),
+    copyPath: (_from, to, sourceRoot) => copied.push({ to, sourceRoot }),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(copied, ['/tmp/preserve/ignored/submodule/cache.tmp']);
+  assert.deepEqual(copied, [
+    {
+      to: '/tmp/preserve/ignored/submodule/cache.tmp',
+      sourceRoot: '/repo/linked',
+    },
+  ]);
   assert.equal(submoduleIgnoredScans, 2);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -3173,6 +3285,61 @@ test('a genuinely unmerged-path stash failure still takes the copy-out fallback'
     verdict.plan.stashes[0]?.unmergedFallbackCopiedTo !== null,
     true,
   );
+});
+
+test('unmerged initialized-submodule fallback uses the parent worktree as symlink root', () => {
+  const sourceRoots: Array<string | undefined> = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? ' M submodule\n'
+              : cwd === '/repo/linked/submodule'
+                ? '?? conflict.txt\n'
+                : '',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'stash' &&
+        argv[1] === 'push'
+      ) {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, _to, sourceRoot) => sourceRoots.push(sourceRoot),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(sourceRoots, ['/repo/linked']);
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('an unmerged fallback refuses staged index contents it cannot copy', () => {

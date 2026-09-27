@@ -507,6 +507,19 @@ function isLegacyReleasedRouting(routing: ConfirmBlockRouting): boolean {
   );
 }
 
+/** True when an explicit absent probe still belongs to a takeover-eligible
+ * stale claim or to a released legacy claim. A prunable record is not enough
+ * by itself: a fresh claim can leave the record absent while its live owner
+ * still has the right to recreate or use the worktree. */
+function isPrunableShortcutRouting(routing: ConfirmBlockRouting): boolean {
+  return (
+    routing.state === 'stale' ||
+    (routing.state === 'unclaimed' && routing.reason === 'legacy-released') ||
+    (routing.state === 'local_worktree_occupied' &&
+      isLegacyReleasedRouting(routing))
+  );
+}
+
 /** Match a worktree-local lock to the claim recovered by routing. Legacy
  * releases may have no lock or an explicitly legacy/null holder, but a
  * non-null holder must never be treated as legacy. Active legacy claims are
@@ -1283,7 +1296,7 @@ function planAndMaybeStashScope(
           allLanded = false;
           continue;
         }
-        deps.copyPath(from, to, scopePath);
+        deps.copyPath(from, to, targetPath);
         if (!deps.pathExists(to)) {
           allLanded = false;
         }
@@ -1480,7 +1493,7 @@ function scanAndMaybeCopyIgnoredFiles(
         copied.push({ path: ignoredPath, copiedTo: null });
         continue;
       }
-      deps.copyPath(join(scopePath, ignoredPath), destination, scopePath);
+      deps.copyPath(join(scopePath, ignoredPath), destination, targetPath);
     }
     copied.push({ path: ignoredPath, copiedTo: destination });
   }
@@ -2302,6 +2315,7 @@ export function runLocalWorktreeRecovery(
         targetComparisonPath,
     );
   const routingReportsExplicitAbsence =
+    isPrunableShortcutRouting(routing) &&
     routing.evidence?.local_worktree?.status === 'absent' &&
     reportedPaths.length === 0;
   if (
@@ -2582,6 +2596,7 @@ export function runLocalWorktreeRecovery(
       );
     const prunableStillExplicitlyAbsent =
       shortcut.eligible &&
+      isPrunableShortcutRouting(recheck.routing) &&
       recheck.routing.evidence?.local_worktree?.status === 'absent' &&
       (recheck.routing.evidence?.local_worktree?.paths ?? []).length === 0;
     let stillEligible: boolean;
@@ -3013,6 +3028,8 @@ export function runLocalWorktreeRecovery(
       );
     const finalLinkedReportsPrunableAbsence =
       shortcut.eligible &&
+      finalLinkedRouting !== null &&
+      isPrunableShortcutRouting(finalLinkedRouting) &&
       finalLinkedRouting?.evidence?.local_worktree?.status === 'absent' &&
       (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).length === 0;
     const finalLinkedStillMatches =
@@ -3171,6 +3188,8 @@ export function runLocalWorktreeRecovery(
               targetComparisonPath,
           );
         const reportsPrunableAbsence =
+          routing !== null &&
+          isPrunableShortcutRouting(routing) &&
           routing?.evidence?.local_worktree?.status === 'absent' &&
           (routing.evidence?.local_worktree?.paths ?? []).length === 0;
         return (
