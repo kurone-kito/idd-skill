@@ -101,16 +101,20 @@ distributed IDD workflow a repository imported.
   not independently trigger a release, and its changes ship with the
   parent roadmap's release (or the next top-level trigger).
 
-  Capture the release-cut merge commit immediately after the bump pull
-  request merges, before a later commit changes the default branch. Use
-  the signing identity already configured for the repository or operator;
-  do not add a personal key or impose a GPG-versus-SSH preference on
-  adopters. For example, a maintainer can create and verify the tag with:
+  Capture the merge SHA recorded by GitHub for the bump pull request and
+  pass it as `RELEASE_CUT_MERGE_SHA`; do not derive the release target
+  from the moving default-branch tip. Tagging a later tip would silently
+  publish the wrong release, so this rule is preventive; no observed
+  incident yet. Use the signing identity already configured for the
+  repository or operator; do not add a personal key or impose a
+  GPG-versus-SSH preference on adopters. For example, a maintainer can
+  create and verify the tag with:
 
   ```sh
   git fetch origin main
   release_version=0.13.0
-  release_commit="$(git rev-parse origin/main^{commit})"
+  release_cut_merge_sha="${RELEASE_CUT_MERGE_SHA:?set to the bump PR merge SHA}"
+  release_commit="$(git rev-parse --verify "${release_cut_merge_sha}^{commit}")"
   git tag -s -a "v${release_version}" "${release_commit}" \
     -m "release v${release_version}"
   git verify-tag "v${release_version}"
