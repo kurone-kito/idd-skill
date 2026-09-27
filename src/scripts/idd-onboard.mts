@@ -1986,17 +1986,20 @@ export interface ManifestCompletenessResult {
    */
   missingSource: string[];
   /**
-   * Manifest target paths declared for `--source` / `--profile` that are
-   * absent under `--target` — the post-import completeness gap this check
-   * exists to catch.
+   * Manifest target paths not named by `--hold`, declared for `--source` /
+   * `--profile`, that are absent under `--target` — the post-import
+   * completeness gap this check exists to catch.
    */
   missingTarget: string[];
 }
 
 /**
- * Check that every file the manifest declares for `profile` exists on both
- * sides, reusing wave 2's own `resolveImportFiles` resolution (the same
- * source `--import` copies from) instead of a second hardcoded file list.
+ * Check that every file not named by `--hold` that the manifest declares for
+ * `profile` exists on both sides, reusing wave 2's own
+ * `resolveImportFiles` resolution (the same source `--import` copies from)
+ * instead of a second hardcoded file list. Held target paths remain
+ * intentionally absent from `missingTarget`; source completeness is still
+ * checked for every declared entry.
  *
  * `resolveImportFiles`'s own `missingSource` only ever reports a
  * vendored-node bundle resolution failure (see `resolveImportFiles`'s doc
@@ -2011,8 +2014,10 @@ export function checkManifestCompleteness(
   sourceRoot: string,
   targetRoot: string,
   profile?: string,
+  hold: readonly string[] = [],
 ): ManifestCompletenessResult {
   const resolved = resolveImportFiles(sourceRoot, profile);
+  const holdSet = new Set(hold);
   const missingSource = [
     ...resolved.missingSource,
     ...resolved.files
@@ -2020,7 +2025,11 @@ export function checkManifestCompleteness(
       .map((file) => file.sourcePath),
   ];
   const missingTarget = resolved.files
-    .filter((file) => !fileExists(targetRoot, file.targetPath))
+    .filter(
+      (file) =>
+        !holdSet.has(file.targetPath) &&
+        !fileExists(targetRoot, file.targetPath),
+    )
     .map((file) => file.targetPath);
   return { missingSource, missingTarget };
 }
@@ -2765,14 +2774,14 @@ export function runVerify(
     sourceRoot,
     targetRoot,
     profile,
+    hold,
   );
   // #3291: a second `resolveImportFiles` call, deliberately -- keeping
-  // `checkManifestCompleteness`'s own `(sourceRoot, targetRoot, profile?)`
-  // signature untouched (5 tests call it directly) costs one extra
-  // manifest resolution per `--verify` run rather than a signature change
-  // that would ripple through those callers. `--verify` is not a hot
-  // loop, and the vendored-node profile's extra helper-bundle walk this
-  // duplicates is a small, bounded read.
+  // `checkManifestCompleteness`'s direct callers compatible when they omit
+  // the new hold argument -- costs one extra manifest resolution per
+  // `--verify` run rather than changing the placeholder-scope data flow.
+  // `--verify` is not a hot loop, and the vendored-node profile's extra
+  // helper-bundle walk this duplicates is a small, bounded read.
   const placeholderScanScope = resolvePlaceholderScanScope(
     resolveImportFiles(sourceRoot, profile).files,
   );
@@ -4943,7 +4952,8 @@ nothing in that case); 2 usage or configuration error.
 idd-template/ONBOARDING.md Step 6. Reports six check groups:
 manifestCompleteness (every file --import would copy for --source /
 --profile exists under --target, reusing that same manifest resolution —
-missing files are blocking; --hold does not shrink this set),
+missing files not named by --hold are blocking; a held target path is
+excluded from this completeness check),
 placeholderResidue (leftover {{...}} tokens via --substitute's own scanner
 — a remaining onboarding placeholder is blocking residue, any other
 {{...}}-shaped token stays informational), helperLoad (--profile
