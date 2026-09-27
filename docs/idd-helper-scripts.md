@@ -603,18 +603,24 @@ POST or use it to bypass the authoring flow. Parse the complete `gh api`
 response and read its `body` property; do not capture `gh api ... --jq
 '.body'` in a shell variable, because CLI output and shell command
 substitution can normalize trailing newlines and change the digest. This
-is a one-time read-back confidence check for that approved new issue, not
-a REST fallback for verification of an existing generation and not a
-change to the helper's GraphQL dependency. These REST checks are
-preliminary evidence only: REST does not expose `lastEditedAt`, so it
-cannot prove that the owner-marker comment was never edited. Before
-membership, re-fetch the active `claimed-by` state and open-PR state even
-when the label is present; if execution began, or either read is
-inconclusive, stop and leave the verified hold in place. Final pass still
-requires the normal GraphQL owner-marker verification, including
-`lastEditedAt: null` for the relevant comments. If that GraphQL check is
-unavailable, do not treat the REST read-back as membership evidence;
-leave the issue held for recovery. The REST evidence must show that the
+is a one-time read-back confidence check for that approved new issue,
+not a REST fallback for verification of an existing generation and not a
+change to the helper's GraphQL dependency. For this one standalone
+self-anchor, the REST read-back is the final membership check after the
+safeguards above: an empty pre-create comment history means there is no
+earlier owner marker for REST to hide, and the atomic publication identity,
+settle delay, complete owner-log replay, trusted marker fields, and body
+digest together establish the new issue's initial state. REST still does
+not expose `lastEditedAt`, so this exception must not be generalized to an
+existing generation, a later re-acquisition, or a multi-target child; those
+continue to require the normal GraphQL owner-marker verification,
+including `lastEditedAt: null` for the relevant comments. GraphQL
+unavailability therefore does not invalidate this one approved fresh-issue
+read-back, but it does keep existing-generation membership held for
+recovery. Before membership, re-fetch the active `claimed-by` state and
+open-PR state even when the label is present; if execution began, or either
+read is inconclusive, stop and leave the verified hold in place. The REST
+evidence must show that the
 fetched issue still carries the configured authoring hold label (normally
 `status:authoring`), the fetched comment is the just-posted trusted
 marker (expected author and canonical marker fields), and its recorded
