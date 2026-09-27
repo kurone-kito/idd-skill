@@ -421,39 +421,87 @@ test('acquire: refuses a worktree recreated while waiting for the clone lock', a
     fixture.primary,
     'recovery-test',
   );
-  const child = spawn(
-    process.execPath,
-    [
-      CLI_PATH,
-      '--acquire',
-      '--worktree',
-      fixture.worktree,
-      '--agent-id',
-      'agent-a',
-      '--claim-id',
-      'claim-a',
-    ],
-    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  const sab = new SharedArrayBuffer(4);
+  const ints = new Int32Array(sab);
+  let workerError: Error | null = null;
+  let readyResolve: (() => void) | null = null;
+  let readyReject: ((error: Error) => void) | null = null;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const childProcess = require('node:child_process');
+      const originalExecFileSync = childProcess.execFileSync;
+      childProcess.execFileSync = (...args) => {
+        const result = originalExecFileSync(...args);
+        const argv = args[1];
+        if (Array.isArray(argv) && argv.includes('--path-format=absolute')) {
+          parentPort.postMessage({ type: 'clone-path-resolved' });
+          Atomics.wait(new Int32Array(workerData.sab), 0, 0);
+        }
+        return result;
+      };
+      require('node:module').syncBuiltinESMExports();
+      import(workerData.moduleUrl).then(({ acquireClaimLock }) => {
+        try {
+          const outcome = acquireClaimLock(
+            workerData.worktree,
+            'agent-a',
+            'claim-a',
+            false,
+          );
+          parentPort.postMessage({ type: 'outcome', outcome });
+          parentPort.close();
+        } catch (error) {
+          parentPort.postMessage({
+            type: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          process.exitCode = 1;
+          parentPort.close();
+        }
+      }).catch((error) => {
+        parentPort.postMessage({
+          type: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        process.exitCode = 1;
+        parentPort.close();
+      });
+    `,
+    {
+      eval: true,
+      workerData: {
+        moduleUrl: pathToFileURL(CLI_PATH).href,
+        worktree: fixture.worktree,
+        sab,
+      },
+    },
   );
-  let stdout = '';
-  let stderr = '';
-  child.stdout?.on('data', (chunk: Buffer) => {
-    stdout += chunk.toString();
+  worker.on('message', (message: { type: string; message?: string }) => {
+    if (message.type === 'clone-path-resolved') {
+      readyResolve?.();
+      return;
+    }
+    if (message.type === 'error') {
+      workerError = new Error(message.message ?? 'claim-lock worker failed');
+      readyReject?.(workerError);
+    }
   });
-  child.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
+  worker.once('error', (error) => {
+    const normalized =
+      error instanceof Error ? error : new Error(String(error));
+    workerError = normalized;
+    readyReject?.(normalized);
   });
-  const exited = new Promise<number>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? -1));
+  const workerExited = new Promise<number>((resolve) => {
+    worker.once('exit', (code) => resolve(code ?? -1));
   });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.equal(
-      child.exitCode,
-      null,
-      'acquisition must still be waiting before recovery replaces the worktree',
-    );
+    await ready;
     git(fixture.primary, ['worktree', 'remove', '--force', fixture.worktree]);
     git(fixture.primary, [
       'worktree',
@@ -463,18 +511,22 @@ test('acquire: refuses a worktree recreated while waiting for the clone lock', a
       'issue/1-replacement',
       'main',
     ]);
+    Atomics.store(ints, 0, 1);
+    Atomics.notify(ints, 0);
     releaseCloneLock(cloneLock);
     cloneLock = null;
-    assert.notEqual(await exited, 0, stderr);
-    assert.equal(stdout, '');
+    const workerExitCode = await workerExited;
+    assert.notEqual(workerExitCode, 0);
+    assert.equal(workerError === null, false);
     assert.equal(checkClaimLock(fixture.worktree).present, false);
+    const workerErrorMessage = (workerError as Error | null)?.message ?? '';
     assert.match(
-      stderr,
+      workerErrorMessage,
       /identity changed|could not establish git-admin directory identity/,
     );
   } finally {
     if (cloneLock !== null) releaseCloneLock(cloneLock);
-    if (child.exitCode === null) child.kill();
+    if (worker.threadId !== -1) await worker.terminate();
     teardown(fixture);
   }
 });
