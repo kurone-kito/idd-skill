@@ -395,7 +395,7 @@ other GitHub side effect, confirm all of the following:
     `secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
-    the same request procedure as step 4. Post no
+    the same procedure; status 1/2 only records/skips it. Post no
     `advisory-wait:` marker for any — none satisfy the primary gate or
     consume its cap, and none change the route already decided above.
     Each review is ordinary advisory input, picked up by the next E1

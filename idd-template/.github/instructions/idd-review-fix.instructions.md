@@ -391,8 +391,8 @@ login).
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
    fallback: every configured login not yet requested this HEAD) —
-   same request procedure as the primary, per login, no
-   `advisory-wait:` marker, no route change. Each review is ordinary
+   same procedure per login; status 1/2 records/skips it: no stop, route
+   change, or marker. Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;
    only F2's `secondary-quiet-window` blocker
