@@ -344,6 +344,12 @@ exception recorded under `packageManagerOnlyHelpers`; it is not a
 source-repository verification helper is not an adopter command. It applies
 only when the `node_modules` linker exposes the path. It does not apply to
 Yarn Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
+Pin the installed package to the exact upstream revision that supplied the
+mirror-only import, using an immutable commit archive, tarball, or equivalent
+`helperRuntime.packageSpec`; do not resolve the package from a mutable default
+such as `main`. If that revision cannot be established, use the source
+checkout recipe above instead, because a newer installed template can produce
+false mismatches or false passes.
 Use a source checkout for PnP adopters. The `vendored-node` profile also does
 not include this source-repository helper because it is intentionally absent
 from the adopter command catalog. The `ephemeral-npx` profile also does not

@@ -1138,7 +1138,12 @@ future inventory reviews do not need to re-infer their role from code.
   include this source-repository helper because it is intentionally absent
   from the adopter command catalog. The `ephemeral-npx` profile does not
   install a supported copy either, so use a source checkout for that profile
-  as well.
+  as well. Pin the installed package to the exact upstream revision that
+  supplied the mirror-only import, using an immutable commit archive, tarball,
+  or equivalent `helperRuntime.packageSpec`; do not resolve it from a mutable
+  default such as `main`. If that revision cannot be established, use the
+  source-checkout recipe instead, because a newer installed template can
+  produce false mismatches or false passes.
 
 ### Discover Roadmap Graph Contract
 
