@@ -296,7 +296,8 @@ export function evaluateAutopilotSuitabilityConsistency(
       marker.value !== null &&
       marker.value > 1 &&
       marker.value >= floor &&
-      blockedByHuman
+      blockedByHuman &&
+      authoringBucket.value !== 'blocked-by-human'
     ) {
       warnings.push(
         `autopilot-suitability: issue #${number} is scored ${marker.value} (>= floor ${floor}) but carries ${blockedByHumanLabelName}; the score and label disagree`,

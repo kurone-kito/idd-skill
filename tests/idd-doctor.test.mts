@@ -180,7 +180,7 @@ test('autopilot-suitability consistency: validates buckets without a suitability
   );
 });
 
-test('autopilot-suitability consistency: bucket semantics do not suppress score contradictions', () => {
+test('autopilot-suitability consistency: needs-decision does not suppress score contradictions', () => {
   const { warnings } = evaluateAutopilotSuitabilityConsistency(
     [
       {
@@ -196,6 +196,20 @@ test('autopilot-suitability consistency: bucket semantics do not suppress score 
     warnings[0],
     /issue #46 is scored 4 \(>= floor 3\) but carries status:blocked-by-human/,
   );
+});
+
+test('autopilot-suitability consistency: blocked-by-human bucket suppresses legacy score contradictions', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 48,
+        body: `task\n${ap(4)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`,
+        labels: ['status:blocked-by-human'],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
 });
 
 test('autopilot-suitability consistency: malformed buckets retain legacy score checks', () => {
@@ -227,6 +241,18 @@ test('autopilot-suitability consistency: accepts an authoring bucket after an ev
   const body = `legacy\n${ap(1)}\n\\\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
   const { warnings } = evaluateAutopilotSuitabilityConsistency(
     [{ number: 47, body, labels: ['status:needs-decision'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: escaped opener cannot hide a later live marker', () => {
+  const body =
+    `legacy\n${ap(1)}\n` +
+    '\\<!-- idd-skill-authoring-bucket: needs-decision ' +
+    '<!-- idd-skill-authoring-bucket: needs-decision -->';
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 49, body, labels: ['status:needs-decision'] }],
     { floor: 3 },
   );
   assert.deepEqual(warnings, []);
