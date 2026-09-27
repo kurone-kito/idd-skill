@@ -1519,6 +1519,20 @@ test('dependency-line-grammar resolves a multiline shortcut reference link', () 
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar resolves a multiline collapsed reference link', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue\n12][]\n\n' +
+      '[Issue 12]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar resolves a definition whose label wraps across a nonblank line', () => {
   const body = childBody({
     extraMarkers:

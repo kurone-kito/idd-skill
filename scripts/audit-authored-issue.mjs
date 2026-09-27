@@ -1464,8 +1464,9 @@ function findMultilineReferenceLinkMisuses(text, referenceDefinitions) {
     if (matchIndex < 0) {
       continue;
     }
+    const definitionLabel = match[2].length === 0 ? match[1] : match[2];
     const target = referenceDefinitions.get(
-      normalizeLinkReferenceLabel(match[2]),
+      normalizeLinkReferenceLabel(definitionLabel),
     );
     if (target === undefined || !GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target)) {
       continue;
@@ -2904,7 +2905,10 @@ function resolveReferenceStyleLinks(text) {
       if (!label.includes('\n') && !ref.includes('\n')) {
         return whole;
       }
-      const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      const definitionLabel = ref.length === 0 ? label : ref;
+      const target = definitions.get(
+        normalizeLinkReferenceLabel(definitionLabel),
+      );
       return target === undefined ? whole : `[${label}](${target})`;
     })
     .replace(REFERENCE_STYLE_LINK_USAGE_PATTERN, (whole, label, ref) => {
