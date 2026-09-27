@@ -134,7 +134,11 @@ test('copyPathWithSafeSymlinks replaces a destination leaf symlink safely', () =
   }
 });
 
-test('copyPathWithSafeSymlinks refuses special files before copying', () => {
+test('copyPathWithSafeSymlinks refuses special files before copying', {
+  // `mkfifo` is a POSIX utility; Windows has no equivalent fixture in this
+  // test environment, while the production guard is covered by the POSIX CI.
+  skip: process.platform === 'win32',
+}, () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-special-'));
   const source = join(root, 'source.pipe');
   const destination = join(root, 'preserve', 'copy');
