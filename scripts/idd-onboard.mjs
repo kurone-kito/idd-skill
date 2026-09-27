@@ -3406,12 +3406,36 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
   }
   return false;
 }
+function moduleDerivesSchemaFixturePath(text, targetPath, modulePath) {
+  const match = /^fixtures\/schemas\/(.+)\.(valid|invalid)\.json$/u.exec(
+    targetPath,
+  );
+  if (match === null) {
+    return false;
+  }
+  const schemaName = match[1] ?? '';
+  const fixtureKind = match[2] ?? '';
+  const schemaPath = `schemas/${schemaName}.schema.json`;
+  const code = stripJavaScriptComments(text);
+  const fixtureTemplate = new RegExp(
+    '`fixtures/schemas/\\$\\{[^}\\r\\n]+(?:\\}|(?=\\.' +
+      `${fixtureKind}\\.json))\\.` +
+      `${fixtureKind}\\.json` +
+      '`',
+    'u',
+  );
+  return (
+    fixtureTemplate.test(code) &&
+    moduleScansManifestDirectory(code, schemaPath, modulePath)
+  );
+}
 function moduleReferencesManifestPath(text, targetPath, modulePath) {
   const basename = targetPath.slice(targetPath.lastIndexOf('/') + 1);
   return (
     text.includes(targetPath) ||
     text.includes(basename) ||
-    moduleScansManifestDirectory(text, targetPath, modulePath)
+    moduleScansManifestDirectory(text, targetPath, modulePath) ||
+    moduleDerivesSchemaFixturePath(text, targetPath, modulePath)
   );
 }
 /**

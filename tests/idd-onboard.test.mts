@@ -4881,6 +4881,37 @@ test('checkHeldSchemaDrift does not retain raw glob candidates when cwd is set',
   ]);
 });
 
+test('checkHeldSchemaDrift tracks fixtures derived from scanned schema names', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const invalidFixture = 'fixtures/schemas/widget.invalid.json';
+  const moduleText = [
+    "const schemaFiles = readdirSync(join(root, 'schemas'));",
+    'const validFixture = `fixtures/schemas/$' + '{name}.valid.json`;',
+    'const invalidFixture = `fixtures/schemas/$' + '{name}.invalid.json`;',
+  ].join('\n');
+  const sourceFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "ok": false }\n';
+  sourceFiles[invalidFixture] = '{ "ok": false }\n';
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  targetFiles[invalidFixture] = '{ "ok": true }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: invalidFixture,
+      heldModulePath: DRIFT_MODULE,
+    },
+    {
+      schemaOrFixturePath: DRIFT_FIXTURE,
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift honors selective glob filters', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

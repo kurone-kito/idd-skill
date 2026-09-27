@@ -4015,6 +4015,34 @@ function moduleScansManifestDirectory(
   return false;
 }
 
+function moduleDerivesSchemaFixturePath(
+  text: string,
+  targetPath: string,
+  modulePath?: string,
+): boolean {
+  const match = /^fixtures\/schemas\/(.+)\.(valid|invalid)\.json$/u.exec(
+    targetPath,
+  );
+  if (match === null) {
+    return false;
+  }
+  const schemaName = match[1] ?? '';
+  const fixtureKind = match[2] ?? '';
+  const schemaPath = `schemas/${schemaName}.schema.json`;
+  const code = stripJavaScriptComments(text);
+  const fixtureTemplate = new RegExp(
+    '`fixtures/schemas/\\$\\{[^}\\r\\n]+(?:\\}|(?=\\.' +
+      `${fixtureKind}\\.json))\\.` +
+      `${fixtureKind}\\.json` +
+      '`',
+    'u',
+  );
+  return (
+    fixtureTemplate.test(code) &&
+    moduleScansManifestDirectory(code, schemaPath, modulePath)
+  );
+}
+
 function moduleReferencesManifestPath(
   text: string,
   targetPath: string,
@@ -4024,7 +4052,8 @@ function moduleReferencesManifestPath(
   return (
     text.includes(targetPath) ||
     text.includes(basename) ||
-    moduleScansManifestDirectory(text, targetPath, modulePath)
+    moduleScansManifestDirectory(text, targetPath, modulePath) ||
+    moduleDerivesSchemaFixturePath(text, targetPath, modulePath)
   );
 }
 
