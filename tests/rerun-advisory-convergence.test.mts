@@ -1870,17 +1870,23 @@ test('#3539: rejects a passing sibling whose run metadata lookup failed', () => 
 });
 
 test('#3539: rejects a passing row from before the sibling run attempt started', () => {
-  const plan = passedSiblingRecoveryPlan({}, {
-    completedAt: '2026-07-16T11:02:00Z',
-    runStartedAt: '2026-07-16T11:03:00Z',
-  });
+  const plan = passedSiblingRecoveryPlan(
+    {},
+    {
+      completedAt: '2026-07-16T11:02:00Z',
+      runStartedAt: '2026-07-16T11:03:00Z',
+    },
+  );
   assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
   assert.equal(plan.counts.rerunBudgetHeld, 1);
 });
 
 test('#3539: rejects a held row from before its latest run attempt started', () => {
   const plan = passedSiblingRecoveryPlan(
-    { completedAt: '2026-07-16T11:00:00Z', runStartedAt: '2026-07-16T11:01:00Z' },
+    {
+      completedAt: '2026-07-16T11:00:00Z',
+      runStartedAt: '2026-07-16T11:01:00Z',
+    },
     { completedAt: '2026-07-16T11:02:00Z' },
   );
   assert.deepEqual(plan.passedSiblingRecoveryPlan, []);

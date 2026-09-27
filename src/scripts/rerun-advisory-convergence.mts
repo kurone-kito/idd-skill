@@ -783,7 +783,9 @@ export function computeRerunPlan(
     const runStartedAt = parseCompletedAt(instance.runStartedAt);
     const completedAt = parseCompletedAt(instance.completedAt);
     return (
-      runStartedAt !== null && completedAt !== null && completedAt >= runStartedAt
+      runStartedAt !== null &&
+      completedAt !== null &&
+      completedAt >= runStartedAt
     );
   };
   const qualifiesAsPassedSibling = (
