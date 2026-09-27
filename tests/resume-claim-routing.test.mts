@@ -3221,17 +3221,45 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * own "run the command above" prose refers to, and including it in the
  * nearest-preceding candidate pool would silently pick the wrong line.
  *
- * Every specific-token check here -- the three own-claim flags, and the
+ * Every specific-token check here -- the three own-claim flags, the
  * `--issue`/`--fresh-claim-gate` tokens used to select invocation lines
- * in the first place -- uses the same whole-token match (word-boundary-
- * aware, tolerant of the `[--flag {value}]`/`[--flag <value>]` bracket
- * forms both files use), not a plain substring check (Codex review,
- * #3480, in two rounds): `.includes('--worktree')` would have also
- * matched an unrelated, differently-scoped option such as
- * `--worktree-path`, and `.includes('--issue')` would equally have
- * matched an `--issue-number`-shaped edit, in both cases silently
- * treating an unsupported option as the canonical one the documented
- * invocation never actually carries.
+ * in the first place, and the helper executable name -- matches a
+ * complete whitespace-separated token, tolerant of the
+ * `[--flag {value}]`/`[--flag <value>]` bracket form both live files
+ * use, not a plain substring check (Copilot/Codex review, #3480 and
+ * #3533, across many rounds summarized below).
+ *
+ * **Design history (why this is tokenized, not one regex per check).**
+ * The original implementation matched each token with its own
+ * hand-written regex (a word-boundary lookbehind/lookahead pair per
+ * flag, a separate pair for the helper filename, a separate alternation
+ * for the operand placeholder). Six review rounds across #3480 and
+ * #3533 (Copilot and a Codex bot, plus internal self-critique) each
+ * found a new false-positive shape that regex design let through --
+ * `.includes()` substring matches (round 1); a negative
+ * exclusion-class boundary that could never enumerate every character
+ * that continues a shell word or documentation token, found and
+ * "fixed" one side at a time only to leak on the opposite,
+ * still-unconverted side of the same check (rounds 2-5: operand
+ * placeholder suffix, filename suffix, filename prefix, flag-name
+ * prefix, `--issue`/`--fresh-claim-gate` line-selection); and finally
+ * an unpaired-bracket corruption (round 6) where "allow a bare flag"
+ * and "allow a `]`-closed bracketed flag" were each individually
+ * correct as independent lookbehind/lookahead assertions, but their
+ * combination accepted a flag opened without a bracket yet closed with
+ * one (or the reverse) -- a class of bug regex lookaround cannot
+ * express a fix for, since lookaround assertions can't correlate two
+ * positions in the string with each other.
+ *
+ * The fix is structural, not another lookaround patch: split each line
+ * on whitespace first, then compare whole tokens with `===`/`.endsWith()`
+ * and validate each flag/operand *pair* together as a single unit. This
+ * makes an entire prior bug class structurally unrepresentable --
+ * exact string/array equality has no "boundary class" to enumerate
+ * incompletely, and a flag/operand pair is validated as one coupled
+ * unit instead of two independently-satisfiable assertions, so a
+ * bracket opened on one side and closed as a different token spacing
+ * can no longer combine into a false accept.
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
@@ -3250,18 +3278,70 @@ function parseStepOneOwnClaimFlags(
       break;
     }
   }
-  const hasExactToken = (line: string, token: string): boolean => {
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`).test(line);
+  // Tokenize on whitespace runs so every check below compares whole
+  // tokens (`===`/`.endsWith()`), never a regex boundary assertion --
+  // see the design-history comment above for why.
+  const tokenize = (line: string): readonly string[] =>
+    line.split(/\s+/).filter((token) => token.length > 0);
+  const isPlaceholderToken = (token: string): boolean =>
+    /^\{[^\s{}<>]+\}$/.test(token) || /^<[^\s{}<>]+>$/.test(token);
+  // Exact-token membership test for `--issue`/`--fresh-claim-gate`
+  // (line selection) -- a corrupted `--issue.bak`, a glued
+  // `{issue}--issue`, or an `--issue-number` edit is simply a different
+  // string than `--issue` once split on whitespace, so no boundary
+  // reasoning is needed at all.
+  const hasExactToken = (line: string, token: string): boolean =>
+    tokenize(line).includes(token);
+  // For a given own-claim flag, find a token that is either the bare
+  // flag name or `[`-prefixed, then require the very next token to be a
+  // matching-form operand: a bare placeholder for the bare flag, or a
+  // placeholder immediately closed with `]` for the bracketed flag.
+  // Validating the flag/operand pair as one coupled unit (instead of
+  // independently matching "is the flag preceded by `[`" and "is the
+  // operand followed by `]`") is what actually closes the unpaired-
+  // bracket class of corruption: a bracket opened on one side can no
+  // longer combine with an unrelated bracket closing the other, because
+  // there is only one bracketed alternative and it requires both
+  // together. The bare form additionally rejects a stray `[`/`]` token
+  // immediately adjacent (space-separated) to the flag or operand, so a
+  // malformed extra space inside the bracket convention (`[ --claim-id
+  // {claim-id}`) can't decouple into "flag looks bare, ignore the
+  // nearby bracket".
+  const hasOperandAfterToken = (line: string, flag: string): boolean => {
+    const tokens = tokenize(line);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const current = tokens[index];
+      const next = tokens[index + 1];
+      if (next === undefined) continue;
+      if (current === `[${flag}`) {
+        const closed = /^(.+)\]$/.exec(next);
+        if (closed && isPlaceholderToken(closed[1])) return true;
+        continue;
+      }
+      if (current === flag) {
+        if (tokens[index - 1] === '[') continue;
+        if (!isPlaceholderToken(next)) continue;
+        if (tokens[index + 2] === ']') continue;
+        return true;
+      }
+    }
+    return false;
   };
-  // Word-boundary-aware, not `.includes()`: an accidental `--issue-number`
-  // or `--fresh-claim-gate-only` edit must not still count as the
-  // required `--issue`/`--fresh-claim-gate` token (Codex review, #3480 --
-  // the same class of false positive already fixed for the three
-  // own-claim flags below, now applied everywhere else this parser
-  // matches a specific CLI token).
+  // Exact-or-path-suffix membership test for the helper filename: a
+  // token qualifies only by being exactly `resume-claim-routing.mjs` or
+  // ending in `/resume-claim-routing.mjs`, so `.mjs.bak`, `.mjs/backup`,
+  // `.mjs~`, `+resume-claim-routing.mjs`, and `legacy-resume-claim-
+  // routing.mjs` are all simply different strings that fail both
+  // comparisons -- again, no boundary-character reasoning required.
+  const HELPER_SCRIPT_NAME = 'resume-claim-routing.mjs';
+  const isExactHelperScriptToken = (line: string): boolean =>
+    tokenize(line).some(
+      (token) =>
+        token === HELPER_SCRIPT_NAME ||
+        token.endsWith(`/${HELPER_SCRIPT_NAME}`),
+    );
   const isInvocationLine = (line: string): boolean =>
-    line.includes('resume-claim-routing.mjs') && hasExactToken(line, '--issue');
+    isExactHelperScriptToken(line) && hasExactToken(line, '--issue');
   const isFreshClaimGateLine = (line: string): boolean =>
     hasExactToken(line, '--fresh-claim-gate');
   const ownSpanInvocationLines = lines
@@ -3287,7 +3367,7 @@ function parseStepOneOwnClaimFlags(
   const found = new Set<StepOneOwnClaimFlag>();
   for (const line of invocationLines) {
     for (const flag of STEP_ONE_OWN_CLAIM_FLAGS) {
-      if (hasExactToken(line, flag)) {
+      if (hasOperandAfterToken(line, flag)) {
         found.add(flag);
       }
     }
@@ -3347,6 +3427,280 @@ concluding the claim is not inheritable.
 `;
   const found = parseStepOneOwnClaimFlags(preIssue3273Fixture);
   assert.deepEqual([...found], []);
+});
+
+test('parseStepOneOwnClaimFlags reports a bare own-claim flag as missing when no operand placeholder follows it (#3533)', () => {
+  // `--claim-id` here is immediately followed by another bracketed
+  // `[--flag ...]` group, not a `{value}`/`<value>` placeholder --
+  // deliberately not "nothing after it at all", so this also proves the
+  // check reads the actual next token rather than merely "the line has
+  // more text after the flag". `--nonce` and `--worktree` both keep
+  // well-formed placeholders, so a pass here can only come from the
+  // operand check itself, not from the line failing to be selected as
+  // an invocation at all (PR #3531 review comment
+  // https://github.com/kurone-kito/idd-skill/pull/3531#discussion_r4112343330).
+  const bareOperandFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} --claim-id [--nonce {nonce}] [--worktree {path}]
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(bareOperandFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not select a corrupted helper filename as a Step 1 invocation (#3533)', () => {
+  // The only invocation-shaped candidate anywhere in this fixture names
+  // `resume-claim-routing.mjs.bak`, carrying `--issue` and all three
+  // own-claim flags with well-formed operands -- if `isInvocationLine`
+  // ever regressed to a plain substring check, this line would still be
+  // selected and every flag would report present. There is no other
+  // invocation-shaped line before Step 1 either, so the fallback
+  // "nearest preceding" branch has nothing to mask a wrong result with
+  // (PR #3531 review comment
+  // https://github.com/kurone-kito/idd-skill/pull/3531#discussion_r4112412098).
+  const corruptedFilenameFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs.bak --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(corruptedFilenameFixture);
+  assert.deepEqual([...found], []);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when its operand placeholder carries a stray trailing suffix (#3533)', () => {
+  // `{claim-id}.bak` is a well-formed placeholder *prefix* followed by
+  // stray text -- a naive placeholder regex with no anchor after its own
+  // closing brace still matches the `{claim-id}` substring and reports
+  // the flag present. `--nonce`/`--worktree` both keep clean placeholders
+  // with no trailing suffix, so a pass here can only come from the
+  // operand-boundary check itself, not from the line failing to be
+  // selected as an invocation at all (Codex review, PR #3537, round 2).
+  const trailingSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} --claim-id {claim-id}.bak --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(trailingSuffixFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not select a helper filename with a stray trailing suffix as a Step 1 invocation (#3533)', () => {
+  // Two corrupted-filename shapes a *negative* lookahead exclusion class
+  // can never fully enumerate (Codex review, PR #3537, round 2): a
+  // path-continuing `/backup` suffix, and a shell-tilde `~` suffix.
+  // Neither `/` nor `~` was ever in the original `[\w.-]` exclusion
+  // class, so both slipped through the same way `.bak` did before
+  // #3531's own fix -- exactly the same false-positive-drift risk this
+  // whole parser exists to close. Each fixture is otherwise identical to
+  // the `.bak` corrupted-filename fixture above (well-formed `--issue`
+  // and all three own-claim flags, no other invocation-shaped line
+  // anywhere earlier), so a pass proves the filename-delimiter check
+  // alone rejects the line.
+  const pathSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs/backup --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(pathSuffixFixture)], []);
+
+  const tildeSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs~ --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(tildeSuffixFixture)], []);
+});
+
+test('parseStepOneOwnClaimFlags does not select a helper filename with a stray leading prefix as a Step 1 invocation (#3533)', () => {
+  // The symmetric gap to the trailing-suffix test above, on the
+  // filename check's *lookbehind* instead of its lookahead (Codex
+  // review, PR #3537, round 3): `+` and `~` were never in the original
+  // `[\w.-]` exclusion class either, so `scripts/+resume-claim-
+  // routing.mjs` and `scripts/~resume-claim-routing.mjs` both still
+  // passed as an exact token match. Each fixture is otherwise identical
+  // to the trailing-suffix fixtures (well-formed `--issue` and all
+  // three own-claim flags, no other invocation-shaped line anywhere
+  // earlier).
+  const plusPrefixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/+resume-claim-routing.mjs --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(plusPrefixFixture)], []);
+
+  const tildePrefixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/~resume-claim-routing.mjs --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(tildePrefixFixture)], []);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when its bracketed placeholder carries a stray trailing suffix (#3533)', () => {
+  // The symmetric gap to the bare-placeholder-suffix test above, one
+  // layer deeper: `[--claim-id {claim-id}].bak` has a well-formed
+  // placeholder *and* a well-formed closing `]`, but stray text after
+  // that bracket (Codex review, PR #3537, round 3) -- the prior fix's
+  // `(?=[\s\]]|$)` lookahead only checked for the bracket's presence,
+  // not what followed it. `--nonce`/`--worktree` both keep clean
+  // `[--flag {value}]` groups with nothing appended, so a pass here can
+  // only come from the boundary-after-`]` check itself.
+  const bracketSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}].bak [--nonce {nonce}] [--worktree {path}]
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(bracketSuffixFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when its own name is glued to preceding text with no separating whitespace (#3533)', () => {
+  // The symmetric gap to the earlier suffix-corruption tests, on the
+  // flag *name*'s own opening boundary instead of the placeholder's
+  // closing one (self-critique, round 4): `{issue-number}--claim-id`
+  // (a dropped space -- a realistic doc-edit slip, not a contrived
+  // string) previously still matched, because reusing `hasExactToken`'s
+  // negative-class lookbehind treated `}` as an acceptable preceding
+  // character the same way `/`/`~`/`+` were acceptable to the
+  // filename check before rounds 2-3 fixed those. `--nonce`/`--worktree`
+  // both stay normally whitespace-separated, so a pass here can only
+  // come from the flag-name boundary check itself.
+  const gluedFlagNameFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number}--claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(gluedFlagNameFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not let a corrupted `--issue` token select the wrong line as the Step 1 invocation (#3533)', () => {
+  // A materially different failure mode from every fixture above (self-
+  // critique, round 5): those all proved a *selected* invocation line's
+  // own-claim flags were validated correctly. This proves *which line
+  // gets selected* in the first place is also correct. `hasExactToken`
+  // drives `isInvocationLine`'s `--issue` check, so its own
+  // pre-round-5 negative-class boundary let a corrupted `--issue.bak`
+  // token still count as a valid `--issue` match -- meaning a flagless
+  // decoy line inside Step 1's own span (real filename, corrupted
+  // `--issue`) could outrank a real, fully-flagged invocation line
+  // sitting earlier in the file, silently reporting every own-claim
+  // flag missing even though a correct command exists. Placing the real
+  // invocation *before* `## Step 1` and the decoy *inside* Step 1's own
+  // span exercises the "own span preferred over nearest-preceding"
+  // selection rule directly: if the decoy still qualified as an
+  // invocation line, it would win outright (own span is checked first),
+  // masking the real line's flags entirely.
+  const wrongLineSelectionFixture = `node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
+
+## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue.bak {issue-number}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(wrongLineSelectionFixture);
+  assert.deepEqual([...found].sort(), ['--claim-id', '--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not let a glued-prefix `--issue` token select the wrong line as the Step 1 invocation (#3533)', () => {
+  // The symmetric gap to the fixture above, on `hasExactToken`'s
+  // *lookbehind* instead of its lookahead (self-critique, round 5,
+  // second pass): `{foo}--issue {issue-number}` has a real, uncorrupted
+  // filename and a real `--issue` token immediately glued to preceding
+  // text with no separating whitespace -- the pre-round-5 negative-class
+  // lookbehind treated `}` as an acceptable preceding character the same
+  // way it treated every other non-`[\w-]` character, so this decoy
+  // would have outranked the real invocation the same way the
+  // corrupted-suffix decoy above did. Same fixture shape as above: real
+  // invocation before `## Step 1`, decoy inside Step 1's own span.
+  const wrongLineSelectionPrefixFixture = `node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
+
+## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs {foo}--issue {issue-number}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(wrongLineSelectionPrefixFixture);
+  assert.deepEqual([...found].sort(), ['--claim-id', '--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when it has a closing bracket with no matching opening bracket (#3533)', () => {
+  // A different shape from every fixture above (Copilot review, PR
+  // #3537, round 6): `--claim-id {claim-id}]` is a *bare* (unbracketed)
+  // flag mention whose placeholder is followed by a stray closing `]`
+  // with no opening `[` anywhere before the flag. The round-2 fix's
+  // `]`-closing alternative accepted any closing `]` regardless of
+  // whether the flag was ever opened with a matching `[`, so this
+  // unpaired-bracket corruption still passed even though it is exactly
+  // as malformed as the earlier `.bak`-suffix corruptions.
+  // `--nonce`/`--worktree` both stay correctly bracketed (matching
+  // opener and closer), so a pass here can only come from the
+  // bracket-pairing check itself.
+  const unmatchedBracketFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} --claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(unmatchedBracketFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when a stray bracket is space-separated from the flag or placeholder (#3533)', () => {
+  // A redesign-time self-critique adversarial pass found this before any
+  // external reviewer did: a malformed extra space inside the optional-
+  // bracket convention -- `[ --claim-id {claim-id}` (space after the
+  // opening bracket) or `--claim-id {claim-id} ]` (space before the
+  // closing bracket) -- makes the stray `[`/`]` its own separate
+  // whitespace-delimited token, so the flag or placeholder token itself
+  // looks bare even though a bracket sits immediately adjacent. Both
+  // shapes are exercised in one fixture; `--worktree` stays cleanly
+  // bracketed throughout as the control.
+  const spaceSeparatedBracketFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} [ --claim-id {claim-id}] --nonce {nonce} ] [--worktree {path}]
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(spaceSeparatedBracketFixture);
+  assert.deepEqual([...found].sort(), ['--worktree']);
 });
 
 test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree present is already_owned, omitted is owner_evidence_required", () => {
