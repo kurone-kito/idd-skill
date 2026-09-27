@@ -4174,6 +4174,42 @@ test('checkHeldSchemaDrift detects scans after postfix updates', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift recognizes static computed option keys', () => {
+  for (const key of ["['cwd']", '[`cwd`]']) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('*.json', { ${key}: 'schemas' });\n`;
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
+test('checkHeldSchemaDrift preserves scans before ASI-separated blocks', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync('schemas')\n{ const marker = true; }\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift keeps scans visible after an object literal', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4280,6 +4316,24 @@ test('checkHeldSchemaDrift detects recursive scans of a parent directory', () =>
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "readdirSync('fixtures', { recursive: true });\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift unwraps TypeScript assertions on scan options', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync('fixtures', { recursive: true } as const);\n";
   const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
   const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
   sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';

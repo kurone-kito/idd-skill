@@ -2453,21 +2453,104 @@ function splitTopLevelArguments(text) {
 function firstCallArgument(text) {
   return splitTopLevelArguments(text)[0] ?? '';
 }
+function findTopLevelCharacter(text, target) {
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    } else if (character === '(' || character === '[' || character === '{') {
+      depth += 1;
+    } else if (character === ')' || character === ']' || character === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (character === target && depth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+function topLevelObjectExpression(text) {
+  const expression = text.trim();
+  if (!expression.startsWith('{')) {
+    return null;
+  }
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < expression.length; index += 1) {
+    const character = expression[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const suffix = expression.slice(index + 1).trim();
+        return suffix === '' || /^(?:as|satisfies)\b/u.test(suffix)
+          ? expression.slice(0, index + 1)
+          : null;
+      }
+    }
+  }
+  return null;
+}
+function parseStaticOptionKey(text) {
+  let key = text.trim();
+  if (key.startsWith('[') && key.endsWith(']')) {
+    key = key.slice(1, -1).trim();
+  }
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key)) {
+    return key;
+  }
+  if (
+    key.length >= 2 &&
+    (key.startsWith("'") || key.startsWith('"') || key.startsWith('`')) &&
+    key.at(-1) === key[0] &&
+    !key.includes('${')
+  ) {
+    return decodeJavaScriptStringLiteral(key.slice(1, -1));
+  }
+  return null;
+}
 function topLevelOptionPropertyValue(argumentsText, property) {
-  const options = splitTopLevelArguments(argumentsText)[1]?.trim();
-  if (options === undefined || !options.startsWith('{')) {
+  const options = topLevelObjectExpression(
+    splitTopLevelArguments(argumentsText)[1] ?? '',
+  );
+  if (options === null) {
     return null;
   }
   const optionEntries = splitTopLevelArguments(options.slice(1, -1));
-  const propertyPattern = new RegExp(
-    `^(?:${escapeRegExp(property)}|['"]${escapeRegExp(property)}['"])\\s*:\\s*`,
-    'u',
-  );
   for (const entry of optionEntries) {
     const trimmed = entry.trim();
-    const match = propertyPattern.exec(trimmed);
-    if (match !== null) {
-      return trimmed.slice(match[0].length);
+    const colon = findTopLevelCharacter(trimmed, ':');
+    if (
+      colon !== -1 &&
+      parseStaticOptionKey(trimmed.slice(0, colon)) === property
+    ) {
+      return trimmed.slice(colon + 1).trim();
     }
   }
   return null;
@@ -2574,6 +2657,7 @@ function findDirectoryScanCalls(text) {
         depth -= 1;
         if (depth === 0) {
           let afterCall = index + 1;
+          const gap = normalizedText.slice(afterCall);
           while (/\s/u.test(normalizedText[afterCall] ?? '')) {
             afterCall += 1;
           }
@@ -2583,7 +2667,8 @@ function findDirectoryScanCalls(text) {
             matchIndex,
           );
           const isDeclaration =
-            normalizedText[afterCall] === '{' ||
+            (normalizedText[afterCall] === '{' &&
+              !/[\r\n]/u.test(gap.slice(0, afterCall - index - 1))) ||
             (normalizedText[afterCall] === ':' &&
               isTypedMethodDeclarationPrefix(normalizedText, matchIndex)) ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
