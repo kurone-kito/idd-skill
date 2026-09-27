@@ -3000,7 +3000,7 @@ test('preserves nested deinitialized submodule admin data', () => {
           status: 0,
           stdout:
             cwd === '/repo/linked'
-              ? '-0000000000000000000000000000000000000000 parent/child\n'
+              ? ' abc123def456abc123def456abc123def456abcd parent (heads/main)\n-0000000000000000000000000000000000000000 parent/child\n'
               : '',
           stderr: '',
         };
@@ -3022,6 +3022,42 @@ test('preserves nested deinitialized submodule admin data', () => {
         from ===
           '/repo/primary/.git/worktrees/linked/modules/parent/modules/child' &&
         to === '/tmp/preserve/submodule-gitdir/cGFyZW50L2NoaWxk',
+    ),
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('preserves slash-containing deinitialized submodule admin data', () => {
+  const copied: Array<{ from: string; to: string }> = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 libs/parent\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (from, to) => copied.push({ from, to }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.ok(
+    copied.some(
+      ({ from, to }) =>
+        from === '/repo/primary/.git/worktrees/linked/modules/libs/parent' &&
+        to === '/tmp/preserve/submodule-gitdir/bGlicy9wYXJlbnQ',
     ),
   );
   assert.equal(verdict.plan.removal?.ran, true);

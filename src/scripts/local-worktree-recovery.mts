@@ -845,6 +845,8 @@ function clearInProgressOperation(
 function resolveDeinitializedSubmoduleGitDir(
   targetGitDir: string | null,
   submodulePath: string,
+  initializedSubmodulePaths: readonly string[],
+  pathExists: (path: string) => boolean,
 ): string | null {
   if (targetGitDir === null) return null;
   const segments = submodulePath.split(/[\\/]/g).filter(Boolean);
@@ -854,11 +856,55 @@ function resolveDeinitializedSubmoduleGitDir(
   ) {
     return null;
   }
-  let gitDir = targetGitDir;
-  for (const segment of segments) {
-    gitDir = join(gitDir, 'modules', segment);
-  }
-  return gitDir;
+  const initialized = new Set(
+    initializedSubmodulePaths.map((path) =>
+      path.split(/[\\/]/g).filter(Boolean).join('/'),
+    ),
+  );
+  const candidates: Array<{
+    path: string;
+    initializedBoundaryCount: number;
+    boundaryCount: number;
+  }> = [];
+  const collectCandidates = (
+    index: number,
+    parts: string[],
+    boundaries: number[],
+  ): void => {
+    if (index === segments.length) {
+      const initializedBoundaryCount = boundaries.filter((boundary) =>
+        initialized.has(segments.slice(0, boundary).join('/')),
+      ).length;
+      candidates.push({
+        path: join(targetGitDir, ...parts),
+        initializedBoundaryCount,
+        boundaryCount: boundaries.length,
+      });
+      return;
+    }
+    const segment = segments[index];
+    if (index === 0) {
+      collectCandidates(index + 1, ['modules', segment], boundaries);
+      return;
+    }
+    collectCandidates(index + 1, [...parts, segment], boundaries);
+    collectCandidates(
+      index + 1,
+      [...parts, 'modules', segment],
+      [...boundaries, index],
+    );
+  };
+  collectCandidates(0, [], []);
+  candidates.sort(
+    (left, right) =>
+      right.initializedBoundaryCount - left.initializedBoundaryCount ||
+      left.boundaryCount - right.boundaryCount,
+  );
+  return (
+    candidates.find((candidate) => pathExists(candidate.path))?.path ??
+    candidates[0]?.path ??
+    null
+  );
 }
 
 /** True when `git status --porcelain --ignored --untracked-files=normal`
@@ -1713,6 +1759,9 @@ function planAndMaybePreserve(
     submoduleStatus.ok && !submoduleListFailed
       ? submoduleStatusEntries(submoduleStatus.stdout)
       : [];
+  const initializedSubmodulePaths = submodules
+    .filter((submodule) => submodule.status !== '-')
+    .map((submodule) => submodule.path);
   // A clean initialized submodule's own stash scope handles the ` M path`
   // that the parent status probe reports for its dirty files. A `+` entry
   // means the submodule HEAD differs from the superproject's recorded
@@ -1909,6 +1958,8 @@ function planAndMaybePreserve(
       ? resolveDeinitializedSubmoduleGitDir(
           targetGitDirForScope,
           submodule.path,
+          initializedSubmodulePaths,
+          deps.pathExists,
         )
       : (() => {
           const result = preserveDeps.runGit(
