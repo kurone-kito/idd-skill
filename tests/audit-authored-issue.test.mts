@@ -1583,6 +1583,88 @@ test('dependency-line-grammar does not resolve a definition that interrupts a pa
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar keeps non-GitHub issue-shaped URLs unresolved', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n[ref]: https://example.com/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar does not let an ordered list starting at 2 interrupt a paragraph', () => {
+  const body = childBody({
+    extraMarkers:
+      'A paragraph is already open here.\n' +
+      '2. [ref]: https://github.com/kurone-kito/idd-skill/issues/12\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar resolves a definition after a setext heading', () => {
+  const body = childBody({
+    extraMarkers:
+      'Heading\n===\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar resolves a definition after a tab-spaced list marker', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n-\t[ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar keeps an invalid bare destination unresolved', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12(',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar ignores definitions inside raw HTML blocks', () => {
+  const body = childBody({
+    extraMarkers:
+      '<div>\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n</div>\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',

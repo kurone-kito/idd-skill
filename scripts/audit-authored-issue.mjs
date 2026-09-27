@@ -303,6 +303,8 @@ function extractNonBlockingReferenceIssueNumbers(text) {
 // backslash-escaped quoted string and applies to both quote styles.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
   /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+const GITHUB_ISSUE_OR_PR_URL_PATTERN =
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:#[^\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
 // followed by a task-list checkbox. Captures the leading indentation
@@ -1344,7 +1346,12 @@ function looksLikeIssueMarkdownLink(text, referenceDefinitions = new Map()) {
   const inlineMatch = text.match(MARKDOWN_LINK_START_PATTERN);
   if (inlineMatch) {
     const [, label, target] = inlineMatch;
-    if (/#\d+/.test(label) || /\/(?:issues|pull)\/\d+/.test(target)) {
+    if (
+      /#\d+/.test(label) ||
+      GITHUB_ISSUE_OR_PR_URL_PATTERN.test(
+        unwrapAngleBracketDestination(target.trim()),
+      )
+    ) {
       return true;
     }
   }
@@ -1355,7 +1362,7 @@ function looksLikeIssueMarkdownLink(text, referenceDefinitions = new Map()) {
   const target = referenceDefinitions.get(
     normalizeLinkReferenceLabel(referenceMatch[2]),
   );
-  return target !== undefined && /\/(?:issues|pull)\/\d+/.test(target);
+  return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
 }
 /**
  * Strip, in any order and up to a few repeats, the decoration that can
@@ -1471,6 +1478,7 @@ function checkDependencyLineGrammar(text, rawText, currentRepo, markerPrefix) {
     'Blocked by / Depends on lines use the canonical line-anchored form';
   const discoverMaskedLines = maskMarkdownForScan(rawText, {
     htmlComments: 'mask',
+    htmlBlocks: 'mask',
   }).split('\n');
   // A well-formed `<!-- {markerPrefix}-blocked-by: <value> -->` sequential-
   // roadmap marker (checkDependencyMarkerRule above) coincidentally
@@ -2403,6 +2411,7 @@ function unwrapAngleBracketDestination(target) {
 function stripReferenceDefinitionContainers(line) {
   let content = line;
   const containerKinds = [];
+  let canListContainerInterruptParagraph = true;
   for (let iteration = 0; iteration < 16; iteration += 1) {
     content = content.replace(/^ +/u, '');
     if (content.startsWith('>')) {
@@ -2410,15 +2419,22 @@ function stripReferenceDefinitionContainers(line) {
       content = content.slice(1).replace(/^[ \t]?/u, '');
       continue;
     }
-    const listMarker = content.match(/^(?:[*+-]|\d{1,9}[.)])(?=[ \t]+)/u);
+    const listMarker = content.match(/^(?:[*+-]|\d{1,9}[.)])[ \t]+/u);
     if (listMarker) {
       containerKinds.push('list');
+      if (/^\d/u.test(listMarker[0]) && !/^1[.)][ \t]+/u.test(listMarker[0])) {
+        canListContainerInterruptParagraph = false;
+      }
       content = content.slice(listMarker[0].length);
       continue;
     }
     break;
   }
-  return { content, containerKinds };
+  return {
+    content,
+    containerKinds,
+    canListContainerInterruptParagraph,
+  };
 }
 /**
  * Read the first destination token from a reference-definition suffix.
@@ -2433,14 +2449,35 @@ function readReferenceDefinitionDestination(suffix) {
   if (suffix.startsWith('<')) {
     const closingBracket = suffix.indexOf('>');
     if (closingBracket <= 1) {
-      return undefined;
+      return null;
     }
     return suffix.slice(0, closingBracket + 1);
   }
-  return suffix.match(/^\S+/u)?.[0];
+  const destination = suffix.match(/^\S+/u)?.[0];
+  if (destination === undefined) {
+    return undefined;
+  }
+  let parenthesisDepth = 0;
+  for (let index = 0; index < destination.length; index += 1) {
+    const character = destination[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '(') {
+      parenthesisDepth += 1;
+    } else if (character === ')') {
+      if (parenthesisDepth === 0) {
+        return null;
+      }
+      parenthesisDepth -= 1;
+    }
+  }
+  return parenthesisDepth === 0 ? destination : null;
 }
 function parseReferenceDefinitionCandidate(line) {
-  const { content, containerKinds } = stripReferenceDefinitionContainers(line);
+  const { content, containerKinds, canListContainerInterruptParagraph } =
+    stripReferenceDefinitionContainers(line);
   const match = content.match(/^\[([^\]\n]+)\]:[ \t]*(.*)$/u);
   if (!match) {
     return undefined;
@@ -2449,11 +2486,13 @@ function parseReferenceDefinitionCandidate(line) {
     label: match[1],
     destination: readReferenceDefinitionDestination(match[2]),
     containerKinds,
+    canListContainerInterruptParagraph,
   };
 }
 function isReferenceDefinitionBlockBoundary(content) {
   return (
     /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^=+[ \t]*$/u.test(content) ||
     /^(`{3,}|~{3,})/u.test(content) ||
     /^(?:\*\s*){3,}$|^(?:-\s*){3,}$|^(?:_\s*){3,}$/u.test(content)
   );
@@ -2490,7 +2529,11 @@ function collectReferenceStyleLinkDefinitions(text) {
     }
     if (pendingContinuation) {
       const destination = readReferenceDefinitionDestination(content.trim());
-      if (destination !== undefined && !content.trim().startsWith('[')) {
+      if (
+        destination !== undefined &&
+        destination !== null &&
+        !content.trim().startsWith('[')
+      ) {
         const key = normalizeLinkReferenceLabel(pendingContinuation.label);
         if (!definitions.has(key)) {
           definitions.set(key, unwrapAngleBracketDestination(destination));
@@ -2508,7 +2551,8 @@ function collectReferenceStyleLinkDefinitions(text) {
     const candidate = parseReferenceDefinitionCandidate(line);
     if (candidate) {
       const startsNewContainerBlock =
-        candidate.containerKinds.includes('list') ||
+        (candidate.containerKinds.includes('list') &&
+          candidate.canListContainerInterruptParagraph) ||
         (candidate.containerKinds.includes('quote') &&
           candidate.containerKinds.join('/') !==
             previousContainerKinds.join('/'));
@@ -2519,7 +2563,10 @@ function collectReferenceStyleLinkDefinitions(text) {
         isReferenceDefinitionBlockBoundary(content);
       if (canStart) {
         const key = normalizeLinkReferenceLabel(candidate.label);
-        if (candidate.destination !== undefined) {
+        if (
+          candidate.destination !== undefined &&
+          candidate.destination !== null
+        ) {
           if (!definitions.has(key)) {
             definitions.set(
               key,
@@ -2529,7 +2576,8 @@ function collectReferenceStyleLinkDefinitions(text) {
           paragraphOpen = false;
           previousDefinition = true;
           previousContainerKinds = candidate.containerKinds;
-        } else {
+          continue;
+        } else if (candidate.destination === undefined) {
           pendingContinuation = {
             label: candidate.label,
             containerKinds: candidate.containerKinds,
@@ -2537,8 +2585,8 @@ function collectReferenceStyleLinkDefinitions(text) {
           paragraphOpen = false;
           previousDefinition = false;
           previousContainerKinds = candidate.containerKinds;
+          continue;
         }
-        continue;
       }
     }
     if (previousDefinition && isReferenceDefinitionTitleContinuation(content)) {
