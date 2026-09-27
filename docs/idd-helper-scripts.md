@@ -497,12 +497,12 @@ The confirmed substitutions are:
 - For `gh search issues`, use the REST search endpoint and URL-encode
   the same repository, issue, state, and text qualifiers. For
   `--state open` or `--state closed`, add the corresponding
-  `state%3Aopen` or `state%3Aclosed` term; omit that term for `all`.
+  `state:open` or `state:closed` term; omit that term for `all`.
   Use `--paginate --slurp`, flatten each response's `items`, and apply
   the requested limit after pagination.
 
   ```sh
-  gh api --paginate --slurp "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state%3Aclosed+<url-encoded-query>"
+  gh api --paginate --slurp "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state:closed+<url-encoded-query>"
   ```
 
 - For `gh repo view`, use the repository endpoint directly. Helpers that
