@@ -336,14 +336,14 @@ EOF
   # reviewer-request mutation. A failed gate must stop this attempt.
   claim_revalidate || return 2
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
-  registration_ok; status=$?
+  if registration_ok; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
   claim_revalidate || return 2
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
-  registration_ok; status=$?
+  if registration_ok; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
@@ -353,7 +353,7 @@ EOF
   jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
     '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
     gh api graphql --input - || :
-  registration_ok; status=$?
+  if registration_ok; then status=0; else status=$?; fi
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
   echo "registration evidence absent" >&2
