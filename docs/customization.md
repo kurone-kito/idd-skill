@@ -93,12 +93,41 @@ distributed IDD workflow a repository imported.
   `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
   same pull request, and an annotated `v<iddVersion>` git tag pushed to
   the source repository after the bump PR merges, so adopters can diff
-  against a concrete release ref instead of a raw commit SHA. The
-  release cadence is milestone-based: cut a release after each merged
-  roadmap. This trigger fires for a merged top-level roadmap only; a
-  merged nested roadmap does not independently trigger a release, and
-  its changes ship with the parent roadmap's release (or the next
-  top-level trigger).
+  against a concrete release ref instead of a raw commit SHA. The tag
+  must be a signed annotated tag created by a maintainer from the exact
+  merge commit that cut the release. The release cadence is
+  milestone-based: cut a release after each merged roadmap. This trigger
+  fires for a merged top-level roadmap only; a merged nested roadmap does
+  not independently trigger a release, and its changes ship with the
+  parent roadmap's release (or the next top-level trigger).
+
+  Capture the merge SHA recorded by GitHub for the bump pull request and
+  pass it as `RELEASE_CUT_MERGE_SHA`; do not derive the release target
+  from the moving default-branch tip. Tagging a later tip would silently
+  publish the wrong release, so this rule is preventive; no observed
+  incident yet. Use the signing identity already configured for the
+  repository or operator; do not add a personal key or impose a
+  GPG-versus-SSH preference on adopters. For example, a maintainer can
+  create and verify the tag with:
+
+  ```sh
+  set -eu
+  git fetch origin main
+  release_version="${RELEASE_VERSION:?set to the iddVersion being released}"
+  release_cut_merge_sha="${RELEASE_CUT_MERGE_SHA:?set to the bump PR merge SHA}"
+  release_commit="$(git rev-parse --verify "${release_cut_merge_sha}^{commit}")"
+  git tag -s -a "v${release_version}" "${release_commit}" \
+    -m "release v${release_version}"
+  git verify-tag "v${release_version}"
+  test "$(git rev-parse "v${release_version}^{commit}")" = "${release_commit}"
+  git push origin "v${release_version}"
+  ```
+
+  `git verify-tag` checks the tag signature, while the `git rev-parse`
+  comparison checks that the annotated tag peels to the intended release
+  merge commit rather than a later default-branch tip. Only maintainers
+  push these release tags; this process does not create a GitHub Release
+  object or add GitHub Release automation.
 - **Adopters** can compare their `iddVersion` against the source release
   to see whether a re-sync is worthwhile. Because the value only moves
   when maintainers bump it, it is a coarse signal — so `idd-doctor` also
