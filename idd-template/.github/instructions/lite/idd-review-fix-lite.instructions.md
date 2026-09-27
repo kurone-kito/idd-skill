@@ -116,11 +116,11 @@ other GitHub side effect, confirm all of the following:
 
 Per-agent pass: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
 with a harness timeout, not a wrapper (#3449). Applies only to per-agent
-subagents; shell-delegate rules are unchanged. Background waits require cleanup
-and suppress late output. Timeout/cancel/interruption/error without findings is
-failure: self-critique for `fallback`/`combined`; hold for `on-success`/`never`.
-Without bound/cleanup, self-critique when allowed and record residual risk/no
-return.
+subagents; shell-delegate rules are unchanged. Background waits require cleanup;
+suppress late output. `mode` only decides whether the per-agent pass starts from
+delegate. Started timeout/cancel/interruption/error passes with no
+findings use structured self-critique and record no return, regardless of mode.
+Unbounded: record risk.
 
 1. Resolve `critiqueLoop.delegate` the same way
    `idd-work-lite.instructions.md` C1 does: helper-first

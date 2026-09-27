@@ -189,8 +189,12 @@ worktree removal) behind the
    superseding PR.
 6. If the criteria only partly hold, keep the issue open, record the overlap
    in the plan, and plan only the remaining work.
-7. Draft an issue comment plan for the exact change set.
-8. Run a critique pass on the plan.
+7. Draft an issue comment plan for the change set.
+8. For a per-agent plan critique, resolve `critiqueLoop.subagentWaitCeiling`
+   (`PT20M` default) and enforce a harness timeout, not a command wrapper
+   (#3449). Timeout/cancel/interruption/error without findings routes to
+   structured self-critique and records no return; without harness
+   bound/cleanup, record residual risk. Then run the critique pass.
 9. Post the refined final plan as a follow-up or update to the same issue
    comment.
 10. After the final plan comment, update the live status digest to `B2 planned`,
@@ -296,10 +300,10 @@ Per-agent delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default
 ceiling applies only to each per-agent subagent; it does not change the
 configured `critiqueLoop.delegate` shell-command timeout or failure rules.
 Background wait requires cancellation/cleanup and late-output suppression.
-Timeout, cancel, interruption, or error without findings is per-agent failure.
-Use `mode` against the configured delegate's outcome (see step 5) to decide
-whether the per-agent structured self-critique runs. If the harness cannot
-bound/clean up, use that self-critique and record residual risk/no return.
+`mode` only decides whether the per-agent pass starts from the configured
+delegate's outcome (see step 5). Once started, timeout/cancel/interruption/error
+without findings routes to structured self-critique and records no delegated
+return. If the harness cannot bound/clean up, record residual risk.
 
 A critique pass asks whether the implementation is correct, whether the issue's
 requirements are satisfied, whether coverage is adequate, and whether any other
