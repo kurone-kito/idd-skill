@@ -3436,11 +3436,11 @@ still fails closed:
     possibly stale, in-memory snapshot) — all while the lock is held,
     immediately before mutating. Then `git worktree remove` (retrying
     `--force` only after a submodule-removal failure), or, for the
-    primary-worktree branch, `checkout {development-branch}`, cleanup of
-    any interrupted operation (`rebase --quit`, `merge --abort`,
-    `cherry-pick --abort`, or `bisect reset`), a bounded retry of the
-    confirmed-absent re-check (up to three total observations), and a SECOND,
-    final lock re-check run
+    primary-worktree branch, cleanup of any interrupted operation
+    (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
+    `bisect reset`) before `checkout {development-branch}`, a bounded retry
+    of the confirmed-absent re-check (up to three total observations), and a
+    SECOND, final lock re-check run
     after that checkout (not only the earlier, now possibly stale,
     pre-checkout one) — deleting only the lock this final check
     positively observed, and reporting failure (never a silent

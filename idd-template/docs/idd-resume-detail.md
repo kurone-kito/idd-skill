@@ -582,11 +582,11 @@ the helper's dry-run output doesn't make self-explanatory.
    the deletion otherwise. Only if that fresh check still matches
    this primary worktree's lock to the claim-id being recovered, or
    — for a legacy release — still finds no lock at all (matching
-   step 1's own absent-lock finding): run `git -C <path> checkout
-   {development-branch}` there to release the branch, clear any interrupted
-   operation (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
-   `bisect reset`), and retry the confirmed-absent routing check up to three
-   total observations — re-resolve
+   step 1's own absent-lock finding): clear any interrupted operation
+   (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
+   `bisect reset`), then run `git -C <path> checkout
+   {development-branch}` there to release the branch and retry the
+   confirmed-absent routing check up to three total observations — re-resolve
    `{development-branch}` per §CSA's note above if this file is
    entered without a fresh B1 pass — confirm `resume-claim-routing.mjs`
    now reports this branch's `evidence.local_worktree.status` as

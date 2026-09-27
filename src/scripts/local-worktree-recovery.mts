@@ -2080,10 +2080,13 @@ function reverifyPreservationArtifactsFresh(
     group.entries.push(stash);
   }
   for (const group of stashGroups.values()) {
-    const expectedBaseline = Math.max(
-      ...group.entries.map((entry) => entry.baselineCount),
+    // Entries in one group may come from sequential preserve passes. Each
+    // entry's baseline already includes the earlier entries, so the final
+    // count is the maximum per-entry `baseline + 1`, not the maximum baseline
+    // plus the number of entries (Copilot review).
+    const expectedCount = Math.max(
+      ...group.entries.map((entry) => entry.baselineCount + 1),
     );
-    const expectedCount = expectedBaseline + group.entries.length;
     const taggedCount = countTaggedStashEntries(
       group.list,
       group.entries[0]?.tag ?? '',
@@ -2266,6 +2269,7 @@ export function runLocalWorktreeRecovery(
   const recordRemovalFailure = (
     detail: string,
   ): LocalWorktreeRecoveryVerdict => {
+    verdict.ready = false;
     verdict.plan.removal = {
       kind: verdict.primaryOrLinked ?? 'linked',
       developmentBranch: null,
@@ -2938,18 +2942,6 @@ export function runLocalWorktreeRecovery(
 
     if (verdict.primaryOrLinked === 'primary') {
       const developmentBranch = deps.resolveDevelopmentBranch();
-      const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
-      if (!checkout.ok) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
       if (verdict.plan.inProgressOperation !== null) {
         const operationError = clearInProgressOperation(
           targetPath,
@@ -2967,6 +2959,18 @@ export function runLocalWorktreeRecovery(
           verdict.result = verdict.plan.removal.detail;
           return verdict;
         }
+      }
+      const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
+      if (!checkout.ok) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
       }
       let confirmAbsent = deps.confirmBlock(cwd);
       let absentRouting = confirmAbsent.routing;

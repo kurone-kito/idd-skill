@@ -1867,8 +1867,44 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
   );
 
   assert.equal(removeCalled, false);
+  assert.equal(verdict.ready, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /could not locate the prunable worktree/);
+});
+
+test('dry-run planning failures clear the ready gate', () => {
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: null,
+      error: 'no readable gitdir pointer matched the target',
+    }),
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /could not plan the prunable/);
 });
 
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
@@ -2062,6 +2098,68 @@ test('forced retry re-verifies preservation after the final identity checks', ()
   assert.equal(guardCalls, 1);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /forced-removal preservation artifact/);
+});
+
+test('forced retry accepts sequential stashes with the same recovery tag', () => {
+  let firstRemovalAttempt = false;
+  let stashPushCount = 0;
+  let guardCalls = 0;
+  const tag = 'idd-lwr claim-x';
+  const first = `stash@{0}: On issue/1-task: ${tag}`;
+  const both = `${first}\nstash@{1}: On issue/1-task: ${tag}`;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: firstRemovalAttempt ? ' M late.txt\n' : ' M tracked.txt\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        stashPushCount += 1;
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashPushCount >= 2
+              ? `${both}\n`
+              : stashPushCount === 1
+                ? `${first}\n`
+                : '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
+      guardCalls += 1;
+      if (!force) {
+        firstRemovalAttempt = true;
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'submodules cannot be moved or removed',
+        };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(stashPushCount, 2);
+  assert.equal(guardCalls, 2);
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('legacy lockless claims may complete the forced retry through the guard', () => {
@@ -3022,6 +3120,212 @@ test('fresh preservation verification rejects a copied artifact redirected into 
   assert.equal(verdict.plan.removal, null);
   assert.match(verdict.result, /step 3 preservation/);
 });
+
+for (const operationCase of [
+  { kind: 'merge', cleanup: ['merge', '--abort'] },
+  { kind: 'rebase', cleanup: ['rebase', '--quit'] },
+  { kind: 'cherry-pick', cleanup: ['cherry-pick', '--abort'] },
+  { kind: 'bisect', cleanup: ['bisect', 'reset'] },
+] as const) {
+  test(`primary-worktree cleanup clears ${operationCase.kind} before checkout`, () => {
+    const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-operation-'));
+    const operationRoot = join(root, '.git');
+    const rebaseDir = join(operationRoot, 'rebase-merge');
+    const bisectLog = join(operationRoot, 'BISECT_LOG');
+    const bisectStart = join(operationRoot, 'BISECT_START');
+    let operationActive = true;
+    let confirmCalls = 0;
+    const events: string[] = [];
+    try {
+      if (operationCase.kind === 'rebase') {
+        mkdirSync(rebaseDir, { recursive: true });
+        writeFileSync(join(rebaseDir, 'orig-head'), 'pre-operation-sha\n');
+      }
+      if (operationCase.kind === 'bisect') {
+        mkdirSync(operationRoot, { recursive: true });
+        writeFileSync(bisectLog, 'bisect\n');
+        writeFileSync(bisectStart, 'issue/1-task\n');
+      }
+      const deps = fakeDeps({
+        cwd: () => root,
+        listWorktreeRecords: () => [
+          {
+            path: root,
+            branchRef: 'refs/heads/main',
+            detached: false,
+            bare: false,
+            locked: false,
+            prunable: false,
+          },
+        ],
+        pathExists: (path) => path === root || existsSync(path),
+        confirmBlock: () => {
+          confirmCalls += 1;
+          const occupied = confirmCalls < 3;
+          return {
+            ok: true,
+            routing: {
+              state: occupied ? 'local_worktree_occupied' : 'stale',
+              reason: occupied
+                ? 'stale-claim-local-worktree-occupied'
+                : 'active-claim-stale',
+              active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+              evidence: {
+                local_worktree: {
+                  status: occupied ? 'occupied' : 'absent',
+                  paths: occupied ? [root] : [],
+                  reason: null,
+                },
+              },
+            },
+            error: null,
+          };
+        },
+        runGit: (argv, cwd) => {
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('-q') &&
+            argv.includes('MERGE_HEAD')
+          ) {
+            return operationCase.kind === 'merge' && operationActive
+              ? { ok: true, status: 0, stdout: 'merge-head\n', stderr: '' }
+              : { ok: false, status: 1, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('-q') &&
+            argv.includes('CHERRY_PICK_HEAD')
+          ) {
+            return operationCase.kind === 'cherry-pick' && operationActive
+              ? { ok: true, status: 0, stdout: 'cherry-head\n', stderr: '' }
+              : { ok: false, status: 1, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('--git-path') &&
+            argv.includes('rebase-merge')
+          ) {
+            return operationCase.kind === 'rebase' && operationActive
+              ? { ok: true, status: 0, stdout: `${rebaseDir}\n`, stderr: '' }
+              : { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('--git-path') &&
+            argv.includes('rebase-apply')
+          ) {
+            return { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('--git-path') &&
+            argv.includes('BISECT_LOG')
+          ) {
+            return operationCase.kind === 'bisect' && operationActive
+              ? { ok: true, status: 0, stdout: `${bisectLog}\n`, stderr: '' }
+              : { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('--git-path') &&
+            argv.includes('BISECT_START')
+          ) {
+            return operationCase.kind === 'bisect' && operationActive
+              ? {
+                  ok: true,
+                  status: 0,
+                  stdout: `${bisectStart}\n`,
+                  stderr: '',
+                }
+              : { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.length === 2 &&
+            argv[1] === 'issue/1-task'
+          ) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: 'pre-operation-sha\n',
+              stderr: '',
+            };
+          }
+          if (argv[0] === 'rev-parse' && argv.includes('HEAD')) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: 'pre-operation-sha\n',
+              stderr: '',
+            };
+          }
+          if (
+            argv[0] === 'rev-parse' &&
+            argv.includes('--verify') &&
+            argv.includes('refs/idd-lwr/issue/1-task')
+          ) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: 'pre-operation-sha\n',
+              stderr: '',
+            };
+          }
+          if (
+            argv[0] === operationCase.cleanup[0] &&
+            argv.slice(1).join(' ') === operationCase.cleanup.slice(1).join(' ')
+          ) {
+            events.push('cleanup');
+            operationActive = false;
+            if (operationCase.kind === 'rebase') {
+              rmSync(rebaseDir, { recursive: true, force: true });
+            }
+            if (operationCase.kind === 'bisect') {
+              rmSync(bisectLog, { force: true });
+              rmSync(bisectStart, { force: true });
+            }
+            return { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          if (argv[0] === 'checkout') {
+            events.push('checkout');
+          }
+          if (argv[0] === 'update-ref') {
+            return { ok: true, status: 0, stdout: '', stderr: '' };
+          }
+          return cleanRepoRunGit(argv, cwd);
+        },
+        checkLock: () => ({
+          path: join(root, '.git/idd-claim.lock'),
+          present: true,
+          holder: {
+            agentId: 'test-agent',
+            claimId: 'claim-x',
+            acquiredAt: '2026-09-27T00:00:00Z',
+          },
+        }),
+        removeLockIfMatches: () => true,
+      });
+      const verdict = runLocalWorktreeRecovery(
+        baseArgs({
+          apply: true,
+          operatorConfirmedNoLiveSession: true,
+          worktree: root,
+        }),
+        deps,
+      );
+      assert.deepEqual(
+        verdict.plan.inProgressOperation?.kind,
+        operationCase.kind,
+      );
+      assert.equal(verdict.plan.removal?.ran, true);
+      assert.ok(events.indexOf('cleanup') >= 0);
+      assert.ok(events.indexOf('checkout') >= 0);
+      assert.ok(events.indexOf('cleanup') < events.indexOf('checkout'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
   let unlinkAttempted = false;
