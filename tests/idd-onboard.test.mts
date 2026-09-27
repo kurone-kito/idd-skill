@@ -4324,6 +4324,23 @@ test('checkHeldSchemaDrift ignores recursive option text inside strings', () => 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores nested recursive options', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "readdirSync('fixtures', { metadata: { recursive: true } });\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift resolves module-relative directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4821,6 +4838,66 @@ test('checkHeldSchemaDrift keeps extglob separators inside character classes', (
   ]);
 });
 
+test('checkHeldSchemaDrift rejects extglob alternatives that cross segments', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/@(x/a|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/x/a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/x/a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift rejects ambiguous repeating extglobs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const relativePath = `schemas/${'a'.repeat(64)}b.json`;
+  const moduleText = "globSync('schemas/+(a|aa)b.json');\n";
+  writeDriftManifest(sourceRoot, {
+    [relativePath]: '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [relativePath]: '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift ignores closing parentheses inside extglob classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/@(a[)]x|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/a)x.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/a)x.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/a)x.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects generic scan calls', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4904,6 +4981,29 @@ test('checkHeldSchemaDrift matches decoded literal glob candidates', () => {
   assert.deepEqual(result.findings, [
     {
       schemaOrFixturePath: 'schemas/w.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
+test('checkHeldSchemaDrift preserves String.raw template escapes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = 'globSync(String.raw`schemas/\\x77*.json`);\n';
+  writeDriftManifest(sourceRoot, {
+    'schemas/x77.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/x77.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/x77.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
@@ -5025,6 +5125,19 @@ test('checkHeldSchemaDrift honors glob exclusions', () => {
   const targetRoot = makeFixtureDir();
   const moduleText =
     "globSync('schemas/*.json', { exclude: ['schemas/widget*.json'] });\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift does not infer function-valued exclusions', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('schemas/*.json', { exclude: path => path.endsWith('.json') });\n";
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {

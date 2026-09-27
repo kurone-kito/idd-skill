@@ -3041,6 +3041,11 @@ function topLevelOptionPropertyValue(
   return null;
 }
 
+function isFunctionValuedExpression(text: string): boolean {
+  const expression = maskJavaScriptStringContents(text).trim();
+  return /=>/u.test(expression) || /^(?:async\s+)?function\b/u.test(expression);
+}
+
 function normalizeComputedDirectoryScanMembers(text: string): string {
   return text.replace(
     /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\()/gu,
@@ -3240,6 +3245,9 @@ function scanStringLiterals(text: string): string[] {
     if (quote !== "'" && quote !== '"' && quote !== '`') {
       continue;
     }
+    const isRawTemplate =
+      quote === '`' &&
+      /(?:^|[^A-Za-z0-9_$])String\.raw\s*$/u.test(text.slice(0, index));
     let content = '';
     let closed = false;
     for (let cursor = index + 1; cursor < text.length; cursor += 1) {
@@ -3254,7 +3262,9 @@ function scanStringLiterals(text: string): string[] {
         continue;
       }
       if (character === quote) {
-        literals.push(decodeJavaScriptStringLiteral(content));
+        literals.push(
+          isRawTemplate ? content : decodeJavaScriptStringLiteral(content),
+        );
         index = cursor;
         closed = true;
         break;
@@ -3445,8 +3455,25 @@ function findGlobGroupEnd(
   closing: string,
 ): number {
   let depth = 0;
+  let inCharacterClass = false;
+  let characterClassStart = false;
   for (let index = start; index < pattern.length; index += 1) {
-    if (pattern[index] === opening) {
+    if (pattern[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (pattern[index] === ']' && !characterClassStart) {
+        inCharacterClass = false;
+      } else {
+        characterClassStart = false;
+      }
+      continue;
+    }
+    if (pattern[index] === '[') {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (pattern[index] === opening) {
       depth += 1;
     } else if (pattern[index] === closing) {
       depth -= 1;
@@ -3491,6 +3518,49 @@ function splitGlobAlternatives(text: string, separator: string): string[] {
   }
   alternatives.push(text.slice(start));
   return alternatives;
+}
+
+function containsUnescapedGlobSlash(text: string): boolean {
+  let inCharacterClass = false;
+  let characterClassStart = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (character === ']' && !characterClassStart) {
+        inCharacterClass = false;
+      } else {
+        characterClassStart = false;
+      }
+      continue;
+    }
+    if (character === '[') {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (character === '/') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasCrossSegmentExtglob(pattern: string): boolean {
+  for (let index = 0; index < pattern.length - 1; index += 1) {
+    if (!/[+@!?*]/u.test(pattern[index] ?? '') || pattern[index + 1] !== '(') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+    if (
+      closing !== -1 &&
+      containsUnescapedGlobSlash(pattern.slice(index + 2, closing))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function expandGlobRange(text: string): string[] | null {
@@ -3628,6 +3698,41 @@ function expandGlobBracePatternsBounded(
   return [text];
 }
 
+function hasAmbiguousRepeatingExtglob(pattern: string): boolean {
+  for (let index = 0; index < pattern.length - 1; index += 1) {
+    const operator = pattern[index] ?? '';
+    if (!/[+*]/u.test(operator) || pattern[index + 1] !== '(') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+    if (closing === -1) {
+      continue;
+    }
+    const expandedGroups = expandGlobBracePatternsBounded(
+      pattern.slice(index + 2, closing),
+      0,
+      MAX_GLOB_BRACE_EXPANSIONS,
+      MAX_GLOB_BRACE_EXPANSION_DEPTH,
+    );
+    if (expandedGroups === null) {
+      continue;
+    }
+    for (const expandedGroup of expandedGroups) {
+      const alternatives = splitGlobAlternatives(expandedGroup, '|');
+      for (let left = 0; left < alternatives.length; left += 1) {
+        for (let right = left + 1; right < alternatives.length; right += 1) {
+          const first = alternatives[left] ?? '';
+          const second = alternatives[right] ?? '';
+          if (first.startsWith(second) || second.startsWith(first)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 type GlobQuestionCapture = { name: string; codeUnitCount: number };
 
 function matchSimpleStarGlob(
@@ -3723,7 +3828,15 @@ function globPatternToRegex(
     const character = pattern[index] ?? '';
     const segmentStart =
       index === 0 ? initialSegmentStart : pattern[index - 1] === '/';
-    if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
+    if (character === '\\') {
+      const escaped = pattern[index + 1];
+      if (escaped === undefined) {
+        expression += '\\\\';
+      } else {
+        expression += escapeRegExp(escaped);
+        index += 1;
+      }
+    } else if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
       const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
       if (closing === -1) {
         expression += escapeRegExp(character);
@@ -3974,6 +4087,12 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
   ) {
     return true;
   }
+  if (
+    hasCrossSegmentExtglob(pattern) ||
+    hasAmbiguousRepeatingExtglob(pattern)
+  ) {
+    return false;
+  }
   if (!hasBoundedGlobRegexComplexity(pattern, targetPath)) {
     return false;
   }
@@ -4006,9 +4125,12 @@ function moduleScansManifestDirectory(
   for (const match of findDirectoryScanCalls(text)) {
     const { apiName, argumentsText } = match;
     const isGlobScanApi = /^glob(?:Sync)?$/u.test(apiName);
-    const optionText = maskJavaScriptStringContents(argumentsText);
+    const recursiveExpression = topLevelOptionPropertyValue(
+      argumentsText,
+      'recursive',
+    );
     const recursive =
-      /(?:\brecursive\b|['"]recursive['"])\s*:\s*true\b/u.test(optionText) ||
+      recursiveExpression?.trim() === 'true' ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument).map(
@@ -4056,6 +4178,12 @@ function moduleScansManifestDirectory(
     const excludeExpression = isGlobScanApi
       ? topLevelOptionPropertyValue(argumentsText, 'exclude')
       : null;
+    if (
+      excludeExpression !== null &&
+      isFunctionValuedExpression(excludeExpression)
+    ) {
+      continue;
+    }
     const excludeCandidates =
       excludeExpression === null ? [] : scanStringLiterals(excludeExpression);
     const joinScanPath = (base: string, path: string): string =>
