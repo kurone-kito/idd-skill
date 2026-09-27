@@ -3479,6 +3479,83 @@ for (const operationCase of [
   });
 }
 
+test('primary recovery refuses a fresh claim during post-checkout absence confirmation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-fresh-claim-'));
+  mkdirSync(join(root, '.git'), { recursive: true });
+  let confirmCalls = 0;
+  let lockRemoved = false;
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) => path === root || existsSync(path),
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const absent = confirmCalls >= 3;
+        return {
+          ok: true,
+          routing: {
+            state: absent ? 'non_inheritable' : 'local_worktree_occupied',
+            reason: absent
+              ? 'active-claim-non-stale'
+              : 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: absent ? 'absent' : 'occupied',
+                paths: absent ? [] : [root],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'checkout') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(lockRemoved, false);
+    assert.equal(verdict.plan.removal?.ran, false);
+    assert.match(verdict.result, /same recovered claim\/branch absent/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery does not abort a merge already cleared by stash', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-stash-merge-'));
   mkdirSync(join(root, '.git'), { recursive: true });
@@ -3506,8 +3583,10 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
         return {
           ok: true,
           routing: {
-            state: 'local_worktree_occupied',
-            reason: 'stale-claim-local-worktree-occupied',
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
             active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             evidence: {
               local_worktree: {
@@ -3808,8 +3887,11 @@ test('primary-worktree release does not delete a lock replaced by another claim'
         return {
           ok: true,
           routing: {
-            state: 'local_worktree_occupied',
-            reason: 'stale-claim-local-worktree-occupied',
+            state: call <= 2 ? 'local_worktree_occupied' : 'stale',
+            reason:
+              call <= 2
+                ? 'stale-claim-local-worktree-occupied'
+                : 'active-claim-stale',
             active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             evidence: {
               local_worktree: {
@@ -3883,8 +3965,11 @@ test('primary-worktree release stops when the recovered claim lock disappears at
         return {
           ok: true,
           routing: {
-            state: 'local_worktree_occupied',
-            reason: 'stale-claim-local-worktree-occupied',
+            state: call <= 2 ? 'local_worktree_occupied' : 'stale',
+            reason:
+              call <= 2
+                ? 'stale-claim-local-worktree-occupied'
+                : 'active-claim-stale',
             active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             evidence: {
               released_claim: { claim_id: null, branch: 'issue/1-task' },

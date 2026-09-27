@@ -545,6 +545,19 @@ function isPrunableShortcutRouting(routing: ConfirmBlockRouting): boolean {
   );
 }
 
+/** True only when an absent worktree is still eligible for stale/legacy
+ * takeover. An absent path alone is not enough: a fresh claim may have
+ * already become non-inheritable while the checkout is being released. */
+function isTakeoverEligibleAbsentRouting(
+  routing: ConfirmBlockRouting,
+): boolean {
+  return (
+    isPrunableShortcutRouting(routing) &&
+    routing.evidence?.local_worktree?.status === 'absent' &&
+    (routing.evidence.local_worktree.paths ?? []).length === 0
+  );
+}
+
 /** Match a worktree-local lock to the claim recovered by routing. Legacy
  * releases may have no lock or an explicitly legacy/null holder, but a
  * non-null holder must never be treated as legacy. Active legacy claims are
@@ -2822,10 +2835,7 @@ export function runLocalWorktreeRecovery(
           targetComparisonPath,
       );
     const prunableStillExplicitlyAbsent =
-      shortcut.eligible &&
-      isPrunableShortcutRouting(recheck.routing) &&
-      recheck.routing.evidence?.local_worktree?.status === 'absent' &&
-      (recheck.routing.evidence?.local_worktree?.paths ?? []).length === 0;
+      shortcut.eligible && isTakeoverEligibleAbsentRouting(recheck.routing);
     let stillEligible: boolean;
     let staleReason: string;
     if (shortcut.eligible) {
@@ -3066,10 +3076,10 @@ export function runLocalWorktreeRecovery(
       let nowAbsent =
         confirmAbsent.ok &&
         absentRouting !== null &&
+        isTakeoverEligibleAbsentRouting(absentRouting) &&
         absentRecovered?.claimId === recoveredClaimId &&
         absentRecovered.branch === recoveredBranch &&
-        isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim &&
-        absentRouting.evidence?.local_worktree?.status === 'absent';
+        isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim;
       // The post-checkout routing query is a network-backed confirmation. A
       // transient fetch/API failure must not strand the primary worktree on
       // the development branch with the recovered lock still present. Retry
@@ -3085,11 +3095,10 @@ export function runLocalWorktreeRecovery(
         nowAbsent =
           confirmAbsent.ok &&
           absentRouting !== null &&
+          isTakeoverEligibleAbsentRouting(absentRouting) &&
           absentRecovered?.claimId === recoveredClaimId &&
           absentRecovered.branch === recoveredBranch &&
-          isLegacyReleasedRouting(absentRouting) ===
-            recoveredFromReleasedClaim &&
-          absentRouting.evidence?.local_worktree?.status === 'absent';
+          isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim;
       }
       if (!nowAbsent || absentRouting === null) {
         verdict.plan.removal = {
