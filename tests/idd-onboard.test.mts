@@ -3950,6 +3950,18 @@ test('checkHeldSchemaDrift honors selective glob filters', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift anchors basename globs to the scanned directory', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift normalizes relative directory scan paths', () => {
   for (const moduleText of [
     "readdirSync('./schemas');\n",

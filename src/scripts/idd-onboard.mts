@@ -3088,7 +3088,7 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
     return false;
   }
   const expression = globPatternToRegex(pattern);
-  return new RegExp(`${expression}$`, 'u').test(targetPath);
+  return new RegExp(`^${expression}$`, 'u').test(targetPath);
 }
 
 function moduleScansManifestDirectory(

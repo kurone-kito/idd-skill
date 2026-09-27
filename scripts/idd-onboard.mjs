@@ -2513,7 +2513,7 @@ function globPatternMatchesPath(pattern, targetPath) {
     return false;
   }
   const expression = globPatternToRegex(pattern);
-  return new RegExp(`${expression}$`, 'u').test(targetPath);
+  return new RegExp(`^${expression}$`, 'u').test(targetPath);
 }
 function moduleScansManifestDirectory(text, targetPath) {
   const slash = targetPath.lastIndexOf('/');
