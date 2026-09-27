@@ -3597,6 +3597,22 @@ test('checkHeldSchemaDrift falls back for an unborn Git target', () => {
   );
 });
 
+test('checkHeldSchemaDrift rejects an explicit baseline for a non-Git target', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  assert.throws(
+    () =>
+      checkHeldSchemaDrift(sourceRoot, targetRoot, {
+        hold: [DRIFT_MODULE],
+        targetBaseRef: 'HEAD',
+      }),
+    /--target-base-ref requires a Git target: HEAD/,
+  );
+});
+
 test('checkHeldSchemaDrift fails when an existing Git HEAD cannot resolve', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3876,6 +3892,25 @@ test('checkHeldSchemaDrift detects recursive scans of a parent directory', () =>
   ]);
 });
 
+test('checkHeldSchemaDrift preserves recursive options after nested path calls', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "readdirSync(join(root, 'fixtures'), { recursive: true });\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects glob scans that set cwd', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3914,6 +3949,30 @@ test('checkHeldSchemaDrift supports glob character classes', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift supports brace and extglob directory scans', () => {
+  for (const pattern of [
+    '{schemas,fixtures}/**/*.json',
+    '+(schemas|fixtures)/**/*.json',
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('${pattern}');\n`;
+    const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+    const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+    sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+    targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+    writeDriftManifest(sourceRoot, sourceFiles);
+    writeDriftManifest(targetRoot, targetFiles);
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift detects directory scans inside template interpolations', () => {

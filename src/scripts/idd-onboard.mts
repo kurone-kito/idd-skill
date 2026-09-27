@@ -2642,9 +2642,9 @@ function readHeldModule(
  * string alone is not enough to infer a dependency, because modules often
  * mention a directory in comments or diagnostics without reading it.
  */
-const DIRECTORY_SCAN_CALL_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)]*)\)/gu;
-const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n)]*)\1/gu;
+const DIRECTORY_SCAN_API_PATTERN =
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*\()/gu;
+const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
 
@@ -2891,6 +2891,53 @@ function firstCallArgument(text: string): string {
   return text;
 }
 
+function findDirectoryScanCalls(
+  text: string,
+): Array<{ apiName: string; argumentsText: string }> {
+  const calls: Array<{ apiName: string; argumentsText: string }> = [];
+  for (const match of text.matchAll(DIRECTORY_SCAN_API_PATTERN)) {
+    const apiName = match[0] ?? '';
+    let openIndex = (match.index ?? 0) + apiName.length;
+    while (/\s/u.test(text[openIndex] ?? '')) {
+      openIndex += 1;
+    }
+    if (text[openIndex] !== '(') {
+      continue;
+    }
+    let depth = 1;
+    let quote: string | null = null;
+    let escaped = false;
+    for (let index = openIndex + 1; index < text.length; index += 1) {
+      const character = text[index] ?? '';
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          calls.push({
+            apiName,
+            argumentsText: text.slice(openIndex + 1, index),
+          });
+          break;
+        }
+      }
+    }
+  }
+  return calls;
+}
+
 function scanStringLiterals(text: string): string[] {
   return [...text.matchAll(DIRECTORY_SCAN_STRING_PATTERN)].map(
     (literal) => literal[2] ?? '',
@@ -2906,7 +2953,7 @@ function pathExpressionCandidates(text: string): string[] {
 }
 
 function isGlobPattern(text: string): boolean {
-  return /[?*[\]]/u.test(text);
+  return /[?*[\]{}]|\+\(/u.test(text);
 }
 
 function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
@@ -2940,6 +2987,24 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
         expression += `[${characterClass.replaceAll('\\', '\\\\')}]`;
         index = closing;
       }
+    } else if (character === '{') {
+      const closing = pattern.indexOf('}', index + 1);
+      if (closing === -1) {
+        expression += '\\{';
+      } else {
+        const alternatives = pattern.slice(index + 1, closing).split(',');
+        expression += `(?:${alternatives.map(escapeRegExp).join('|')})`;
+        index = closing;
+      }
+    } else if (character === '+' && pattern[index + 1] === '(') {
+      const closing = pattern.indexOf(')', index + 2);
+      if (closing === -1) {
+        expression += '\\+';
+      } else {
+        const alternatives = pattern.slice(index + 2, closing).split('|');
+        expression += `(?:${alternatives.map(escapeRegExp).join('|')})`;
+        index = closing;
+      }
     } else {
       expression += escapeRegExp(character);
     }
@@ -2956,12 +3021,8 @@ function moduleScansManifestDirectory(
     return false;
   }
   const directory = targetPath.slice(0, slash);
-  for (const match of stripJavaScriptComments(text).matchAll(
-    DIRECTORY_SCAN_CALL_PATTERN,
-  )) {
-    const argumentsText = match[1] ?? '';
-    const apiName =
-      match[0]?.match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0] ?? '';
+  for (const match of findDirectoryScanCalls(stripJavaScriptComments(text))) {
+    const { apiName, argumentsText } = match;
     const recursive =
       /\brecursive\s*:\s*true\b/u.test(argumentsText) ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
@@ -3115,6 +3176,11 @@ function resolveGitTargetBaseline(
       },
     ).trim();
   } catch (error) {
+    if (targetBaseRef !== undefined) {
+      throw new Error(
+        `--target-base-ref requires a Git target: ${targetBaseRef}`,
+      );
+    }
     if (hasGitMetadataInAncestors(targetRoot)) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
