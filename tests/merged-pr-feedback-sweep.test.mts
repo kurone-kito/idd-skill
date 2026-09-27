@@ -16,6 +16,10 @@ const OPTIONS = {
   iddAgentLogins: ['kurone-kito'],
 };
 
+const RATE_LIMIT_NOTICE = `${CODERABBIT_SUMMARY_MARKER}\n\n> ## Review limit reached`;
+const RATE_LIMIT_DISPOSITION =
+  '**Rejected** — coderabbitai[bot] did not review HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (review limit reached / rate limited); this is not a completed review (source: #issuecomment-100)\n\n<!-- idd-skill-review-reply -->';
+
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
 test('parseArgs: parses --pr (repeatable), --days, and --limit', () => {
@@ -670,6 +674,151 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
   assert.equal(
     result.prs[0].unaddressedComments[0].author,
     'coderabbitai[bot]',
+  );
+});
+
+test('#3572 carries a trusted notice rejection across a restamped updatedAt', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            id: 100,
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.deepEqual(result.prs, []);
+});
+
+test('#3572 keeps a notice visible without a trusted rejection', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 keeps a notice visible when its rejection was edited', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: '2026-09-27T08:00:00Z',
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 keeps a changed notice visible even when its old rejection is intact', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            body: `${RATE_LIMIT_NOTICE}\n\nA changed notice body`,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T08:02:07Z',
+            lastEditedAt: '2026-09-27T08:02:00Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3572 still surfaces a genuine review that replaces a dispositioned notice', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 3572,
+        comments: [
+          {
+            body: RATE_LIMIT_NOTICE,
+            createdAt: '2026-09-27T06:45:28Z',
+            updatedAt: '2026-09-27T07:42:07Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: RATE_LIMIT_DISPOSITION,
+            createdAt: '2026-09-27T07:34:18Z',
+            updatedAt: '2026-09-27T07:34:18Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+          {
+            body: 'Please address this genuine review finding.',
+            createdAt: '2026-09-27T08:10:00Z',
+            updatedAt: '2026-09-27T08:10:00Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].bodyExcerpt,
+    'Please address this genuine review finding.',
   );
 });
 

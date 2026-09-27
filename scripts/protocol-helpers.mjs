@@ -4306,12 +4306,13 @@ export function foldSecondaryAdvisoryReviewSettlements(
 // into any generic disposition pool, so an absent or already-resolved sticky
 // leaves the disposition unused: it can never clear an unrelated human comment.
 // Returns the set of `sortedIndex` values of the stickies that are dispositioned.
-function matchTrustedAdvisoryStickyDispositions(
+export function matchTrustedAdvisoryStickyDispositions(
   comments,
   advisoryBotLogins,
   trustedMarkerLogins,
   iddAgentLogins,
   currentHeadSha,
+  options = {},
 ) {
   const dispositionedStickyIndexes = new Set();
   // #3249: an edited (or edit-state-unresolved) trusted disposition must
@@ -4337,6 +4338,8 @@ function matchTrustedAdvisoryStickyDispositions(
       isSticky: (body) => isAdvisoryNonReviewNotice(body),
       isDisposition: (body) => isNonReviewNoticeDisposition({ body }),
       requireNewerDisposition: false,
+      allowIddAgentDisposition: options.allowIddAgentNoticeDisposition,
+      requireUneditedSticky: options.requireUneditedNotice,
     },
     {
       isSticky: (body) => isReviewSummaryComment(body),
@@ -4369,6 +4372,9 @@ function matchTrustedAdvisoryStickyDispositions(
       if (
         !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
         !kind.isSticky(comment.body) ||
+        (kind.requireUneditedSticky &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'unedited') ||
         (kind.isStickyAuthor && !kind.isStickyAuthor(comment.authorLogin))
       ) {
         continue;

@@ -5677,7 +5677,7 @@ export function foldSecondaryAdvisoryReviewSettlements(
 // into any generic disposition pool, so an absent or already-resolved sticky
 // leaves the disposition unused: it can never clear an unrelated human comment.
 // Returns the set of `sortedIndex` values of the stickies that are dispositioned.
-function matchTrustedAdvisoryStickyDispositions<
+export function matchTrustedAdvisoryStickyDispositions<
   T extends {
     id: string;
     authorLogin: string;
@@ -5692,6 +5692,21 @@ function matchTrustedAdvisoryStickyDispositions<
   trustedMarkerLogins: Set<string>,
   iddAgentLogins: Set<string>,
   currentHeadSha?: string | null,
+  options: {
+    /**
+     * Allow the resolved IDD-agent identity to author the disposition. The
+     * merge-gate callers keep this disabled because their own disposition
+     * pool already accounts for those comments; read-only merged-PR sweeps
+     * have no such pool and must carry the same machine disposition forward.
+     */
+    allowIddAgentNoticeDisposition?: boolean;
+    /**
+     * Require the source notice to be explicitly unedited before carrying a
+     * disposition forward. `updatedAt` can advance when GitHub restamps a
+     * comment during minimization, so it is not an edit signal.
+     */
+    requireUneditedNotice?: boolean;
+  } = {},
 ): Set<number> {
   const dispositionedStickyIndexes = new Set<number>();
   // #3249: an edited (or edit-state-unresolved) trusted disposition must
@@ -5717,6 +5732,7 @@ function matchTrustedAdvisoryStickyDispositions<
     isStickyAuthor?: (authorLogin: string) => boolean;
     isDisposition: (body: string) => boolean;
     requireNewerDisposition: boolean;
+    requireUneditedSticky?: boolean;
     allowIddAgentDisposition?: boolean;
     matchesDisposition?: (sticky: T, disposition: T) => boolean;
   }[] = [
@@ -5724,6 +5740,8 @@ function matchTrustedAdvisoryStickyDispositions<
       isSticky: (body: string) => isAdvisoryNonReviewNotice(body),
       isDisposition: (body: string) => isNonReviewNoticeDisposition({ body }),
       requireNewerDisposition: false,
+      allowIddAgentDisposition: options.allowIddAgentNoticeDisposition,
+      requireUneditedSticky: options.requireUneditedNotice,
     },
     {
       isSticky: (body: string) => isReviewSummaryComment(body),
@@ -5756,6 +5774,9 @@ function matchTrustedAdvisoryStickyDispositions<
       if (
         !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
         !kind.isSticky(comment.body) ||
+        (kind.requireUneditedSticky &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+            'unedited') ||
         (kind.isStickyAuthor && !kind.isStickyAuthor(comment.authorLogin))
       ) {
         continue;
