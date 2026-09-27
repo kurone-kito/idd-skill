@@ -171,7 +171,12 @@ function looksLikeOwnerMarker(body, markerPrefix) {
  * set do not count. A parsed marker whose target is not the issue
  * the comment was fetched from fails closed: counting the host
  * issue instead could collapse two targets into one member. One
- * issue with several markers for the set is still one member.
+ * issue with several markers for the set is still one member. Every
+ * per-comment fail-closed `reason` (an edited, unparseable, or
+ * mistargeted marker) names the triggering comment's host issue
+ * (`<owner>/<repo>#<issueNumber>`) and comment id so the exact
+ * culprit comment can be located without paging through every
+ * issue's comment history by hand.
  */
 export function evaluateAuthoringSetMembers(input) {
   if (!input.enumerationComplete) {
@@ -194,12 +199,14 @@ export function evaluateAuthoringSetMembers(input) {
     if (!looksLikeOwnerMarker(comment.body, input.markerPrefix)) {
       continue;
     }
+    const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
+    const locator = `${hostRef}, comment id ${comment.id}`;
     if (comment.lastEditedAt !== null) {
       return {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: 'edited trusted authoring-owner marker',
+        reason: `edited trusted authoring-owner marker (${locator})`,
       };
     }
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
@@ -208,16 +215,15 @@ export function evaluateAuthoringSetMembers(input) {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: 'unparseable trusted authoring-owner marker',
+        reason: `unparseable trusted authoring-owner marker (${locator})`,
       };
     }
-    const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
     if (parsed.target.toLowerCase() !== hostRef.toLowerCase()) {
       return {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: 'authoring-owner marker target does not match its host issue',
+        reason: `authoring-owner marker target does not match its host issue (${locator})`,
       };
     }
     if (parsed.set !== input.set) {
@@ -410,6 +416,7 @@ function runCli() {
       body: comment.body,
       lastEditedAt: comment.lastEditedAt,
       issueNumber,
+      id: comment.id,
     })),
   );
   const evaluation = evaluateAuthoringSetMembers({
