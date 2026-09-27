@@ -1509,6 +1509,20 @@ test('dependency-line-grammar leaves unresolved and non-issue reference-style li
   }
 });
 
+test('dependency-line-grammar ignores reference definitions inside HTML comments', () => {
+  const body = childBody({
+    extraMarkers:
+      '<!--\nBlocked by [Issue 12][ref]\n\n' +
+      '[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n-->',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',

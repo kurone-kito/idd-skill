@@ -1795,6 +1795,9 @@ function findDependencyKeywordMisuse(
  *   would otherwise be misread as a "blocked-by" near-miss/mid-line
  *   mention -- the two grammars are unrelated and only coincidentally
  *   share the substring "blocked-by".
+ * - `referenceDefinitions` is collected from the same comment-masked view
+ *   used by the shared grammar, so a `[ref]: ...` definition inside an HTML
+ *   comment is not treated as active CommonMark metadata.
  * - A second, separately masked view, masked here with
  *   `{ htmlComments: 'mask' }` -- matching `extractDependencyReferences`'s
  *   own internal masking, i.e. Discover's real view of the body -- is
@@ -1850,7 +1853,9 @@ function checkDependencyLineGrammar(
   const nearMissScanLines = text
     .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
     .split('\n');
-  const referenceDefinitions = collectReferenceStyleLinkDefinitions(text);
+  const referenceDefinitions = collectReferenceStyleLinkDefinitions(
+    discoverMaskedLines.join('\n'),
+  );
   // Maps a 1-based accepted line number to how many trailing characters of
   // that line the shared grammar's match left unconsumed (#3285 review,
   // Copilot): the grammar recognizes at most ONE dependency declaration
