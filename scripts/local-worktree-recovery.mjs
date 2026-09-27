@@ -128,13 +128,17 @@ function runLocalGitCommand(argv, cwd) {
     };
   }
 }
-function pathExistsOnDisk(path) {
+function pathPresenceOnDisk(path) {
   try {
     lstatSync(path);
-    return true;
-  } catch {
-    return false;
+    return 'present';
+  } catch (error) {
+    const code = error.code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown';
   }
+}
+function pathExistsOnDisk(path) {
+  return pathPresenceOnDisk(path) === 'present';
 }
 function realpathOrNull(path) {
   try {
@@ -313,6 +317,7 @@ export function evaluatePrunableShortcut(
   targetPath,
   requestedBranch,
   pathExists,
+  pathPresence = (path) => (pathExists(path) ? 'present' : 'absent'),
 ) {
   const targetComparisonPath =
     normalizeGitWorktreePathForComparison(targetPath);
@@ -332,8 +337,16 @@ export function evaluatePrunableShortcut(
   if (!record.prunable) {
     return { eligible: false, record, reason: 'record is not prunable' };
   }
-  if (pathExists(record.path)) {
-    return { eligible: false, record, reason: 'path still exists on disk' };
+  const presence = pathPresence(record.path);
+  if (presence !== 'absent') {
+    return {
+      eligible: false,
+      record,
+      reason:
+        presence === 'present'
+          ? 'path still exists on disk'
+          : 'path presence is unknown; refusing shortcut',
+    };
   }
   if (record.locked) {
     return { eligible: false, record, reason: 'record is locked' };
@@ -2224,6 +2237,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     targetPath,
     recoveredBranch,
     deps.pathExists,
+    deps.pathPresence,
   );
   const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
   const routingReportsTargetPath =
@@ -2508,6 +2522,7 @@ export function runLocalWorktreeRecovery(args, deps) {
               targetPath,
               recoveredBranch,
               deps.pathExists,
+              deps.pathPresence,
             );
       // The occupancy helper deliberately reports a matching prunable record
       // whose path is absent as `unreadable`, because its general callers do
@@ -3338,6 +3353,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           targetPath,
           recoveredBranch,
           deps.pathExists,
+          deps.pathPresence,
         ).eligible
       ) {
         return recordRemovalFailure(
@@ -3354,6 +3370,7 @@ export function runLocalWorktreeRecovery(args, deps) {
                 targetPath,
                 recoveredBranch,
                 deps.pathExists,
+                deps.pathPresence,
               );
         const confirmation = deps.confirmBlock(cwd);
         const routing = confirmation.routing;
@@ -4210,6 +4227,7 @@ function createProductionDeps(args) {
         cwd,
       ),
     pathExists: pathExistsOnDisk,
+    pathPresence: pathPresenceOnDisk,
     readDirectoryIdentity,
     realpathOrNull,
     readlinkOrNull,

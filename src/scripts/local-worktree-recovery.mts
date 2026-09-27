@@ -157,13 +157,20 @@ function runLocalGitCommand(
   }
 }
 
-function pathExistsOnDisk(path: string): boolean {
+export type PathPresence = 'present' | 'absent' | 'unknown';
+
+function pathPresenceOnDisk(path: string): PathPresence {
   try {
     lstatSync(path);
-    return true;
-  } catch {
-    return false;
+    return 'present';
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown';
   }
+}
+
+function pathExistsOnDisk(path: string): boolean {
+  return pathPresenceOnDisk(path) === 'present';
 }
 
 function realpathOrNull(path: string): string | null {
@@ -497,6 +504,9 @@ export interface LocalWorktreeRecoveryDeps {
   /** Non-throwing `git <argv>` in `cwd`. */
   runGit: (argv: string[], cwd: string) => LocalGitCommandResult;
   pathExists: (path: string) => boolean;
+  /** Distinguishes a positively absent path from an unreadable one for
+   * destructive shortcut decisions. */
+  pathPresence?: (path: string) => PathPresence;
   /** Read the filesystem identity of a directory before and after the
    * clone-lock wait. Device/inode identity distinguishes a worktree or its
    * private git-admin directory being removed and recreated at the same
@@ -664,6 +674,8 @@ export function evaluatePrunableShortcut(
   targetPath: string,
   requestedBranch: string | null,
   pathExists: (path: string) => boolean,
+  pathPresence: (path: string) => PathPresence = (path) =>
+    pathExists(path) ? 'present' : 'absent',
 ): { eligible: boolean; record: LocalWorktreeRecord | null; reason: string } {
   const targetComparisonPath =
     normalizeGitWorktreePathForComparison(targetPath);
@@ -683,8 +695,16 @@ export function evaluatePrunableShortcut(
   if (!record.prunable) {
     return { eligible: false, record, reason: 'record is not prunable' };
   }
-  if (pathExists(record.path)) {
-    return { eligible: false, record, reason: 'path still exists on disk' };
+  const presence = pathPresence(record.path);
+  if (presence !== 'absent') {
+    return {
+      eligible: false,
+      record,
+      reason:
+        presence === 'present'
+          ? 'path still exists on disk'
+          : 'path presence is unknown; refusing shortcut',
+    };
   }
   if (record.locked) {
     return { eligible: false, record, reason: 'record is locked' };
@@ -2780,6 +2800,7 @@ export function runLocalWorktreeRecovery(
     targetPath,
     recoveredBranch,
     deps.pathExists,
+    deps.pathPresence,
   );
   const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
   const routingReportsTargetPath =
@@ -3069,6 +3090,7 @@ export function runLocalWorktreeRecovery(
               targetPath,
               recoveredBranch,
               deps.pathExists,
+              deps.pathPresence,
             );
       // The occupancy helper deliberately reports a matching prunable record
       // whose path is absent as `unreadable`, because its general callers do
@@ -3910,6 +3932,7 @@ export function runLocalWorktreeRecovery(
           targetPath,
           recoveredBranch,
           deps.pathExists,
+          deps.pathPresence,
         ).eligible
       ) {
         return recordRemovalFailure(
@@ -3926,6 +3949,7 @@ export function runLocalWorktreeRecovery(
                 targetPath,
                 recoveredBranch,
                 deps.pathExists,
+                deps.pathPresence,
               );
         const confirmation = deps.confirmBlock(cwd);
         const routing = confirmation.routing;
@@ -4838,6 +4862,7 @@ function createProductionDeps(
         cwd,
       ),
     pathExists: pathExistsOnDisk,
+    pathPresence: pathPresenceOnDisk,
     readDirectoryIdentity,
     realpathOrNull,
     readlinkOrNull,

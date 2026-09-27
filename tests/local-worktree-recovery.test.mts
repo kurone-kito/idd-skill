@@ -39,6 +39,7 @@ import {
   type LocalGitCommandResult,
   type LocalWorktreeRecoveryDeps,
   normalizeGitWorktreePathForComparison,
+  type PathPresence,
   parseArgs,
   resolveDevelopmentBranchProduction,
   resolveEffectiveRealpath,
@@ -471,6 +472,27 @@ test('evaluatePrunableShortcut fails closed when the requested branch is unknown
     evaluatePrunableShortcut([record], '/gone', null, () => false).eligible,
     false,
   );
+});
+
+test('evaluatePrunableShortcut fails closed when the target path is unreadable', () => {
+  const record = {
+    path: '/restricted/gone',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const presence: PathPresence = 'unknown';
+  const verdict = evaluatePrunableShortcut(
+    [record],
+    record.path,
+    'issue/1-task',
+    () => false,
+    () => presence,
+  );
+  assert.equal(verdict.eligible, false);
+  assert.match(verdict.reason, /unknown/);
 });
 
 test('normalizes Git forward-slash worktree paths only for Windows comparisons', () => {
