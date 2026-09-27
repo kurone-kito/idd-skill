@@ -282,7 +282,12 @@ run `verify-import-mirror` against the mirror-only commit made after the
 copy and before placeholder substitution. The upstream path must be the
 clone's `idd-template/` directory: using the repository root compares
 template paths such as `docs/idd-workflow.md` with source-repository paths
-and produces false mismatches.
+and produces false mismatches (observed in
+[kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
+Keep that clone clean and checked out at the exact upstream commit that
+supplied the mirror-only import; the helper reads the current files under
+`--upstream-path`, so a later working tree can produce false mismatches or
+falsely pass matching local edits.
 
 The helper is not an `idd-*` bin. For a source checkout, invoke it directly
 and restrict the check with one `--path-prefix` per imported root or root-level

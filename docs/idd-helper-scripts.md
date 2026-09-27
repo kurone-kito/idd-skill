@@ -1054,6 +1054,11 @@ future inventory reviews do not need to re-infer their role from code.
 
   For an adopter's template import, point `--upstream-path` at the
   checkout's `idd-template/` directory, not at the checkout root. The
+  checkout must be clean and pinned to the exact upstream commit that supplied
+  the mirror-only import. `verify-import-mirror` reads the current files under
+  `--upstream-path`; checking an older import against a later working tree can
+  therefore report false mismatches or falsely pass matching local edits
+  (observed in [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
   target commit must be the mirror-only commit made after copying the
   upstream files and before `--substitute` rewrites placeholders. The
   template core file set also includes the root-level
