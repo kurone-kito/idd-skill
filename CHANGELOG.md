@@ -14,12 +14,90 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-27
+
+Shared helper execution, authoring-time safety checks, and claim,
+discover, review, and recovery hardening since the 0.12.2 cut.
+
 ### Added
 
-- `critiqueLoop.deferByUrgency` opt-in policy key (`off` default,
-  `low`, `low-and-medium`) adds an independent E4/E5 "adopt-now
-  urgency" defer trigger, active from round 1, alongside the existing
-  round-count `deferAfterRounds` cutoff (#3222).
+- `critiqueLoop.deferByUrgency` adds an independent E4/E5
+  "adopt-now urgency" defer trigger, active from round 1, alongside
+  the existing round-count `deferAfterRounds` cutoff (#3222, #3306).
+- A shared CLI runner and opt-in JSON error envelope now provide a
+  consistent execution path for helper families including discover,
+  claim, review, merge, marker, provider, and miscellaneous CLIs
+  (#3432, #3442, #3446, #3483).
+- Advisory-wait accepts a configured list of secondary advisory bots,
+  while review settlement remains tied to recognized current-HEAD
+  evidence (#3196, #3380, #3406, #3412, #3422).
+- Onboarding can selectively hold import entries and verify held schema
+  drift; verify-import-mirror checks whether a vendoring commit is a
+  pure upstream mirror and preserves list nesting during reflow
+  (#3224, #3225, #3417, #3455).
+- Review tooling gains a Copilot review-wave/severity audit, and review
+  triage gains the opt-in low/medium adopt-now urgency defer path
+  (#3245, #3306).
+- Authoring and audit tooling can run A4/A4.5 triage before publication,
+  enforce a shared dependency grammar, enumerate set members, and
+  reject malformed `Blocked by` declarations (#3383, #3431, #3474).
+- Force-handoff and out-of-loop workflows gain explicit successor/release
+  and authorization markers, while protocol helpers centralize PR-loop
+  and IDD-comment classification (#3197, #3421, #3437, #3452).
+- Audit tooling detects lite safety-gate drift and production exports
+  covered only by their own test file (#3428, #3487).
+
+### Changed
+
+- Helper execution now has explicit package-manager and vendored-Node
+  behavior, clearer unsupported-runtime failures, and bounded error
+  output; the migration is covered by platform-aware helper tests
+  (#3303, #3305, #3432, #3457, #3460, #3461).
+- Advisory-wait settlement uses current-HEAD observation, recognized
+  completion evidence, secondary-bot quiet-window details, and bounded
+  recovery paths for the current CI state (#3200, #3220, #3404, #3422,
+  #3490, #3491, #3515).
+- Onboarding, lite instructions, issue-authoring, resume, review, merge,
+  and CI documentation now describe the corresponding recovery and
+  parity rules, including local-worktree recovery and the tool's own
+  execution timeout (#3210, #3234, #3242, #3348, #3354, #3356, #3456,
+  #3458, #3475, #3505, #3511, #3512, #3513, #3516, #3517).
+- Safety evidence is more explicitly tied to trusted actors, unedited
+  marker comments, current claims, and actual workflow/check identity;
+  generated helper mirrors and lite bundles are checked for structural
+  parity (#3333, #3355, #3363, #3365, #3367, #3369, #3370, #3397,
+  #3403, #3428, #3438, #3440, #3447, #3518, #3519).
+- D3.5 scripted rebase recovery now guards abbreviated todo commands
+  and `rebase.updateRefs`, verifies rewritten messages, and records a
+  hold before D4 if a stray close remains (#3555).
+
+### Fixed
+
+- Claim, worktree, resume, and merge recovery now reject primary or
+  detached-worktree collisions, stale or edited ownership evidence,
+  unsafe claim-lock races, and incomplete F4 cleanup instead of
+  silently continuing (#3206, #3358, #3371, #3375, #3376, #3395,
+  #3396, #3401, #3411, #3444, #3469, #3471, #3502, #3509, #3514,
+  #3523).
+- Discover and roadmap audit now agree on dependency parsing, masking,
+  parked-issue eligibility, roadmap identity, nested-roadmap state, and
+  cross-repository references (#3357, #3362, #3378, #3379, #3393,
+  #3399, #3413, #3415, #3423, #3524).
+- Review and advisory gates now classify inline and thread-less findings,
+  rate-limit and no-find notices, external primary bots, waiver
+  membership, and rerun/refresh recovery without treating non-review
+  activity as coverage (#3199, #3200, #3304, #3381, #3390, #3407,
+  #3416, #3420, #3430, #3438, #3453, #3467, #3470, #3476, #3477,
+  #3493, #3504, #3510, #3515, #3525).
+- Authoring, suitability, viability, and audit checks now fail closed on
+  empty child candidate files, unsupported dependency spellings,
+  misleading security vocabulary, fixture-boundary false positives,
+  and configured needs-decision semantics (#3198, #3305, #3349,
+  #3384, #3424, #3487, #3498, #3528, #3529, #3544, #3548).
+- Windows, GHES, generated-source, and documentation validation paths
+  are more reliable, including CommonMark fence handling,
+  generated-from banners, template-link audits, and CI timeout evidence
+  (#3204, #3232, #3236, #3303, #3352, #3356, #3424, #3477, #3481).
 
 ## [0.12.2] - 2026-09-22
 
