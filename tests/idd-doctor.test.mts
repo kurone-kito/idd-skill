@@ -437,7 +437,7 @@ test('roadmap-identity consistency: matches the configured label name case-insen
   );
 });
 
-test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName from the canonical config (idd-skill#2028)', () => {
+test('resolveAutopilotSuitabilityPolicy reads canonical labels and feeds live suitability checks (idd-skill#2028)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-suitability-policy-'));
   try {
     mkdirSync(join(dir, '.github/idd'), { recursive: true });
@@ -445,14 +445,35 @@ test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName 
       join(dir, '.github/idd/config.json'),
       JSON.stringify({
         autopilotSuitability: { floor: 3 },
-        labels: { blockedByHumanLabelName: 'status:human-only' },
+        labels: {
+          blockedByHumanLabelName: 'status:human-only',
+          needsDecisionLabelName: 'triage:decision-needed',
+        },
       }),
     );
-    assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
+    const policy = resolveAutopilotSuitabilityPolicy(dir);
+    assert.deepEqual(policy, {
       floor: 3,
       blockedByHumanLabelName: 'status:human-only',
-      needsDecisionLabelName: undefined,
+      needsDecisionLabelName: 'triage:decision-needed',
     });
+
+    const { warnings } = evaluateAutopilotSuitabilityConsistency(
+      [
+        {
+          number: 3543,
+          body: `decision\n${ap(1)}\n<!-- custom-authoring-bucket: needs-decision -->`,
+          labels: ['triage:decision-needed'],
+        },
+      ],
+      {
+        floor: policy.floor,
+        markerPrefix: 'custom',
+        blockedByHumanLabelName: policy.blockedByHumanLabelName,
+        needsDecisionLabelName: policy.needsDecisionLabelName,
+      },
+    );
+    assert.deepEqual(warnings, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
