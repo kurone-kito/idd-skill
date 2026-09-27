@@ -3977,6 +3977,20 @@ test('checkHeldSchemaDrift detects recursive scans of a parent directory', () =>
   ]);
 });
 
+test('checkHeldSchemaDrift treats recursive scans of the repository root as broad', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync('.', { recursive: true });\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores recursive option text inside strings', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4604,6 +4618,24 @@ test('checkHeldSchemaDrift excludes dotfiles from negative extglobs', () => {
   });
   writeDriftManifest(targetRoot, {
     'fixtures/.hidden.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift excludes dotfiles from negative extglobs with dot alternatives', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/!(.foo).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/.bar.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/.bar.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {

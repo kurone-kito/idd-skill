@@ -3125,34 +3125,6 @@ function splitGlobAlternatives(text: string, separator: string): string[] {
   return alternatives;
 }
 
-function globPatternExplicitlyMatchesLeadingDot(pattern: string): boolean {
-  if (pattern.startsWith('.')) {
-    return true;
-  }
-  if (pattern.startsWith('[')) {
-    const closing = pattern.indexOf(']', 1);
-    if (closing !== -1) {
-      const characterClass = pattern.slice(1, closing);
-      return !characterClass.startsWith('!') && characterClass.includes('.');
-    }
-  }
-  if (/[+@!?*{]/u.test(pattern[0] ?? '')) {
-    const opening = pattern[0] === '{' ? '{' : '(';
-    const closing = opening === '{' ? '}' : ')';
-    const groupStart = opening === '{' ? 0 : 1;
-    const groupEnd = findGlobGroupEnd(pattern, groupStart, opening, closing);
-    if (groupEnd !== -1) {
-      return splitGlobAlternatives(
-        pattern.slice(groupStart + 1, groupEnd),
-        opening === '{' ? ',' : '|',
-      ).some((alternative) =>
-        globPatternExplicitlyMatchesLeadingDot(alternative),
-      );
-    }
-  }
-  return false;
-}
-
 function expandGlobRange(text: string): string[] | null {
   const numeric =
     /^(?<start>-?\d+)\.\.(?<end>-?\d+)(?:\.\.(?<step>-?\d+))?$/u.exec(text);
@@ -3247,18 +3219,12 @@ function globPatternToRegex(
         )
         .join('|');
       if (character === '!') {
-        const explicitlyMatchesDot = splitGlobAlternatives(
-          pattern.slice(index + 2, closing),
-          '|',
-        ).some((alternative) =>
-          globPatternExplicitlyMatchesLeadingDot(alternative),
-        );
         const slash = trailingPattern.indexOf('/');
         const suffix = trailingPattern.slice(
           0,
           slash === -1 ? trailingPattern.length : slash,
         );
-        expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
+        expression += `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
       } else {
         const quantifier = character === '@' ? '' : character;
         expression += `(?:${inner})${quantifier}`;
@@ -3463,7 +3429,8 @@ function moduleScansManifestDirectory(
           (globPatternMatchesPath(candidate, normalizedTargetPath) ||
             (!isGlobPattern(candidate) &&
               (recursive
-                ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
+                ? candidate === '' ||
+                  new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
                     normalizedTargetPath,
                   )
                 : readsDirectoryEntries && candidate === normalizedDirectory))),
