@@ -38,6 +38,7 @@ import {
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
+  matchTrustedAdvisoryStickyDispositions,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -71,6 +72,14 @@ function commentTimestamp(node) {
     node.created_at ??
     null
   );
+}
+function commentIdentifier(node, inputIndex) {
+  const explicit = String(node.id ?? '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  const url = String(node.url ?? node.html_url ?? '');
+  return /#issuecomment-(\d+)$/.exec(url)?.[1] ?? `sweep-comment-${inputIndex}`;
 }
 function excerpt(body, max = 160) {
   const flat = String(body ?? '')
@@ -215,6 +224,7 @@ export function buildMergedPrFeedbackSweep(prs, options) {
       isIdd,
       isAdvisoryBot,
       isConfiguredAdvisoryBotIdentity,
+      options.advisoryBotLogins,
       primaryBotLogin,
       trustedMarkerLoginsForAck,
       iddAgentLoginsForBookkeeping,
@@ -314,10 +324,34 @@ function collectUnaddressedComments(
   isIdd,
   isAdvisoryBot,
   isConfiguredAdvisoryBotIdentity,
+  advisoryBotLogins,
   primaryBotLogin,
   trustedMarkerLoginsForAck,
   iddAgentLoginsForBookkeeping,
 ) {
+  const normalizedComments = comments.map((comment, inputIndex) => ({
+    id: commentIdentifier(comment, inputIndex),
+    authorLogin: authorLogin(comment),
+    body: String(comment.body ?? ''),
+    activityAt: commentTimestamp(comment) ?? '',
+    sortedIndex: inputIndex,
+    lastEditedAt: comment.lastEditedAt,
+  }));
+  const matchedDispositionIndexes = new Set();
+  const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
+    normalizedComments,
+    new Set(advisoryBotLogins.map((login) => login.toLowerCase())),
+    new Set(trustedMarkerLoginsForAck),
+    new Set(iddAgentLoginsForBookkeeping),
+    null,
+    {
+      allowIddAgentNoticeDisposition: true,
+      requireUneditedNotice: true,
+      requireConfiguredAdvisoryBotLogin: true,
+      requireNoticeSourceCommentId: true,
+      matchedDispositionIndexes,
+    },
+  );
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
   // exists — markers and plain replies do not address feedback. IDD
@@ -373,7 +407,7 @@ function collectUnaddressedComments(
     latestPrimaryClause?.satisfied === true &&
     latestPrimaryClause.bodyShape !== null &&
     latestPrimaryClause.bodyShape !== 'unrecognized';
-  for (const comment of comments) {
+  for (const [commentIndex, comment] of comments.entries()) {
     const author = authorLogin(comment);
     // Only IDD-agent comments are excluded by author (their dispositions are
     // folded into `latestDispositionAt`); a non-IDD reviewer who opens a
@@ -424,6 +458,12 @@ function collectUnaddressedComments(
       isConfiguredAdvisoryBotIdentity(author) &&
       isReviewSummaryComment(comment.body) &&
       !isAdvisoryNonReviewNotice(comment.body)
+    ) {
+      continue;
+    }
+    if (
+      dispositionedStickyIndexes.has(commentIndex) ||
+      matchedDispositionIndexes.has(commentIndex)
     ) {
       continue;
     }
@@ -678,6 +718,7 @@ function fetchMergedPr(port, number) {
     mergeCommit: meta.mergeCommitOid,
     headRefOid: meta.headRefOid,
     comments: port.listChangeRequestGraphqlComments(number).map((comment) => ({
+      id: /#issuecomment-(\d+)$/.exec(comment.url)?.[1] ?? null,
       body: comment.body,
       url: comment.url,
       createdAt: comment.createdAt,
