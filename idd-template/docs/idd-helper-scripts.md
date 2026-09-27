@@ -3425,9 +3425,10 @@ still fails closed:
     observed incident yet.
   - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
     (`clone-lock.mts`) directly — in-process, not the manual
-    `clone-lock.mjs --exec -- bash -c '...'` wrapper the procedure
-    otherwise requires — to wrap a fresh re-check (re-running step 1's two
-    checks, including the prunable shortcut's own eligibility), a
+    `clone-lock.mjs --exec -- bash -c '...'` wrapper the instructions-only
+    procedure requires — and acquires the lock before step-3 preservation,
+    holding it through the fresh re-check (re-running step 1's two checks,
+    including the prunable shortcut's own eligibility), a
     comparison of the rechecked claim identity (claim-id and branch)
     against the one step 1 actually recovered, and a fresh re-verification
     of every step-3 preservation artifact (stash entries, backup refs,

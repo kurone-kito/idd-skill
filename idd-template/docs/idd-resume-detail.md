@@ -454,6 +454,18 @@ the helper's dry-run output doesn't make self-explanatory.
    or `rebase-apply/orig-head` (whichever the detection above matched)
    instead.
 
+   Before the first step-3 mutation, acquire the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
+   shared primary clone and keep it held through all preservation and step-4
+   removal commands. In a helper-enabled profile, the
+   `local-worktree-recovery` helper does this in-process. In an
+   `instructions-only` profile, wrap the step-3 and step-4 command sequence
+   in the profile-selected `clone-lock --exec -- ...` form; do not release the
+   lock between preservation and removal. This prevents a stale same-claim
+   session from reacquiring its worktree lock while preservation is still in
+   progress (Codex review, PR `#3550`, comment `#4116882321`). Stop if the
+   clone-scoped lock cannot be acquired.
+
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
    unpushed work is otherwise invisible here
@@ -513,19 +525,17 @@ the helper's dry-run output doesn't make self-explanatory.
    change has nothing to stash: `stash push` reports no local changes
    to save and creates no new entry, so step 4 skips the stash check
    for it.
-4. **Remove.** Acquire the
-   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) before
-   either branch's fresh claim/lock re-check, and hold it through that
-   re-check and the mutation that follows — the checkout on the
+4. **Remove.** Keep the clone-scoped lock acquired before step 3 held through
+   either branch's fresh claim/lock re-check and the mutation that follows —
+   the checkout on the
    primary-worktree branch, or `git worktree remove` on the ordinary
-   linked-worktree branch. Do not re-check and then wait to acquire
-   the lock: a concurrent session can acquire or replace
-   `idd-claim.lock` during that wait, so a re-check that already
-   passed before the lock is held is stale. The lock serializes
+   linked-worktree branch. Do not release the lock after preservation and
+   reacquire it here: a concurrent session can acquire or replace
+   `idd-claim.lock` during that gap, so the preserved snapshot would be
+   stale. The lock serializes
    `worktree add`/`remove` and `fetch` against the shared primary
-   clone (`src/scripts/clone-lock.mts`'s own documented scope). Step
-   3's stash, update-ref, and copy operations never touch that
-   topology, so nothing before this step needs the lock.
+   clone (`src/scripts/clone-lock.mts`'s own documented scope), while also
+   keeping the preservation and removal sequence one exclusion window.
 
    While that lock is already held — not step 1's earlier read —
    re-run the confirm-the-block check, using the same
