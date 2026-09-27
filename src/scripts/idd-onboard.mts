@@ -2688,9 +2688,7 @@ function isBlockClosingBrace(text: string, index: number): boolean {
       if (depth === 0) {
         const openingPrefix = text.slice(0, current);
         return (
-          /(?:^|[;}])\s*(?:else(?:\s+if\b[\s\S]*)?|do|try|finally)\s*$/u.test(
-            openingPrefix,
-          ) ||
+          /(?:^|[;}])\s*(?:else|do|try|finally)\s*$/u.test(openingPrefix) ||
           /(?:\)\s*$|=>\s*$)/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
           /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
@@ -3026,7 +3024,10 @@ function findDirectoryScanCalls(
           const character = normalizedText[openIndex] ?? '';
           if (character === '<') {
             angleDepth += 1;
-          } else if (character === '>') {
+          } else if (
+            character === '>' &&
+            normalizedText[openIndex - 1] !== '='
+          ) {
             angleDepth -= 1;
             if (angleDepth === 0) {
               openIndex += 1;
@@ -3764,6 +3765,7 @@ function moduleScansManifestDirectory(
                 normalizedTargetPath.startsWith(`${exclusion}/`)),
           ) &&
           (globPatternMatchesPath(candidate, normalizedTargetPath) ||
+            candidate === normalizedTargetPath ||
             (!isGlobPattern(candidate) &&
               (recursive
                 ? candidate === '' ||
@@ -3871,7 +3873,53 @@ function isUnbornGitHead(targetRoot: string): boolean {
       typeof error === 'object' && error !== null && 'status' in error
         ? error.status
         : undefined;
-    return status === 1;
+    if (status !== 1) {
+      return false;
+    }
+    let refPath: string;
+    try {
+      refPath = execFileSync(
+        'git',
+        ['-C', targetRoot, 'rev-parse', '--git-path', headRef],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      ).trim();
+    } catch {
+      return false;
+    }
+    const resolvedRefPath = isAbsolute(refPath)
+      ? refPath
+      : resolve(targetRoot, refPath);
+    if (existsSync(resolvedRefPath)) {
+      return false;
+    }
+    let packedRefsPath: string;
+    try {
+      packedRefsPath = execFileSync(
+        'git',
+        ['-C', targetRoot, 'rev-parse', '--git-path', 'packed-refs'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      ).trim();
+    } catch {
+      return true;
+    }
+    const resolvedPackedRefsPath = isAbsolute(packedRefsPath)
+      ? packedRefsPath
+      : resolve(targetRoot, packedRefsPath);
+    try {
+      return !readFileSync(resolvedPackedRefsPath, 'utf8')
+        .split(/\r?\n/u)
+        .some((line) => line.endsWith(` ${headRef}`));
+    } catch {
+      return true;
+    }
   }
 }
 

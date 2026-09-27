@@ -4089,6 +4089,21 @@ test('checkHeldSchemaDrift keeps scans visible after an object literal', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift keeps scans visible after an else-if block', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "if (ok) {} else if (later) {}; const ratio = {} / readdirSync('schemas').length / divisor;\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after class declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4577,6 +4592,20 @@ test('checkHeldSchemaDrift detects generic scan calls', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift detects generic scan calls with function types', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "scanDirectory<(value: string) => string>('schemas');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift decodes JavaScript path escapes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4595,6 +4624,29 @@ test('checkHeldSchemaDrift decodes JavaScript path escapes', () => {
   assert.deepEqual(result.findings, [
     {
       schemaOrFixturePath: 'schemas/widget.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
+test('checkHeldSchemaDrift matches decoded literal glob candidates', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/\\x77idget.schema.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.schema.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.schema.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/widget.schema.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
