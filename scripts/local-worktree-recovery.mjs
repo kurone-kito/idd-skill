@@ -505,42 +505,25 @@ function resolveDeinitializedSubmoduleGitDir(
       path.split(/[\\/]/g).filter(Boolean).join('/'),
     ),
   );
-  const candidates = [];
-  const collectCandidates = (index, parts, boundaries) => {
-    if (index === segments.length) {
-      const initializedBoundaryCount = boundaries.filter((boundary) =>
-        initialized.has(segments.slice(0, boundary).join('/')),
-      ).length;
-      candidates.push({
-        path: join(targetGitDir, ...parts),
-        initializedBoundaryCount,
-        boundaryCount: boundaries.length,
-      });
-      return;
-    }
+  // Git nests a child submodule's admin directory below the `modules/`
+  // directory of each initialized ancestor. Build that one layout directly
+  // from the known initialized boundaries, plus the plain layout as a
+  // compatibility fallback. The former recursive enumeration considered
+  // every possible `modules/` insertion and grew as 2^(N-1) candidates for a
+  // path with N components (Copilot review #4116253158).
+  const canonicalParts = ['modules'];
+  for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
-    if (index === 0) {
-      collectCandidates(index + 1, ['modules', segment], boundaries);
-      return;
+    canonicalParts.push(segment);
+    const prefix = segments.slice(0, index + 1).join('/');
+    if (index < segments.length - 1 && initialized.has(prefix)) {
+      canonicalParts.push('modules');
     }
-    collectCandidates(index + 1, [...parts, segment], boundaries);
-    collectCandidates(
-      index + 1,
-      [...parts, 'modules', segment],
-      [...boundaries, index],
-    );
-  };
-  collectCandidates(0, [], []);
-  candidates.sort(
-    (left, right) =>
-      right.initializedBoundaryCount - left.initializedBoundaryCount ||
-      left.boundaryCount - right.boundaryCount,
-  );
-  return (
-    candidates.find((candidate) => pathExists(candidate.path))?.path ??
-    candidates[0]?.path ??
-    null
-  );
+  }
+  const canonical = join(targetGitDir, ...canonicalParts);
+  const plain = join(targetGitDir, 'modules', ...segments);
+  const candidates = canonical === plain ? [canonical] : [canonical, plain];
+  return candidates.find(pathExists) ?? canonical;
 }
 /** True when `git status --porcelain --ignored --untracked-files=normal`
  * reports at least one tracked/untracked change (any line not prefixed
@@ -2298,6 +2281,15 @@ export function runLocalWorktreeRecovery(args, deps) {
     verdict.result =
       'refusing: --operator-confirmed-no-live-session was not given (step 2 is never checked mechanically); no mutation';
     return verdict;
+  }
+  // Regular-file preservation uses an atomic no-follow source/temp open.
+  // Node does not expose that primitive on every platform (notably
+  // Windows), so reject apply before any stash, ref, or copy mutation rather
+  // than discovering the limitation after partial preservation.
+  if (constants.O_NOFOLLOW === undefined) {
+    return recordRemovalFailure(
+      'refusing --apply: this platform does not support the no-follow file opens required for recovery copies; no mutation',
+    );
   }
   // Capture the target checkout and its private git-admin directory before
   // step 3 waits for the clone-scoped lock. A concurrent recovery can remove
