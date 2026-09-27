@@ -549,16 +549,19 @@ Ask these checks:
    asserting a file needs no placeholder substitution as an unverified
    default (observed 2026-08-12/13 on an adopter repository,
    `setup.ubuntu`, kurone-kito/idd-skill#2012).
-6. When a draft proposes changes to `.github/instructions/` files or
-   their `idd-template/` sources, first resolve the target repository's
-   own bundle-budget policy. If it defines the affected bundle's
-   `bundleBudgets.limitBytes` and `contextCeiling.maxUtilizationPct`,
-   compare the measured, banner-stripped total with the configured limit
-   and apply the context ceiling as a separate constraint before claiming
-   byte-budget headroom. Also check the context ceiling's absolute
-   `maxBundleLimitBytes` and `exemptBundles` rules where they are defined;
-   utilization alone is not sufficient. If the target repository does not
-   define these source-repository-only settings, do not apply this
+6. When a draft proposes changes to files listed in the target repository's
+   configured `bundleBudgets` entries — including `.github/instructions/`
+   files, their `idd-template/` sources, and onboarding documents — first
+   resolve that repository's own bundle-budget policy. For every configured
+   bundle containing a changed file, compare its measured,
+   banner-stripped total with its `bundleBudgets.limitBytes` and apply the
+   `contextCeiling.maxUtilizationPct` constraint before claiming byte-budget
+   headroom. Also check the context ceiling's absolute
+   `maxBundleLimitBytes` and honor its `exemptBundles` rules where they are
+   defined; utilization alone is not sufficient. Record each bundle's
+   measured total, configured limit, utilization, applicable ceiling, and
+   pass/fail result in the draft's headroom claim. If the target repository
+   does not define these source-repository-only settings, do not apply this
    repository's values: use the target's own declared budget checks when
    available, or state that no repository-configured byte/context ceiling
    was found instead of claiming headroom. Use the
