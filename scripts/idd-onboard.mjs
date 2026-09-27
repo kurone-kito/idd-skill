@@ -2167,7 +2167,7 @@ function isRegexLiteralStart(text, index) {
   if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
     return true;
   }
-  return /\b(?:return|case|throw|else|do|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
+  return /\b(?:return|case|throw|else|do|break|continue|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
     text.slice(0, previousIndex + 1),
   );
 }
@@ -2532,6 +2532,9 @@ function usesModuleRelativePathExpression(text) {
     text.includes('import.meta.dirname') || text.includes('import.meta.url')
   );
 }
+function isBareModuleDirectoryExpression(text) {
+  return /^import\.meta\.dirname(?:\s*\})?$/u.test(text.trim());
+}
 function isGlobPattern(text) {
   return /[?*[\]{}]|[+@!]\(/u.test(text);
 }
@@ -2857,11 +2860,18 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
       const cwdExpression = firstCallArgument(
         argumentsText.slice(cwd.index + cwd[0].length),
       );
-      if (/^undefined(?:\s*\})?$/u.test(cwdExpression.trim())) {
-        return [''];
+      if (
+        /^(?:undefined|import\.meta\.dirname)(?:\s*\})?$/u.test(
+          cwdExpression.trim(),
+        )
+      ) {
+        return isBareModuleDirectoryExpression(cwdExpression)
+          ? [modulePath === undefined ? '' : dirname(modulePath)]
+          : [''];
       }
       return pathExpressionCandidates(cwdExpression).map((candidate) =>
-        usesModuleRelativePathExpression(cwdExpression)
+        usesModuleRelativePathExpression(cwdExpression) &&
+        !isBareModuleDirectoryExpression(cwdExpression)
           ? resolveModuleRelativeScanPath(candidate, modulePath)
           : candidate,
       );

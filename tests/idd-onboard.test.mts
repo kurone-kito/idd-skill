@@ -4016,6 +4016,26 @@ test('checkHeldSchemaDrift ignores regex literals after standalone blocks', () =
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after break and continue', () => {
+  for (const keyword of ['break', 'continue']) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `while (ok) { ${keyword}\n/readdirSync('schemas')/.test(text); }\n`;
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, []);
+  }
+});
+
 test('checkHeldSchemaDrift ignores regex literals after class declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4310,6 +4330,30 @@ test('checkHeldSchemaDrift treats an undefined glob cwd as the target root', () 
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('schemas/*.json', { cwd: undefined });\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/widget.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
+test('checkHeldSchemaDrift resolves a bare module-relative glob cwd', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('../../schemas/*.json', { cwd: import.meta.dirname });\n";
   writeDriftManifest(sourceRoot, {
     'schemas/widget.json': '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
