@@ -5,6 +5,7 @@ import {
   consumeDependencyContinuationRefLines,
   consumeDependencyReferenceList,
   extractDependencyReferences,
+  matchDependencyKeywordLine,
   normalizeDependencyRepoRef,
 } from '../src/scripts/dependency-grammar.mts';
 import { extractBlockedByReferences } from '../src/scripts/discover-orphan-filter.mts';
@@ -170,6 +171,32 @@ test('extractDependencyReferences: "Depends on" uses the same grammar', () => {
   );
 });
 
+test("extractDependencyReferences: a same-repo qualified reference with an invalid number still reports unresolvable, preserving Discover's fail-safe block (final review round, Copilot regression catch)", () => {
+  // Direct regression guard at the entry point discover-readiness-check.mts
+  // and discover-orphan-filter.mts actually call: `unresolvable` must
+  // still surface this token so those consumers keep treating the issue
+  // as blocked/non-orphan, not silently reading it as having no
+  // dependency at all.
+  assert.deepEqual(
+    extractDependencyReferences(
+      'Blocked by kurone-kito/idd-skill#0',
+      'Blocked by',
+      {
+        currentRepo: CURRENT_REPO,
+      },
+    ),
+    {
+      numbers: [],
+      unresolvable: [
+        {
+          token: 'kurone-kito/idd-skill#0',
+          reason: 'cross_repository_reference',
+        },
+      ],
+    },
+  );
+});
+
 // Lower-level helpers, exercised directly.
 
 test('consumeDependencyReferenceList stops at the first non-token, non-separator text', () => {
@@ -177,6 +204,8 @@ test('consumeDependencyReferenceList stops at the first non-token, non-separator
     numbers: [10],
     unresolvable: [],
     remaining: '(see other/repo#20)',
+    consumedTokenEnd: 3,
+    invalidTokens: [],
   });
 });
 
@@ -190,6 +219,8 @@ test('consumeDependencyReferenceList reports a qualified token unresolvable when
       },
     ],
     remaining: '',
+    consumedTokenEnd: 24,
+    invalidTokens: [],
   });
 });
 
@@ -199,7 +230,13 @@ test('consumeDependencyReferenceList resolves a full GitHub issue URL for the cu
       'https://github.com/kurone-kito/idd-skill/issues/42',
       { currentRepo: CURRENT_REPO },
     ),
-    { numbers: [42], unresolvable: [], remaining: '' },
+    {
+      numbers: [42],
+      unresolvable: [],
+      remaining: '',
+      consumedTokenEnd: 50,
+      invalidTokens: [],
+    },
   );
 });
 
@@ -208,6 +245,9 @@ test('consumeDependencyContinuationRefLines stops at a blank line', () => {
   assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
     numbers: [2, 3],
     unresolvable: [],
+    invalidTokens: [],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [],
   });
 });
 
@@ -272,4 +312,243 @@ test('#3284 review fix: trailing prose on the keyword line suppresses the contin
     extractDependencyReferences('Blocked by #10.\n#20', 'Blocked by'),
     { numbers: [10], unresolvable: [] },
   );
+});
+
+// --- matchDependencyKeywordLine (#3285) ---
+
+test('matchDependencyKeywordLine returns numbers plus the same-line unconsumed remaining text', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(
+      ['Blocked by #12. Depends on #13'],
+      0,
+      'Blocked by',
+    ),
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '. Depends on #13',
+      invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [],
+    },
+  );
+});
+
+test('matchDependencyKeywordLine returns an empty remaining string when the reference list consumes the rest of the line', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by #12'], 0, 'Blocked by'),
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '',
+      invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [],
+    },
+  );
+});
+
+test('matchDependencyKeywordLine returns undefined for a malformed token with no word boundary after the digits (#3285 E2 review, Copilot: "Blocked by #12foo")', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['Blocked by #12foo'], 0, 'Blocked by'),
+    undefined,
+  );
+});
+
+test('matchDependencyKeywordLine returns undefined for a non-positive issue number (#3285 E2 review, Copilot: "Blocked by #0")', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['Blocked by #0'], 0, 'Blocked by'),
+    undefined,
+  );
+});
+
+test('matchDependencyKeywordLine still returns a defined result for a cross-repository token even though it resolves zero local numbers', () => {
+  // An unresolvable (cross-repository) token is a genuine, meaningful
+  // outcome distinct from "nothing was extracted at all" -- the
+  // numbers.length === 0 && unresolvable.length === 0 guard must not
+  // also suppress this case.
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by other/repo#5'], 0, 'Blocked by', {
+      currentRepo: 'kurone-kito/idd-skill',
+    }),
+    {
+      numbers: [],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+      remaining: '',
+      invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [0],
+      invalidTokenLineIndexes: [],
+    },
+  );
+});
+
+test('consumeDependencyReferenceList records an invalid bare token without dropping the valid ones around it (#3285 final review round, Copilot: "#0, #12")', () => {
+  assert.deepEqual(consumeDependencyReferenceList('#0, #12'), {
+    numbers: [12],
+    unresolvable: [],
+    remaining: '',
+    consumedTokenEnd: 7,
+    invalidTokens: ['#0'],
+  });
+});
+
+test('consumeDependencyReferenceList validates a qualified token\'s number ADDITIVELY (final review round, Copilot: "kurone-kito/idd-skill#0" -- a regression caught only after landing)', () => {
+  // A non-positive number on an otherwise same-repo-matching qualified
+  // token lands in invalidTokens (for the audit-time linter's precise
+  // reporting) WITHOUT being removed from unresolvable: Discover's own
+  // readiness-check/orphan-filter consumers read unresolvable directly
+  // to add a real blocking reason for any reference they cannot confirm
+  // resolves locally, and never read invalidTokens -- an earlier version
+  // of this fix routed the token to invalidTokens INSTEAD of
+  // unresolvable, silently dropping Discover's own fail-safe block for
+  // it (a genuine regression, caught by a fresh Copilot review round
+  // after this branch had already pushed the first version of this fix).
+  assert.deepEqual(
+    consumeDependencyReferenceList('kurone-kito/idd-skill#0', {
+      currentRepo: CURRENT_REPO,
+    }),
+    {
+      numbers: [],
+      unresolvable: [
+        {
+          token: 'kurone-kito/idd-skill#0',
+          reason: 'cross_repository_reference',
+        },
+      ],
+      remaining: '',
+      consumedTokenEnd: 23,
+      invalidTokens: ['kurone-kito/idd-skill#0'],
+    },
+  );
+});
+
+test("consumeDependencyReferenceList validates a URL token's number ADDITIVELY, same as a qualified token", () => {
+  assert.deepEqual(
+    consumeDependencyReferenceList(
+      'https://github.com/kurone-kito/idd-skill/issues/0',
+      { currentRepo: CURRENT_REPO },
+    ),
+    {
+      numbers: [],
+      unresolvable: [
+        {
+          token: 'https://github.com/kurone-kito/idd-skill/issues/0',
+          reason: 'cross_repository_reference',
+        },
+      ],
+      remaining: '',
+      consumedTokenEnd: 49,
+      invalidTokens: ['https://github.com/kurone-kito/idd-skill/issues/0'],
+    },
+  );
+});
+
+test('consumeDependencyReferenceList still treats a valid qualified cross-repo token as unresolvable, not invalid', () => {
+  assert.deepEqual(
+    consumeDependencyReferenceList('other/repo#5', {
+      currentRepo: CURRENT_REPO,
+    }),
+    {
+      numbers: [],
+      unresolvable: [
+        { token: 'other/repo#5', reason: 'cross_repository_reference' },
+      ],
+      remaining: '',
+      consumedTokenEnd: 12,
+      invalidTokens: [],
+    },
+  );
+});
+
+test('matchDependencyKeywordLine still returns a defined result with numbers when an invalid token is mixed in, but reports it in invalidTokens', () => {
+  assert.deepEqual(
+    matchDependencyKeywordLine(['Blocked by #0, #12'], 0, 'Blocked by'),
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '',
+      invalidTokens: ['#0'],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [0],
+    },
+  );
+});
+
+test('consumeDependencyContinuationRefLines reports an invalid token on an invalid-only continuation line instead of silently discarding it (final review round, Copilot: "Blocked by #12,\\n#0")', () => {
+  const lines = ['Blocked by #12,', '#0'];
+  assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
+    numbers: [],
+    unresolvable: [],
+    invalidTokens: ['#0'],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [1],
+  });
+});
+
+test('consumeDependencyContinuationRefLines still reports nothing for genuinely unrelated prose (no token-shaped text at all)', () => {
+  const lines = ['Blocked by #12,', 'unrelated text'];
+  assert.deepEqual(consumeDependencyContinuationRefLines(lines, 1), {
+    numbers: [],
+    unresolvable: [],
+    invalidTokens: [],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [],
+  });
+});
+
+test("matchDependencyKeywordLine surfaces an invalid-only continuation line's token via invalidTokens, attributed to its OWN line index (final review round, Copilot)", () => {
+  const result = matchDependencyKeywordLine(
+    ['Blocked by #12,', '#0'],
+    0,
+    'Blocked by',
+  );
+  assert.deepEqual(result, {
+    numbers: [12],
+    unresolvable: [],
+    // The trailing comma on the keyword line itself is same-line
+    // unconsumed text by `consumedTokenEnd`'s own definition (measured
+    // before the trailing separator is stripped) -- unrelated to the
+    // continuation-line fix this test targets, which is that `#0`'s
+    // own invalidTokens entry below is no longer silently dropped.
+    remaining: ',',
+    invalidTokens: ['#0'],
+    matchStart: 0,
+    unresolvableLineIndexes: [],
+    // `#0` is on line index 1 (the swept continuation line), NOT index 0
+    // (the keyword line itself) -- this is the field a caller uses to
+    // report the CORRECT physical line number instead of always citing
+    // the keyword line's own.
+    invalidTokenLineIndexes: [1],
+  });
+});
+
+test('matchDependencyKeywordLine reports a non-zero matchStart for a list-marker prefix', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['- Blocked by #12'], 0, 'Blocked by')
+      ?.matchStart,
+    2,
+  );
+  assert.equal(
+    matchDependencyKeywordLine(['1. Blocked by #12'], 0, 'Blocked by')
+      ?.matchStart,
+    3,
+  );
+});
+
+test('matchDependencyKeywordLine reports a non-zero matchStart for a masked (discover) prefix, recovering a hidden mention preceding it (final review round, Copilot: "<!-- Depends on #13 --> Blocked by #12")', () => {
+  // The discover-masked view blanks the HTML comment to spaces, which
+  // `DEPENDENCY_LINE_PREFIX`'s own leading `[ \t]*` consumes the same
+  // way it would consume genuine indentation -- `matchStart` still
+  // correctly reports how much of the line precedes the literal keyword
+  // text, regardless of whether that prefix was real whitespace or
+  // masked content.
+  const masked = '                        Blocked by #12';
+  const result = matchDependencyKeywordLine([masked], 0, 'Blocked by');
+  assert.equal(result?.matchStart, 24);
 });

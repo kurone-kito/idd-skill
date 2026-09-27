@@ -673,6 +673,31 @@ required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
 footers.
 
+It also emits a **failing** finding, `dependency-line-grammar`: a
+`Blocked by`/`Depends on` mention that the shared line-anchored grammar
+(`dependency-grammar.mjs`, the same grammar every Discover helper uses)
+would never resolve as a real dependency fails the audit outright,
+naming the offending line number. This covers a mid-line mention (the
+keyword appears after other prose, or hidden inside an HTML comment), a
+near-miss line at the otherwise-correct position (an emphasis-wrapped
+keyword, a hyphenated/camelCase spelling such as `Blocked-by` or
+`BlockedBy`, a full-width colon, or a Markdown-link reference instead
+of the three plain forms the grammar accepts), and a cross-repository
+token on an otherwise well-formed line — the last one only when the
+caller supplies `--current-repo` and it does not match, since without
+that context a qualified reference is treated as unverifiable rather
+than malformed (mirroring how the `roadmap-tracks-parse` check below
+already treats an unverifiable qualified reference elsewhere in this
+same file). A real `<!-- <marker-prefix>-blocked-by: ... -->` roadmap
+marker is never mistaken for a near-miss, even when its own value
+happens to look like an issue reference (e.g.
+`<!-- idd-skill-blocked-by: #12 -->` — the extractor behind this
+marker accepts any non-whitespace value, with no format restriction):
+the check masks every well-formed marker of this shape out of its
+near-miss scan before running it, using the same pattern the marker's
+own extractor matches against, so the marker's value is never read as
+the required trailing reference in the first place.
+
 For the `orphan` and `child` shapes, it also runs the same A4 viability
 and A4.5 suitability evaluators the IDD discover phase runs later, at
 claim time (`triage-title-missing`, one `triage-a4-<criterion id>`
@@ -1933,6 +1958,23 @@ line in the body:
 ```md
 Blocked by #123
 ```
+
+The line must open at the start of the line (after optional
+indentation, blockquote `>` markers, and at most one list marker) with
+the literal keyword `Blocked by` or `Depends on`, an optional `:`, and
+the reference itself — a bare `#123`, a qualified `owner/repo#123`, or
+a full GitHub issue URL. A mid-line mention (the keyword appearing
+after other prose, or hidden inside an HTML comment) and a near-miss
+spelling or shape (an emphasis-wrapped keyword, `Blocked-by`/
+`BlockedBy`/`Depends-on`, a full-width colon, or a Markdown-link
+reference instead of one of the three plain forms) are rejected
+unconditionally by the `dependency-line-grammar` mechanical check
+below — none of these produce a dependency Discover can actually
+resolve. A cross-repository token on an otherwise well-formed line is
+rejected only when the linter is given `--current-repo` and it does
+not match; without that context the token is treated as unverifiable,
+not malformed, since Discover's own live run resolves a same-repo
+reference correctly regardless.
 
 ### Sequential roadmap dependency
 
