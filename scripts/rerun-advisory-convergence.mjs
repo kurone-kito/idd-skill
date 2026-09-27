@@ -426,6 +426,15 @@ export function computeRerunPlan(input, options) {
         !isSupersededHistoricalCheckRun(candidate.checkRunId) &&
         candidate.classification !== 'pass',
     );
+  const isCurrentRunAttemptCheckRun = (instance) => {
+    const runStartedAt = parseCompletedAt(instance.runStartedAt);
+    const completedAt = parseCompletedAt(instance.completedAt);
+    return (
+      runStartedAt !== null &&
+      completedAt !== null &&
+      completedAt >= runStartedAt
+    );
+  };
   const qualifiesAsPassedSibling = (sibling, heldRunId, heldCompletedAt) => {
     const siblingRunId = String(sibling.runId ?? '').trim();
     const siblingCompletedAt = parseCompletedAt(sibling.completedAt);
@@ -439,6 +448,7 @@ export function computeRerunPlan(input, options) {
       !sibling.runLookupFailed &&
       typeof sibling.runAttempt === 'number' &&
       PULL_REQUEST_FAMILY_EVENTS.has(siblingRunEvent) &&
+      isCurrentRunAttemptCheckRun(sibling) &&
       siblingCompletedAt !== null &&
       siblingCompletedAt > heldCompletedAt &&
       !hasRemainingNonPassRow(siblingRunId)
@@ -461,7 +471,9 @@ export function computeRerunPlan(input, options) {
         return false;
       }
       const heldCompletedAt = parseCompletedAt(instance.completedAt);
-      if (heldCompletedAt === null) return false;
+      if (heldCompletedAt === null || !isCurrentRunAttemptCheckRun(instance)) {
+        return false;
+      }
       return latestInstancesByRun.some((sibling) =>
         qualifiesAsPassedSibling(sibling, runId, heldCompletedAt),
       );

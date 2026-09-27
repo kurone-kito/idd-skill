@@ -1568,6 +1568,7 @@ function passedSiblingRecoveryPlan(
           conclusion: 'failure',
           runAttempt: 2,
           completedAt: '2026-07-16T11:00:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
           ...heldOverrides,
         }),
         baseInstance({
@@ -1575,6 +1576,7 @@ function passedSiblingRecoveryPlan(
           runId: '8002',
           conclusion: 'success',
           completedAt: '2026-07-16T11:01:00Z',
+          runStartedAt: '2026-07-16T10:59:30Z',
           ...siblingOverrides,
         }),
       ],
@@ -1867,6 +1869,24 @@ test('#3539: rejects a passing sibling whose run metadata lookup failed', () => 
   assert.equal(plan.counts.rerunBudgetHeld, 1);
 });
 
+test('#3539: rejects a passing row from before the sibling run attempt started', () => {
+  const plan = passedSiblingRecoveryPlan({}, {
+    completedAt: '2026-07-16T11:02:00Z',
+    runStartedAt: '2026-07-16T11:03:00Z',
+  });
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+});
+
+test('#3539: rejects a held row from before its latest run attempt started', () => {
+  const plan = passedSiblingRecoveryPlan(
+    { completedAt: '2026-07-16T11:00:00Z', runStartedAt: '2026-07-16T11:01:00Z' },
+    { completedAt: '2026-07-16T11:02:00Z' },
+  );
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+});
+
 test('#2549: excludes a handled refresh candidate from hold totals', () => {
   const plan = computeRerunPlan(
     baseInput({
@@ -1975,6 +1995,7 @@ test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage rec
           runId: '8102',
           conclusion: 'success',
           completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T10:59:30Z',
         }),
         baseInstance({
           checkRunId: 'live-held',
@@ -1982,6 +2003,7 @@ test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage rec
           conclusion: 'failure',
           runAttempt: 2,
           completedAt: '2026-07-16T11:00:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
           verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
         }),
         baseInstance({
@@ -1990,6 +2012,7 @@ test('#3539: applyRerunPlan runs passed-sibling recovery after live-coverage rec
           conclusion: 'failure',
           runAttempt: 2,
           completedAt: '2026-07-16T11:01:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
         }),
       ],
     }),
