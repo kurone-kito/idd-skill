@@ -186,10 +186,10 @@ worktree removal) behind the
    in the plan, and plan only the remaining work.
 7. Draft an issue comment plan for the change set.
 8. For a per-agent plan critique, resolve `critiqueLoop.subagentWaitCeiling`
-   (`PT20M` default) and enforce a harness timeout, not a command wrapper
-   (#3449). Timeout/cancel/interruption/error without findings routes to
-   structured self-critique and records no return; without harness
-   bound/cleanup, record residual risk. Then run the critique pass.
+   (`PT20M` default). If the harness lacks bound/cleanup, skip delegation and
+   use structured self-critique, recording risk. Otherwise enforce a harness
+   timeout, not a wrapper (#3449); timeout/cancel/interruption/error without
+   findings uses self-critique and records no return. Then run the critique.
 9. Post the refined final plan as a follow-up or update to the same issue
    comment.
 10. After the final plan comment, update the live status digest to `B2 planned`,
@@ -290,15 +290,14 @@ ad hoc or improvise worker-side authoring.
 
 #### Delegated critique wait ceiling
 
-Per-agent delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default
-`PT20M`) and enforce a harness timeout, never a command wrapper (#3449). This
-ceiling applies only to each per-agent subagent; it does not change the
-configured `critiqueLoop.delegate` shell-command timeout or failure rules.
-Background wait requires cancellation/cleanup and late-output suppression.
+Per-agent pass: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
+with a harness timeout, not a wrapper (#3449). Only per-agent; shell-delegate
+rules unchanged. Background waits require cleanup and late-output suppression.
 `mode` only decides whether the per-agent pass starts from the configured
 delegate's outcome (see step 5). Once started, timeout/cancel/interruption/error
 without findings routes to structured self-critique and records no delegated
-return. If the harness cannot bound/clean up, record residual risk.
+return. If the harness cannot bound/clean up, skip the per-agent pass, use
+structured self-critique, and record residual risk.
 
 A critique pass asks whether the implementation is correct, whether the issue's
 requirements are satisfied, whether coverage is adequate, and whether any other
