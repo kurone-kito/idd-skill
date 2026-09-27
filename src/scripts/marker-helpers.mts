@@ -2705,16 +2705,18 @@ export function parseAuthoringBucketMarker(
   text: string,
   markerPrefix: string,
 ): AuthoringBucketMarkerDetection {
-  const rawCount = countMarkerOccurrences(
-    text,
-    markerPrefix,
-    'authoring-bucket',
-  );
+  // A backslash-escaped opener renders as literal text in CommonMark, so it
+  // must not turn an issue's documented marker syntax into a live bucket.
+  // Keep this in step with findHtmlCommentRanges's escaped-opener handling.
+  const rawMarker = createMarkerRegex(markerPrefix, 'authoring-bucket');
+  const rawCount = [
+    ...text.matchAll(new RegExp(`(?<!\\\\)${rawMarker.source}`, 'gi')),
+  ].length;
   if (rawCount === 0) {
     return { present: false, value: null, malformed: false };
   }
   const regex = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
+    `(?<!\\\\)<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
   let coherentCount = 0;

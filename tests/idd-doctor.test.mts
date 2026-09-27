@@ -176,6 +176,17 @@ test('autopilot-suitability consistency: malformed buckets retain legacy score c
   assert.ok(warnings.every((warning) => /scored 1/.test(warning)));
 });
 
+// Copilot review (PR #3548): escaped marker examples are literal prose, not
+// live authoring-bucket declarations.
+test('autopilot-suitability consistency: ignores escaped authoring-bucket examples', () => {
+  const body = `legacy\n${ap(1)}\n\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 44, body, labels: ['status:blocked-by-human'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
 test('autopilot-suitability consistency: authoring-bucket honors configured prefix and labels case-insensitively', () => {
   const body =
     'human decision\n<!-- custom-autopilot-suitability: 1 -->\n<!-- custom-authoring-bucket: needs-decision -->';
