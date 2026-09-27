@@ -113,7 +113,7 @@ distributed IDD workflow a repository imported.
   ```sh
   set -eu
   git fetch origin main
-  release_version=0.13.0
+  release_version="${RELEASE_VERSION:?set to the iddVersion being released}"
   release_cut_merge_sha="${RELEASE_CUT_MERGE_SHA:?set to the bump PR merge SHA}"
   release_commit="$(git rev-parse --verify "${release_cut_merge_sha}^{commit}")"
   git tag -s -a "v${release_version}" "${release_commit}" \
