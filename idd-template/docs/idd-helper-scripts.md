@@ -3359,18 +3359,23 @@ still fails closed:
     helper's own `--worktree` — that flag has an unrelated, documented
     meaning there) for the `local_worktree_occupied` /
     `stale-claim-*` / `released-claim-*` verdict, exactly as the written
-    procedure's own step 1 does. A `git worktree list --porcelain -z`
-    record for `--worktree` that is prunable, absent on disk, not locked,
-    and names the recovered branch (a detached record is never shortcut,
-    since which branch it held can no longer be confirmed once its path
-    is gone) then skips only the worktree-local claim-lock check
-    (`claim-lock.mts`'s `checkClaimLock`, called directly — no subprocess,
-    no network) and goes straight to step 4's removal (nothing to
-    preserve) — the `locked` and branch-matching guards are this
+    procedure's own step 1 does. An `-local-worktree-unreadable` reason
+    (occupancy could not be verified either way) refuses outright, never
+    silently treated the same as a confirmed `-occupied` one — recovering
+    a worktree whose true state is unknown is unsafe. A `git worktree list
+    --porcelain -z` record for `--worktree` that is prunable, absent on
+    disk, not locked, and names the recovered branch (a detached record is
+    never shortcut, since which branch it held can no longer be confirmed
+    once its path is gone) then skips only the worktree-local claim-lock
+    check (`claim-lock.mts`'s `checkClaimLock`, called directly — no
+    subprocess, no network) and goes straight to step 4's removal (nothing
+    to preserve) — the `locked` and branch-matching guards are this
     implementation's own added margin over the written procedure's own
     shortcut text, not a literal transcription of it. Otherwise
     `checkClaimLock` confirms the lock's holder matches the claim-id
-    being recovered.
+    being recovered. `--preserve-dir`, when given, is rejected up front if
+    it resolves inside the target worktree — a backup destination there
+    would be deleted by the very removal it exists to survive.
   - **Step 2** (rule out a live session) is never checked mechanically —
     `claim-lock.mts`'s own header documents why no local process-liveness
     signal is recorded. `--operator-confirmed-no-live-session` is your own
@@ -3380,21 +3385,34 @@ still fails closed:
     (backing up the pre-operation tip — `orig-head` for rebase, else
     `HEAD`), then tag-stashes tracked/untracked changes
     (`idd-lwr <claim-id-or-legacy>`) for the worktree and every dirty
-    submodule, copies out an uninitialized (`-`) submodule's files and any
-    unmerged-path stash failure, and writes `refs/idd-lwr/<branch>` for
-    unpushed commits (worktree- and submodule-scoped). Ignored-file,
-    uninitialized-submodule, and unmerged-path copies land under
-    `--preserve-dir` (default: a temp directory, created only when
-    something needs copying).
+    submodule, copies out an uninitialized (`-`) submodule's files, and
+    writes `refs/idd-lwr/<branch>` for unpushed commits (worktree- and
+    submodule-scoped). A failed `git status` or `git submodule status`
+    probe fails closed (blocks removal) rather than reading as "clean" or
+    "no submodules". An unmerged-path `stash push` failure copies out
+    every dirty path in that scope, not only the conflicted subset, and
+    verifies each one landed. Ignored files are scanned and copied per
+    scope (the worktree and every initialized submodule, not only the
+    top level, since a submodule's own ignored contents never show up in
+    the top-level scan). Ignored-file, uninitialized-submodule, and
+    unmerged-path copies land under `--preserve-dir` (default: a temp
+    directory, created only when something needs copying).
   - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
     (`clone-lock.mts`) directly — in-process, not the manual
     `clone-lock.mjs --exec -- bash -c '...'` wrapper the procedure
     otherwise requires — to wrap a fresh re-check (re-running step 1's two
-    checks) plus verification that every step 3 preservation action
-    actually landed, then `git worktree remove` (retrying `--force` only
-    after a submodule-removal failure), or, for the primary-worktree
-    branch, `checkout {development-branch}` followed by a confirmed-absent
-    re-check and a hand-removed lock file.
+    checks, including the prunable shortcut's own eligibility), a
+    comparison of the rechecked claim identity (claim-id and branch)
+    against the one step 1 actually recovered, and a fresh re-verification
+    of every step-3 stash/backup-ref artifact against the live repository
+    state (not the earlier, now possibly stale, in-memory snapshot) — all
+    while the lock is held, immediately before mutating. Then
+    `git worktree remove` (retrying `--force` only after a
+    submodule-removal failure), or, for the primary-worktree branch,
+    `checkout {development-branch}` followed by a confirmed-absent
+    re-check and a hand-removed lock file — deleting only the lock the
+    fresh re-check positively observed, and reporting failure (never a
+    silent best-effort no-op) if resolving or deleting it fails.
 - Default mode is dry-run (no mutation): prints exactly what step 1 found
   and what step 3/4 would do (the full stash/backup-ref/removal plan),
   without mutating anything. `--apply` performs the mutation, still gated

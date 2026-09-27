@@ -14,13 +14,16 @@ import {
   countTaggedStashEntries,
   detectInProgressOperation,
   evaluatePrunableShortcut,
+  extractDirtyPaths,
   extractIgnoredPaths,
   extractRecoveredClaim,
   hasWorkingTreeChanges,
   isAcceptedBlockReason,
+  isSafeRelativePath,
   type LocalGitCommandResult,
   type LocalWorktreeRecoveryDeps,
   runLocalWorktreeRecovery,
+  submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -228,6 +231,41 @@ test('detectInProgressOperation reports null when nothing is in progress', () =>
     () => null,
   );
   assert.equal(result, null);
+});
+
+test('submoduleStatusEntries parses a path containing spaces (Copilot review finding)', () => {
+  const raw = [
+    ' abc123def456abc123def456abc123def456abcd libs/my module (heads/main)',
+    '-0000000000000000000000000000000000000000 uninit/sub with space',
+    '+1111111111111111111111111111111111111111 dirty/no-space-path (heads/x)',
+  ].join('\n');
+  assert.deepEqual(submoduleStatusEntries(raw), [
+    { status: ' ', path: 'libs/my module' },
+    { status: '-', path: 'uninit/sub with space' },
+    { status: '+', path: 'dirty/no-space-path' },
+  ]);
+});
+
+test('extractDirtyPaths reads tracked/untracked paths, follows a rename arrow, and skips ignored lines', () => {
+  const status = [
+    ' M tracked.txt',
+    '?? untracked.txt',
+    'R  old.txt -> new.txt',
+    '!! ignored.txt',
+  ].join('\n');
+  assert.deepEqual(extractDirtyPaths(status), [
+    'tracked.txt',
+    'untracked.txt',
+    'new.txt',
+  ]);
+});
+
+test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
+  assert.equal(isSafeRelativePath('a/b.txt'), true);
+  assert.equal(isSafeRelativePath('/etc/passwd'), false);
+  assert.equal(isSafeRelativePath('../escape.txt'), false);
+  assert.equal(isSafeRelativePath('a/../../escape.txt'), false);
+  assert.equal(isSafeRelativePath(''), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -664,6 +702,244 @@ test('refuses the cwd-inside-target invariant before step 1 ever runs', () => {
   const verdict = runLocalWorktreeRecovery(baseArgs({ apply: false }), deps);
   assert.equal(verdict.step1.outcome, 'cwd-inside-target');
   assert.equal(confirmCalls, 0);
+});
+
+test('refuses --preserve-dir inside the target worktree before any mutation (Copilot review finding)', () => {
+  const deps = fakeDeps({
+    realpathOrNull: (p) => p,
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: '/repo/linked/backup',
+    }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'preserve-dir-inside-target');
+  assert.equal(verdict.mutated, false);
+});
+
+test('refuses a fresh routing state of `-local-worktree-unreadable` outside the prunable shortcut (Copilot review finding)', () => {
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-unreadable',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'unreadable',
+            paths: ['/repo/linked'],
+            reason: 'some read failure',
+          },
+        },
+      },
+      error: null,
+    }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'blocked-unreadable');
+  assert.equal(verdict.mutated, false);
+});
+
+test('a failed status probe blocks removal even with no other changes detected (Codex/Copilot review finding)', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: false, status: 128, stdout: '', stderr: 'boom' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.statusReadFailed, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
+test('a failed `git submodule status` list blocks removal instead of silently reading as no submodules (advisor-caught gap)', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return { ok: false, status: 128, stdout: '', stderr: 'boom' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.submoduleListFailed, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
+test('step 4 stops removal when the fresh claim/branch identity no longer matches step 1 (Copilot review finding)', () => {
+  const deps = fakeDeps({
+    confirmBlock: (() => {
+      let call = 0;
+      return () => {
+        call += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            // First call (step 1) recovers claim-x; the recheck (step 4)
+            // now reports a DIFFERENT claim occupying the same path --
+            // simulating the issue moving to another stale/legacy claim
+            // while this session waited for the clone lock.
+            active_claim: {
+              claim_id: call === 1 ? 'claim-x' : 'claim-y',
+              branch: 'issue/1-task',
+            },
+            evidence: {
+              local_worktree: {
+                status: 'occupied',
+                paths: ['/repo/linked'],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /claim being recovered changed since step 1/);
+});
+
+test('step 4 stops removal when a preservation artifact no longer verifies fresh under the clone lock (Copilot review finding)', () => {
+  // Call order for `git stash list` against the single stashed scope:
+  // 1st = baseline (pre-push, empty); 2nd = post-push verify (one tagged
+  // entry -- so the pre-lock `preservationVerified` check passes); 3rd =
+  // the FRESH re-check inside the clone lock, which finds it gone again --
+  // simulating a concurrent pop/drop in the lock-wait window.
+  let stashListCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashListCalls === 2
+              ? 'stash@{0}: On issue/1-task: idd-lwr claim-x'
+              : '',
+          stderr: '',
+        };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.stashed, true);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /no longer verifies fresh under the clone lock/);
+});
+
+test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
+  let unlinkAttempted = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    checkLock: () => ({
+      path: '/repo/primary/.git/idd-claim.lock',
+      present: false,
+    }),
+    confirmBlock: (() => {
+      let call = 0;
+      return () => {
+        call += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: call <= 2 ? 'occupied' : 'absent',
+                paths: call <= 2 ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        unlinkAttempted = true;
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git\n',
+          stderr: '',
+        };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(verdict.primaryOrLinked, 'primary');
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(
+    unlinkAttempted,
+    false,
+    'must never attempt to resolve/delete a lock file the recheck found absent',
+  );
 });
 
 // ---------------------------------------------------------------------------

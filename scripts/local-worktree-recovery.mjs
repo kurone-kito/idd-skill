@@ -276,6 +276,35 @@ export function extractIgnoredPaths(statusPorcelain) {
     .filter((path) => path.length > 0);
 }
 /**
+ * Every tracked/untracked dirty path (any line not `!!`-prefixed) reported
+ * by the same `git status --porcelain --ignored --untracked-files=normal`
+ * scan -- used by the unmerged-`stash push`-failure fallback (Codex review
+ * finding): that fallback must preserve every dirty path in the scope, not
+ * only the `--diff-filter=U` conflicted subset, or a coexisting untracked
+ * file / non-conflicting modification is silently lost. A rename line
+ * (`R  old -> new`) reports only the new path -- the working tree copy at
+ * the old path no longer exists to back up.
+ */
+export function extractDirtyPaths(statusPorcelain) {
+  const paths = [];
+  for (const line of statusPorcelain.split('\n')) {
+    if (line.length < 3 || line.startsWith('!!')) continue;
+    let rest = line.slice(3).trim();
+    const arrow = rest.indexOf(' -> ');
+    if (arrow !== -1) {
+      rest = rest.slice(arrow + 4);
+    }
+    const unquoted =
+      rest.startsWith('"') && rest.endsWith('"') && rest.length >= 2
+        ? rest.slice(1, -1)
+        : rest;
+    if (unquoted.length > 0) {
+      paths.push(unquoted);
+    }
+  }
+  return paths;
+}
+/**
  * True when `relativePath` is safe to join under a preserve-directory
  * destination: not absolute, and no `..` path segment. Defense in depth for
  * the ignored-file and unmerged-conflict copy-out paths -- a normal `git
@@ -301,17 +330,25 @@ export function countTaggedStashEntries(stashList, tag) {
 // git repository or subprocess; the compiled CLI's own production deps wire
 // these to real git/gh calls, exercised end-to-end by the sandboxed tests).
 // ---------------------------------------------------------------------------
-function submoduleStatusEntries(raw) {
-  return raw
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const status = line.slice(0, 1);
-      // `git submodule status` lines: "<status><sha> <path> (<describe>)".
-      const rest = line.slice(1).trim();
-      const path = rest.split(' ')[1] ?? rest.split(' ')[0] ?? '';
-      return { status, path };
-    });
+// `git submodule status` lines: "<status><sha> <path>[ (<describe>)]". Git
+// permits spaces in a submodule path, so splitting on whitespace (Copilot
+// review finding) truncates a path like "libs/my module" to "libs/my" --
+// the real submodule is then never inspected or backed up. The optional
+// trailing "(<describe>)" suffix is the only other whitespace-delimited
+// token this format ever appends, so anchoring on it (when present) and
+// otherwise taking the rest of the line as the path handles a spaced path
+// correctly either way.
+const SUBMODULE_STATUS_LINE_PATTERN =
+  /^([ +\-U])([0-9a-f]{4,40}) (.+?)(?: \(.+\))?$/;
+export function submoduleStatusEntries(raw) {
+  const entries = [];
+  for (const line of raw.split('\n')) {
+    if (line.length === 0) continue;
+    const match = SUBMODULE_STATUS_LINE_PATTERN.exec(line);
+    if (!match) continue;
+    entries.push({ status: match[1], path: match[3] });
+  }
+  return entries;
 }
 /** Preserve one scope (the worktree itself, or a submodule path relative to
  * it) -- stash tracked/untracked changes under `tag`, or fall back to
@@ -323,6 +360,10 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
     scopePath,
   );
+  // Codex/Copilot review: a failed status probe must never read as "clean".
+  // `preservationVerified` fails closed on `statusReadFailed` regardless of
+  // `hasChanges` below.
+  const statusReadFailed = !status.ok;
   const hasChanges = status.ok && hasWorkingTreeChanges(status.stdout);
   const baselineList = deps.runGit(['stash', 'list'], scopePath);
   const baselineCount = countTaggedStashEntries(baselineList.stdout, tag);
@@ -330,12 +371,14 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     scope: scopeLabel,
     tag,
     hasChanges,
+    statusReadFailed,
     baselineCount,
     stashed: false,
     verifiedCount: null,
     unmergedFallbackCopiedTo: null,
+    unmergedFallbackAllPreserved: null,
   };
-  if (!hasChanges || !apply) {
+  if (statusReadFailed || !hasChanges || !apply) {
     return entry;
   }
   const stash = deps.runGit(
@@ -343,25 +386,36 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     scopePath,
   );
   if (!stash.ok) {
-    // Unmerged-path fallback: copy conflicted files out instead of trusting
-    // the branch-tip backup alone (§LWR step 3).
-    const conflicted = deps
-      .runGit(['diff', '--name-only', '--diff-filter=U'], scopePath)
-      .stdout.split('\n')
-      .filter((line) => line.trim().length > 0);
-    if (conflicted.length > 0) {
+    // Unmerged-path fallback: `stash push` itself refused (unmerged paths
+    // from a backed-up interrupted operation) -- copy out EVERY dirty path
+    // in this scope, not only the `--diff-filter=U` conflicted subset
+    // (Codex review finding: a coexisting untracked file or non-conflicting
+    // modification would otherwise be silently lost), and verify each one
+    // actually landed before trusting this scope as preserved.
+    const dirtyPaths = extractDirtyPaths(status.stdout).filter(
+      isSafeRelativePath,
+    );
+    if (dirtyPaths.length > 0) {
       const preserveDir = deps.ensurePreserveDir();
       const destination = join(
         preserveDir,
         `unmerged-${scopeLabel.replace(/[\\/]+/g, '_')}`,
       );
-      for (const relPath of conflicted) {
-        if (!isSafeRelativePath(relPath)) {
-          continue;
+      let allLanded = true;
+      for (const relPath of dirtyPaths) {
+        const from = join(scopePath, relPath);
+        const to = join(destination, relPath);
+        deps.copyPath(from, to);
+        if (!deps.pathExists(to)) {
+          allLanded = false;
         }
-        deps.copyPath(join(scopePath, relPath), join(destination, relPath));
       }
       entry.unmergedFallbackCopiedTo = destination;
+      entry.unmergedFallbackAllPreserved = allLanded;
+    } else {
+      // Nothing dirty by this scan's own accounting, so there is nothing to
+      // preserve -- vacuously satisfied.
+      entry.unmergedFallbackAllPreserved = true;
     }
     return entry;
   }
@@ -423,6 +477,46 @@ function planAndMaybeBackupRef(
  * function over injected deps so both the plan (dry-run) and the actual
  * mutation (`--apply`) share one code path -- `apply` toggles only whether
  * the stash/ref-write commands actually run. */
+/**
+ * Scan one scope's ignored files (worktree or an initialized submodule) and
+ * copy them out under `--apply` -- extracted so `planAndMaybePreserve` can
+ * call it per submodule too (Codex review finding): the original single
+ * top-level-only scan never saw ignored, non-reproducible data (e.g.
+ * `submodule/.env`) living inside an initialized submodule, since the
+ * top-level `git status --porcelain` does not enumerate a submodule's own
+ * ignored contents. Returns `scanFailed: true` (never silently swallowed)
+ * when the status probe itself fails, mirroring the same fail-closed
+ * contract `planAndMaybeStashScope`'s `statusReadFailed` uses.
+ */
+function scanAndMaybeCopyIgnoredFiles(scopePath, scopeLabel, apply, deps) {
+  const status = deps.runGit(
+    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
+    scopePath,
+  );
+  if (!status.ok) {
+    return { copied: [], scanFailed: true };
+  }
+  const copied = [];
+  for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
+    if (!isSafeRelativePath(ignoredPath)) {
+      continue;
+    }
+    const preserveDir = apply ? deps.ensurePreserveDir() : null;
+    const destination = preserveDir
+      ? join(
+          preserveDir,
+          'ignored',
+          scopeLabel === '.' ? '' : scopeLabel,
+          ignoredPath,
+        )
+      : null;
+    if (apply && destination) {
+      deps.copyPath(join(scopePath, ignoredPath), destination);
+    }
+    copied.push({ path: ignoredPath, copiedTo: destination });
+  }
+  return { copied, scanFailed: false };
+}
 function planAndMaybePreserve(path, branch, tag, apply, deps) {
   const readFile = (p) => {
     try {
@@ -504,25 +598,22 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
       ),
     );
   }
-  const ignoredFilesCopied = [];
-  const status = deps.runGit(
-    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
-    path,
-  );
-  if (status.ok) {
-    for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
-      if (!isSafeRelativePath(ignoredPath)) {
-        continue;
-      }
-      const preserveDir = apply ? deps.ensurePreserveDir() : null;
-      const destination = preserveDir
-        ? join(preserveDir, 'ignored', ignoredPath)
-        : null;
-      if (apply && destination) {
-        deps.copyPath(join(path, ignoredPath), destination);
-      }
-      ignoredFilesCopied.push({ path: ignoredPath, copiedTo: destination });
-    }
+  let ignoredFilesCopied = [];
+  let ignoredFilesScanFailed = false;
+  const topLevelIgnored = scanAndMaybeCopyIgnoredFiles(path, '.', apply, deps);
+  ignoredFilesCopied = ignoredFilesCopied.concat(topLevelIgnored.copied);
+  ignoredFilesScanFailed = ignoredFilesScanFailed || topLevelIgnored.scanFailed;
+  for (const submodule of submodules) {
+    if (!submodule.path || submodule.status === '-') continue;
+    const submoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+      join(path, submodule.path),
+      submodule.path,
+      apply,
+      deps,
+    );
+    ignoredFilesCopied = ignoredFilesCopied.concat(submoduleIgnored.copied);
+    ignoredFilesScanFailed =
+      ignoredFilesScanFailed || submoduleIgnored.scanFailed;
   }
   return {
     inProgressOperation,
@@ -530,14 +621,31 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
     uninitializedSubmodules,
     backupRefs,
     ignoredFilesCopied,
+    ignoredFilesScanFailed,
+    submoduleListFailed: !submoduleStatus.ok,
   };
 }
 /** Verify every step-3 preservation action that claimed a change actually
  * landed, before step 4 is ever allowed to remove anything. */
-function preservationVerified(preserve) {
+function preservationVerified(preserve, pathExists) {
+  if (preserve.ignoredFilesScanFailed) return false;
+  // A failed `git submodule status --recursive` must never silently
+  // degrade to "no submodules" -- an unbacked-up dirty/uninitialized
+  // submodule would otherwise be indistinguishable from one that
+  // genuinely does not exist.
+  if (preserve.submoduleListFailed) return false;
   for (const stash of preserve.stashes) {
+    // Codex/Copilot review: a failed status probe must block removal
+    // regardless of what `hasChanges` reads as -- it was never a genuine
+    // "clean" observation.
+    if (stash.statusReadFailed) return false;
     if (!stash.hasChanges) continue;
-    if (stash.unmergedFallbackCopiedTo) continue;
+    if (stash.unmergedFallbackCopiedTo !== null) {
+      // Copilot review: a non-null destination alone is not proof every
+      // dirty path actually landed there.
+      if (stash.unmergedFallbackAllPreserved !== true) return false;
+      continue;
+    }
     if (!stash.stashed) return false;
     if (
       stash.verifiedCount === null ||
@@ -558,6 +666,49 @@ function preservationVerified(preserve) {
   }
   for (const submodule of preserve.uninitializedSubmodules) {
     if (submodule.copiedTo === null) return false;
+    if (!pathExists(submodule.copiedTo)) return false;
+  }
+  // Copilot review: `ignoredFilesCopied` was never included in verification
+  // at all -- a failed or partial ignored-file copy could not block
+  // removal despite §LWR requiring these copies verified before step 4.
+  for (const ignored of preserve.ignoredFilesCopied) {
+    if (ignored.copiedTo === null) return false;
+    if (!pathExists(ignored.copiedTo)) return false;
+  }
+  return true;
+}
+/**
+ * Re-read and re-verify the stash/ref preservation artifacts fresh, while
+ * the clone-scoped lock is held, immediately before removal (Copilot
+ * review finding): `preservationVerified` above runs BEFORE the lock is
+ * acquired, so its cached counts/booleans can go stale during the wait to
+ * acquire it -- a concurrent process could pop or drop the stash, or
+ * delete the backup ref, in that window. This re-derives the same counts
+ * and OIDs from a fresh `git stash list` / `git rev-parse --verify` against
+ * each scope's own path, rather than trusting the earlier snapshot.
+ */
+function reverifyPreservationArtifactsFresh(preserve, targetPath, runGit) {
+  const scopePath = (scope) =>
+    scope === '.' ? targetPath : join(targetPath, scope);
+  for (const stash of preserve.stashes) {
+    if (!stash.stashed) continue;
+    const list = runGit(['stash', 'list'], scopePath(stash.scope));
+    if (
+      countTaggedStashEntries(list.stdout, stash.tag) <
+      stash.baselineCount + 1
+    ) {
+      return false;
+    }
+  }
+  for (const ref of preserve.backupRefs) {
+    if (!ref.written) continue;
+    const verify = runGit(
+      ['rev-parse', '--verify', ref.ref],
+      scopePath(ref.scope),
+    );
+    if (!verify.ok || verify.stdout.trim() !== ref.tipSha) {
+      return false;
+    }
   }
   return true;
 }
@@ -606,6 +757,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       uninitializedSubmodules: [],
       backupRefs: [],
       ignoredFilesCopied: [],
+      ignoredFilesScanFailed: false,
+      submoduleListFailed: false,
       removal: null,
     },
     preserveDir: null,
@@ -628,6 +781,33 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.step1.outcome = 'cwd-inside-target';
       verdict.step1.reason =
         'must be invoked from the primary worktree, never from the linked worktree being recovered';
+      verdict.result = verdict.step1.reason;
+      return verdict;
+    }
+  }
+  // Copilot review: `--preserve-dir` was passed through with no check that
+  // it names a location OUTSIDE the target worktree. An operator pointing
+  // it inside the target would have every ignored/unmerged/uninitialized
+  // backup copied into the very directory `git worktree remove` (or the
+  // primary-worktree checkout) is about to delete -- silently defeating
+  // this helper's entire recovery guarantee. Reject that up front, using
+  // both the lexical and (when resolvable) realpath forms, mirroring the
+  // cwd-inside-target guard above.
+  if (args.preserveDir) {
+    const preserveDirResolved = resolve(cwd, args.preserveDir);
+    const preserveDirReal = deps.realpathOrNull(preserveDirResolved);
+    const targetReal = deps.realpathOrNull(targetPath);
+    const insideLexical =
+      preserveDirResolved === targetPath ||
+      preserveDirResolved.startsWith(`${targetPath}/`);
+    const insideReal =
+      preserveDirReal !== null &&
+      targetReal !== null &&
+      (preserveDirReal === targetReal ||
+        preserveDirReal.startsWith(`${targetReal}/`));
+    if (insideLexical || insideReal) {
+      verdict.step1.outcome = 'preserve-dir-inside-target';
+      verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must be outside the target worktree (${targetPath}) -- a backup destination inside it would be deleted by the removal it is meant to survive`;
       verdict.result = verdict.step1.reason;
       return verdict;
     }
@@ -680,6 +860,22 @@ export function runLocalWorktreeRecovery(args, deps) {
     verdict.step1.outcome = 'blocked-prunable';
     verdict.step1.reason = 'prunable record, absent on disk, unlocked';
     verdict.plan.prunableShortcut = true;
+  } else if (routing.reason.endsWith('-local-worktree-unreadable')) {
+    // Copilot review: `isAcceptedBlockReason` above only checks the
+    // `stale-claim-`/`released-claim-` PREFIX, so an `-unreadable` suffix
+    // (occupancy could not be verified either way) passed through
+    // identically to a confirmed `-occupied` one. `local-worktree-
+    // occupancy.mts`'s own `inspectLocalWorktreeBranch` treats `unreadable`
+    // as fail-closed precisely because the true state is unknown --
+    // preserving and force-removing a worktree whose git status cannot
+    // even be read reliably is unsafe. The prunable-and-absent shortcut
+    // (checked above) is the one specific unreadable sub-case this helper
+    // still handles, via its own independent fail-closed conditions; every
+    // other unreadable reason refuses here instead.
+    verdict.step1.outcome = 'blocked-unreadable';
+    verdict.step1.reason = `resume-claim-routing reports an unreadable local worktree occupancy (${routing.reason}); refusing to preserve/remove an unverifiable worktree`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
   } else {
     const lock = deps.checkLock(targetPath);
     if (lock.malformed) {
@@ -722,6 +918,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
       verdict.plan.backupRefs = preserve.backupRefs;
       verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
+      verdict.plan.ignoredFilesScanFailed = preserve.ignoredFilesScanFailed;
+      verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
     }
     verdict.plan.removal = {
       kind: verdict.primaryOrLinked ?? 'linked',
@@ -761,11 +959,13 @@ export function runLocalWorktreeRecovery(args, deps) {
     verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
     verdict.plan.backupRefs = preserve.backupRefs;
     verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
+    verdict.plan.ignoredFilesScanFailed = preserve.ignoredFilesScanFailed;
+    verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
     verdict.mutated =
       preserve.stashes.some((s) => s.stashed) ||
       preserve.backupRefs.some((r) => r.written) ||
       preserve.uninitializedSubmodules.some((s) => s.copiedTo !== null);
-    if (!preservationVerified(preserve)) {
+    if (!preservationVerified(preserve, deps.pathExists)) {
       verdict.result =
         'step 3 preservation could not be fully verified; stopping before removal';
       return verdict;
@@ -786,11 +986,22 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.plan.removal.detail;
       return verdict;
     }
-    // CodeRabbit finding: the shortcut path must be re-verified fresh too,
-    // not merely exempted from the ordinary occupied re-check -- the
-    // clone-scoped lock's whole purpose is closing the window between step
-    // 1's read and this mutation, and that window applies to the shortcut
-    // exactly as much as the ordinary path.
+    // CodeRabbit/Copilot findings: the shortcut path must be re-verified
+    // fresh too, not merely exempted from the ordinary occupied re-check --
+    // the clone-scoped lock's whole purpose is closing the window between
+    // step 1's read and this mutation, and that window applies to the
+    // shortcut exactly as much as the ordinary path. The ordinary
+    // occupied/reason/path condition is required in BOTH branches (Copilot
+    // review: the shortcut previously derived eligibility only from the
+    // fresh worktree record and ignored the fresh routing result entirely,
+    // so a claim that became live, or moved to a different claim, while the
+    // record stayed prunable-and-absent could still authorize removal).
+    const ordinaryStillOccupied =
+      recheck.routing.state === 'local_worktree_occupied' &&
+      isAcceptedBlockReason(recheck.routing.reason) &&
+      (recheck.routing.evidence?.local_worktree?.paths ?? []).includes(
+        targetPath,
+      );
     let stillEligible;
     let staleReason;
     if (shortcut.eligible) {
@@ -801,16 +1012,11 @@ export function runLocalWorktreeRecovery(args, deps) {
         recoveredBranch,
         deps.pathExists,
       );
-      stillEligible = freshShortcut.eligible;
+      stillEligible = freshShortcut.eligible && ordinaryStillOccupied;
       staleReason =
-        'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, or no longer names the recovered branch); stopping';
+        'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, no longer names the recovered branch, or the issue claim state itself changed); stopping';
     } else {
-      stillEligible =
-        recheck.routing.state === 'local_worktree_occupied' &&
-        isAcceptedBlockReason(recheck.routing.reason) &&
-        (recheck.routing.evidence?.local_worktree?.paths ?? []).includes(
-          targetPath,
-        );
+      stillEligible = ordinaryStillOccupied;
       staleReason =
         'the situation changed since step 1 (a live session resumed the claim, a different claim-id now holds the lock, or the branch no longer reports local_worktree_occupied); stopping';
     }
@@ -825,14 +1031,39 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.plan.removal.detail;
       return verdict;
     }
+    // Copilot review: the fresh routing check above validates only
+    // state/reason/path -- it never compared the rechecked active/released
+    // claim (or branch) against the claim step 1 actually recovered. If the
+    // issue moved to a DIFFERENT stale or legacy-released claim while this
+    // session waited for the clone lock, an absent worktree-local lock
+    // would still pass the lock-recheck below, and this session could
+    // remove the new claim's worktree while tagging preserved artifacts
+    // under the OLD, no-longer-current claim-id.
+    const freshRecovered = extractRecoveredClaim(recheck.routing);
+    if (
+      freshRecovered.claimId !== recoveredClaimId ||
+      freshRecovered.branch !== recoveredBranch
+    ) {
+      verdict.plan.removal = {
+        kind: verdict.primaryOrLinked ?? 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail: `the claim being recovered changed since step 1 (was claim-id ${recoveredClaimId ?? 'legacy'} / branch ${recoveredBranch ?? 'unknown'}, now claim-id ${freshRecovered.claimId ?? 'legacy'} / branch ${freshRecovered.branch ?? 'unknown'}); stopping`,
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
     // Re-run the claim-lock check too, while the clone lock is held --
     // step 1's own lock check is stale the moment a concurrent session
     // could have replaced this shared admin directory's lock during the
     // wait to acquire the clone-scoped lock (mirrors step 1's own skip:
     // never re-checked for the prunable-and-absent shortcut, which never
     // checked it in the first place).
+    let lockRecheckPresent = false;
     if (!shortcut.eligible) {
       const lockRecheck = deps.checkLock(targetPath);
+      lockRecheckPresent = lockRecheck.present;
       // Mirrors step 1's own lock-check pass condition exactly: malformed
       // always fails; otherwise an absent lock passes unconditionally (a
       // legacy pre-claim-id release may never have acquired one), and a
@@ -849,6 +1080,31 @@ export function runLocalWorktreeRecovery(args, deps) {
           ran: false,
           detail:
             'the worktree-local claim lock no longer matches the recovered claim-id (a different session may have taken over); stopping',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      // Copilot review: step 3's own preservation check ran BEFORE this
+      // lock was acquired, so its cached counts/booleans can go stale
+      // during the wait to acquire it. Re-derive the same artifacts fresh,
+      // now that the lock is actually held, immediately before removal.
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+          },
+          targetPath,
+          deps.runGit,
+        )
+      ) {
+        verdict.plan.removal = {
+          kind: verdict.primaryOrLinked ?? 'linked',
+          developmentBranch: null,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'a preservation artifact (stash entry or backup ref) no longer verifies fresh under the clone lock; stopping before removal',
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
@@ -884,20 +1140,63 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      // Codex/Copilot review: only delete the lock file the fresh
+      // `lockRecheck` positively observed -- never a bare "does a file
+      // happen to exist now" check, which could delete a DIFFERENT lock
+      // (re)created by another session after the recheck. When the
+      // recheck found no lock (a legacy release with nothing to delete),
+      // there is nothing further to do here; report success only once
+      // confirmed. Any failure to resolve the git directory or delete the
+      // positively-observed lock is a failed release, not a silent
+      // best-effort no-op -- the CLI must not exit successfully while a
+      // stale lock may still block recovery.
+      if (!lockRecheckPresent) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: true,
+          detail: `checked out ${developmentBranch}; no worktree-local lock was present to remove`,
+        };
+        verdict.mutated = true;
+        verdict.result = 'primary worktree released';
+        return verdict;
+      }
       const lockPath = deps.runGit(
         ['rev-parse', '--absolute-git-dir'],
         targetPath,
       );
-      if (lockPath.ok) {
-        const idLockFile = join(lockPath.stdout.trim(), 'idd-claim.lock');
-        if (deps.pathExists(idLockFile)) {
-          try {
-            unlinkSync(idLockFile);
-          } catch {
-            // Best-effort: a race here is diagnostic only, matching
-            // claim-lock.mts's own release semantics for an absent lock.
-          }
+      if (!lockPath.ok) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checked out ${developmentBranch}, but could not resolve the git directory to remove the lock file: ${lockPath.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const idLockFile = join(lockPath.stdout.trim(), 'idd-claim.lock');
+      try {
+        unlinkSync(idLockFile);
+      } catch (error) {
+        const code = error.code;
+        if (code !== 'ENOENT') {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `checked out ${developmentBranch}, but removing the lock file failed: ${error.message}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
         }
+        // ENOENT: already gone (e.g. removed by the same recovery on a
+        // retried attempt) -- the positively-observed lock is confirmed
+        // absent either way, matching claim-lock.mts's own release
+        // semantics for an absent lock.
       }
       verdict.plan.removal = {
         kind: 'primary',
