@@ -204,12 +204,12 @@ Run one critique pass on the branch's changes every E1-E3 pass (always).
 Add any newly found issues to
 ReviewItems_snapshot.
 
-Delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
-and enforce a harness timeout, never a command wrapper (#3449). Background
-wait requires cancellation/cleanup and late-output suppression. Timeout,
-cancel, interruption, or error without findings is delegate failure: apply the
-phase's `mode`; self-critique when requested, otherwise hold. Record no return;
-without bound/cleanup, record risk.
+Per-agent E2: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default) with
+a harness timeout, not a wrapper (#3449). Only per-agent; shell-delegate rules
+unchanged. Background waits require cleanup; suppress late output.
+Timeout/cancel/interruption/error without findings uses self-critique fallback;
+mark failure/risk, never clean or phase-level `mode` wait. Without
+bound/cleanup, self-critique; record risk/no return.
 
 Apply these lenses when they fit (composing when both do):
 **Mutation / write-side** (the diff implements a helper that mutates

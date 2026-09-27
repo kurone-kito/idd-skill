@@ -114,12 +114,13 @@ other GitHub side effect, confirm all of the following:
 
 ## E10 — Validate fixes with critique pass
 
-Delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
-and enforce a harness timeout, never a command wrapper (#3449). Background
-wait requires cancellation/cleanup and late-output suppression. Timeout,
-cancel, interruption, or error without findings is delegate failure: obey
-`mode`; self-critique for `fallback`/`combined`, hold for `on-success`/`never`.
-Record no return; without bound/cleanup, record risk.
+Per-agent pass: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
+with a harness timeout, not a wrapper (#3449). Applies only to per-agent
+subagents; shell-delegate rules are unchanged. Background waits require cleanup
+and suppress late output. Timeout/cancel/interruption/error without findings is
+failure: self-critique for `fallback`/`combined`; hold for `on-success`/`never`.
+Without bound/cleanup, self-critique when allowed and record residual risk/no
+return.
 
 1. Resolve `critiqueLoop.delegate` the same way
    `idd-work-lite.instructions.md` C1 does: helper-first

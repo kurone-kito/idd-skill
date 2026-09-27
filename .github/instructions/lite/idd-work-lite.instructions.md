@@ -291,12 +291,15 @@ ad hoc or improvise worker-side authoring.
 
 #### Delegated critique wait ceiling
 
-Delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
-and enforce a harness timeout, never a command wrapper (#3449). Background
-wait requires cancellation/cleanup and late-output suppression. Timeout,
-cancel, interruption, or error without findings is delegate failure: obey
-`mode`; self-critique when it calls for it, otherwise hold. Record no return;
-without bound/cleanup, record risk.
+Per-agent delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default
+`PT20M`) and enforce a harness timeout, never a command wrapper (#3449). This
+ceiling applies only to each per-agent subagent; it does not change the
+configured `critiqueLoop.delegate` shell-command timeout or failure rules.
+Background wait requires cancellation/cleanup and late-output suppression.
+Timeout, cancel, interruption, or error without findings is per-agent failure.
+Use `mode` against the configured delegate's outcome (see step 5) to decide
+whether the per-agent structured self-critique runs. If the harness cannot
+bound/clean up, use that self-critique and record residual risk/no return.
 
 A critique pass asks whether the implementation is correct, whether the issue's
 requirements are satisfied, whether coverage is adequate, and whether any other
