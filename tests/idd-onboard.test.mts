@@ -3942,12 +3942,18 @@ test('checkHeldSchemaDrift does not retain raw glob candidates when cwd is set',
   const targetRoot = makeFixtureDir();
   const moduleText =
     "globSync('schemas/*.json', { cwd: join(root, 'fixtures') });\n";
-  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
-  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
   });
-  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+  ]);
 });
 
 test('checkHeldSchemaDrift honors selective glob filters', () => {
@@ -4037,6 +4043,31 @@ test('checkHeldSchemaDrift supports brace and extglob directory scans', () => {
     assert.deepEqual(result.findings, [
       { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
       { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
+test('checkHeldSchemaDrift supports numeric and alphabetic brace ranges', () => {
+  for (const [pattern, relativePath] of [
+    ['schemas/widget{1..3}.json', 'schemas/widget2.json'],
+    ['schemas/widget{a..c}.json', 'schemas/widgetb.json'],
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('${pattern}');\n`;
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
     ]);
   }
 });
@@ -4384,6 +4415,48 @@ test('bin/idd-onboard.mjs --verify exits 0 with no blocking finding for a fully 
   assert.deepEqual(
     (verdict.placeholderResidue as { residue: unknown[] }).residue,
     [],
+  );
+});
+
+test('bin/idd-onboard.mjs --verify wires --target-base-ref through the CLI', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    sourceRoot,
+    '--target',
+    targetRoot,
+    '--hold',
+    DRIFT_MODULE,
+    '--target-base-ref',
+    'HEAD',
+  ]);
+  assert.equal(status, 0);
+  assert.deepEqual(
+    (verdict.heldSchemaDrift as { findings: unknown[] }).findings,
+    [{ schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE }],
   );
 });
 

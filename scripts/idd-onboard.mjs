@@ -2463,6 +2463,62 @@ function splitGlobAlternatives(text, separator) {
   alternatives.push(text.slice(start));
   return alternatives;
 }
+function expandGlobRange(text) {
+  const numeric =
+    /^(?<start>-?\d+)\.\.(?<end>-?\d+)(?:\.\.(?<step>-?\d+))?$/u.exec(text);
+  if (numeric?.groups !== undefined) {
+    const start = Number(numeric.groups.start);
+    const end = Number(numeric.groups.end);
+    const requestedStep = Number(numeric.groups.step ?? 0);
+    const step = requestedStep || (start <= end ? 1 : -1);
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      !Number.isSafeInteger(step) ||
+      (start < end && step < 0) ||
+      (start > end && step > 0)
+    ) {
+      return null;
+    }
+    const values = [];
+    const width = Math.max(
+      numeric.groups.start.replace(/^-?/u, '').length,
+      numeric.groups.end.replace(/^-?/u, '').length,
+    );
+    for (
+      let value = start;
+      (step > 0 && value <= end) || (step < 0 && value >= end);
+      value += step
+    ) {
+      if (values.length >= 1024) {
+        return ['*'];
+      }
+      const sign = value < 0 ? '-' : '';
+      const absolute = Math.abs(value).toString().padStart(width, '0');
+      values.push(`${sign}${absolute}`);
+    }
+    return values;
+  }
+  const alphabetic = /^(?<start>[A-Za-z])\.\.(?<end>[A-Za-z])$/u.exec(text);
+  if (alphabetic?.groups !== undefined) {
+    const start = alphabetic.groups.start.codePointAt(0) ?? 0;
+    const end = alphabetic.groups.end.codePointAt(0) ?? 0;
+    const step = start <= end ? 1 : -1;
+    const values = [];
+    for (
+      let value = start;
+      (step > 0 && value <= end) || (step < 0 && value >= end);
+      value += step
+    ) {
+      if (values.length >= 1024) {
+        return ['*'];
+      }
+      values.push(String.fromCodePoint(value));
+    }
+    return values;
+  }
+  return null;
+}
 function globPatternToRegex(pattern) {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -2515,10 +2571,9 @@ function globPatternToRegex(pattern) {
       if (closing === -1) {
         expression += '\\{';
       } else {
-        const alternatives = splitGlobAlternatives(
-          pattern.slice(index + 1, closing),
-          ',',
-        );
+        const content = pattern.slice(index + 1, closing);
+        const alternatives =
+          expandGlobRange(content) ?? splitGlobAlternatives(content, ',');
         expression += `(?:${alternatives.map(globPatternToRegex).join('|')})`;
         index = closing;
       }
