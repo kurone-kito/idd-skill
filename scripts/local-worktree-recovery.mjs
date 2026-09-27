@@ -1708,6 +1708,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: plannedDestination,
+        copyFailed: true,
       });
       continue;
     }
@@ -1716,6 +1717,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: plannedDestination,
+        copyFailed: false,
       });
       continue;
     }
@@ -1731,6 +1733,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: destination,
+        copyFailed: true,
       });
       continue;
     }
@@ -1743,8 +1746,9 @@ function planAndMaybePreserve(
       submoduleAdminCopyFailed = true;
       submoduleAdminCopies.push({
         path: submodule.path,
-        copiedTo: null,
+        copiedTo: destination,
         plannedTo: destination,
+        copyFailed: true,
       });
       continue;
     }
@@ -1752,6 +1756,7 @@ function planAndMaybePreserve(
       path: submodule.path,
       copiedTo: destination,
       plannedTo: destination,
+      copyFailed: false,
     });
   }
   const submoduleInProgressOperations = Array.from(submoduleOperations).flatMap(
@@ -1854,7 +1859,13 @@ function preservationVerified(preserve, pathExists) {
   }
   if (preserve.submoduleAdminCopyFailed) return false;
   for (const admin of preserve.submoduleAdminCopies) {
-    if (admin.copiedTo === null || !pathExists(admin.copiedTo)) return false;
+    if (
+      admin.copyFailed ||
+      admin.copiedTo === null ||
+      !pathExists(admin.copiedTo)
+    ) {
+      return false;
+    }
   }
   if (preserve.worktreeAdminCopyFailed) return false;
   if (
@@ -1967,6 +1978,7 @@ function reverifyPreservationArtifactsFresh(preserve, targetPath, deps) {
     }
   }
   for (const admin of preserve.submoduleAdminCopies) {
+    if (admin.copyFailed) return false;
     if (admin.copiedTo !== null && !copyVerified(admin.copiedTo)) {
       return false;
     }

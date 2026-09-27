@@ -5709,9 +5709,83 @@ test('dry-run plans an initialized submodule admin export without copying it', (
       path: 'submodule',
       copiedTo: null,
       plannedTo: '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+      copyFailed: false,
     },
   ]);
   assert.equal(verdict.plan.removal?.ran, false);
+});
+
+test('retains a partial initialized-submodule admin copy and blocks removal', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/tags/private-tag\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'stash' &&
+        argv[1] === 'list'
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'stash@{0}: On main: pre-existing\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-list' &&
+        argv.includes('--not')
+      ) {
+        return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir')
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/linked/.git/modules/submodule\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => {
+      copied.push(to);
+      throw new Error('copy interrupted after partial write');
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  const entry = verdict.plan.submoduleAdminCopies[0];
+  assert.equal(entry?.copiedTo, '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl');
+  assert.equal(entry?.copyFailed, true);
+  assert.deepEqual(copied, ['/tmp/preserve/submodule-gitdir/c3VibW9kdWxl']);
+  assert.equal(verdict.plan.removal, null);
+  assert.equal(verdict.mutated, true);
 });
 
 test('a failed `git log @{u}..HEAD` (or HEAD) probe blocks removal instead of reading as no unpushed commits (Copilot/Codex review finding)', () => {
