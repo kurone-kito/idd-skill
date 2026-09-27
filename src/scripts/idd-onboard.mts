@@ -2747,7 +2747,7 @@ function isBlockClosingBrace(text: string, index: number): boolean {
             )) ||
           /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
-          /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
+          /(?:^|[;}])\s*(?:(?:@[^\n;{}]+)\s*)*(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
             openingPrefix,
           )
         );
@@ -4048,7 +4048,7 @@ function globPatternToRegex(
       expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
     } else if (character === '?') {
       let questionEnd = index + 1;
-      while (pattern[questionEnd] === '?') {
+      while (pattern[questionEnd] === '?' && pattern[questionEnd + 1] !== '(') {
         questionEnd += 1;
       }
       const captureName = `__iddQuestion${questionCaptures.length}`;

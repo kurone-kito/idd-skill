@@ -4326,6 +4326,19 @@ test('checkHeldSchemaDrift ignores regex literals after class declarations', () 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after decorated class declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "@sealed\nclass Parser {} /readdirSync('schemas')/.test(text);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after function declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5823,6 +5836,26 @@ test('checkHeldSchemaDrift resolves import.meta.url directory scans', () => {
   });
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift preserves question runs before optional extglobs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/??(a|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/a.json', heldModulePath: DRIFT_MODULE },
   ]);
 });
 
