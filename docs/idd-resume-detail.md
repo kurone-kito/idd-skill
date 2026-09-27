@@ -449,7 +449,7 @@ could ever observe it as 'alive'".
    - `git -C <path> submodule status --recursive`
    - `git -C <path> submodule foreach --recursive 'git status
      --porcelain --ignored --untracked-files=normal; git stash list;
-     git rev-list --all --not --remotes --count'`
+     git rev-list HEAD --branches --not --remotes --tags --count'`
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
    found no lock (the legacy pre-claim-id release case has no

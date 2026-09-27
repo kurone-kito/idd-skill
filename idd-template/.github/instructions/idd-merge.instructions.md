@@ -518,19 +518,19 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Off-default `{development-branch}`: `git switch <default-branch>`
    once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, never inside the one being
-   removed. Any removal (plain or `--force`) silently discards
-   ignored files too, including inside a submodule. Scope Git
+   removed. Removal (plain or `--force`) silently discards ignored
+   files, including inside submodules. Scope Git
    commands to `<path>`. Inspect leftover files under a `-`
    submodule path (not a repo).
 
-   Use `--untracked-files=normal` (not `all`). A clean submodule
-   worktree can still hide a stash or unpushed commit:
+   Use `--untracked-files=normal` (not `all`). A clean submodule can
+   still hide a stash or unpushed commit:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
    - `git -C <path> submodule foreach --recursive 'git status
      --porcelain --ignored --untracked-files=normal; git stash list;
-     git rev-list --all --not --remotes --count'`
+     git rev-list HEAD --branches --not --remotes --tags --count'`
 
    Generated output is disposable only when a configured command
    reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
