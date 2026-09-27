@@ -1329,7 +1329,7 @@ function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
   for (const [scope, paths] of pathsByScope) {
     const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
     const cleaned = deps.runGit(
-      ['clean', '-fdX', '--', ...Array.from(paths)],
+      ['clean', '-fdx', '--', ...Array.from(paths)],
       scopePath,
     );
     if (!cleaned.ok) {

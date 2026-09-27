@@ -4617,7 +4617,9 @@ test('primary recovery removes preserved ignored files before reporting release'
           };
         }
         if (argv[0] === 'clean') {
-          events.push(`clean:${cwd}:${argv.at(-1)}`);
+          events.push(
+            `clean:${cwd}:${argv.slice(1, 3).join(' ')}:${argv.at(-1)}`,
+          );
           ignoredPresent = false;
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
@@ -4658,7 +4660,7 @@ test('primary recovery removes preserved ignored files before reporting release'
       deps,
     );
     assert.deepEqual(events.slice(-3), [
-      `clean:${root}:stale.env`,
+      `clean:${root}:-fdx --:stale.env`,
       'checkout',
       'submodule-update',
     ]);
