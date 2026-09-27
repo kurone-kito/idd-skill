@@ -3375,6 +3375,12 @@ function globPatternToRegex(
           ? translatedGroups[0]
           : `(?:${translatedGroups.join('|')})`;
       index = closing;
+    } else if (
+      character === '*' &&
+      pattern[index + 1] === '*' &&
+      pattern[index + 2] === '('
+    ) {
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
     } else if (character === '*' && pattern[index + 1] === '*') {
       index += 1;
       if (segmentStart && pattern[index + 1] === '/') {
@@ -3430,7 +3436,7 @@ function globPatternToRegex(
           ascii: '\\x00-\\x7F',
           blank: ' \\t',
           cntrl: '\\x00-\\x1F\\x7F',
-          digit: '0-9',
+          digit: '\\p{Nd}',
           graph: '\\x21-\\x7E',
           lower: '\\p{Ll}',
           print: '\\x20-\\x7E',

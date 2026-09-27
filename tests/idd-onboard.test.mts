@@ -4717,6 +4717,26 @@ test('checkHeldSchemaDrift preserves Unicode POSIX alpha matches', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves Unicode POSIX digit matches', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[[:digit:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/١.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/١.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/١.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift excludes dotfiles from wildcard glob matches', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5171,6 +5191,29 @@ test('checkHeldSchemaDrift bounds large extglob brace expansions', () => {
   assert.deepEqual(result.findings, [
     {
       schemaOrFixturePath: 'schemas/aaaaaaaaaaa.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
+test('checkHeldSchemaDrift preserves extglobs after adjacent stars', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/**(a|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/widget.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
