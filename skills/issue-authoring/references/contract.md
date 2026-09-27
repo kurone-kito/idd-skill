@@ -572,7 +572,9 @@ Ask these checks:
    include the base-reference near-ceiling ratchet and full
    `contextCeiling` policy in the proposed pass/fail result. Use the linked
    Context ceiling section for threshold, absolute-limit, and exemption
-   mechanics. Include every other applicable
+   mechanics. When the draft also changes `noticeUtilizationPct`, record the
+   lower of the base and proposed values for the near-ceiling-ratchet result.
+   Include every other applicable
    manifest budget, including `instructionSizeBudgets` per-file limits and
    their near-ceiling ratchets, when the draft changes a governed file or
    proposes a budget-policy edit, using the target repository's own
@@ -580,15 +582,15 @@ Ask these checks:
    Record each affected bundle or file's measured total, configured limit,
    utilization, applicable ceiling, ratchet status (`not applicable` when no
    relevant increase is proposed), and pass/fail result in the draft's
-   headroom claim. These checks preserve the observed regressions in
+   headroom claim. If no applicable budget entry is configured, or the target
+   repository does not define these source-repository-only settings, do not
+   claim headroom: state that no repository-configured byte/context ceiling
+   was found or use the target's own declared budget checks when available.
+   These checks preserve the observed regressions in
    [#1213](https://github.com/kurone-kito/idd-skill/issues/1213) (closed
    2026-07-03) and [#1259](https://github.com/kurone-kito/idd-skill/issues/1259)
    (closed 2026-07-04), where recovered headroom regressed without an upper
-   bound. If the target repository
-   does not define these source-repository-only settings, do not apply this
-   repository's values: use the target's own declared budget checks when
-   available, or state that no repository-configured byte/context ceiling
-   was found instead of claiming headroom. Use the
+   bound. Use the
    [Context ceiling](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#context-ceiling)
    section as the authoritative policy reference instead of copying its
    mechanics into the issue.
