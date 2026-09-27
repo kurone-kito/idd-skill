@@ -3937,6 +3937,31 @@ test('checkHeldSchemaDrift honors selective glob filters', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift normalizes relative directory scan paths', () => {
+  for (const moduleText of [
+    "readdirSync('./schemas');\n",
+    "readdirSync('schemas/');\n",
+    "globSync('./schemas/*.json');\n",
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
 test('checkHeldSchemaDrift supports glob character classes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

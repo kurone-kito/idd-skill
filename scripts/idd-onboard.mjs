@@ -2387,6 +2387,28 @@ function pathExpressionCandidates(text) {
   }
   return literals;
 }
+function normalizeManifestScanPath(path) {
+  const normalized = path.replaceAll('\\', '/');
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+  const segments = [];
+  for (const segment of normalized.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      if (segments.at(-1) !== undefined && segments.at(-1) !== '..') {
+        segments.pop();
+      } else {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
+}
 function isGlobPattern(text) {
   return /[?*[\]{}]|\+\(/u.test(text);
 }
@@ -2473,17 +2495,21 @@ function moduleScansManifestDirectory(text, targetPath) {
           .filter((cwd) => !isGlobPattern(cwd))
           .map((cwd) => `${cwd}/${candidate}`),
       ),
-    ].flat();
+    ]
+      .flat()
+      .map(normalizeManifestScanPath);
+    const normalizedTargetPath = normalizeManifestScanPath(targetPath);
+    const normalizedDirectory = normalizeManifestScanPath(directory);
     if (
       candidates.some(
         (candidate) =>
-          globPatternMatchesPath(candidate, targetPath) ||
+          globPatternMatchesPath(candidate, normalizedTargetPath) ||
           (!isGlobPattern(candidate) &&
             (recursive
               ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
-                  targetPath,
+                  normalizedTargetPath,
                 )
-              : candidate === directory)),
+              : candidate === normalizedDirectory)),
       )
     ) {
       return true;
