@@ -1189,6 +1189,71 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('prunable shortcut rechecks claim identity after copying private admin data', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    confirmBlock: () => {
+      confirmCalls += 1;
+      const claimId = confirmCalls >= 4 ? 'claim-y' : 'claim-x';
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: claimId, branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: 'unreadable',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: () => {},
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 4);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /final prunable-worktree routing/);
+});
+
 test('prunable shortcut stops when private admin-directory ownership cannot be established', () => {
   let removeCalled = false;
   const deps = fakeDeps({
@@ -1363,6 +1428,66 @@ test('forced retry uses the identity-bound removal guard', () => {
   assert.equal(forcedRunCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /identity-bound forced removal/);
+});
+
+test('forced retry re-verifies preservation after the final identity checks', () => {
+  let firstRemovalAttempt = false;
+  let guardCalls = 0;
+  let stashListCalls = 0;
+  const tag = 'idd-lwr claim-x';
+  const stashEntry = `stash@{0}: On issue/1-task: ${tag}`;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: firstRemovalAttempt ? '' : ' M tracked.txt\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashListCalls === 1 || stashListCalls === 8
+              ? ''
+              : `${stashEntry}\n`,
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
+      guardCalls += 1;
+      if (!force) {
+        firstRemovalAttempt = true;
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'submodules cannot be moved or removed',
+        };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(stashListCalls, 8);
+  assert.equal(guardCalls, 1);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /forced-removal preservation artifact/);
 });
 
 test('legacy lockless claims may complete the forced retry through the guard', () => {

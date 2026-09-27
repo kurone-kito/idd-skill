@@ -2473,6 +2473,33 @@ export function runLocalWorktreeRecovery(args, deps) {
           'the prunable-and-absent record changed before forced removal; stopping before removal',
         );
       }
+      // The private admin-directory copy above is itself a mutation window:
+      // claim state can change while it runs, even though the target record
+      // remains prunable and absent. Re-run the same routing/claim identity
+      // check immediately before the forced removal so the shortcut cannot
+      // delete a worktree whose stale claim has already changed hands.
+      const finalShortcutConfirm = deps.confirmBlock(cwd);
+      const finalShortcutRouting = finalShortcutConfirm.routing;
+      const finalShortcutRecovered = finalShortcutRouting
+        ? extractRecoveredClaim(finalShortcutRouting)
+        : null;
+      const finalShortcutStillMatches =
+        finalShortcutConfirm.ok &&
+        finalShortcutRouting !== null &&
+        finalShortcutRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(finalShortcutRouting.reason) &&
+        (finalShortcutRouting.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        ) &&
+        finalShortcutRecovered?.claimId === recoveredClaimId &&
+        finalShortcutRecovered.branch === recoveredBranch;
+      if (!finalShortcutStillMatches) {
+        return recordRemovalFailure(
+          'the final prunable-worktree routing/claim identity no longer matches; stopping before forced removal',
+        );
+      }
     }
     let remove;
     if (shortcut.eligible) {
@@ -2565,6 +2592,27 @@ export function runLocalWorktreeRecovery(args, deps) {
       if (!lockMatchesRecoveredClaim(forceLock, recoveredClaimId)) {
         return recordRemovalFailure(
           'the worktree-local claim lock no longer matches before forced removal; stopping before removal',
+        );
+      }
+      // The final routing/lock checks above are another concurrency window.
+      // Reverify every stash, backup ref, and copied artifact immediately
+      // before the identity-bound forced removal, just as the ordinary
+      // linked path does before its first removal attempt.
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a forced-removal preservation artifact disappeared after the final identity checks; stopping before removal',
         );
       }
       if (!deps.removeWorktreeIfLockMatches) {
