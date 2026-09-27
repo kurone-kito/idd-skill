@@ -3499,3 +3499,64 @@ test('keeps parser token provisioning local (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let missing credential possession pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 211,
+    title: 'document credential storage',
+    body: 'We do not have the credential. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a required approval receipt pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 212,
+    title: 'document credential storage',
+    body:
+      'Implementation must receive maintainer approval before work begins. ' +
+      'Make a targeted change in a single file. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not treat a production drop as removal framing (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 213,
+    title: 'document credential storage',
+    body:
+      'The production drop requires maintainer approval before deployment. ' +
+      'Make a targeted change. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let a negative-modal approval prerequisite pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 214,
+    title: 'document credential storage',
+    body: 'Work will not begin without maintainer approval. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps approval-gate defect descriptions autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 215,
+    title: 'Fix deployment approval bug',
+    body:
+      'Fix the bug where deployment requires maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
