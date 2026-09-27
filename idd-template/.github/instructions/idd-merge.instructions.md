@@ -531,7 +531,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --all --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
    Discard only command output; preserve all else.

@@ -452,7 +452,7 @@ could ever observe it as 'alive'".
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --count --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --all --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
