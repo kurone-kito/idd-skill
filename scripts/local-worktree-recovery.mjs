@@ -2340,6 +2340,18 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.step1.reason;
       return verdict;
     }
+    if (!args.apply) {
+      const preserveDirPresence = pathPresenceForDeps(
+        deps,
+        preserveDirResolved,
+      );
+      if (preserveDirPresence !== 'absent') {
+        verdict.step1.outcome = 'preserve-dir-exists';
+        verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must name a new directory; the destination already exists or cannot be inspected during dry-run`;
+        verdict.result = verdict.step1.reason;
+        return verdict;
+      }
+    }
   }
   // Step 1: confirm-the-block ALWAYS runs first, per the written procedure
   // ("Run the profile-selected resume-claim-routing helper... If <path> no

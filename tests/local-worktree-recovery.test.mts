@@ -2037,7 +2037,7 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
 
 test('dry-run planning failures clear the ready gate', () => {
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== '/repo/linked' && path !== '/tmp/explicit',
     findWorktreeAdminDir: () => ({
       path: null,
       error: 'no readable gitdir pointer matched the target',
@@ -2091,10 +2091,21 @@ test('dry-run preservation probe failures clear the ready gate', () => {
   );
 });
 
+test('dry-run rejects an existing explicit preserve directory', () => {
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, preserveDir: '/tmp/preserve' }),
+    fakeDeps(),
+  );
+  assert.equal(verdict.step1.outcome, 'preserve-dir-exists');
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /must name a new directory/);
+});
+
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== '/repo/linked' && path !== '/tmp/explicit',
     findWorktreeAdminDir: () => ({
       path: '/repo/primary/.git/worktrees/linked',
       error: null,
@@ -5610,6 +5621,7 @@ test('copies linked worktree admin data for an interrupted operation without loc
 test('dry-run plans an initialized submodule admin export without copying it', () => {
   const copied: string[] = [];
   const deps = fakeDeps({
+    pathExists: (path) => path !== '/tmp/preserve',
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
         return {

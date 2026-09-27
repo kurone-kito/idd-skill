@@ -427,6 +427,7 @@ export interface LocalWorktreeRecoveryVerdict {
       | 'target-gitdir-unresolved'
       | 'blocked-unreadable'
       | 'preserve-dir-inside-target'
+      | 'preserve-dir-exists'
       | 'worktree-list-failed';
     claimId: string | null;
     branch: string | null;
@@ -2915,6 +2916,18 @@ export function runLocalWorktreeRecovery(
       verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must be outside the target worktree (${targetPath}) -- a backup destination inside it would be deleted by the removal it is meant to survive`;
       verdict.result = verdict.step1.reason;
       return verdict;
+    }
+    if (!args.apply) {
+      const preserveDirPresence = pathPresenceForDeps(
+        deps,
+        preserveDirResolved,
+      );
+      if (preserveDirPresence !== 'absent') {
+        verdict.step1.outcome = 'preserve-dir-exists';
+        verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must name a new directory; the destination already exists or cannot be inspected during dry-run`;
+        verdict.result = verdict.step1.reason;
+        return verdict;
+      }
     }
   }
 
