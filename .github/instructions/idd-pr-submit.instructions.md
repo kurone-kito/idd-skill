@@ -514,8 +514,9 @@ completion.
    use the D1 signing wrapper (including its continuation) when primary
    signing is non-interactive-hostile. Force-push with
    `--force-with-lease` only when repository policy permits it; otherwise
-   hold. Amend before merge, repeat this step once, and hold if the match
-   remains.
+   hold. Amend before merge, repeat this step once, and if the match
+   remains, post a hold note on the issue citing the PR URL and stop
+   before D4.
 
    **Scripted-rebase hazards**: `rebase.abbreviateCommands=true` can
    make a non-interactive todo list use `p`/`r` instead of
@@ -533,6 +534,9 @@ completion.
    After any scripted reword or rebase, verify that the target message
    changed and rerun the stray-keyword scan; do not trust only the exit
    status or `Successfully rebased` text.
+
+   These hazards were observed while recovering [PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431)
+   for issue #3285; the field report is tracked in issue #3552.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
