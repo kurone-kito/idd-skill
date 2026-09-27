@@ -592,7 +592,11 @@ Ask these checks:
 6. When a draft proposes changes to files listed in the target repository's
    configured `bundleBudgets` entries — including `.github/instructions/`
    files, their `idd-template/` sources, and onboarding documents — first
-   resolve that repository's own bundle-budget policy. For every configured
+   resolve that repository's own bundle-budget policy. For a changed
+   `idd-template/` source that is not itself listed in `bundleBudgets.files`,
+   resolve its generated target through the target repository's `syncPairs`
+   (or equivalent source-to-target mapping) before selecting bundles;
+   evaluate that target path as changed. For every configured
    bundle containing a changed file, compare its measured,
    banner-stripped total with its `bundleBudgets.limitBytes` and apply the
    `contextCeiling.maxUtilizationPct` constraint before claiming byte-budget

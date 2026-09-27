@@ -160,8 +160,10 @@ finding and re-run before publishing; a `passed: false` report means
 the draft is not ready yet, regardless of how complete the narrative
 reads.
 
-When the proposed issue touches `.github/instructions/` files or their
-`idd-template/` sources, also apply the contract's
+When the proposed issue touches a file listed in the target repository's
+configured `bundleBudgets` entries — or an `idd-template/` source that maps to
+one through `syncPairs` (or an equivalent source-to-target mapping), including
+onboarding documents — also apply the contract's
 [context-ceiling check](contract.md#codebase-fidelity-validation) before treating
 `bundleBudgets.limitBytes` as available headroom; that limit is not the
 only constraint.
