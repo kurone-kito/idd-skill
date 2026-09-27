@@ -54,6 +54,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep,
@@ -75,7 +76,6 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadIddConfig } from './idd-config.mts';
 import {
   type LocalWorktreeRecord,
   parseLocalWorktreeList,
@@ -3431,11 +3431,11 @@ export function runLocalWorktreeRecovery(
  * `resolveCurrentGithubRepository` (never a direct `gh` spawn;
  * `tests/gh-spawn-guard.test.mts` enforces this repository-wide).
  */
-function resolveDevelopmentBranchProduction(
+export function resolveDevelopmentBranchProduction(
   args: Pick<LocalWorktreeRecoveryArgs, 'owner' | 'repo'>,
   repositoryRoot: string,
 ): string {
-  const config = loadIddConfig(repositoryRoot);
+  const config = loadRecoveryIddConfig(repositoryRoot);
   const inspection = inspectDevelopmentBranch(config);
   if (inspection.status === 'invalid') {
     throw new Error(
@@ -3479,6 +3479,41 @@ function resolveDevelopmentBranchProduction(
 }
 
 /**
+ * Read the recovery helper's local config without collapsing malformed or
+ * unreadable files into the legitimate "not configured" case. The shared
+ * `loadIddConfig()` contract is intentionally permissive for its existing
+ * callers, but primary-worktree recovery must not check out a live default
+ * branch when the local policy file is present and broken.
+ */
+function loadRecoveryIddConfig(repositoryRoot: string): unknown | null {
+  const configPath = join(repositoryRoot, '.github/idd/config.json');
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error(
+        `expected a JSON object at the top level, got ${
+          parsed === null
+            ? 'null'
+            : Array.isArray(parsed)
+              ? 'an array'
+              : `a ${typeof parsed}`
+        }`,
+      );
+    }
+    return parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error(
+      `could not read ${configPath}: ${errorMessageForProduction(error)}`,
+    );
+  }
+}
+
+/**
  * Copy recovery data without leaving links into the removed worktree dangling.
  * Symlinks whose resolved target is inside `sourceRoot` are materialized;
  * links to external targets retain their original link text. A dangling link
@@ -3494,11 +3529,48 @@ export function copyPathWithSafeSymlinks(
   const sourceRootReal = realpathSync(sourceRootAbsolute);
   const activeDirectories = new Set<string>();
 
-  const ensureDestinationParent = (destination: string): void => {
-    mkdirSync(dirname(destination), { recursive: true });
+  const ensureDestinationParent = (destination: string): string => {
+    const parent = resolve(dirname(destination));
+    const root = parse(parent).root;
+    let current = root;
+    const suffix = relative(root, parent);
+    for (const segment of suffix.split(sep).filter(Boolean)) {
+      current = join(current, segment);
+      try {
+        const existing = lstatSync(current);
+        if (!existing.isDirectory() || existing.isSymbolicLink()) {
+          throw new Error(
+            `destination parent is not a real directory: ${current}`,
+          );
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        mkdirSync(current);
+        const created = lstatSync(current);
+        if (!created.isDirectory() || created.isSymbolicLink()) {
+          throw new Error(
+            `destination parent was replaced during creation: ${current}`,
+          );
+        }
+      }
+    }
+    return realpathSync(parent);
   };
 
-  const ensureDestinationDirectory = (destination: string): void => {
+  const assertDestinationParentStable = (
+    destination: string,
+    expectedParentReal: string,
+  ): void => {
+    const actualParentReal = realpathSync(dirname(destination));
+    if (actualParentReal !== expectedParentReal) {
+      throw new Error(
+        `destination parent changed during copy: ${dirname(destination)}`,
+      );
+    }
+  };
+
+  const ensureDestinationDirectory = (destination: string): string => {
+    const parentReal = ensureDestinationParent(destination);
     try {
       const existing = lstatSync(destination);
       if (!existing.isDirectory() || existing.isSymbolicLink()) {
@@ -3506,13 +3578,19 @@ export function copyPathWithSafeSymlinks(
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      mkdirSync(destination, { recursive: true });
+      mkdirSync(destination);
     }
+    assertDestinationParentStable(destination, parentReal);
+    const created = lstatSync(destination);
+    if (!created.isDirectory() || created.isSymbolicLink()) {
+      throw new Error(`destination is not a real directory: ${destination}`);
+    }
+    return parentReal;
   };
 
   const copyEntry = (source: string, destination: string): void => {
     const sourceStat = lstatSync(source);
-    ensureDestinationParent(destination);
+    const parentReal = ensureDestinationParent(destination);
 
     if (sourceStat.isSymbolicLink()) {
       const linkText = readlinkSync(source, 'utf8');
@@ -3541,6 +3619,7 @@ export function copyPathWithSafeSymlinks(
         ? linkText
         : relative(dirname(destination), externalTarget) || '.';
       symlinkSync(destinationLink, destination);
+      assertDestinationParentStable(destination, parentReal);
       return;
     }
 
@@ -3569,7 +3648,13 @@ export function copyPathWithSafeSymlinks(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    assertDestinationParentStable(destination, parentReal);
     copyFileSync(source, destination);
+    assertDestinationParentStable(destination, parentReal);
+    const copied = lstatSync(destination);
+    if (copied.isDirectory() || copied.isSymbolicLink()) {
+      throw new Error(`destination is not a regular file: ${destination}`);
+    }
   };
 
   copyEntry(from, to);

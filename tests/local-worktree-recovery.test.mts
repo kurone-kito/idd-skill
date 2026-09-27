@@ -5,6 +5,7 @@ import {
   spawnSync,
 } from 'node:child_process';
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -37,6 +38,7 @@ import {
   type LocalWorktreeRecoveryDeps,
   normalizeGitWorktreePathForComparison,
   parseArgs,
+  resolveDevelopmentBranchProduction,
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
   submoduleStatusEntries,
@@ -85,6 +87,43 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
     assert.equal(
       readFileSync(join(destination, 'external-relative-link'), 'utf8'),
       'external\n',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses a symlinked destination parent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-parent-'));
+  const source = join(root, 'source.txt');
+  const outside = join(root, 'outside');
+  const destinationParent = join(root, 'preserve');
+  try {
+    writeFileSync(source, 'source\n');
+    mkdirSync(outside);
+    symlinkSync(outside, destinationParent);
+    assert.throws(
+      () => copyPathWithSafeSymlinks(source, join(destinationParent, 'copy')),
+      /destination parent is not a real directory/,
+    );
+    assert.equal(existsSync(join(outside, 'copy')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('primary recovery refuses malformed local config before default-branch lookup', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-config-'));
+  try {
+    mkdirSync(join(root, '.github/idd'), { recursive: true });
+    writeFileSync(join(root, '.github/idd/config.json'), '{broken');
+    assert.throws(
+      () =>
+        resolveDevelopmentBranchProduction(
+          { owner: 'owner', repo: 'repo' },
+          root,
+        ),
+      /could not read .*config\.json/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
