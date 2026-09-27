@@ -1147,7 +1147,10 @@ future inventory reviews do not need to re-infer their role from code.
   ```
 
   `verify-import-mirror` is not an `idd-*` bin in the `package-manager` or
-  `ephemeral-npx` profiles. The installed-package path above is a deliberate
+  `ephemeral-npx` profiles. This profile-mismatch failure mode has been
+  observed across adopters and tracked in
+  [kurone-kito/idd-skill#1674](https://github.com/kurone-kito/idd-skill/issues/1674).
+  The installed-package path above is a deliberate
   package-manager-only runtime-manifest exception: it is recorded under
   `packageManagerOnlyHelpers` rather than `commandCatalog` or
   `managedPackageJsonScripts` because this source-repository verification

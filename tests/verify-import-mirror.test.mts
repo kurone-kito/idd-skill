@@ -326,6 +326,29 @@ test('rule 2 pass: deliberate command restores normalize only configured JSON ke
   assert.equal(result.contentClass, 'structural-json-match');
 });
 
+test('rule 2 pass: a normalized key copied from upstream needs no baseline value', () => {
+  const result = classifyFileContent({
+    path: '.github/idd/config.json',
+    upstreamContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run fix"}}',
+    ),
+    targetContent: Buffer.from(
+      '{\n  "commands": {\n    "fix-validate": "pnpm run fix"\n  }\n}',
+    ),
+    targetBaseContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run old-fix"}}',
+    ),
+    generatedDirs: [],
+    jsonKeyNormalizations: [
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'fix-validate'],
+      },
+    ],
+  });
+  assert.equal(result.contentClass, 'structural-json-match');
+});
+
 test('rule 2 fail: JSON normalization does not hide unrelated policy changes', () => {
   const upstream = Buffer.from(
     '{"commands":{"fix-validate":"{{FIX_VALIDATE_COMMANDS}}"},"issueScope":"roadmap-first"}',

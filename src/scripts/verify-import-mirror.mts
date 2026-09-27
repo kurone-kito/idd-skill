@@ -506,8 +506,16 @@ function canonicalizeJsonWithTargetKeys(
   for (const entry of applicable) {
     const targetValue = readJsonKey(target.value, entry.keyPath);
     const targetBaseValue = readJsonKey(targetBase.value, entry.keyPath);
+    const upstreamValue = readJsonKey(upstream.value, entry.keyPath);
+    if (!targetValue.found || !upstreamValue.found) {
+      return null;
+    }
     if (
-      !targetValue.found ||
+      JSON.stringify(targetValue.value) === JSON.stringify(upstreamValue.value)
+    ) {
+      continue;
+    }
+    if (
       !targetBaseValue.found ||
       JSON.stringify(targetValue.value) !==
         JSON.stringify(targetBaseValue.value) ||
