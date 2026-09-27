@@ -236,6 +236,8 @@ export interface StashPlanEntry {
   baselineCount: number;
   stashed: boolean;
   verifiedCount: number | null;
+  /** Exact default-format stash-list line created by this recovery. */
+  createdStashEntry: string | null;
   unmergedFallbackCopiedTo: string | null;
   /** Every individual destination attempted by the unmerged-path fallback.
    * The directory itself is not proof that each dirty path survived. */
@@ -283,6 +285,7 @@ export interface IgnoredFileEntry {
 export interface SubmoduleAdminCopyEntry {
   path: string;
   copiedTo: string | null;
+  plannedTo: string | null;
 }
 
 export interface PrunableAdminCopyEntry {
@@ -922,7 +925,7 @@ function isCopyDestinationOutsideKnownPaths(
       deps.realpathOrNull,
       deps.readlinkOrNull,
     );
-    return pathReal === null || !isPathContainedIn(destinationReal, pathReal);
+    return pathReal !== null && !isPathContainedIn(destinationReal, pathReal);
   });
 }
 
@@ -1041,7 +1044,7 @@ export function submoduleStatusEntries(
   raw: string,
 ): { status: string; path: string }[] {
   const entries: { status: string; path: string }[] = [];
-  for (const line of raw.split('\n')) {
+  for (const line of raw.split(/\r?\n/)) {
     if (line.length === 0) continue;
     const match = SUBMODULE_STATUS_LINE_PATTERN.exec(line);
     if (!match) continue;
@@ -1053,6 +1056,14 @@ export function submoduleStatusEntries(
     entries.push({ status, path });
   }
   return entries;
+}
+
+function submoduleStatusOutputIsValid(raw: string): boolean {
+  return raw
+    .split(/\r?\n/)
+    .every(
+      (line) => line.length === 0 || SUBMODULE_STATUS_LINE_PATTERN.test(line),
+    );
 }
 
 /** Convert recursive repository-relative submodule paths into paths relative
@@ -1125,6 +1136,7 @@ function planAndMaybeStashScope(
     baselineCount,
     stashed: false,
     verifiedCount: null,
+    createdStashEntry: null,
     unmergedFallbackCopiedTo: null,
     unmergedFallbackCopiedFiles: [],
     unmergedFallbackAllPreserved: null,
@@ -1212,6 +1224,10 @@ function planAndMaybeStashScope(
   entry.stashListReadFailed = entry.stashListReadFailed || !afterList.ok;
   entry.verifiedCount = afterList.ok
     ? countTaggedStashEntries(afterList.stdout, tag)
+    : null;
+  entry.createdStashEntry = afterList.ok
+    ? (afterList.stdout.split('\n').find((line) => line.endsWith(`: ${tag}`)) ??
+      null)
     : null;
   return entry;
 }
@@ -1394,6 +1410,7 @@ function planAndMaybePreserve(
     | 'realpathOrNull'
     | 'readlinkOrNull'
   >,
+  plannedPreserveDir: string | null = null,
 ): {
   preserveDir: string | null;
   inProgressOperation: InProgressOperation | null;
@@ -1438,9 +1455,13 @@ function planAndMaybePreserve(
     ['submodule', 'status', '--recursive'],
     path,
   );
-  const submodules = submoduleStatus.ok
-    ? submoduleStatusEntries(submoduleStatus.stdout)
-    : [];
+  const submoduleListFailed =
+    !submoduleStatus.ok ||
+    !submoduleStatusOutputIsValid(submoduleStatus.stdout);
+  const submodules =
+    submoduleStatus.ok && !submoduleListFailed
+      ? submoduleStatusEntries(submoduleStatus.stdout)
+      : [];
   // A clean initialized submodule's own stash scope handles the ` M path`
   // that the parent status probe reports for its dirty files. A `+` entry is
   // the same case with an unstaged submodule HEAD difference, so exclude it
@@ -1575,54 +1596,89 @@ function planAndMaybePreserve(
 
   const submoduleAdminCopies: SubmoduleAdminCopyEntry[] = [];
   let submoduleAdminCopyFailed = false;
-  if (apply) {
-    for (const submodule of submodules) {
-      if (!submodule.path || submodule.status === '-') continue;
-      const stash = stashes.find((entry) => entry.scope === submodule.path);
-      const ref = backupRefs.find((entry) => entry.scope === submodule.path);
-      const operation = submoduleOperations.get(submodule.path);
-      if (
-        submodule.status !== '+' &&
-        !stash?.stashed &&
-        !stash?.hasStashes &&
-        !ref?.written &&
-        !ref?.hasLocalOnlyRefs &&
-        operation === null
-      )
-        continue;
-      const submodulePath = join(path, submodule.path);
-      const gitDir = preserveDeps.runGit(
-        ['rev-parse', '--absolute-git-dir'],
-        submodulePath,
-      );
-      if (!gitDir.ok || !gitDir.stdout.trim()) {
-        submoduleAdminCopyFailed = true;
-        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
-        continue;
-      }
-      const preserveDirForAdmin = preserveDeps.ensurePreserveDir();
-      const destination = join(
-        preserveDirForAdmin,
-        'submodule-gitdir',
-        Buffer.from(submodule.path).toString('base64url'),
-      );
-      if (!isCopyDestinationOutsideTarget(destination, path, deps)) {
-        submoduleAdminCopyFailed = true;
-        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
-        continue;
-      }
-      try {
-        deps.copyPath(gitDir.stdout.trim(), destination);
-      } catch {
-        submoduleAdminCopyFailed = true;
-        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
-        continue;
-      }
+  for (const submodule of submodules) {
+    if (!submodule.path || submodule.status === '-') continue;
+    const stash = stashes.find((entry) => entry.scope === submodule.path);
+    const ref = backupRefs.find((entry) => entry.scope === submodule.path);
+    const operation = submoduleOperations.get(submodule.path);
+    const shouldCopy = apply
+      ? submodule.status === '+' ||
+        Boolean(
+          stash?.stashed ||
+            stash?.hasStashes ||
+            ref?.written ||
+            ref?.hasLocalOnlyRefs ||
+            operation !== null,
+        )
+      : submodule.status === '+' ||
+        Boolean(
+          stash?.hasChanges ||
+            stash?.hasStashes ||
+            ref?.hasUnpushed ||
+            ref?.hasLocalOnlyRefs ||
+            operation !== null,
+        );
+    if (!shouldCopy) continue;
+    const submodulePath = join(path, submodule.path);
+    const gitDir = preserveDeps.runGit(
+      ['rev-parse', '--absolute-git-dir'],
+      submodulePath,
+    );
+    const plannedDestination = plannedPreserveDir
+      ? join(
+          plannedPreserveDir,
+          'submodule-gitdir',
+          Buffer.from(submodule.path).toString('base64url'),
+        )
+      : null;
+    if (!gitDir.ok || !gitDir.stdout.trim()) {
+      submoduleAdminCopyFailed = true;
       submoduleAdminCopies.push({
         path: submodule.path,
-        copiedTo: destination,
+        copiedTo: null,
+        plannedTo: plannedDestination,
       });
+      continue;
     }
+    if (!apply) {
+      submoduleAdminCopies.push({
+        path: submodule.path,
+        copiedTo: null,
+        plannedTo: plannedDestination,
+      });
+      continue;
+    }
+    const preserveDirForAdmin = preserveDeps.ensurePreserveDir();
+    const destination = join(
+      preserveDirForAdmin,
+      'submodule-gitdir',
+      Buffer.from(submodule.path).toString('base64url'),
+    );
+    if (!isCopyDestinationOutsideTarget(destination, path, deps)) {
+      submoduleAdminCopyFailed = true;
+      submoduleAdminCopies.push({
+        path: submodule.path,
+        copiedTo: null,
+        plannedTo: destination,
+      });
+      continue;
+    }
+    try {
+      deps.copyPath(gitDir.stdout.trim(), destination);
+    } catch {
+      submoduleAdminCopyFailed = true;
+      submoduleAdminCopies.push({
+        path: submodule.path,
+        copiedTo: null,
+        plannedTo: destination,
+      });
+      continue;
+    }
+    submoduleAdminCopies.push({
+      path: submodule.path,
+      copiedTo: destination,
+      plannedTo: destination,
+    });
   }
 
   return {
@@ -1635,7 +1691,7 @@ function planAndMaybePreserve(
     ignoredFilesScanFailed,
     submoduleAdminCopies,
     submoduleAdminCopyFailed,
-    submoduleListFailed: !submoduleStatus.ok,
+    submoduleListFailed,
   };
 }
 
@@ -1683,7 +1739,8 @@ function preservationVerified(
     if (!stash.stashed) return false;
     if (
       stash.verifiedCount === null ||
-      stash.verifiedCount !== stash.baselineCount + 1
+      stash.verifiedCount !== stash.baselineCount + 1 ||
+      stash.createdStashEntry === null
     ) {
       return false;
     }
@@ -1747,15 +1804,11 @@ function reverifyPreservationArtifactsFresh(
     if (stash.stashed) {
       const list = runGit(['stash', 'list'], scopePath(stash.scope));
       if (!list.ok) return false;
-      // A lower bound, not exact equality: the fresh recheck's only
-      // question is "is THIS attempt's stash still there" -- a stale or
-      // concurrent same-tag entry appearing during the lock wait is MORE
-      // preservation than required, never less, so it must not fail this
-      // check (the step-3 verify immediately after the push already
-      // enforced exactly-one against its own baseline).
       if (
-        countTaggedStashEntries(list.stdout, stash.tag) <
-        stash.baselineCount + 1
+        stash.createdStashEntry === null ||
+        !list.stdout
+          .split(/\r?\n/)
+          .some((line) => line === stash.createdStashEntry)
       ) {
         return false;
       }
@@ -2203,6 +2256,7 @@ export function runLocalWorktreeRecovery(
         tag,
         false,
         deps,
+        args.preserveDir ? resolve(cwd, args.preserveDir) : null,
       );
       verdict.preserveDir = preserve.preserveDir;
       verdict.plan.inProgressOperation = preserve.inProgressOperation;
@@ -3080,7 +3134,13 @@ function ensurePreserveDirProduction(
       return preserveDirMemo;
     }
     if (explicit) {
-      preserveDirMemo = resolve(process.cwd(), explicit);
+      const explicitDir = resolve(process.cwd(), explicit);
+      if (pathExistsOnDisk(explicitDir)) {
+        throw new Error(
+          `local-worktree-recovery: --preserve-dir must name a new directory; refusing to overwrite existing recovery data at ${explicitDir}`,
+        );
+      }
+      preserveDirMemo = explicitDir;
       return preserveDirMemo;
     }
     // Validate the base before mkdtempSync creates anything. Otherwise a

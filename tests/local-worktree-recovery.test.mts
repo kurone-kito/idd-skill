@@ -1930,6 +1930,33 @@ test('a failed `git submodule status` list blocks removal instead of silently re
   assert.match(verdict.result, /could not be fully verified/);
 });
 
+test('malformed `git submodule status` output blocks removal instead of dropping a submodule', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'not a submodule record\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.submoduleListFailed, true);
+  assert.equal(removeCalled, false);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
 test('step 4 stops removal when the fresh claim/branch identity no longer matches step 1 (Copilot review finding)', () => {
   const deps = fakeDeps({
     confirmBlock: (() => {
@@ -2553,6 +2580,63 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   assert.equal(verdict.plan.submoduleAdminCopies[0]?.copiedTo !== null, true);
   assert.equal(copied.length, 1);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('dry-run plans an initialized submodule admin export without copying it', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked/submodule'
+              ? ' M changed.txt\n'
+              : ' M submodule\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir')
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/linked/.git/modules/submodule\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, preserveDir: '/tmp/preserve' }),
+    deps,
+  );
+  assert.deepEqual(copied, []);
+  assert.deepEqual(verdict.plan.submoduleAdminCopies, [
+    {
+      path: 'submodule',
+      copiedTo: null,
+      plannedTo: '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+    },
+  ]);
+  assert.equal(verdict.plan.removal?.ran, false);
 });
 
 test('a failed `git log @{u}..HEAD` (or HEAD) probe blocks removal instead of reading as no unpushed commits (Copilot/Codex review finding)', () => {
