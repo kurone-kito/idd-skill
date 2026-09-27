@@ -79,7 +79,10 @@ import {
   loadPolicyConfig,
 } from './idd-config.mts';
 import {
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
   findHtmlCommentRanges,
+  findIndentedCodeRanges,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
@@ -739,6 +742,14 @@ const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 // decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
 // hazard as MARKDOWN_LINK_START_PATTERN immediately above.
 const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
+
+// Matches a CommonMark shortcut reference link at the start of a string:
+// `[text]` whose next character is not `[` (full/collapsed reference), `(`
+// (inline link), or `:` (reference-definition declaration). Its visible
+// label is resolved against the document-wide definition map just like the
+// explicit reference-style form.
+const MARKDOWN_SHORTCUT_LINK_START_PATTERN = /^\[([^\n\u005D]+)](?![[(:])/;
+const MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN = /\[([^\n\u005D]+)](?![[(:])/g;
 
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
@@ -1683,13 +1694,23 @@ function looksLikeIssueMarkdownLink(
     }
   }
   const referenceMatch = text.match(MARKDOWN_REFERENCE_LINK_START_PATTERN);
-  if (referenceMatch === null || /#\d+/.test(referenceMatch[1])) {
-    return referenceMatch !== null;
+  if (referenceMatch !== null) {
+    if (/#\d+/.test(referenceMatch[1])) {
+      return true;
+    }
+    const definitionLabel =
+      referenceMatch[2].length === 0 ? referenceMatch[1] : referenceMatch[2];
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(definitionLabel),
+    );
+    return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
   }
-  const definitionLabel =
-    referenceMatch[2].length === 0 ? referenceMatch[1] : referenceMatch[2];
+  const shortcutMatch = text.match(MARKDOWN_SHORTCUT_LINK_START_PATTERN);
+  if (shortcutMatch === null || /#\d+/.test(shortcutMatch[1])) {
+    return shortcutMatch !== null;
+  }
   const target = referenceDefinitions.get(
-    normalizeLinkReferenceLabel(definitionLabel),
+    normalizeLinkReferenceLabel(shortcutMatch[1]),
   );
   return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
 }
@@ -1849,7 +1870,28 @@ function checkDependencyLineGrammar(
   // dependency mentions in comments, while real raw-HTML content stays
   // invisible to this scan.
   const normalizedRawText = rawText.replace(/\r\n/g, '\n');
-  for (const range of findHtmlCommentRanges(normalizedRawText)) {
+  const fencedRanges = findFencedCodeRanges(normalizedRawText);
+  const indentedRanges = findIndentedCodeRanges(
+    normalizedRawText,
+    fencedRanges,
+  );
+  const htmlBlockRanges = findHtmlBlockRanges(normalizedRawText, fencedRanges);
+  const commentRanges = findHtmlCommentRanges(
+    normalizedRawText,
+    [...fencedRanges, ...indentedRanges],
+    fencedRanges,
+    htmlBlockRanges,
+  ).filter(
+    (commentRange) =>
+      !htmlBlockRanges.some(
+        (blockRange) =>
+          blockRange.start <= commentRange.start &&
+          commentRange.end <= blockRange.end &&
+          (blockRange.start !== commentRange.start ||
+            !normalizedRawText.startsWith('<!--', blockRange.start)),
+      ),
+  );
+  for (const range of commentRanges) {
     for (let index = range.start; index < range.end; index += 1) {
       nearMissScanText[index] = normalizedRawText[index] ?? ' ';
     }
@@ -2948,9 +2990,6 @@ function matchesReferenceDefinitionContinuationContainer(
   pendingContainerKinds: string[],
 ): boolean {
   if (currentContainerKinds.join('/') === pendingContainerKinds.join('/')) {
-    if (currentContainerKinds.length === 0) {
-      return hasReferenceDefinitionContinuationIndent(line);
-    }
     if (
       currentContainerKinds.includes('list') &&
       pendingContainerKinds.includes('list')
@@ -3101,13 +3140,21 @@ function resolveReferenceStyleLinks(text: string): string {
   if (definitions.size === 0) {
     return text;
   }
-  return text.replace(
-    REFERENCE_STYLE_LINK_USAGE_PATTERN,
-    (whole: string, label: string, ref: string) => {
-      const target = definitions.get(normalizeLinkReferenceLabel(ref));
-      return target === undefined ? whole : `[${label}](${target})`;
-    },
-  );
+  return text
+    .replace(
+      REFERENCE_STYLE_LINK_USAGE_PATTERN,
+      (whole: string, label: string, ref: string) => {
+        const target = definitions.get(normalizeLinkReferenceLabel(ref));
+        return target === undefined ? whole : `[${label}](${target})`;
+      },
+    )
+    .replace(
+      MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN,
+      (whole: string, label: string) => {
+        const target = definitions.get(normalizeLinkReferenceLabel(label));
+        return target === undefined ? whole : `[${label}](${target})`;
+      },
+    );
 }
 
 // Exactly one blank line between two lines of content is two newline

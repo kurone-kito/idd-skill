@@ -1491,6 +1491,20 @@ test('dependency-line-grammar resolves a reference-style Markdown-link definitio
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
 });
 
+test('dependency-line-grammar resolves a shortcut reference link', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12]\n\n' +
+      '[Issue 12]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar resolves a reference definition with a query string', () => {
   const body = childBody({
     extraMarkers:
@@ -1689,6 +1703,21 @@ test('dependency-line-grammar ignores dependency mentions inside raw HTML blocks
   );
   assert.ok(finding);
   assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar keeps comments nested inside opaque blocks masked', () => {
+  for (const opaqueBody of [
+    '<div>\n<!-- Blocked by #12 -->\n</div>',
+    '```\n<!-- Blocked by #12 -->\n```',
+  ]) {
+    const body = childBody({ extraMarkers: opaqueBody });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding, opaqueBody);
+    assert.equal(finding.result, 'pass', opaqueBody);
+  }
 });
 
 test('dependency-line-grammar keeps trailing junk from activating a definition', () => {
@@ -2791,7 +2820,7 @@ test('prose-dependency resolves a reference-style link whose ref label differs i
   assert.equal(finding.severity, undefined);
 });
 
-test('prose-dependency does not resolve an unindented top-level definition continuation', () => {
+test('prose-dependency resolves an unindented top-level definition continuation', () => {
   const body = childBody({
     extraMarkers:
       'Before starting, [PR #1391][upstream] must land.\n\n' +
@@ -2805,16 +2834,15 @@ test('prose-dependency does not resolve an unindented top-level definition conti
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, 'warning');
-  assert.match(finding?.detail ?? '', /#1391/);
+  assert.equal(finding?.severity, undefined);
 });
 
-test('prose-dependency does not treat an unindented quoted paragraph as a definition title', () => {
+test('prose-dependency does not treat an ordinary paragraph as a definition title', () => {
   const body = childBody({
     extraMarkers:
       'Before starting, [PR #1391][upstream] must land.\n\n' +
       '[previous]: https://github.com/acme/other-repo/pull/1390\n' +
-      '"ordinary paragraph"\n' +
+      'ordinary paragraph\n' +
       '[upstream]: https://github.com/acme/other-repo/pull/1391',
   });
   const report = auditAuthoredIssue(body, {
