@@ -391,6 +391,19 @@
         }
       }
     },
+    "idd-local-worktree-recovery.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-merge-execute.mjs": {
       "migrated": true,
       "runs": {
