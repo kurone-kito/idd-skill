@@ -348,20 +348,17 @@ node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-This direct path is a package-manager-only runtime-manifest exception under
+This direct path is a package-manager-only runtime-manifest exception in
 `packageManagerOnlyHelpers`, not a `commandCatalog` entry or managed script.
-It applies only when the `node_modules` linker exposes the path, not to Yarn
-Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
-Pin the installed package to the exact upstream revision that supplied the
-mirror-only import, using an immutable commit archive, tarball, or equivalent
-`helperRuntime.packageSpec`; do not resolve the package from a mutable default
-such as `main`. If that revision cannot be established, use the source
-checkout recipe above instead, because a newer installed template can produce
-false mismatches or false passes.
-Use a source checkout for PnP adopters. The `vendored-node` profile also does
-not include this source-repository helper because it is intentionally absent
-from the adopter command catalog. The `ephemeral-npx` profile also does not
-install a supported copy, so use a source checkout for that profile as well.
+It requires a `node_modules` linker and is unavailable under Yarn Plug'n'Play;
+that profile-mismatch failure is tracked in
+[issue #1674](https://github.com/kurone-kito/idd-skill/issues/1674). Pin the
+installed package to the exact upstream revision that supplied the mirror-only
+import, using an immutable archive, tarball, or equivalent
+`helperRuntime.packageSpec`; never resolve it from mutable `main`. If that
+revision cannot be established, use the source-checkout recipe instead.
+Use a source checkout for PnP and `ephemeral-npx` adopters; `vendored-node`
+also omits this source-repository helper from its adopter command catalog.
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes
