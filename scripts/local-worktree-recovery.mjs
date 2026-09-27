@@ -1,0 +1,1220 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/local-worktree-recovery.mts
+//
+// The scripts/local-worktree-recovery.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
+// #3536: consolidates docs/idd-resume-detail.md's §LWR (Local Worktree
+// Recovery) steps 1 ("confirm the block"), 3 ("preserve"), and 4 ("remove")
+// into a single invocation, composing the existing building-block helpers
+// rather than reimplementing their logic:
+//
+// - Step 1 spawns the compiled `resume-claim-routing.mjs` CLI (network,
+//   `gh`-backed) -- `runCli`/`fetchIssueComments` are not exported there, so
+//   this mirrors `post-idd-marker.mts`'s own sibling-spawn composition
+//   (`runReviewActivitySnapshot`) rather than reimplementing that file's CLI
+//   glue. The new helper's own `--worktree` is NEVER forwarded to this
+//   spawn -- that flag has an unrelated, documented meaning on
+//   `resume-claim-routing.mjs` (an owner-evidence redirect); only
+//   `--issue`/`--owner`/`--repo`/`--policy`/`--now` are forwarded.
+// - `checkClaimLock` (claim-lock.mts) and `acquireCloneLock`/
+//   `releaseCloneLock` (clone-lock.mts) are imported and called in-process
+//   -- both are pure/synchronous/network-free, so importing them directly
+//   avoids both a redundant subprocess and the manual `clone-lock.mjs
+//   --exec -- bash -c '...'` wrapper the issue cites as today's toil.
+// - §LWR's step 2 ("rule out a live session") is intentionally NOT
+//   automated: `claim-lock.mts`'s own header documents why no local
+//   process-liveness signal is recorded (a one-shot CLI's own PID would be
+//   a tombstone before any concurrent session could observe it as alive).
+//   `--operator-confirmed-no-live-session` is the operator's own explicit
+//   attestation for that step, checked before ANY mutation, regardless of
+//   what step 1 finds or whether `--apply` is set.
+//
+// Default mode is dry-run (no mutation); `--apply` performs steps 3 and 4.
+import { execFileSync } from 'node:child_process';
+import {
+  cpSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
+import { checkClaimLock } from './claim-lock.mjs';
+import { parseCliArgs } from './cli-args.mjs';
+import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
+import { readGithubRepoDefaultBranch } from './gh-exec.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import { loadIddConfig } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
+import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
+
+// ---------------------------------------------------------------------------
+// Local git plumbing (a file-scoped copy of the sanitized-environment /
+// non-throwing-exec pattern already used by idd-roadmap-audit-execute.mts
+// and local-worktree-occupancy.mts -- neither exports it, and this file is
+// outside their own candidate-files scope, so this mirrors rather than
+// imports).
+// ---------------------------------------------------------------------------
+/** Strip ambient `GIT_*` overrides so every git call below targets exactly
+ * the repository/worktree its own `cwd` names, never one an inherited
+ * environment variable silently redirects to. */
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+function runLocalGitCommand(argv, cwd) {
+  try {
+    const stdout = execFileSync('git', argv, {
+      cwd,
+      env: sanitizedGitEnvironment(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true, status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const execError = error;
+    return {
+      ok: false,
+      status: execError.status ?? null,
+      stdout: execError.stdout ?? '',
+      stderr: execError.stderr ?? execError.message ?? '',
+    };
+  }
+}
+function pathExistsOnDisk(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function realpathOrNull(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+// ---------------------------------------------------------------------------
+// Pure decision logic
+// ---------------------------------------------------------------------------
+/** True when `routing.reason` matches §LWR step 1's own accepted prefixes. */
+export function isAcceptedBlockReason(reason) {
+  return (
+    reason.startsWith('stale-claim-') || reason.startsWith('released-claim-')
+  );
+}
+/** Extract the recovered claim-id (null for a legacy pre-claim-id release)
+ * and the occupying branch from a confirmed `local_worktree_occupied`
+ * routing result. */
+export function extractRecoveredClaim(routing) {
+  if (routing.active_claim) {
+    return {
+      claimId: routing.active_claim.claim_id,
+      branch: routing.active_claim.branch,
+    };
+  }
+  if (routing.evidence?.released_claim) {
+    return {
+      claimId: routing.evidence.released_claim.claim_id,
+      branch: routing.evidence.released_claim.branch,
+    };
+  }
+  return { claimId: null, branch: null };
+}
+/**
+ * Mirrors `inspectLocalWorktreeBranch`'s (local-worktree-occupancy.mts) own
+ * fail-closed conditions for exactly the record naming `targetPath`: a
+ * prunable record whose path is absent on disk is a safe force-remove
+ * shortcut only when it is not locked and its own `branchRef` names
+ * `requestedBranch` exactly. A detached record (`branchRef === null`) is
+ * never shortcut, even when `requestedBranch` is known -- matching
+ * `inspectLocalWorktreeBranch`'s own fail-closed behavior there: it cannot
+ * run its `resolveDetachedBranch` sequencer lookup once the path is already
+ * absent (that lookup itself reads files at the path), so it always treats
+ * a detached+prunable+absent record as blocking, regardless of relevance.
+ * This function does not replicate every other branch
+ * `inspectLocalWorktreeBranch` walks (e.g. a non-prunable record, or a
+ * present-on-disk prunable record) -- it only judges the one specific
+ * record this helper's own targetPath resolves to, for the one shortcut
+ * decision made here.
+ */
+export function evaluatePrunableShortcut(
+  records,
+  targetPath,
+  requestedBranch,
+  pathExists,
+) {
+  const record =
+    records.find((candidate) => candidate.path === targetPath) ?? null;
+  if (!record) {
+    return {
+      eligible: false,
+      record: null,
+      reason: 'no matching worktree record',
+    };
+  }
+  if (!record.prunable) {
+    return { eligible: false, record, reason: 'record is not prunable' };
+  }
+  if (pathExists(record.path)) {
+    return { eligible: false, record, reason: 'path still exists on disk' };
+  }
+  if (record.locked) {
+    return { eligible: false, record, reason: 'record is locked' };
+  }
+  if (requestedBranch !== null) {
+    if (record.branchRef === null) {
+      // Detached + prunable + absent: `inspectLocalWorktreeBranch` can never
+      // resolve which branch a detached, on-disk-absent record held (its
+      // own resolveDetachedBranch needs to read files at a path that no
+      // longer exists), so it fails closed and treats the record as
+      // unreadable/blocking regardless of relevance. Mirror that here --
+      // never shortcut a detached record just because its branch happens to
+      // be unresolvable; an ambiguous match must never authorize a
+      // force-remove.
+      return {
+        eligible: false,
+        record,
+        reason:
+          'record is detached; its branch cannot be confirmed (fail closed, mirrors inspectLocalWorktreeBranch)',
+      };
+    }
+    if (
+      record.branchRef !== `refs/heads/${requestedBranch}` &&
+      record.branchRef !== requestedBranch
+    ) {
+      return {
+        eligible: false,
+        record,
+        reason: 'record names a different, unrelated branch',
+      };
+    }
+  }
+  return {
+    eligible: true,
+    record,
+    reason: 'prunable, absent, unlocked, matching',
+  };
+}
+/** Detect an in-progress merge/rebase/cherry-pick/bisect in `path`, returning
+ * the pre-operation tip to preserve (`orig-head` for rebase, else HEAD). */
+export function detectInProgressOperation(path, runGit, pathExists, readFile) {
+  const merge = runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], path);
+  if (merge.ok) {
+    const head = runGit(['rev-parse', 'HEAD'], path);
+    return { kind: 'merge', tipSha: head.stdout.trim() };
+  }
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const gitPath = runGit(['rev-parse', '--git-path', name], path);
+    if (!gitPath.ok) continue;
+    const resolved = gitPath.stdout.trim();
+    if (!resolved) continue;
+    const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
+    if (!pathExists(absolute)) continue;
+    const origHead = readFile(join(absolute, 'orig-head'));
+    if (origHead) {
+      return { kind: 'rebase', tipSha: origHead.trim() };
+    }
+  }
+  const cherryPick = runGit(
+    ['rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD'],
+    path,
+  );
+  if (cherryPick.ok) {
+    const head = runGit(['rev-parse', 'HEAD'], path);
+    return { kind: 'cherry-pick', tipSha: head.stdout.trim() };
+  }
+  const bisectLogPath = runGit(['rev-parse', '--git-path', 'BISECT_LOG'], path);
+  if (bisectLogPath.ok) {
+    const resolved = bisectLogPath.stdout.trim();
+    const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
+    if (resolved && pathExists(absolute)) {
+      const head = runGit(['rev-parse', 'HEAD'], path);
+      return { kind: 'bisect', tipSha: head.stdout.trim() };
+    }
+  }
+  return null;
+}
+/** True when `git status --porcelain --ignored --untracked-files=normal`
+ * reports at least one tracked/untracked change (any line not prefixed
+ * `!!`, which marks an ignored path). */
+export function hasWorkingTreeChanges(statusPorcelain) {
+  return statusPorcelain
+    .split('\n')
+    .some((line) => line.length > 0 && !line.startsWith('!!'));
+}
+/** The ignored-file paths (`!!`-prefixed lines) reported by the same status
+ * scan, relative to the scanned path. */
+export function extractIgnoredPaths(statusPorcelain) {
+  return statusPorcelain
+    .split('\n')
+    .filter((line) => line.startsWith('!! '))
+    .map((line) => line.slice(3).trim())
+    .filter((path) => path.length > 0);
+}
+/**
+ * True when `relativePath` is safe to join under a preserve-directory
+ * destination: not absolute, and no `..` path segment. Defense in depth for
+ * the ignored-file and unmerged-conflict copy-out paths -- a normal `git
+ * status`/`git diff` relative path never escapes the scanned worktree, but
+ * neither loop should trust that unconditionally when the destination join
+ * result is about to be passed to a real filesystem copy.
+ */
+export function isSafeRelativePath(relativePath) {
+  if (relativePath.length === 0 || isAbsolute(relativePath)) {
+    return false;
+  }
+  return relativePath.split(/[\\/]+/).every((segment) => segment !== '..');
+}
+/** Count of stash entries whose subject contains `tag` verbatim. */
+export function countTaggedStashEntries(stashList, tag) {
+  if (stashList.trim().length === 0) {
+    return 0;
+  }
+  return stashList.split('\n').filter((line) => line.includes(tag)).length;
+}
+// ---------------------------------------------------------------------------
+// Orchestration (pure over injected deps -- unit-testable without a real
+// git repository or subprocess; the compiled CLI's own production deps wire
+// these to real git/gh calls, exercised end-to-end by the sandboxed tests).
+// ---------------------------------------------------------------------------
+function submoduleStatusEntries(raw) {
+  return raw
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const status = line.slice(0, 1);
+      // `git submodule status` lines: "<status><sha> <path> (<describe>)".
+      const rest = line.slice(1).trim();
+      const path = rest.split(' ')[1] ?? rest.split(' ')[0] ?? '';
+      return { status, path };
+    });
+}
+/** Preserve one scope (the worktree itself, or a submodule path relative to
+ * it) -- stash tracked/untracked changes under `tag`, or fall back to
+ * copying conflicted files out on an unmerged-path stash failure. Returns
+ * the plan entry; `--apply` semantics (actually stashing) are gated by the
+ * caller passing `apply: false` for a dry-run report only. */
+function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
+  const status = deps.runGit(
+    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
+    scopePath,
+  );
+  const hasChanges = status.ok && hasWorkingTreeChanges(status.stdout);
+  const baselineList = deps.runGit(['stash', 'list'], scopePath);
+  const baselineCount = countTaggedStashEntries(baselineList.stdout, tag);
+  const entry = {
+    scope: scopeLabel,
+    tag,
+    hasChanges,
+    baselineCount,
+    stashed: false,
+    verifiedCount: null,
+    unmergedFallbackCopiedTo: null,
+  };
+  if (!hasChanges || !apply) {
+    return entry;
+  }
+  const stash = deps.runGit(
+    ['stash', 'push', '--include-untracked', '-m', tag],
+    scopePath,
+  );
+  if (!stash.ok) {
+    // Unmerged-path fallback: copy conflicted files out instead of trusting
+    // the branch-tip backup alone (§LWR step 3).
+    const conflicted = deps
+      .runGit(['diff', '--name-only', '--diff-filter=U'], scopePath)
+      .stdout.split('\n')
+      .filter((line) => line.trim().length > 0);
+    if (conflicted.length > 0) {
+      const preserveDir = deps.ensurePreserveDir();
+      const destination = join(
+        preserveDir,
+        `unmerged-${scopeLabel.replace(/[\\/]+/g, '_')}`,
+      );
+      for (const relPath of conflicted) {
+        if (!isSafeRelativePath(relPath)) {
+          continue;
+        }
+        deps.copyPath(join(scopePath, relPath), join(destination, relPath));
+      }
+      entry.unmergedFallbackCopiedTo = destination;
+    }
+    return entry;
+  }
+  entry.stashed = true;
+  const afterList = deps.runGit(['stash', 'list'], scopePath);
+  entry.verifiedCount = countTaggedStashEntries(afterList.stdout, tag);
+  return entry;
+}
+/** Preserve unpushed commits for one scope on `refs/idd-lwr/<branch>`. */
+function planAndMaybeBackupRef(
+  scopePath,
+  scopeLabel,
+  branch,
+  inProgressTip,
+  apply,
+  runGit,
+) {
+  const ref = `refs/idd-lwr/${branch}`;
+  let tipSha = null;
+  let hasUnpushed = false;
+  if (inProgressTip) {
+    tipSha = inProgressTip;
+    hasUnpushed = true;
+  } else {
+    const upstream = runGit(
+      ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+      scopePath,
+    );
+    const head = runGit(['rev-parse', 'HEAD'], scopePath);
+    tipSha = head.ok ? head.stdout.trim() : null;
+    if (!upstream.ok) {
+      // No upstream: every commit counts as unpushed (§LWR step 3).
+      hasUnpushed = tipSha !== null;
+    } else {
+      const unpushed = runGit(['log', '@{u}..HEAD', '--oneline'], scopePath);
+      hasUnpushed = unpushed.ok && unpushed.stdout.trim().length > 0;
+    }
+  }
+  const entry = {
+    scope: scopeLabel,
+    ref,
+    hasUnpushed,
+    tipSha,
+    written: false,
+    verifiedOid: null,
+  };
+  if (!hasUnpushed || !tipSha || !apply) {
+    return entry;
+  }
+  const write = runGit(['update-ref', ref, tipSha], scopePath);
+  if (write.ok) {
+    entry.written = true;
+    const verify = runGit(['rev-parse', '--verify', ref], scopePath);
+    entry.verifiedOid = verify.ok ? verify.stdout.trim() : null;
+  }
+  return entry;
+}
+/** Run §LWR step 3 (preserve) for the worktree and every submodule; a pure
+ * function over injected deps so both the plan (dry-run) and the actual
+ * mutation (`--apply`) share one code path -- `apply` toggles only whether
+ * the stash/ref-write commands actually run. */
+function planAndMaybePreserve(path, branch, tag, apply, deps) {
+  const readFile = (p) => {
+    try {
+      return readFileSync(p, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const inProgressOperation = detectInProgressOperation(
+    path,
+    deps.runGit,
+    deps.pathExists,
+    readFile,
+  );
+  const stashes = [planAndMaybeStashScope(path, '.', tag, apply, deps)];
+  const uninitializedSubmodules = [];
+  const submoduleStatus = deps.runGit(
+    ['submodule', 'status', '--recursive'],
+    path,
+  );
+  const submodules = submoduleStatus.ok
+    ? submoduleStatusEntries(submoduleStatus.stdout)
+    : [];
+  for (const submodule of submodules) {
+    if (!submodule.path) continue;
+    if (submodule.status === '-') {
+      // Uninitialized: not a git repository at all -- copy files out
+      // directly rather than attempting any `git -C` command there.
+      const submodulePath = join(path, submodule.path);
+      if (deps.pathExists(submodulePath)) {
+        // Dry-run must have zero side effects: only create the preserve
+        // directory (and copy into it) when actually applying.
+        let destination = null;
+        if (apply) {
+          const preserveDir = deps.ensurePreserveDir();
+          destination = join(
+            preserveDir,
+            `uninitialized-${submodule.path.replace(/[\\/]+/g, '_')}`,
+          );
+          deps.copyPath(submodulePath, destination);
+        }
+        uninitializedSubmodules.push({
+          path: submodule.path,
+          copiedTo: destination,
+        });
+      }
+      continue;
+    }
+    stashes.push(
+      planAndMaybeStashScope(
+        join(path, submodule.path),
+        submodule.path,
+        tag,
+        apply,
+        deps,
+      ),
+    );
+  }
+  const backupRefs = [
+    planAndMaybeBackupRef(
+      path,
+      '.',
+      branch,
+      inProgressOperation?.tipSha ?? null,
+      apply,
+      deps.runGit,
+    ),
+  ];
+  for (const submodule of submodules) {
+    if (!submodule.path || submodule.status === '-') continue;
+    backupRefs.push(
+      planAndMaybeBackupRef(
+        join(path, submodule.path),
+        submodule.path,
+        branch,
+        null,
+        apply,
+        deps.runGit,
+      ),
+    );
+  }
+  const ignoredFilesCopied = [];
+  const status = deps.runGit(
+    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
+    path,
+  );
+  if (status.ok) {
+    for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
+      if (!isSafeRelativePath(ignoredPath)) {
+        continue;
+      }
+      const preserveDir = apply ? deps.ensurePreserveDir() : null;
+      const destination = preserveDir
+        ? join(preserveDir, 'ignored', ignoredPath)
+        : null;
+      if (apply && destination) {
+        deps.copyPath(join(path, ignoredPath), destination);
+      }
+      ignoredFilesCopied.push({ path: ignoredPath, copiedTo: destination });
+    }
+  }
+  return {
+    inProgressOperation,
+    stashes,
+    uninitializedSubmodules,
+    backupRefs,
+    ignoredFilesCopied,
+  };
+}
+/** Verify every step-3 preservation action that claimed a change actually
+ * landed, before step 4 is ever allowed to remove anything. */
+function preservationVerified(preserve) {
+  for (const stash of preserve.stashes) {
+    if (!stash.hasChanges) continue;
+    if (stash.unmergedFallbackCopiedTo) continue;
+    if (!stash.stashed) return false;
+    if (
+      stash.verifiedCount === null ||
+      stash.verifiedCount !== stash.baselineCount + 1
+    ) {
+      return false;
+    }
+  }
+  for (const ref of preserve.backupRefs) {
+    if (!ref.hasUnpushed) continue;
+    if (
+      !ref.written ||
+      ref.verifiedOid === null ||
+      ref.verifiedOid !== ref.tipSha
+    ) {
+      return false;
+    }
+  }
+  for (const submodule of preserve.uninitializedSubmodules) {
+    if (submodule.copiedTo === null) return false;
+  }
+  return true;
+}
+/**
+ * Run the full §LWR steps 1/3/4 sequence. Pure over injected `deps` so a
+ * unit test can assert exact call order (acquire-lock before recheck,
+ * recheck before removal, release always runs) without a real git
+ * repository. Never mutates when `!args.apply`, and never mutates when
+ * `!args.operatorConfirmedNoLiveSession` regardless of `--apply` or what
+ * step 1 finds -- both gates are checked before ANY git write.
+ */
+export function runLocalWorktreeRecovery(args, deps) {
+  const mode = args.apply ? 'apply' : 'dry-run';
+  const cwd = deps.cwd();
+  // Known limitation (CodeRabbit review, #3536): this is a lexical
+  // resolution, compared below against other lexical paths (git's own
+  // `worktree list` output, and `evidence.local_worktree.paths`) with plain
+  // string equality -- never realpath-resolved. A `--worktree` argument
+  // that reaches the same directory through a symlink, or that differs
+  // only by trailing-slash/case normalization, fails closed as
+  // `path-mismatch` or misclassifies `primaryOrLinked` rather than
+  // matching -- safe (no silent wrong-target mutation), but requires the
+  // operator to pass the exact path git itself reports. Follow-up:
+  // realpath both sides before comparing, if this proves disruptive in
+  // practice.
+  const targetPath = resolve(cwd, args.worktree);
+  const verdict = {
+    protocolVersion: '1',
+    mode,
+    issueNumber: args.issue ?? Number.NaN,
+    worktree: targetPath,
+    primaryWorktree: null,
+    operatorConfirmed: args.operatorConfirmedNoLiveSession,
+    step1: {
+      outcome: 'confirm-failed',
+      claimId: null,
+      branch: null,
+      reason: 'not evaluated',
+    },
+    ready: false,
+    primaryOrLinked: null,
+    plan: {
+      prunableShortcut: false,
+      inProgressOperation: null,
+      stashes: [],
+      uninitializedSubmodules: [],
+      backupRefs: [],
+      ignoredFilesCopied: [],
+      removal: null,
+    },
+    preserveDir: null,
+    mutated: false,
+    result: '',
+  };
+  const records = deps.listWorktreeRecords(cwd);
+  const primary = records[0] ?? null;
+  verdict.primaryWorktree = primary?.path ?? null;
+  verdict.primaryOrLinked =
+    primary && primary.path === targetPath ? 'primary' : 'linked';
+  if (verdict.primaryOrLinked === 'linked') {
+    const cwdReal = deps.realpathOrNull(cwd);
+    const targetReal = deps.realpathOrNull(targetPath);
+    const cwdInsideTarget =
+      cwdReal !== null &&
+      targetReal !== null &&
+      (cwdReal === targetReal || cwdReal.startsWith(`${targetReal}/`));
+    if (cwdInsideTarget) {
+      verdict.step1.outcome = 'cwd-inside-target';
+      verdict.step1.reason =
+        'must be invoked from the primary worktree, never from the linked worktree being recovered';
+      verdict.result = verdict.step1.reason;
+      return verdict;
+    }
+  }
+  // Step 1: confirm-the-block ALWAYS runs first, per the written procedure
+  // ("Run the profile-selected resume-claim-routing helper... If <path> no
+  // longer exists on disk (a prunable record), skip to git worktree remove
+  // --force... Otherwise run the... claim-lock helper's check form"): the
+  // prunable-record shortcut below only ever skips the claim-lock check,
+  // never the confirm-the-block spawn itself.
+  const confirmed = deps.confirmBlock(cwd);
+  if (!confirmed.ok || !confirmed.routing) {
+    verdict.step1.outcome = 'confirm-failed';
+    verdict.step1.reason = confirmed.error ?? 'confirm-the-block check failed';
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
+  const routing = confirmed.routing;
+  if (
+    routing.state !== 'local_worktree_occupied' ||
+    !isAcceptedBlockReason(routing.reason)
+  ) {
+    verdict.step1.outcome = 'not-blocked';
+    verdict.step1.reason = `resume-claim-routing reports state=${routing.state} reason=${routing.reason}; nothing to recover`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
+  const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
+  if (!reportedPaths.includes(targetPath)) {
+    verdict.step1.outcome = 'path-mismatch';
+    verdict.step1.reason = `--worktree ${targetPath} is not among the occupied paths reported (${reportedPaths.join(', ') || 'none'})`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
+  const recovered = extractRecoveredClaim(routing);
+  const recoveredClaimId = recovered.claimId;
+  const recoveredBranch = recovered.branch;
+  // The prunable-and-absent shortcut skips the claim-lock check only
+  // (nothing to preserve or remove either, since the path is already gone)
+  // -- never the confirm-the-block spawn above. Passing the now-known
+  // recovered branch lets the locked/branch-matching guard actually apply,
+  // instead of the shortcut being reachable for an unrelated branch.
+  const shortcut = evaluatePrunableShortcut(
+    records,
+    targetPath,
+    recoveredBranch,
+    deps.pathExists,
+  );
+  if (shortcut.eligible) {
+    verdict.step1.outcome = 'blocked-prunable';
+    verdict.step1.reason = 'prunable record, absent on disk, unlocked';
+    verdict.plan.prunableShortcut = true;
+  } else {
+    const lock = deps.checkLock(targetPath);
+    if (lock.malformed) {
+      verdict.step1.outcome = 'lock-malformed';
+      verdict.step1.reason = 'worktree-local claim lock is malformed';
+      verdict.result = verdict.step1.reason;
+      return verdict;
+    }
+    if (lock.present && lock.holder?.claimId !== recoveredClaimId) {
+      verdict.step1.outcome = 'lock-mismatch';
+      verdict.step1.reason = `lock holder claim-id (${lock.holder?.claimId ?? 'unknown'}) does not match the recovered claim-id (${recoveredClaimId ?? 'legacy'})`;
+      verdict.result = verdict.step1.reason;
+      return verdict;
+    }
+    verdict.step1.outcome = routing.reason.startsWith('released-claim-')
+      ? 'blocked-released'
+      : 'blocked-stale';
+    verdict.step1.reason = routing.reason;
+  }
+  verdict.step1.claimId = recoveredClaimId;
+  verdict.step1.branch = recoveredBranch;
+  verdict.ready = true;
+  // Dry-run always reports the full plan, regardless of the operator flag
+  // -- reporting never mutates, so there is no safety reason to withhold it,
+  // and it lets the operator preview everything before adding both
+  // `--operator-confirmed-no-live-session` and `--apply`. The operator-flag
+  // gate below applies to the ACTUAL mutation only.
+  if (!args.apply) {
+    const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
+    if (!shortcut.eligible) {
+      const preserve = planAndMaybePreserve(
+        targetPath,
+        recoveredBranch ?? '',
+        tag,
+        false,
+        deps,
+      );
+      verdict.plan.inProgressOperation = preserve.inProgressOperation;
+      verdict.plan.stashes = preserve.stashes;
+      verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
+      verdict.plan.backupRefs = preserve.backupRefs;
+      verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
+    }
+    verdict.plan.removal = {
+      kind: verdict.primaryOrLinked ?? 'linked',
+      developmentBranch:
+        verdict.primaryOrLinked === 'primary'
+          ? deps.resolveDevelopmentBranch()
+          : null,
+      wouldRun: true,
+      ran: false,
+      detail:
+        verdict.primaryOrLinked === 'primary'
+          ? 'would checkout {development-branch} then hand-remove the lock file'
+          : 'would run git worktree remove (retry --force only after a submodule-removal failure)',
+    };
+    verdict.result = 'dry-run: no mutation performed';
+    return verdict;
+  }
+  // --apply: gate on the operator's own attestation BEFORE any mutation,
+  // regardless of what step 1 found.
+  if (!args.operatorConfirmedNoLiveSession) {
+    verdict.result =
+      'refusing: --operator-confirmed-no-live-session was not given (step 2 is never checked mechanically); no mutation';
+    return verdict;
+  }
+  // --apply: steps 3 and 4.
+  const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
+  if (!shortcut.eligible) {
+    const preserve = planAndMaybePreserve(
+      targetPath,
+      recoveredBranch ?? '',
+      tag,
+      true,
+      deps,
+    );
+    verdict.plan.inProgressOperation = preserve.inProgressOperation;
+    verdict.plan.stashes = preserve.stashes;
+    verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
+    verdict.plan.backupRefs = preserve.backupRefs;
+    verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
+    verdict.mutated =
+      preserve.stashes.some((s) => s.stashed) ||
+      preserve.backupRefs.some((r) => r.written) ||
+      preserve.uninitializedSubmodules.some((s) => s.copiedTo !== null);
+    if (!preservationVerified(preserve)) {
+      verdict.result =
+        'step 3 preservation could not be fully verified; stopping before removal';
+      return verdict;
+    }
+  }
+  const repoPath = verdict.primaryWorktree ?? cwd;
+  const lockHandle = deps.acquireCloneLock(repoPath, args.agentId);
+  try {
+    const recheck = deps.confirmBlock(cwd);
+    if (!recheck.ok || !recheck.routing) {
+      verdict.plan.removal = {
+        kind: verdict.primaryOrLinked ?? 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail: `fresh re-check failed: ${recheck.error ?? 'unknown error'}`,
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
+    // CodeRabbit finding: the shortcut path must be re-verified fresh too,
+    // not merely exempted from the ordinary occupied re-check -- the
+    // clone-scoped lock's whole purpose is closing the window between step
+    // 1's read and this mutation, and that window applies to the shortcut
+    // exactly as much as the ordinary path.
+    let stillEligible;
+    let staleReason;
+    if (shortcut.eligible) {
+      const freshRecords = deps.listWorktreeRecords(cwd);
+      const freshShortcut = evaluatePrunableShortcut(
+        freshRecords,
+        targetPath,
+        recoveredBranch,
+        deps.pathExists,
+      );
+      stillEligible = freshShortcut.eligible;
+      staleReason =
+        'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, or no longer names the recovered branch); stopping';
+    } else {
+      stillEligible =
+        recheck.routing.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(recheck.routing.reason) &&
+        (recheck.routing.evidence?.local_worktree?.paths ?? []).includes(
+          targetPath,
+        );
+      staleReason =
+        'the situation changed since step 1 (a live session resumed the claim, a different claim-id now holds the lock, or the branch no longer reports local_worktree_occupied); stopping';
+    }
+    if (!stillEligible) {
+      verdict.plan.removal = {
+        kind: verdict.primaryOrLinked ?? 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail: staleReason,
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
+    // Re-run the claim-lock check too, while the clone lock is held --
+    // step 1's own lock check is stale the moment a concurrent session
+    // could have replaced this shared admin directory's lock during the
+    // wait to acquire the clone-scoped lock (mirrors step 1's own skip:
+    // never re-checked for the prunable-and-absent shortcut, which never
+    // checked it in the first place).
+    if (!shortcut.eligible) {
+      const lockRecheck = deps.checkLock(targetPath);
+      // Mirrors step 1's own lock-check pass condition exactly: malformed
+      // always fails; otherwise an absent lock passes unconditionally (a
+      // legacy pre-claim-id release may never have acquired one), and a
+      // present lock passes only when its holder still matches.
+      const lockStillMatches =
+        !lockRecheck.malformed &&
+        (!lockRecheck.present ||
+          lockRecheck.holder?.claimId === recoveredClaimId);
+      if (!lockStillMatches) {
+        verdict.plan.removal = {
+          kind: verdict.primaryOrLinked ?? 'linked',
+          developmentBranch: null,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'the worktree-local claim lock no longer matches the recovered claim-id (a different session may have taken over); stopping',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+    }
+    if (verdict.primaryOrLinked === 'primary') {
+      const developmentBranch = deps.resolveDevelopmentBranch();
+      const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
+      if (!checkout.ok) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const confirmAbsent = deps.confirmBlock(cwd);
+      const nowAbsent =
+        confirmAbsent.ok &&
+        confirmAbsent.routing?.evidence?.local_worktree?.status === 'absent';
+      if (!nowAbsent) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'checked out {development-branch}, but resume-claim-routing does not yet report the branch absent; stopping before removing the lock file',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const lockPath = deps.runGit(
+        ['rev-parse', '--absolute-git-dir'],
+        targetPath,
+      );
+      if (lockPath.ok) {
+        const idLockFile = join(lockPath.stdout.trim(), 'idd-claim.lock');
+        if (deps.pathExists(idLockFile)) {
+          try {
+            unlinkSync(idLockFile);
+          } catch {
+            // Best-effort: a race here is diagnostic only, matching
+            // claim-lock.mts's own release semantics for an absent lock.
+          }
+        }
+      }
+      verdict.plan.removal = {
+        kind: 'primary',
+        developmentBranch,
+        wouldRun: true,
+        ran: true,
+        detail: `checked out ${developmentBranch} and removed the lock file`,
+      };
+      verdict.mutated = true;
+      verdict.result = 'primary worktree released';
+      return verdict;
+    }
+    let remove = deps.runGit(['worktree', 'remove', targetPath], repoPath);
+    if (
+      !remove.ok &&
+      /submodules cannot be moved or removed/i.test(remove.stderr)
+    ) {
+      remove = deps.runGit(
+        ['worktree', 'remove', '--force', targetPath],
+        repoPath,
+      );
+    }
+    if (!remove.ok) {
+      verdict.plan.removal = {
+        kind: 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail: `git worktree remove failed: ${remove.stderr}`,
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
+    deps.runGit(['worktree', 'prune'], repoPath);
+    verdict.plan.removal = {
+      kind: 'linked',
+      developmentBranch: null,
+      wouldRun: true,
+      ran: true,
+      detail: 'git worktree remove succeeded',
+    };
+    verdict.mutated = true;
+    verdict.result = 'linked worktree removed';
+    return verdict;
+  } finally {
+    deps.releaseCloneLock(lockHandle);
+  }
+}
+// ---------------------------------------------------------------------------
+// Production dependency wiring (real git / gh)
+// ---------------------------------------------------------------------------
+const VALID_BRANCH_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/;
+/**
+ * Resolve `{development-branch}` (§LWR step 4's primary-worktree branch):
+ * `developmentBranch` from `.github/idd/config.json` when valid, else the
+ * live GitHub default branch -- routed through `gh-exec.mts`'s
+ * `readGithubRepoDefaultBranch` / `resolveCurrentGithubRepository` (never a
+ * direct `gh` spawn; `tests/gh-spawn-guard.test.mts` enforces this
+ * repository-wide).
+ */
+function resolveDevelopmentBranchProduction(args) {
+  const config = loadIddConfig();
+  const configured = config?.developmentBranch;
+  if (typeof configured === 'string' && VALID_BRANCH_PATTERN.test(configured)) {
+    return configured;
+  }
+  let fromGh;
+  try {
+    const resolvedRepo =
+      args.owner && args.repo
+        ? { owner: args.owner, repo: args.repo }
+        : resolveCurrentGithubRepository();
+    fromGh = readGithubRepoDefaultBranch(resolvedRepo.owner, resolvedRepo.repo);
+  } catch (error) {
+    throw new Error(
+      `local-worktree-recovery: could not resolve {development-branch} (no valid developmentBranch in .github/idd/config.json, and the live default-branch lookup failed: ${error.message})`,
+    );
+  }
+  if (!fromGh || !VALID_BRANCH_PATTERN.test(fromGh)) {
+    throw new Error(
+      `local-worktree-recovery: could not resolve a valid default branch name (got: ${fromGh ?? 'none'})`,
+    );
+  }
+  return fromGh;
+}
+function copyPathProduction(from, to) {
+  cpSync(from, to, { recursive: true, errorOnExist: false, force: true });
+}
+let preserveDirMemo = null;
+function ensurePreserveDirProduction(explicit) {
+  return () => {
+    if (preserveDirMemo) {
+      return preserveDirMemo;
+    }
+    if (explicit) {
+      preserveDirMemo = explicit;
+      return preserveDirMemo;
+    }
+    preserveDirMemo = mkdtempSync(join(tmpdir(), 'idd-lwr-preserve-'));
+    return preserveDirMemo;
+  };
+}
+/**
+ * Spawns the compiled sibling `resume-claim-routing.mjs` (§LWR step 1's
+ * own documented invocation) -- resolved via `resolveBundleRoot` (not a
+ * bare `import.meta.dirname`-relative join) so this also works when a test
+ * imports this `.mts` source directly, one directory level deeper than the
+ * compiled `.mjs` pair. Forwards ONLY `--issue`/`--owner`/`--repo`/
+ * `--policy`/`--now` -- never this helper's own `--worktree`, which names
+ * an unrelated owner-evidence redirect on that CLI.
+ */
+function confirmBlockProduction(args) {
+  return (cwd) => {
+    const root = resolveBundleRoot(import.meta.dirname);
+    const script = join(root, 'scripts/resume-claim-routing.mjs');
+    const argv = [script, '--issue', String(args.issue)];
+    if (args.owner) argv.push('--owner', args.owner);
+    if (args.repo) argv.push('--repo', args.repo);
+    if (args.policy) argv.push('--policy', args.policy);
+    if (args.now) argv.push('--now', args.now);
+    try {
+      const stdout = execFileSync(process.execPath, argv, {
+        cwd,
+        encoding: 'utf8',
+      });
+      return {
+        ok: true,
+        routing: JSON.parse(stdout),
+        error: null,
+      };
+    } catch (error) {
+      const execError = error;
+      // A non-zero exit can still have printed a valid JSON verdict
+      // (resume-claim-routing.mjs itself only ever exits non-zero on a
+      // genuine usage/internal error, but tolerate a parseable payload
+      // regardless of exit status rather than discarding it).
+      if (execError.stdout) {
+        try {
+          return {
+            ok: true,
+            routing: JSON.parse(execError.stdout),
+            error: null,
+          };
+        } catch {
+          // fall through to the error report below
+        }
+      }
+      return { ok: false, routing: null, error: error.message };
+    }
+  };
+}
+function listWorktreeRecordsProduction(cwd) {
+  const result = runLocalGitCommand(
+    ['worktree', 'list', '--porcelain', '-z'],
+    cwd,
+  );
+  if (!result.ok) {
+    return [];
+  }
+  try {
+    return parseLocalWorktreeList(result.stdout);
+  } catch {
+    return [];
+  }
+}
+function createProductionDeps(args) {
+  return {
+    cwd: () => process.cwd(),
+    listWorktreeRecords: listWorktreeRecordsProduction,
+    confirmBlock: confirmBlockProduction(args),
+    checkLock: (worktreePath) => checkClaimLock(worktreePath),
+    runGit: runLocalGitCommand,
+    pathExists: pathExistsOnDisk,
+    realpathOrNull,
+    acquireCloneLock: (repoPath, agentId) =>
+      acquireCloneLock(repoPath, agentId),
+    releaseCloneLock: (handle) => releaseCloneLock(handle),
+    resolveDevelopmentBranch: () => resolveDevelopmentBranchProduction(args),
+    copyPath: copyPathProduction,
+    ensurePreserveDir: ensurePreserveDirProduction(args.preserveDir),
+    now: () => args.now || new Date().toISOString(),
+  };
+}
+// ---------------------------------------------------------------------------
+// CLI glue
+// ---------------------------------------------------------------------------
+const LOCAL_WORKTREE_RECOVERY_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--worktree': { type: 'string' },
+  '--operator-confirmed-no-live-session': { type: 'boolean', default: false },
+  '--apply': { type: 'boolean', default: false },
+  '--agent-id': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--now': { type: 'string' },
+  '--preserve-dir': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(
+    argv,
+    LOCAL_WORKTREE_RECOVERY_FLAG_SPEC,
+  );
+  const issueRaw = values.issue;
+  const parsedIssue =
+    issueRaw !== undefined && /^\d+$/.test(issueRaw) ? Number(issueRaw) : null;
+  const issue = parsedIssue !== null && parsedIssue > 0 ? parsedIssue : null;
+  const owner = (values.owner ?? '').trim();
+  const repo = (values.repo ?? '').trim();
+  if ((owner === '') !== (repo === '')) {
+    throw markCliUsageError(
+      new Error(
+        'local-worktree-recovery: --owner and --repo must be provided together or not at all',
+      ),
+    );
+  }
+  return {
+    issue,
+    worktree: (values.worktree ?? '').trim(),
+    operatorConfirmedNoLiveSession: Boolean(
+      values['operator-confirmed-no-live-session'],
+    ),
+    apply: Boolean(values.apply),
+    agentId: (values['agent-id'] ?? 'idd-lwr-operator').trim(),
+    owner,
+    repo,
+    policy: (values.policy ?? '').trim(),
+    now: (values.now ?? '').trim(),
+    preserveDir: (values['preserve-dir'] ?? '').trim(),
+    help: Boolean(help),
+  };
+}
+function printHelp() {
+  process.stdout.write(`
+Usage:
+  node scripts/local-worktree-recovery.mjs --issue <number> --worktree <path> [options]
+
+  #3536: consolidates docs/idd-resume-detail.md's §LWR (Local Worktree
+  Recovery) steps 1 ("confirm the block"), 3 ("preserve"), and 4 ("remove")
+  into one invocation. Step 2 ("rule out a live session") is never checked
+  mechanically -- see below.
+
+Options:
+  --issue <number>                          the issue whose stale/released claim occupies <path> (required)
+  --worktree <path>                         the occupied worktree path to recover (required)
+  --operator-confirmed-no-live-session      your own attestation that step 2 was performed independently (required for any mutation)
+  --apply                                   perform steps 3/4 (default: dry-run report only, no mutation)
+  --agent-id <id>                           clone-lock holder identity (default: idd-lwr-operator)
+  --owner <owner> --repo <repo>             forwarded to the confirm-the-block check (both or neither)
+  --policy <path>                           forwarded to the confirm-the-block check
+  --now <ISO8601>                           forwarded to the confirm-the-block check
+  --preserve-dir <path>                     destination for ignored-file / uninitialized-submodule / unmerged-path copies (default: a fresh temp directory, created only when needed)
+  --help                                    show this help
+
+Default (no --apply): dry-run. Reports step 1's confirm-the-block verdict
+and exactly what step 3/4 would do, without mutating anything.
+
+Refuses before ANY mutation, regardless of --apply or what step 1 finds,
+when --operator-confirmed-no-live-session is not given -- this flag is the
+operator's own attestation, never a mechanical check (claim-lock.mts's own
+header documents why no local process-liveness signal is recorded).
+
+Must be invoked from the primary worktree (or the primary worktree itself,
+when that IS <path>), never from the linked worktree being recovered.
+`);
+}
+function runCli() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+  if (args.issue === null) {
+    throw markCliUsageError(
+      new Error('--issue is required and must be a positive integer'),
+    );
+  }
+  if (!args.worktree) {
+    throw markCliUsageError(new Error('--worktree is required'));
+  }
+  const deps = createProductionDeps(args);
+  const verdict = runLocalWorktreeRecovery(args, deps);
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  // Under --apply, success means step 4's removal (or primary-worktree
+  // release) actually ran -- `verdict.mutated` alone is not enough: step 3
+  // can have already stashed changes or written a backup ref before a LATER
+  // step-4 failure (a failed re-check, a lost claim, or `git worktree
+  // remove` itself failing), which would otherwise report false success
+  // while the worktree is still sitting there, unremoved.
+  const success = args.apply
+    ? (verdict.plan.removal?.ran ?? false)
+    : verdict.ready;
+  return success ? 0 : 1;
+}
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('local-worktree-recovery', () => {
+      try {
+        return runCli();
+      } catch (error) {
+        process.stderr.write(`Error: ${error.message}\n`);
+        const classified = classifyHelperError(error);
+        return {
+          exitCode: 1,
+          kind: classified.kind,
+          message: classified.message,
+          httpStatus: classified.httpStatus,
+        };
+      }
+    });
+  } else {
+    try {
+      applyHelperCliOutcomeWhenDisabled(runCli());
+    } catch (error) {
+      process.stderr.write(`Error: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  }
+}
