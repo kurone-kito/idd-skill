@@ -296,6 +296,7 @@ below instead.
    ```sh
    node scripts/idd-onboard.mjs --verify \
      --source <idd-skill-clone> --target <target-repo> [--profile <name>] \
+     [--hold <target-path>] \
      --target-base-ref <pre-import-ref>
    ```
 
