@@ -1061,14 +1061,13 @@ future inventory reviews do not need to re-infer their role from code.
   (observed in [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
   The target commit must be the mirror-only commit made after copying the
   upstream files and before `--substitute` rewrites placeholders.
-  During a re-import, `idd-onboard --import` may intentionally restore the
-  target's existing commands table in `.github/idd/config.json` after the
-  template copy. Because that restoration happens in the same operation,
-  there is no later pure-mirror commit to verify for that path. Replace a
-  broad `.github` prefix with the specific imported `.github` roots you want
-  to check, omit `.github/idd/config.json`, and verify the restored commands
-  separately with the onboarding/doctor checks. This preservation behavior
-  is tracked by
+  During a re-import, `idd-onboard --import` may restore the target's three
+  validate-command rows in `.github/idd/config.json` after the template copy.
+  Keep that file in scope with `--path-prefix .github/idd/config.json`, and
+  repeat `--normalize-json-key` for only `commands.fix-validate`,
+  `commands.pre-push-validate`, and `commands.post-fix-validate`. This replaces
+  only those target values during comparison, so every other config field stays
+  checked; never omit the whole file. This preservation behavior is tracked by
   [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
   The template core file set also includes the root-level
   `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
@@ -1120,6 +1119,10 @@ future inventory reviews do not need to re-infer their role from code.
   For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
   or Yarn configured for `node_modules`), run the installed package's copy
   directly when the source checkout is unavailable:
+
+  `--normalize-json-key <path>:<key.path>` replaces only the upstream JSON key
+  with the target value before structural comparison; repeat it for the three
+  validate-command keys above and add the config path prefix to this command.
 
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \

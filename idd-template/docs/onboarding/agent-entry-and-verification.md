@@ -289,13 +289,13 @@ supplied the mirror-only import; the helper reads the current files under
 `--upstream-path`, so a later working tree can produce false mismatches or
 falsely pass matching local edits.
 
-During a re-import, `idd-onboard --import` may intentionally restore the
-target's existing commands table in `.github/idd/config.json` after the
-template copy. Because that restoration happens in the same operation, there
-is no pure-mirror commit for that path. Replace a broad `.github` prefix with
-the specific imported `.github` roots you want to check, omit
-`.github/idd/config.json`, and verify the restored commands separately with
-the onboarding/doctor checks. This preservation behavior is tracked by
+During a re-import, `idd-onboard --import` may restore the target's three
+validate-command rows in `.github/idd/config.json` after the template copy.
+Keep that file in scope with `--path-prefix .github/idd/config.json`, and
+repeat `--normalize-json-key` for only `commands.fix-validate`,
+`commands.pre-push-validate`, and `commands.post-fix-validate`. This replaces
+only those target values during comparison, so every other config field stays
+checked; never omit the whole file. This preservation behavior is tracked by
 [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
 
 The helper is not an `idd-*` bin. For a source checkout, invoke it directly

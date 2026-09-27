@@ -280,6 +280,72 @@ test('rule 2 pass: structurally identical JSON tolerates pure formatting differe
   assert.equal(result.contentClass, 'structural-json-match');
 });
 
+test('rule 2 pass: deliberate command restores normalize only configured JSON keys', () => {
+  const upstream = Buffer.from(
+    JSON.stringify({
+      commands: {
+        'fix-validate': '{{FIX_VALIDATE_COMMANDS}}',
+        'pre-push-validate': '{{PRE_PUSH_VALIDATE_COMMANDS}}',
+        'post-fix-validate': '{{POST_FIX_VALIDATE_COMMANDS}}',
+      },
+      issueScope: 'roadmap-first',
+    }),
+  );
+  const target = Buffer.from(
+    JSON.stringify({
+      commands: {
+        'fix-validate': 'pnpm run fix',
+        'pre-push-validate': 'pnpm run pre-push',
+        'post-fix-validate': 'pnpm run post-fix',
+      },
+      issueScope: 'roadmap-first',
+    }),
+  );
+  const result = classifyFileContent({
+    path: '.github/idd/config.json',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+    jsonKeyNormalizations: [
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'fix-validate'],
+      },
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'pre-push-validate'],
+      },
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'post-fix-validate'],
+      },
+    ],
+  });
+  assert.equal(result.contentClass, 'structural-json-match');
+});
+
+test('rule 2 fail: JSON normalization does not hide unrelated policy changes', () => {
+  const upstream = Buffer.from(
+    '{"commands":{"fix-validate":"{{FIX_VALIDATE_COMMANDS}}"},"issueScope":"roadmap-first"}',
+  );
+  const target = Buffer.from(
+    '{"commands":{"fix-validate":"pnpm run fix"},"issueScope":"orphan-first"}',
+  );
+  const result = classifyFileContent({
+    path: '.github/idd/config.json',
+    upstreamContent: upstream,
+    targetContent: target,
+    generatedDirs: [],
+    jsonKeyNormalizations: [
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'fix-validate'],
+      },
+    ],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 test('rule 2 fail: a real value change is never whitespace-tolerant', () => {
   const upstream = Buffer.from('{"a":1}');
   const target = Buffer.from('{"a":2}');
@@ -971,6 +1037,7 @@ test('CLI --help documents every declared flag and exits 0', () => {
     '--upstream-remote',
     '--path-prefix',
     '--generated-dir',
+    '--normalize-json-key',
     '--format',
     '--help',
   ]) {
@@ -1049,7 +1116,7 @@ test('CLI end-to-end: a pure vendoring commit against an --upstream-path checkou
     assert.equal(
       result.status,
       0,
-      `expected exit 0, got ${result.status}: ${result.stderr}`,
+      `expected exit 0, got ${result.status}: ${result.stderr}${result.stdout}`,
     );
     const report = JSON.parse(result.stdout) as {
       scanned: number;
@@ -1061,6 +1128,86 @@ test('CLI end-to-end: a pure vendoring commit against an --upstream-path checkou
         ['structural-json-match', 'prose-reflow-match'].includes(r.status),
       ),
     );
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+    rmSync(upstreamRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI end-to-end: --normalize-json-key preserves non-command config comparison', () => {
+  const targetRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-target-'),
+  );
+  const upstreamRoot = mkdtempSync(
+    join(tmpdir(), 'verify-import-mirror-upstream-'),
+  );
+  try {
+    initTargetRepo(targetRoot);
+    writeFileSync(join(targetRoot, 'baseline.txt'), 'baseline\n');
+    commitAll(targetRoot, 'chore: baseline');
+
+    const upstreamConfig = {
+      commands: {
+        'fix-validate': '{{FIX_VALIDATE_COMMANDS}}',
+        'pre-push-validate': '{{PRE_PUSH_VALIDATE_COMMANDS}}',
+        'post-fix-validate': '{{POST_FIX_VALIDATE_COMMANDS}}',
+      },
+      issueScope: 'roadmap-first',
+    };
+    const targetConfig = {
+      commands: {
+        'fix-validate': 'pnpm run fix',
+        'pre-push-validate': 'pnpm run pre-push',
+        'post-fix-validate': 'pnpm run post-fix',
+      },
+      issueScope: 'roadmap-first',
+    };
+    mkdirSync(join(upstreamRoot, '.github', 'idd'), { recursive: true });
+    mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(upstreamRoot, '.github', 'idd', 'config.json'),
+      JSON.stringify(upstreamConfig),
+    );
+    writeFileSync(
+      join(targetRoot, '.github', 'idd', 'config.json'),
+      JSON.stringify(targetConfig),
+    );
+    commitAll(targetRoot, 'chore: vendor re-import config');
+
+    const result = runCli(
+      [
+        '--target-root',
+        targetRoot,
+        '--upstream-path',
+        upstreamRoot,
+        '--path-prefix',
+        '.github/idd/config.json',
+        '--normalize-json-key',
+        '.github/idd/config.json:commands.fix-validate',
+        '--normalize-json-key',
+        '.github/idd/config.json:commands.pre-push-validate',
+        '--normalize-json-key',
+        '.github/idd/config.json:commands.post-fix-validate',
+        '--format',
+        'json',
+      ],
+      targetRoot,
+    );
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}: ${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout) as {
+      results: { path: string; status: string }[];
+    };
+    assert.deepEqual(report.results, [
+      {
+        path: '.github/idd/config.json',
+        changeType: 'A',
+        status: 'structural-json-match',
+      },
+    ]);
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
     rmSync(upstreamRoot, { recursive: true, force: true });
