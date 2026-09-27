@@ -2536,14 +2536,16 @@ function moduleScansManifestDirectory(text, targetPath) {
             firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
           );
     })();
-    const candidates = [
-      ...firstCandidates,
-      ...firstCandidates.flatMap((candidate) =>
-        cwdCandidates
-          .filter((cwd) => !isGlobPattern(cwd))
-          .map((cwd) => `${cwd}/${candidate}`),
-      ),
-    ]
+    const hasCwd = /\bcwd\s*:\s*/u.test(argumentsText);
+    const candidates = (
+      hasCwd
+        ? firstCandidates.flatMap((candidate) =>
+            cwdCandidates
+              .filter((cwd) => !isGlobPattern(cwd))
+              .map((cwd) => `${cwd}/${candidate}`),
+          )
+        : firstCandidates
+    )
       .flat()
       .map(normalizeManifestScanPath);
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
