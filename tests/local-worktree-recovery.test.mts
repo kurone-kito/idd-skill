@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { recordGeneratedClaimTokens } from '../src/scripts/claim-lock.mts';
 import {
+  assertRepositoryOverrideMatchesLocal,
   copyPathWithSafeSymlinks,
   countTaggedStashEntries,
   detectInProgressOperation,
@@ -128,6 +129,23 @@ test('primary recovery refuses malformed local config before default-branch look
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('primary recovery rejects an owner/repo override for another local repository', () => {
+  assert.throws(
+    () =>
+      assertRepositoryOverrideMatchesLocal(
+        { owner: 'other-owner', repo: 'other-repo' },
+        { owner: 'local-owner', repo: 'local-repo' },
+      ),
+    /do not match the local repository/,
+  );
+  assert.doesNotThrow(() =>
+    assertRepositoryOverrideMatchesLocal(
+      { owner: 'LOCAL-OWNER', repo: 'LOCAL-REPO' },
+      { owner: 'local-owner', repo: 'local-repo' },
+    ),
+  );
 });
 
 test('parseArgs rejects issue numbers that are not safe positive integers', () => {
@@ -3745,6 +3763,10 @@ function stubGhForStaleClaim(options: {
 const commentJson = ${JSON.stringify(commentJson)};
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('viewer-login\\n');
+  process.exit(0);
+}
+if (args[0] === 'repo' && args[1] === 'view') {
+  process.stdout.write(args.includes('owner') ? 'o\\n' : 'r\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((a) => /nodes\\(ids/.test(a))) {

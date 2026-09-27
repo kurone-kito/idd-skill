@@ -3021,6 +3021,8 @@ export function runLocalWorktreeRecovery(
       finalLinkedRouting !== null &&
       finalLinkedRouting.state === 'local_worktree_occupied' &&
       isAcceptedBlockReason(finalLinkedRouting.reason) &&
+      (shortcut.eligible ||
+        !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable')) &&
       (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).some(
         (reportedPath) =>
           normalizeGitWorktreePathForComparison(reportedPath) ===
@@ -3166,6 +3168,23 @@ export function runLocalWorktreeRecovery(
             'the worktree-local claim lock changed during late preservation; stopping before removal',
           );
         }
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a preservation artifact disappeared after late preservation; stopping before removal',
+        );
       }
     }
 
@@ -3946,6 +3965,22 @@ function removeWorktreeIfLockMatchesProduction(
   );
 }
 
+/** Refuse a network-repository override that does not name the local clone. */
+export function assertRepositoryOverrideMatchesLocal(
+  requested: Pick<LocalWorktreeRecoveryArgs, 'owner' | 'repo'>,
+  local: { owner: string; repo: string },
+): void {
+  if (!requested.owner && !requested.repo) return;
+  if (
+    requested.owner.toLowerCase() !== local.owner.toLowerCase() ||
+    requested.repo.toLowerCase() !== local.repo.toLowerCase()
+  ) {
+    throw new Error(
+      `local-worktree-recovery: --owner/--repo (${requested.owner}/${requested.repo}) do not match the local repository (${local.owner}/${local.repo}); refusing recovery`,
+    );
+  }
+}
+
 function createProductionDeps(
   args: LocalWorktreeRecoveryArgs,
 ): LocalWorktreeRecoveryDeps {
@@ -3957,6 +3992,12 @@ function createProductionDeps(
     repositoryRootResult.ok && repositoryRootResult.stdout.trim().length > 0
       ? resolve(repositoryRootResult.stdout.trim())
       : null;
+  if (args.owner && args.repo) {
+    assertRepositoryOverrideMatchesLocal(
+      args,
+      resolveCurrentGithubRepository(),
+    );
+  }
   return {
     cwd: () => process.cwd(),
     listWorktreeRecords: listWorktreeRecordsProduction,
