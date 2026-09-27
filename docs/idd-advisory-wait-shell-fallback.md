@@ -213,17 +213,16 @@ curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/com
 ## Registration-proven review request
 
 E14's `REQUEST_NEEDED` branch (and AW3-S step 3 below) uses this
-procedure. The two `gh` calls are attempts. Post an E14
-`advisory-wait` marker only after registration evidence: a
-`review_requested` timeline event for the bot that follows the
-current HEAD `committed` event (the same ordering AW1 uses for
-`COPILOT_PENDING_COVERS_HEAD` and AW3-S step 4 already counts), or a
-non-empty review-request node for that bot on the current PR (the
-node AW1 reads as `COPILOT_PENDING`). An older `review_requested`
-event does not count. Exit status and HTTP 201 are not
-evidence. Observed 2026-09-26 in issue `#3500` (refs #3481, #3491):
-both calls returned success while `requested_reviewers` stayed empty
-and no `review_requested` event was recorded.
+procedure. The two `gh` calls are attempts. Before the first request
+mutation, snapshot the latest matching `review_requested` event for the
+bot (its id or timestamp). Post an E14 `advisory-wait` marker only when
+the re-read finds a newer matching event that also follows the current
+HEAD `committed` event, or a non-empty `requested_reviewers` node for
+that bot read after the attempt. An older event, exit status, or HTTP
+201 is not evidence. Observed 2026-09-26 in issue `#3500` (refs issues
+`#3481` and `#3491`): both calls returned success while
+`requested_reviewers` stayed empty and no `review_requested` event was
+recorded.
 
 ```sh
 gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
@@ -250,7 +249,8 @@ jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
   | gh api graphql --input -
 ```
 
-Confirm the same evidence. E14 then posts its `advisory-wait` marker.
+Confirm the same current-attempt evidence. E14 then posts its
+`advisory-wait` marker.
 AW3-S keeps its own step 4 disposition and does not treat this block
 as that proof.
 
@@ -274,8 +274,8 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # Step 3 — request again (non-pending entry: the first mutating step;
 # pending entry: after step 2 verifies the removal). Run the
 # registration-proven review request above. The two gh/REST calls
-# there are attempts, not a complete request. Step 4 below stays
-# the counted proof-of-registration rule.
+# there are attempts, not a complete request; snapshot the matching
+# event before them. Step 4 below stays the counted proof rule.
 
 # Step 5 -- post exactly one bound marker, only once step 4 reaches a
 # counted disposition: proven re-registration for a pending entry, or

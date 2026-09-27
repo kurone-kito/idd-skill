@@ -332,10 +332,10 @@ other GitHub side effect, confirm all of the following:
    - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer, then
      REST `requested_reviewers`. Post
      `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
-     as plain text only after a `review_requested` event that
-     follows HEAD, or a non-empty review-request node. Exit status
-     is not evidence
-     (observed 2026-09-26 in issue `#3500`). If both leave it absent,
+     as plain text only after current-attempt evidence (newer matching
+     event than a pre-request snapshot and after HEAD, or non-empty
+     request node read after requesting); exit status is not evidence
+     (issue `#3500`). If absent,
      call `requestReviews` (`botIds` JSON array, `union: true`,
      resolved node id — never hard-coded). Still absent: stop and
      ask; do not post. Then go to the polling loop.

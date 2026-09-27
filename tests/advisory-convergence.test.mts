@@ -6819,6 +6819,11 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const noneText = formatAssertNextActions(none);
   assert.match(noneText, /has not reviewed this PR/);
   assert.match(noneText, /registration evidence/);
+  assert.match(
+    noneText,
+    /snapshot the matching review_requested event before requesting/,
+  );
+  assert.match(noneText, /newer event/);
   assert.match(noneText, /review_requested/);
   assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
   // #2159: add-reviewer alone is not a complete request. #3500: neither
@@ -6831,7 +6836,7 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(
     noneText,
-    /non-empty requested_reviewers node for copilot-pull-request-reviewer\[bot\]/,
+    /non-empty requested_reviewers node read after the attempt/,
   );
   assert.match(
     noneText,
