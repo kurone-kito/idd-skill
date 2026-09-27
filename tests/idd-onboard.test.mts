@@ -4121,6 +4121,21 @@ test('checkHeldSchemaDrift keeps scans visible after a function expression', () 
   ]);
 });
 
+test('checkHeldSchemaDrift keeps scans visible after a class expression', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "const ratio = class {} / readdirSync('schemas').length / divisor;\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift keeps scans visible after an else-if block', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4274,6 +4289,30 @@ test('checkHeldSchemaDrift detects glob scans that set cwd', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift ignores cwd and exclude options for non-glob scans', () => {
+  for (const moduleText of [
+    "readdirSync('schemas', { cwd: 'fixtures' });\n",
+    "readdirSync('schemas', { exclude: ['schemas'] });\n",
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift preserves grouped glob pattern arrays', () => {

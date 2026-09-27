@@ -2714,7 +2714,7 @@ function isBlockClosingBrace(text: string, index: number): boolean {
             )) ||
           /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
-          /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
+          /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
             openingPrefix,
           )
         );
@@ -3893,6 +3893,7 @@ function moduleScansManifestDirectory(
   const directory = targetPath.slice(0, slash);
   for (const match of findDirectoryScanCalls(text)) {
     const { apiName, argumentsText } = match;
+    const isGlobScanApi = /^glob(?:Sync)?$/u.test(apiName);
     const optionText = maskJavaScriptStringContents(argumentsText);
     const recursive =
       /(?:\brecursive\b|['"]recursive['"])\s*:\s*true\b/u.test(optionText) ||
@@ -3909,6 +3910,9 @@ function moduleScansManifestDirectory(
           : candidate,
     );
     const cwdCandidates = (() => {
+      if (!isGlobScanApi) {
+        return [];
+      }
       const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(optionText);
       if (cwd === null) {
         return [];
@@ -3936,10 +3940,11 @@ function moduleScansManifestDirectory(
           : candidate,
       );
     })();
-    const hasCwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(optionText);
-    const excludeMatch = /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(
-      optionText,
-    );
+    const hasCwd =
+      isGlobScanApi && /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(optionText);
+    const excludeMatch = isGlobScanApi
+      ? /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(optionText)
+      : null;
     const excludeCandidates =
       excludeMatch === null
         ? []
@@ -3963,7 +3968,7 @@ function moduleScansManifestDirectory(
       .map((candidate) =>
         normalizeManifestScanPath(
           candidate,
-          /^glob(?:Sync)?$/u.test(apiName),
+          isGlobScanApi,
           isGlobPattern(candidate),
         ),
       );
@@ -3982,7 +3987,7 @@ function moduleScansManifestDirectory(
       );
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
     const normalizedDirectory = normalizeManifestScanPath(directory);
-    const readsDirectoryEntries = !/^glob(?:Sync)?$/u.test(apiName);
+    const readsDirectoryEntries = !isGlobScanApi;
     if (
       candidates.some(
         (candidate) =>
