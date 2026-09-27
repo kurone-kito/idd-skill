@@ -111,6 +111,7 @@ distributed IDD workflow a repository imported.
   create and verify the tag with:
 
   ```sh
+  set -eu
   git fetch origin main
   release_version=0.13.0
   release_cut_merge_sha="${RELEASE_CUT_MERGE_SHA:?set to the bump PR merge SHA}"
