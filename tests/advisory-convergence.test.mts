@@ -7191,12 +7191,18 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.match(fallback, /registration_attempt aw3-s/);
   assert.match(fallback, /registration_check\(\)[\s\S]*?max_attempts=3/);
   assert.match(fallback, /AW3S_ENTRY.*pending|non-pending/);
-  assert.match(fallback, /REGISTRATION_STATUS.*-eq 2[\s\S]*?exit 2/);
+  assert.match(fallback, /command -v registration_attempt/);
+  assert.match(fallback, /AW3-S registration returned an unexpected status/);
   assert.match(
     fallback,
-    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \]/,
+    /case "\$REGISTRATION_STATUS"[\s\S]*?2\)[\s\S]*?exit 2/,
   );
-  assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?jq -n/);
+  assert.match(
+    fallback,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \][\s\S]*?\[ "\$NODE_FRESH" = true \]/,
+  );
+  assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?return 0/);
+  assert.doesNotMatch(fallback, /IFS=\$'\\t'/);
 });
 
 test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#2143)', () => {

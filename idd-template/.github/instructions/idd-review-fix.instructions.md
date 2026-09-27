@@ -373,9 +373,8 @@ login).
      with a newer event after HEAD or a fresh node absent from that
      snapshot. Exit status is not evidence (issue `#3500`).
      See the [registration fallback](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
-     if absent, ask and do not poll or continue to E15. Status `3` means
-     claim/HEAD guard failure: stop and return to E1; `1`/`2` are
-     non-gating evidence/API failures.
+     if absent, stop/ask; status `3` returns to E1, and primary `1`/`2`
+     are unproven/unreadable (only secondary `1`/`2` are non-gating).
 
      `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"true"` (unproven coverage —
@@ -392,9 +391,10 @@ login).
    every `apply step 5` reference in this file.**
    `secondaryBotLogin` accepts one login or a list; request **every**
    login the helper's `secondaryRequestLogins` reports (shell
-   fallback: every configured login not yet requested this HEAD) —
-   same procedure per login; `1`/`2` record/skip it, while `3` stops on a
-   claim/HEAD guard failure. Ordinary failures do not change route/marker.
+   fallback: every configured login not yet requested this HEAD). Use the
+   guarded procedure per login, replacing primary placeholders and
+   `BOT_REST_LOGIN`/bare form, with REST type selecting `botIds`/`userIds`;
+   `1`/`2` record/skip, `3` stops. No primary marker.
    Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll/wait for any of them here, E1, or E2;

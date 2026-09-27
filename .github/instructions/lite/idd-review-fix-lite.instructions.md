@@ -342,7 +342,8 @@ other GitHub side effect, confirm all of the following:
      [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
      use its account-typed fallback; never hard-code ids. Still absent:
      stop and ask; poll only after success. Status `3` means claim/HEAD
-     guard failure: stop and return to E1; `1`/`2` are non-gating failures.
+     guard failure: stop and return to E1. Status `1`/`2` means primary
+     registration is unproven/unreadable: stop/ask, not poll.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the
@@ -401,9 +402,9 @@ other GitHub side effect, confirm all of the following:
     `secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
-    the same procedure; `1`/`2` record/skip it, while `3` stops on a
-    claim/HEAD guard failure. Post no marker or change route for ordinary
-    failures — none satisfy the primary gate or consume its cap.
+    the guarded procedure, replacing primary placeholders and
+    `BOT_REST_LOGIN`/bare form; type selects `botIds`/`userIds`;
+    `1`/`2` skip and `3` stops. No marker.
     Each review is ordinary advisory input, picked up by the next E1
     snapshot if it lands before merge. Skip this step entirely when
     `secondaryRequestNeeded` is `false`.

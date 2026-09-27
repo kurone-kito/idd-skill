@@ -321,9 +321,8 @@ registration_attempt() {
   registration_ok() {
     EVENT_AFTER=$(request_event) || return 2
     NODES_AFTER=$(request_nodes) || return 2
-    IFS=$'\t' read -r EVENT_ID EVENT_AT EVENT_INDEX <<EOF
-$EVENT_AFTER
-EOF
+    EVENT_ID=$(printf '%s\n' "$EVENT_AFTER" | cut -f1)
+    EVENT_INDEX=$(printf '%s\n' "$EVENT_AFTER" | cut -f3)
     EVENT_NEW=false
     case "$EVENT_INDEX" in
       ''|*[!0-9]*) ;;
@@ -342,7 +341,9 @@ EOF
 $NODES_AFTER
 EOF
     if [ "$evidence_mode" = "aw3-s" ]; then
-      [ "$EVENT_NEW" = true ]
+      # A fresh request node is current-attempt evidence when the claim and
+      # HEAD guards remain stable; GitHub may omit or delay the timeline event.
+      [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
     else
       [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
     fi
@@ -365,14 +366,20 @@ EOF
   claim_revalidate || return 3
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
   if registration_check; then status=0; else status=$?; fi
-  [ "$status" -eq 0 ] && return 0
+  if [ "$status" -eq 0 ]; then
+    claim_revalidate || return 3
+    return 0
+  fi
   [ "$status" -eq 2 ] && return 2
 
   claim_revalidate || return 3
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
   if registration_check; then status=0; else status=$?; fi
-  [ "$status" -eq 0 ] && return 0
+  if [ "$status" -eq 0 ]; then
+    claim_revalidate || return 3
+    return 0
+  fi
   [ "$status" -eq 2 ] && return 2
 
   # Resolve the id and account type live. The GraphQL mutation has separate
@@ -400,7 +407,10 @@ EOF
       ;;
   esac
   if registration_check; then status=0; else status=$?; fi
-  [ "$status" -eq 0 ] && return 0
+  if [ "$status" -eq 0 ]; then
+    claim_revalidate || return 3
+    return 0
+  fi
   [ "$status" -eq 2 ] && return 2
   echo "registration evidence absent" >&2
   return 1
@@ -415,9 +425,9 @@ registration_attempt e14 || REGISTRATION_STATUS=$?
 
 The post-request reads must run after each mutating attempt. The
 `EVENT_BEFORE`/`NODES_BEFORE` values are the baselines for the selected
-mode. E14 can carry a fresh node proof when the event is delayed, but
-AW3-S uses event-after-HEAD proof only; a fresh node alone cannot prove
-that the stale-request re-registration covers this HEAD. E14 posts its
+mode. E14 and AW3-S can carry a fresh node proof when the event is delayed;
+the claim/HEAD guards bind that current-attempt node evidence to this HEAD.
+E14 posts its
 `advisory-wait` marker only when `REGISTRATION_STATUS` is `0`; statuses
 `1`/`2` stop and ask, while status `3` stops for an E1 restart. AW3-S
 uses step 4 only after readable event evidence; status `2` routes to AW4
@@ -460,6 +470,17 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # registration-proven review request above in AW3-S mode. Its
 # event/node snapshots precede both mutations, but step 4 accepts only
 # a fresh review_requested event after HEAD's committed event.
+case "$AW3S_ENTRY" in
+  pending | non-pending) ;;
+  *)
+    echo "AW3-S entry must be pending or non-pending" >&2
+    exit 2
+    ;;
+esac
+if ! command -v registration_attempt >/dev/null 2>&1; then
+  echo "AW3-S requires the shared registration procedure" >&2
+  exit 2
+fi
 REGISTRATION_STATUS=0
 registration_attempt aw3-s || REGISTRATION_STATUS=$?
 
@@ -467,14 +488,21 @@ registration_attempt aw3-s || REGISTRATION_STATUS=$?
 # Pending success is counted; pending status 1 returns without a marker.
 # Non-pending status 0 is ordinary success and also returns without a
 # marker; only its status 1 failure reaches the counted marker below.
-if [ "$REGISTRATION_STATUS" -eq 2 ]; then
-  echo "AW3-S evidence unreadable; route to AW4" >&2
-  exit 2
-fi
-if [ "$REGISTRATION_STATUS" -eq 3 ]; then
-  echo "AW3-S claim/HEAD guard failed; restart from E1" >&2
-  exit 2
-fi
+case "$REGISTRATION_STATUS" in
+  2)
+    echo "AW3-S evidence unreadable; route to AW4" >&2
+    exit 2
+    ;;
+  3)
+    echo "AW3-S claim/HEAD guard failed; restart from E1" >&2
+    exit 2
+    ;;
+  0 | 1) ;;
+  *)
+    echo "AW3-S registration returned an unexpected status" >&2
+    exit 2
+    ;;
+esac
 if [ "$AW3S_ENTRY" = "pending" ] && [ "$REGISTRATION_STATUS" -eq 1 ]; then
   echo "AW3-S pending request still unproven; return to polling" >&2
   exit 1
