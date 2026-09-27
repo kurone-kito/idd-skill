@@ -5,12 +5,15 @@ import {
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
   parseArgs,
+  resolveNowFlag,
 } from '../src/scripts/advisory-wait-state.mts';
+import { NOW_FLAG_USAGE_MESSAGE } from '../src/scripts/marker-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
   renderAdvisoryWaitRecoveryMarker,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const advisoryWaitStateSchema = loadJson(
   'schemas/advisory-wait-state.schema.json',
@@ -843,4 +846,52 @@ test('advisoryMarkerComment: still recognizes advisory-wait: and advisory-wait-r
 test('advisoryMarkerComment: rejects unrelated comment bodies', () => {
   assert.equal(advisoryMarkerComment('just a regular comment'), false);
   assert.equal(advisoryMarkerComment(''), false);
+});
+
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test("resolveNowFlag: an empty value returns an empty now with no error -- late sampling is the caller's job (#3551 Codex review)", () => {
+  // Deliberately does NOT sample new Date() here: the CLI's own call site
+  // samples the real current time immediately before buildAdvisoryWaitSummary
+  // (after evidence collection), not inside resolveNowFlag (before it) --
+  // see resolveNowFlag's own doc comment for why an early sample would be
+  // stale by the time collection finishes.
+  const { now, error } = resolveNowFlag('');
+  assert.equal(error, null);
+  assert.equal(now, '');
+});
+
+test('resolveNowFlag: an offset value normalizes to canonical UTC', () => {
+  const { now, error } = resolveNowFlag('2026-09-27T02:20:20+09:00');
+  assert.equal(error, null);
+  assert.equal(now, '2026-09-26T17:20:20Z');
+});
+
+test("parseArgs + resolveNowFlag: the CLI's own argument handling normalizes an offset --now to canonical UTC", () => {
+  const args = parseArgs(['--pr', '42', '--now', '2026-09-27T02:20:20+09:00']);
+  const { now, error } = resolveNowFlag(args.now);
+  assert.equal(error, null);
+  assert.equal(now, '2026-09-26T17:20:20Z');
+});
+
+test('resolveNowFlag: a malformed value returns a one-line usage error instead of a value', () => {
+  const { now, error } = resolveNowFlag('Sep 27 2026');
+  assert.equal(now, '');
+  assert.equal(error, NOW_FLAG_USAGE_MESSAGE);
+});
+
+// #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
+// must classify as a usage error (kind "usage"), not a genuine advisory-wait
+// state failure (kind "gate").
+test('bin/idd-advisory-wait-state.mjs: a malformed --now classifies as a usage error under the opt-in error envelope', () => {
+  const result = spawnHelperBinWithEnvelope('idd-advisory-wait-state.mjs', [
+    '--pr',
+    '1',
+    '--now',
+    'Sep 27 2026',
+  ]);
+  assert.equal(result.status, 1, JSON.stringify(result));
+  assert.ok(result.envelope, JSON.stringify(result));
+  assert.equal(result.envelope?.kind, 'usage');
+  assert.equal(result.envelope?.exitCode, 1);
 });

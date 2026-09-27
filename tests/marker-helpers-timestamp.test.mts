@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import {
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
   normalizeApplyNow,
+  normalizeNowFlag,
   normalizeSecondPrecisionIsoTimestamp,
   toSecondPrecisionIso,
 } from '../src/scripts/marker-helpers.mts';
@@ -107,4 +109,101 @@ test('normalizeSecondPrecisionIsoTimestamp still rejects a genuinely malformed v
   assert.equal(normalizeSecondPrecisionIsoTimestamp(''), '');
   assert.equal(normalizeSecondPrecisionIsoTimestamp(undefined), '');
   assert.equal(normalizeSecondPrecisionIsoTimestamp(123), '');
+});
+
+// ---------------------------------------------------------------------------
+// normalizeNowFlag (#3541) -- the CLI-boundary `--now` normalizer for
+// advisory-convergence.mts, advisory-wait-state.mts,
+// rerun-advisory-convergence.mts, idd-merge-execute.mts, and
+// pre-merge-readiness.mts. Unlike normalizeApplyNow, this keeps millisecond
+// precision and strictly requires a `Z` or numeric-offset ISO 8601
+// date-time -- it must reject a date-only value or a non-ISO string that
+// `new Date()` would otherwise parse leniently.
+// ---------------------------------------------------------------------------
+
+test('normalizeNowFlag converts an offset value to canonical UTC', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20+09:00'),
+    '2026-09-26T17:20:20Z',
+  );
+});
+
+test('normalizeNowFlag keeps milliseconds on a Z value that carries them', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.123Z'),
+    '2026-09-27T02:20:20.123Z',
+  );
+});
+
+test('normalizeNowFlag shortens a trailing .000Z fraction to Z', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.000Z'),
+    '2026-09-27T02:20:20Z',
+  );
+});
+
+test('normalizeNowFlag normalizes a single-digit fractional second instead of rejecting it', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.5Z'),
+    '2026-09-27T02:20:20.500Z',
+  );
+});
+
+test('normalizeNowFlag fails closed (null) on a date-only value, a non-ISO string, and an empty string', () => {
+  assert.equal(normalizeNowFlag('2026-09-27'), null);
+  assert.equal(normalizeNowFlag('Sep 27 2026'), null);
+  assert.equal(normalizeNowFlag(''), null);
+});
+
+test('normalizeNowFlag never throws for non-string input', () => {
+  for (const value of [123, null, undefined, {}, []]) {
+    assert.doesNotThrow(() => normalizeNowFlag(value as unknown as string));
+    assert.equal(normalizeNowFlag(value as unknown as string), null);
+  }
+});
+
+test('NOW_FLAG_USAGE_MESSAGE names --now and shows an accepted example', () => {
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /--now/);
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20Z/);
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20\+09:00/);
+});
+
+// #3551 Copilot + Codex review: `new Date()` silently rolls an impossible
+// calendar date forward (e.g. `2026-02-30T...` becomes `2026-03-02T...`)
+// instead of rejecting it. Since the normalized value drives merge-gate
+// and advisory-wait clocks, a typo'd day must fail closed rather than
+// silently shifting those clocks.
+test('normalizeNowFlag rejects a nonexistent calendar day (Feb 30, Apr 31)', () => {
+  assert.equal(normalizeNowFlag('2026-02-30T02:20:20Z'), null);
+  assert.equal(normalizeNowFlag('2026-04-31T00:00:00Z'), null);
+});
+
+test('normalizeNowFlag rejects Feb 29 on a non-leap year, accepts it on a leap year', () => {
+  // 2026 and 1900 (divisible by 100, not by 400) are not leap years.
+  assert.equal(normalizeNowFlag('2026-02-29T00:00:00Z'), null);
+  assert.equal(normalizeNowFlag('1900-02-29T00:00:00Z'), null);
+  // 2024 and 2000 (divisible by 400) are leap years.
+  assert.equal(
+    normalizeNowFlag('2024-02-29T00:00:00Z'),
+    '2024-02-29T00:00:00Z',
+  );
+  assert.equal(
+    normalizeNowFlag('2000-02-29T00:00:00Z'),
+    '2000-02-29T00:00:00Z',
+  );
+});
+
+test('normalizeNowFlag rejects hour 24 instead of silently rolling to the next day', () => {
+  assert.equal(normalizeNowFlag('2026-09-27T24:00:00Z'), null);
+});
+
+test('normalizeNowFlag still accepts every valid boundary date/time unaffected by the calendar check', () => {
+  assert.equal(
+    normalizeNowFlag('2026-12-31T23:59:59Z'),
+    '2026-12-31T23:59:59Z',
+  );
+  assert.equal(
+    normalizeNowFlag('2026-01-01T00:00:00Z'),
+    '2026-01-01T00:00:00Z',
+  );
 });

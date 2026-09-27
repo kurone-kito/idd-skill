@@ -21,6 +21,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { NOW_FLAG_USAGE_MESSAGE, normalizeNowFlag } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -326,6 +327,36 @@ export function runMergeExecute(argv, deps = defaultDeps) {
         'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
       ),
     );
+  }
+  // #3541: checked BEFORE the --now/--apply mutual-exclusion gate below,
+  // and before any collection call -- a malformed --now must never reach
+  // `deps.collect` (which would otherwise throw uncaught deep inside the
+  // shared pre-merge-readiness collector).
+  if (args.nowFlagError) {
+    // This placeholder verdict is NEVER printed: main() below checks
+    // `nowFlagError` first and returns before its own JSON.stringify(verdict)
+    // write. It exists only so a caller that reads `verdict`/`exitCode`
+    // without checking `nowFlagError` still gets a well-shaped (if
+    // internally inconsistent -- `ready: false` with no blocker entry
+    // explaining why) result instead of `undefined`.
+    return {
+      verdict: {
+        protocolVersion: '1',
+        decisionAuthority: 'instructions',
+        mode: args.apply ? 'apply' : 'dry-run',
+        prNumber: args.prNumber,
+        prHeadSha: '',
+        ready: false,
+        blockers: [],
+        mergeCommand: '',
+        merged: false,
+        mergeResult: '',
+        adminFallbackUsed: false,
+        localHeadDrift: null,
+      },
+      exitCode: 1,
+      nowFlagError: args.nowFlagError,
+    };
   }
   // #3252: --now overrides every merge-gate clock (claim staleness,
   // waiver expiry, advisory-convergence deadline, terminal-unavailability
@@ -644,12 +675,27 @@ function parseArgs(argv) {
     claimIdProvided: false,
     claimless: false,
     nowProvided: false,
+    nowFlagError: null,
   };
   // Captured locally so `repoRef` is set only when BOTH are present; these
   // are ALSO forwarded to the collector via passthrough (we do not stop
   // forwarding them — the collector still scopes its own gh/API calls).
   let owner = '';
   let repo = '';
+  // #3551 (Copilot + Codex review, round 3): the last VALID, normalized
+  // `--now` value across every occurrence in argv (last-occurrence-wins),
+  // tracked independently of `parsed.passthrough` and pushed there exactly
+  // ONCE, after the whole loop below, rather than incrementally per
+  // occurrence. `passthrough` is append-only, so an earlier fix that
+  // pushed per-occurrence let a LATER not-provided/invalid occurrence
+  // correctly clear `nowProvided`/`nowFlagError` while an EARLIER valid
+  // occurrence's entry silently remained already-pushed in `passthrough`
+  // -- reaching the collector (and, under `--apply`, the actual merge
+  // gate) with a stale clock the `--now`/`--apply` mutual-exclusion gate
+  // believed had never been provided at all. Tracking one resolved token
+  // and pushing it once after the loop makes `passthrough`,
+  // `nowProvided`, and `nowFlagError` structurally unable to diverge.
+  let resolvedNowToken = null;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--apply') {
@@ -724,23 +770,59 @@ function parseArgs(argv) {
       continue;
     }
     // #3252: same detect-without-changing purpose as `--claim-id` above,
-    // for the `--now`/`--apply` mutual-exclusion gate.
+    // for the `--now`/`--apply` mutual-exclusion gate. Never pushes to
+    // `passthrough` directly (#3551) -- see `resolvedNowToken`'s own doc
+    // comment above for why the final value is pushed once, after the
+    // whole loop, instead.
     if (token === '--now' || token.startsWith('--now=')) {
       let value;
       if (token.includes('=')) {
         value = token.slice(token.indexOf('=') + 1);
-        parsed.passthrough.push(token);
       } else {
         value = argv[index + 1];
         if (value !== undefined && !value.startsWith('--')) {
-          parsed.passthrough.push(token, value);
           index += 1;
         } else {
-          parsed.passthrough.push(token);
           value = undefined;
         }
       }
-      parsed.nowProvided = value !== undefined && value.trim() !== '';
+      if (value === undefined) {
+        // #3551 Codex review (P1): a bare `--now` with NO value at all --
+        // the last argv token, or immediately followed by another
+        // recognized flag (e.g. `--now --apply`) -- is a malformed
+        // invocation, not an intentional "no override": unlike an
+        // EXPLICIT blank value (`--now=` or a quoted whitespace value,
+        // handled below as the deliberate not-provided sentinel), nothing
+        // here indicates the caller meant to omit `--now` at all. Treating
+        // it the same as a genuinely omitted flag would let a probably
+        // mistyped `--apply` invocation proceed to merge using the live
+        // clock instead of refusing.
+        parsed.nowProvided = true;
+        parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
+        resolvedNowToken = null;
+        continue;
+      }
+      const provided = value.trim() !== '';
+      parsed.nowProvided = provided;
+      if (!provided) {
+        parsed.nowFlagError = null;
+        resolvedNowToken = null;
+        continue;
+      }
+      // #3541: normalize HERE, before the collector (collectPreMergeReadiness)
+      // ever sees it -- forwarding the normalized value so a valid
+      // numeric-offset value reaches the collector's own
+      // isValidIsoTimestamp gate already converted, and a malformed value
+      // fails closed with a one-line message instead of an uncaught throw
+      // deep inside the shared collector.
+      const normalizedNow = normalizeNowFlag(value);
+      if (normalizedNow === null) {
+        parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
+        resolvedNowToken = null;
+      } else {
+        parsed.nowFlagError = null;
+        resolvedNowToken = normalizedNow;
+      }
       continue;
     }
     // Every other flag (and its value, if it takes one) is forwarded
@@ -775,6 +857,15 @@ function parseArgs(argv) {
   // collector, the head re-fetch, and the merge all default to the
   // current-directory repo (consistent).
   parsed.repoRef = owner && repo ? `${owner}/${repo}` : null;
+  // #3551: push the single resolved --now token (if any) exactly once,
+  // after every occurrence in argv has been walked -- see
+  // `resolvedNowToken`'s own doc comment above. `--now`'s relative
+  // position among other forwarded flags in `passthrough` does not
+  // matter to the collector's own flag-name-keyed parser, so appending
+  // it here (rather than at its original argv position) is safe.
+  if (resolvedNowToken !== null) {
+    parsed.passthrough.push('--now', resolvedNowToken);
+  }
   return parsed;
 }
 function printHelp() {
@@ -842,7 +933,18 @@ if (import.meta.main) {
   }
 }
 function main() {
-  const { verdict, exitCode, cause } = runMergeExecute(process.argv.slice(2));
+  const { verdict, exitCode, cause, nowFlagError } = runMergeExecute(
+    process.argv.slice(2),
+  );
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw.
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than the bare `exitCode` number -- see
+    // advisory-convergence.mts's identical comment for why a plain number
+    // misclassifies as `kind: 'gate'` under `IDD_HELPER_ERROR_ENVELOPE=1`.
+    process.stderr.write(`${nowFlagError}\n`);
+    return { exitCode, kind: 'usage', message: nowFlagError, httpStatus: null };
+  }
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running
     // --apply interactively should actually notice it, not just find it

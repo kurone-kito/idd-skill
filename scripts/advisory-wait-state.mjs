@@ -38,6 +38,8 @@ import {
   findLastCopilotReviewCommit,
   isCopilotPending,
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
   resolveTrustedMarkerActors,
@@ -482,6 +484,37 @@ if (import.meta.main) {
     applyHelperCliOutcomeWhenDisabled(main());
   }
 }
+/**
+ * Resolve the CLI's own `--now` flag at the argument-handling boundary
+ * (#3541), before it ever reaches {@link buildAdvisoryWaitSummary}'s
+ * `isValidIsoTimestamp` gate (that gate, and its existing test fixtures,
+ * stay unchanged). A non-empty value normalizes through
+ * {@link normalizeNowFlag}, returning `now: ''` plus a one-line `error`
+ * naming `--now` and its accepted shapes instead of forwarding a malformed
+ * value into the pure summary builder.
+ *
+ * An empty `rawNow` (the flag omitted) returns `now: ''` too, WITHOUT
+ * sampling the real current time here (Codex review, PR #3551): this
+ * file's pre-existing behavior samples `new Date()` immediately before
+ * `buildAdvisoryWaitSummary` -- AFTER every `gh`/GraphQL evidence-collection
+ * call below has already completed -- so the summary evaluates against a
+ * clock as fresh as possible relative to that evidence. Sampling it here
+ * instead, before collection even starts, would let a slow collection
+ * evaluate against a stale start time and could incorrectly keep the
+ * advisory wait blocked until another invocation. Callers must apply the
+ * same late-sampling fallback this file's own call site does:
+ * `resolvedNow || new Date().toISOString().replace('.000Z', 'Z')`.
+ */
+export function resolveNowFlag(rawNow) {
+  if (!rawNow) {
+    return { now: '', error: null };
+  }
+  const normalized = normalizeNowFlag(rawNow);
+  if (normalized === null) {
+    return { now: '', error: NOW_FLAG_USAGE_MESSAGE };
+  }
+  return { now: normalized, error: null };
+}
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call. Returns 0 or throws -- `runHelperCli` (#3344) classifies a
@@ -496,6 +529,23 @@ function main() {
     throw markCliUsageError(
       new Error('missing required --pr <number> argument'),
     );
+  }
+  // #3541: validated before any `gh`/GraphQL call below -- a malformed
+  // --now must exit cleanly (one line, no stack trace) without spending
+  // any network round-trip first.
+  const { now: resolvedNow, error: nowFlagError } = resolveNowFlag(args.now);
+  if (nowFlagError) {
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than a bare `1` -- see advisory-convergence.mts's identical
+    // comment for why a plain number misclassifies as `kind: 'gate'`
+    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
+    process.stderr.write(`${nowFlagError}\n`);
+    return {
+      exitCode: 1,
+      kind: 'usage',
+      message: nowFlagError,
+      httpStatus: null,
+    };
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
@@ -570,7 +620,11 @@ function main() {
       graphqlRequestedReviewerLogins,
     },
     {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      // #3551 Codex review: sampled here (immediately before this call),
+      // AFTER every evidence-collection call above has completed -- not
+      // inside resolveNowFlag, which would sample it before collection
+      // even starts. See resolveNowFlag's own doc comment for why.
+      now: resolvedNow || new Date().toISOString().replace('.000Z', 'Z'),
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,

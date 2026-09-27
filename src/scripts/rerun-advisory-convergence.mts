@@ -147,7 +147,11 @@ import {
 } from './helper-cli-runner.mts';
 import type { IddConfig } from './idd-config.mts';
 import { loadTrustedIddConfig } from './idd-config.mts';
-import { isValidIsoTimestamp } from './marker-helpers.mts';
+import {
+  isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
+} from './marker-helpers.mts';
 import {
   advisoryBotIdentityToken,
   isCopilotReviewerLogin,
@@ -2457,6 +2461,13 @@ export function runRerunAdvisoryConvergence(
   refreshLatestPlan: RefreshLatestPlan | null;
   help: boolean;
   args: RerunPlanArgs;
+  /** #3541: a one-line usage error naming `--now` and its accepted shapes,
+   * set instead of throwing when `--now` was given a value
+   * {@link normalizeNowFlag} rejects -- lets the CLI entry point print it
+   * cleanly and exit non-zero without an uncaught stack trace. `undefined`
+   * (never set) on every other path, mirroring `idd-merge-execute.mts`'s
+   * `runMergeExecute` return shape. */
+  nowFlagError?: string;
 } {
   const args = parseArgs(argv);
   if (args.help) {
@@ -2466,6 +2477,22 @@ export function runRerunAdvisoryConvergence(
     throw markCliUsageError(
       new Error('missing required --pr <number> argument'),
     );
+  }
+  // #3541: normalize BEFORE any collection or pure plan computation --
+  // computeRerunPlan/computeRefreshLatestPlan's own isValidIsoTimestamp
+  // gates stay unchanged and must never see a malformed value.
+  if (args.now) {
+    const normalizedNow = normalizeNowFlag(args.now);
+    if (normalizedNow === null) {
+      return {
+        plan: null,
+        refreshLatestPlan: null,
+        help: false,
+        args,
+        nowFlagError: NOW_FLAG_USAGE_MESSAGE,
+      };
+    }
+    args.now = normalizedNow;
   }
 
   const { input, options } = deps.collect(args);
@@ -3535,9 +3562,22 @@ if (import.meta.main) {
 }
 
 function main(): HelperCliResult {
-  const { plan, refreshLatestPlan, help, args } = runRerunAdvisoryConvergence(
-    process.argv.slice(2),
-  );
+  const { plan, refreshLatestPlan, help, args, nowFlagError } =
+    runRerunAdvisoryConvergence(process.argv.slice(2));
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw.
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than a bare `1` -- see advisory-convergence.mts's identical
+    // comment for why a plain number misclassifies as `kind: 'gate'`
+    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
+    process.stderr.write(`${nowFlagError}\n`);
+    return {
+      exitCode: 1,
+      kind: 'usage',
+      message: nowFlagError,
+      httpStatus: null,
+    };
+  }
   if (help) {
     printHelp();
   } else if (refreshLatestPlan) {

@@ -52,6 +52,8 @@ import {
   classifyPrLoopMembership,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parseExternalCheckWaiverComment,
@@ -237,6 +239,22 @@ export function collectPreMergeReadiness(
     throw markCliUsageError(
       new Error('missing required --claim-issue <number> argument'),
     );
+  }
+  // #3541: normalize BEFORE any `gh`/GraphQL call below, and before
+  // buildPreMergeReadinessSummary's own isValidIsoTimestamp gate (which
+  // stays unchanged) ever sees it -- an otherwise-valid numeric-offset
+  // value must reach that gate already converted to the canonical UTC
+  // shape it accepts, and a genuinely malformed value must fail closed
+  // here with a one-line message naming --now and its accepted shapes,
+  // not spend a network round-trip first. main()'s existing top-level
+  // try/catch renders this thrown error as clean `{"error": ...}` JSON
+  // with no stack trace, same as every other usage error in this file.
+  if (args.now) {
+    const normalizedNow = normalizeNowFlag(args.now);
+    if (normalizedNow === null) {
+      throw markCliUsageError(new Error(NOW_FLAG_USAGE_MESSAGE));
+    }
+    args.now = normalizedNow;
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();

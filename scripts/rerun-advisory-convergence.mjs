@@ -144,7 +144,11 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
-import { isValidIsoTimestamp } from './marker-helpers.mjs';
+import {
+  isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
+} from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
   isCopilotReviewerLogin,
@@ -1848,6 +1852,22 @@ export function runRerunAdvisoryConvergence(argv, deps = defaultDeps) {
       new Error('missing required --pr <number> argument'),
     );
   }
+  // #3541: normalize BEFORE any collection or pure plan computation --
+  // computeRerunPlan/computeRefreshLatestPlan's own isValidIsoTimestamp
+  // gates stay unchanged and must never see a malformed value.
+  if (args.now) {
+    const normalizedNow = normalizeNowFlag(args.now);
+    if (normalizedNow === null) {
+      return {
+        plan: null,
+        refreshLatestPlan: null,
+        help: false,
+        args,
+        nowFlagError: NOW_FLAG_USAGE_MESSAGE,
+      };
+    }
+    args.now = normalizedNow;
+  }
   const { input, options } = deps.collect(args);
   if (args.refreshLatest) {
     const refreshLatestPlan = computeRefreshLatestPlan(input, options);
@@ -2686,9 +2706,22 @@ if (import.meta.main) {
   }
 }
 function main() {
-  const { plan, refreshLatestPlan, help, args } = runRerunAdvisoryConvergence(
-    process.argv.slice(2),
-  );
+  const { plan, refreshLatestPlan, help, args, nowFlagError } =
+    runRerunAdvisoryConvergence(process.argv.slice(2));
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw.
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than a bare `1` -- see advisory-convergence.mts's identical
+    // comment for why a plain number misclassifies as `kind: 'gate'`
+    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
+    process.stderr.write(`${nowFlagError}\n`);
+    return {
+      exitCode: 1,
+      kind: 'usage',
+      message: nowFlagError,
+      httpStatus: null,
+    };
+  }
   if (help) {
     printHelp();
   } else if (refreshLatestPlan) {

@@ -139,6 +139,8 @@ import { loadIddConfig } from './idd-config.mts';
 import {
   digestExternalCheckWaiverMarkerBody,
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
   parseClaimComment,
   parseExternalCheckWaiverComment,
 } from './marker-helpers.mts';
@@ -2873,6 +2875,14 @@ export function runAdvisoryConvergence(
   verdict: AdvisoryConvergenceVerdict | null;
   exitCode: number;
   help: boolean;
+  /** #3541: a one-line usage error naming `--now` and its accepted shapes,
+   * set instead of throwing when `--now` was given a value
+   * {@link normalizeNowFlag} rejects -- so the CLI entry point below can
+   * print it cleanly and exit non-zero without an uncaught stack trace,
+   * the same way `help` short-circuits before any collection happens.
+   * `undefined` (never set) on every other path, mirroring
+   * `idd-merge-execute.mts`'s `runMergeExecute` return shape. */
+  nowFlagError?: string;
 } {
   const args = parseArgs(argv);
   if (args.help) {
@@ -2882,6 +2892,23 @@ export function runAdvisoryConvergence(
     throw markCliUsageError(
       new Error('missing required --pr <number> argument'),
     );
+  }
+  // #3541: normalize BEFORE any collection or pure verdict computation --
+  // `computeAdvisoryConvergenceVerdict`'s own `isValidIsoTimestamp` gate
+  // stays unchanged and must never see a malformed value, and an
+  // otherwise-valid numeric-offset value must reach it already converted
+  // to the canonical UTC shape that gate accepts.
+  if (args.now) {
+    const normalizedNow = normalizeNowFlag(args.now);
+    if (normalizedNow === null) {
+      return {
+        verdict: null,
+        exitCode: 1,
+        help: false,
+        nowFlagError: NOW_FLAG_USAGE_MESSAGE,
+      };
+    }
+    args.now = normalizedNow;
   }
 
   const { inputs, options } = deps.collect(args);
@@ -3126,6 +3153,7 @@ export function runAdvisoryConvergenceWithPoll(
   verdict: AdvisoryConvergenceVerdict | null;
   exitCode: number;
   help: boolean;
+  nowFlagError?: string;
 } {
   let result = runAdvisoryConvergence(argv, deps);
   if (
@@ -4813,11 +4841,23 @@ if (import.meta.main) {
 
 function main(): HelperCliResult {
   const { pollIntervalMs, maxWaitMs } = readCopilotReviewPollPolicy();
-  const { verdict, exitCode, help } = runAdvisoryConvergenceWithPoll(
-    process.argv.slice(2),
-    defaultDeps,
-    { pollIntervalMs, maxWaitMs },
-  );
+  const { verdict, exitCode, help, nowFlagError } =
+    runAdvisoryConvergenceWithPoll(process.argv.slice(2), defaultDeps, {
+      pollIntervalMs,
+      maxWaitMs,
+    });
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw --
+    // deliberately printed instead of the (null) verdict. Returned as a
+    // classified `usage` outcome (Codex review, PR #3551) rather than the
+    // bare `exitCode` number below -- `normalizeOutcome`
+    // (helper-cli-runner.mts) classifies a plain number as `kind: 'gate'`
+    // whenever `IDD_HELPER_ERROR_ENVELOPE=1`, which would misreport this
+    // argument mistake as a genuine convergence failure to a caller that
+    // distinguishes the two (and might retry a `usage` error indefinitely).
+    process.stderr.write(`${nowFlagError}\n`);
+    return { exitCode, kind: 'usage', message: nowFlagError, httpStatus: null };
+  }
   if (help) {
     printHelp();
   } else if (verdict) {

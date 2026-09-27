@@ -3847,3 +3847,134 @@ export function normalizeApplyNow(raw: string): string | null {
   }
   return toSecondPrecisionIso(parsed);
 }
+
+// --- CLI-boundary `--now` normalization (#3541) ---
+//
+// `advisory-convergence.mts`, `advisory-wait-state.mts`,
+// `rerun-advisory-convergence.mts`, `idd-merge-execute.mts`, and
+// `pre-merge-readiness.mts` each forward a raw `--now` CLI value into a pure
+// function gated by `isValidIsoTimestamp` above, which accepts only the
+// exact `Date#toISOString()` shape (a `Z`-suffixed value, optionally without
+// the `.000` millisecond fraction) -- so an otherwise well-formed ISO 8601
+// value carrying a numeric UTC offset (e.g. `2026-09-27T02:20:20+09:00`, the
+// field-feedback reproduction case) is rejected outright, even though it
+// unambiguously names one instant in time. `normalizeApplyNow` above is too
+// lenient for this boundary instead: it round-trips through `new Date()`,
+// which also accepts a date-only value or a non-ISO string like
+// `Sep 27 2026`, silently coercing either to midnight UTC rather than
+// failing closed.
+//
+// `normalizeNowFlag` below is the dedicated CLI-boundary normalizer this
+// issue adds: strict enough to reject anything `isValidIsoTimestamp` would
+// (plus a date-only value and non-ISO strings `new Date()` alone would
+// accept), lenient enough to accept a numeric-offset value, and it keeps
+// millisecond precision -- the same canonical shape these helpers' own
+// default `now` (`new Date().toISOString()`, minus a `.000` fraction)
+// already produces. `normalizeApplyNow`'s second-precision semantics and
+// existing callers stay unchanged; this is a new, independent function for
+// a new, independent call-site family.
+
+/**
+ * An ISO 8601 date-time with a `Z` or numeric `+HH:MM` / `-HH:MM` UTC offset,
+ * optionally with one or more fractional-second digits. Deliberately
+ * excludes a date-only value (`2026-09-27`) and any non-ISO string (e.g.
+ * `Sep 27 2026`) that `new Date()` would otherwise parse leniently. Capture
+ * groups 1-5 (year/month/day/hour) back the calendar-overflow check below --
+ * this pattern alone cannot reject an impossible date (`2026-02-30`) or an
+ * out-of-range hour (`24`), since each component is only shape-checked here.
+ */
+const OFFSET_NOW_FLAG_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * One-line usage-error text naming `--now` and the shapes it accepts,
+ * shared by every CLI that routes `--now` through {@link normalizeNowFlag}
+ * so a malformed value's error message stays identical across all five
+ * helpers.
+ */
+export const NOW_FLAG_USAGE_MESSAGE =
+  '--now must be an ISO 8601 date-time with a Z or numeric UTC offset ' +
+  '(e.g. 2026-09-27T02:20:20Z or 2026-09-27T02:20:20+09:00), optionally ' +
+  'with fractional seconds';
+
+function isGregorianLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/**
+ * `new Date()` silently rolls an impossible calendar date forward instead
+ * of rejecting it -- verified empirically: `new Date('2026-02-30T00:00:00Z')`
+ * parses to `2026-03-02T00:00:00.000Z` (Copilot + Codex review, PR #3551,
+ * both independently on `normalizeNowFlag`). Since the normalized value
+ * drives merge-gate/advisory-wait clocks (deadlines, waiver expiry, quiet
+ * windows), a typo'd day must fail closed instead of silently shifting
+ * those clocks by hours or days. `month`/`day` are the raw 1-indexed
+ * calendar fields as written in the input, not JS `Date`'s own
+ * zero-indexed month.
+ */
+function isValidCalendarDate(
+  year: number,
+  month: number,
+  day: number,
+): boolean {
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  const daysInMonth = [
+    31,
+    isGregorianLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day >= 1 && day <= daysInMonth[month - 1];
+}
+
+/**
+ * Validate and normalize a CLI `--now` flag value at the argument-handling
+ * boundary, before it ever reaches a pure function gated by
+ * {@link isValidIsoTimestamp}. Accepts only the shape
+ * {@link OFFSET_NOW_FLAG_PATTERN} describes, a real calendar date (see
+ * {@link isValidCalendarDate}), and an hour of `00`-`23` (`new Date()`
+ * itself already rejects every other malformed component -- an
+ * out-of-range month, minute, second, or offset -- via the
+ * `Number.isNaN` check below; only the calendar-day-overflow and
+ * hour-`24` cases pass shape validation yet still silently roll over).
+ * Returns `null` for anything else (including a date-only value, a
+ * non-ISO string, or an empty string -- callers treat an empty `--now`
+ * as "not provided" before ever calling this function).
+ *
+ * Returns the canonical UTC form these helpers' own default `now` already
+ * produces: `new Date(raw).toISOString()` with a trailing `.000Z` shortened
+ * to `Z`, otherwise keeping millisecond precision (unlike
+ * {@link normalizeApplyNow}, which truncates to second precision -- that
+ * function's own existing callers and semantics are unchanged by this one).
+ */
+export function normalizeNowFlag(raw: string): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const match = OFFSET_NOW_FLAG_PATTERN.exec(raw);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  if (!isValidCalendarDate(year, month, day) || hour > 23) {
+    return null;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().replace('.000Z', 'Z');
+}
