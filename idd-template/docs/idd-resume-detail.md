@@ -442,7 +442,7 @@ could ever observe it as 'alive'".
    just its superproject status — a submodule's own uncommitted or
    unpushed work is otherwise invisible here
    (`idd-merge.instructions.md`); tag-only detached history is not
-   counted, but other local refs are:
+   counted, but local refs are:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> log @{u}..HEAD` (or all commits when there is no
@@ -452,7 +452,7 @@ could ever observe it as 'alive'".
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --count --not --remotes --tags --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
