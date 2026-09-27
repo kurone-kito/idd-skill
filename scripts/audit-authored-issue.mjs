@@ -306,9 +306,9 @@ function extractNonBlockingReferenceIssueNumbers(text) {
 // class). This is the standard non-overlapping idiom for a
 // backslash-escaped quoted string and applies to both quote styles.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:\?[^\s)#"']+)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:\?[^\s)#"']*)?(?:#[^)\s"']*)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 const GITHUB_ISSUE_OR_PR_URL_PATTERN =
-  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:\?[^\s#"']+)?(?:#[^\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:\?[^\s#"']*)?(?:#[^\s"']*)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
 // followed by a task-list checkbox. Captures the leading indentation

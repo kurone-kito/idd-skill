@@ -1616,6 +1616,22 @@ test('dependency-line-grammar resolves a reference definition with a query strin
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar resolves reference definitions with empty query or fragment suffixes', () => {
+  for (const suffix of ['?', '#']) {
+    const body = childBody({
+      extraMarkers:
+        'Blocked by [Issue 12][ref]\n\n' +
+        `[ref]: https://github.com/kurone-kito/idd-skill/issues/12${suffix}`,
+    });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding, suffix);
+    assert.equal(finding.result, 'fail', suffix);
+  }
+});
+
 test('dependency-line-grammar decodes numeric character references in destinations', () => {
   const body = childBody({
     extraMarkers:
