@@ -534,13 +534,19 @@ The confirmed substitutions are:
   limit.
 
   ```sh
+  state=closed
   limit=100
   page=1
   items_file="$(mktemp)"
   trap 'rm -f "$items_file"' EXIT
   set -euo pipefail
+  case "$state" in
+    open|closed) state_qualifier="+state:${state}" ;;
+    all) state_qualifier='' ;;
+    *) printf '%s\n' 'state must be open, closed, or all' >&2; exit 2 ;;
+  esac
   while :; do
-    search_url="search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+state:closed+<url-encoded-query>&per_page=100&page=${page}"
+    search_url="search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue${state_qualifier}+<url-encoded-query>&per_page=100&page=${page}"
     if ! page_json="$(gh api "$search_url")"; then
       printf '%s\n' 'REST issue-search request failed' >&2
       exit 1
