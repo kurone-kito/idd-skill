@@ -2641,7 +2641,7 @@ function expandGlobRange(text) {
       (step > 0 && value <= end) || (step < 0 && value >= end);
       value += step
     ) {
-      if (values.length >= 1024) {
+      if (values.length >= MAX_GLOB_BRACE_EXPANSIONS) {
         return ['*'];
       }
       const sign = value < 0 ? '-' : '';
@@ -2675,7 +2675,7 @@ function expandGlobRange(text) {
       (step > 0 && value <= end) || (step < 0 && value >= end);
       value += step
     ) {
-      if (values.length >= 1024) {
+      if (values.length >= MAX_GLOB_BRACE_EXPANSIONS) {
         return ['*'];
       }
       values.push(String.fromCodePoint(value));
@@ -2868,10 +2868,10 @@ function globPatternToRegex(
           blank: ' \\t',
           cntrl: '\\x00-\\x1F\\x7F',
           digit: '\\p{Nd}',
-          graph: '\\x21-\\x7E',
+          graph: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}',
           lower: '\\p{Ll}',
           print: '\\x20-\\x7E',
-          punct: '!-/:-@[-`{-~',
+          punct: '\\p{P}',
           space: '\\s',
           upper: '\\p{Lu}',
           word: '\\p{L}\\p{N}_',

@@ -4788,6 +4788,48 @@ test('checkHeldSchemaDrift preserves Unicode POSIX digit matches', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves Unicode POSIX graph matches', () => {
+  for (const relativePath of ['schemas/é.json', 'schemas/🙂.json']) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = "globSync('schemas/[[:graph:]].json');\n";
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
+test('checkHeldSchemaDrift preserves Unicode POSIX punctuation matches', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[[:punct:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/¿.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/¿.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/¿.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {
   for (const [pattern, relativePath, expected] of [
     ['schemas/?.json', 'schemas/🙂.json', []],
@@ -5286,6 +5328,26 @@ test('checkHeldSchemaDrift bounds large extglob brace expansions', () => {
       schemaOrFixturePath: 'schemas/aaaaaaaaaaa.json',
       heldModulePath: DRIFT_MODULE,
     },
+  ]);
+});
+
+test('checkHeldSchemaDrift bounds direct brace range expansion', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/{1..1000000000}.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/1.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/1.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/1.json', heldModulePath: DRIFT_MODULE },
   ]);
 });
 
