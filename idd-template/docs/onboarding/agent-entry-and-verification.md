@@ -373,10 +373,10 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
 ```
 
 Keep `--target-ref` on the mirror-only commit. After substitution, run
-`idd-onboard --verify` with the same source, target, and profile; its manifest
-completeness covers unchanged expected paths. Placeholder rewrites and pinned
-workflow actions are intentional; selected mirror-path content or mode
-mismatches remain failures.
+`idd-onboard --verify`; its manifest check covers unchanged paths. Placeholder
+rewrites, pinned actions, and GHES-generated
+`.github/workflows/strip-untrusted-labels.yml` are intentional; selected
+mirror-path content or mode mismatches fail.
 
 ### Recorded policies and selected companions
 

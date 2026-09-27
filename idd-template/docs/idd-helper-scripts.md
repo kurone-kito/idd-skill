@@ -1107,8 +1107,9 @@ future inventory reviews do not need to re-infer their role from code.
   Do not add a directory prefix merely because it exists upstream: use only
   roots and root-level files touched by the mirror-only commit. A later
   substituted commit is expected to differ in rewritten placeholders, pinned
-  workflow references, and other adopter-specific output, so it is not a
-  pure-mirror target.
+  workflow references, GHES-generated
+  `.github/workflows/strip-untrusted-labels.yml`, and other adopter output, so
+  it is not a pure-mirror target.
 
   For the `vendored-node` profile, compare helper and schema paths against
   the checkout root instead. The helper's source-root mapping uses the
