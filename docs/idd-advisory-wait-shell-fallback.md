@@ -230,7 +230,9 @@ was recorded.
 BOT_REST_LOGIN={primary-advisory-bot-rest-login}
 export BOT_REST_LOGIN
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
-PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+if [ -z "${PR_HEAD_SHA:-}" ]; then
+  PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+fi
 BOT_REST_LOGIN_BARE=${BOT_REST_LOGIN%\[bot\]}
 export BOT_REST_LOGIN_BARE
 claim_revalidate() {
@@ -341,9 +343,7 @@ registration_attempt() {
 $NODES_AFTER
 EOF
     if [ "$evidence_mode" = "aw3-s" ]; then
-      # A fresh request node is current-attempt evidence when the claim and
-      # HEAD guards remain stable; GitHub may omit or delay the timeline event.
-      [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
+      [ "$EVENT_NEW" = true ]
     else
       [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
     fi
@@ -425,9 +425,9 @@ registration_attempt e14 || REGISTRATION_STATUS=$?
 
 The post-request reads must run after each mutating attempt. The
 `EVENT_BEFORE`/`NODES_BEFORE` values are the baselines for the selected
-mode. E14 and AW3-S can carry a fresh node proof when the event is delayed;
-the claim/HEAD guards bind that current-attempt node evidence to this HEAD.
-E14 posts its
+mode. E14 can carry a fresh node proof when the event is delayed, but AW3-S
+requires the event-after-HEAD proof because a request node has no commit
+association. E14 posts its
 `advisory-wait` marker only when `REGISTRATION_STATUS` is `0`; statuses
 `1`/`2` stop and ask, while status `3` stops for an E1 restart. AW3-S
 uses step 4 only after readable event evidence; status `2` routes to AW4

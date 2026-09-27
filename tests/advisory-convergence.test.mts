@@ -7186,6 +7186,7 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.match(fallback, /variables:\{id:\$id,reviewer:\[\$reviewer\]\}/);
   assert.match(fallback, /botIds:\$reviewer/);
   assert.match(fallback, /userIds:\$reviewer/);
+  assert.match(fallback, /gh api graphql --input -/);
   assert.match(fallback, /REVIEWER_TYPE=.*ascii_downcase/);
   assert.match(fallback, /type == "user" and \$l == \$configured/);
   assert.match(fallback, /registration_attempt aw3-s/);
@@ -7199,7 +7200,11 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   );
   assert.match(
     fallback,
-    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \][\s\S]*?\[ "\$NODE_FRESH" = true \]/,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \][\s\S]*?else/,
+  );
+  assert.doesNotMatch(
+    fallback,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?then\s+\[ "\$EVENT_NEW" = true \]\s+\|\|/,
   );
   assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?return 0/);
   assert.doesNotMatch(fallback, /IFS=\$'\\t'/);
