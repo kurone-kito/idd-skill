@@ -2657,27 +2657,33 @@ function globPatternToRegex(pattern) {
         if (characterClass.startsWith('!')) {
           characterClass = `^${characterClass.slice(1)}`;
         }
+        const posixClassReplacements = {
+          alnum: 'A-Za-z0-9',
+          alpha: 'A-Za-z',
+          ascii: '\\x00-\\x7F',
+          blank: ' \\t',
+          cntrl: '\\x00-\\x1F\\x7F',
+          digit: '0-9',
+          graph: '\\x21-\\x7E',
+          lower: 'a-z',
+          print: '\\x20-\\x7E',
+          punct: '!-/:-@[-`{-~',
+          space: '\\s',
+          upper: 'A-Z',
+          word: 'A-Za-z0-9_',
+          xdigit: 'A-Fa-f0-9',
+        };
         characterClass = characterClass.replace(
           /\[:(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]/gu,
-          (_match, name) =>
-            ({
-              alnum: 'A-Za-z0-9',
-              alpha: 'A-Za-z',
-              ascii: '\\x00-\\x7F',
-              blank: ' \\t',
-              cntrl: '\\x00-\\x1F\\x7F',
-              digit: '0-9',
-              graph: '\\x21-\\x7E',
-              lower: 'a-z',
-              print: '\\x20-\\x7E',
-              punct: '!-/:-@[-`{-~',
-              space: '\\s',
-              upper: 'A-Z',
-              word: 'A-Za-z0-9_',
-              xdigit: 'A-Fa-f0-9',
-            })[name] ?? _match,
+          (_match, name) => `__IDD_POSIX_${name}__`,
         );
-        expression += `[${characterClass.replaceAll('\\', '\\\\')}]`;
+        characterClass = characterClass
+          .replaceAll('\\', '\\\\')
+          .replace(
+            /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
+            (_match, name) => posixClassReplacements[name] ?? _match,
+          );
+        expression += `[${characterClass}]`;
         index = closing;
       }
     } else if (character === '{') {
