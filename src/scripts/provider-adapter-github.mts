@@ -3553,7 +3553,7 @@ export function createGithubProviderAdapter(
             authorLogin: String(node.author?.login ?? ''),
             commitOid:
               node.commit?.oid == null ? null : String(node.commit.oid),
-            commentCount,
+            commentCount: commentsComplete ? commentCount : null,
             replyOnly,
           });
         }

@@ -4050,8 +4050,38 @@ test('listChangeRequestGraphqlReviews proves reply-only only for a complete non-
   const reviews = port.listChangeRequestGraphqlReviews(7);
   assert.equal(reviews[0].commentCount, 1);
   assert.equal(reviews[0].replyOnly, true);
-  assert.equal(reviews[1].commentCount, 2);
+  assert.equal(reviews[1].commentCount, null);
   assert.equal(reviews[1].replyOnly, false);
+});
+
+test('#3564: listChangeRequestGraphqlReviews fails closed when comment nodes are missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'incomplete',
+                      comments: { totalCount: 0 },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const review = port.listChangeRequestGraphqlReviews(7)[0];
+  assert.equal(review.commentCount, null);
+  assert.equal(review.replyOnly, false);
 });
 
 test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {

@@ -2831,7 +2831,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             authorLogin: String(node.author?.login ?? ''),
             commitOid:
               node.commit?.oid == null ? null : String(node.commit.oid),
-            commentCount,
+            commentCount: commentsComplete ? commentCount : null,
             replyOnly,
           });
         }
