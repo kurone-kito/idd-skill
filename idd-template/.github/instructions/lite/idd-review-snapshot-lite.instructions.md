@@ -18,15 +18,11 @@ instead.
 
 ## Triage hand-off boundary (E4-E8 excluded)
 
-This file only fetches, freezes, and routes ReviewItems_snapshot — it
-never classifies findings, scores severity, or decides Accept/Reject.
-
-1. E3's non-empty-list outcome hands off to
-   `idd-review-triage.instructions.md` (E4-E8) for a stronger session
-   or a human — never run E4-E8 yourself, even for a trivial-looking
-   finding.
-2. If you catch yourself judging severity, deciding Accept/Reject, or
-   assigning a PATH before handing off to E4, stop and ask instead.
+This file only fetches, freezes, and routes ReviewItems_snapshot; it
+never classifies, scores severity, assigns a PATH, or decides
+Accept/Reject. A non-empty E3 result hands off to
+`idd-review-triage.instructions.md` (E4-E8) for a stronger session or a
+human; never run E4-E8 here, even for a trivial finding.
 
 ## Stop-and-ask conditions
 

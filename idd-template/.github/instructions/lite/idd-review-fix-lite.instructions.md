@@ -23,24 +23,15 @@ review-fix instructions instead.
 
 ## Upstream-triage boundary
 
-This file only executes triage dispositions someone else already made.
-It never classifies, scores severity, or decides Accept/Reject itself —
-those are E4-E8 judgment calls, excluded from every lite profile.
+This file executes only prior E4-E8 dispositions; it never classifies
+severity or decides Accept/Reject.
 
-1. Before fixing anything, confirm every item from ReviewItems_snapshot
-   that this round acts on already carries an `**Accepted**` or
-   `**Rejected**` disposition from a prior E4-E8 pass.
-2. If a ReviewItems_snapshot item has no recorded disposition, stop and
-   ask. Do not triage it yourself, and do not guess its severity.
-3. Only act on ReviewItems_snapshot items already marked `**Accepted**`.
-   Leave `**Rejected**` items alone.
-4. This boundary covers ReviewItems_snapshot items only — the ones E9
-   fixes and E13 replies to. It does not cover E10's own critique
-   findings (E10 fixes those directly, per its own step, the same
-   self-review loop every phase uses) or E12's bounded cross-round
-   batching allowance (which explicitly permits folding in bot-sourced
-   comments not yet gone through triage, under its own separate
-   conditions).
+1. Before fixing, confirm every acted-on ReviewItems_snapshot item has an
+   `**Accepted**` or `**Rejected**` disposition from E4-E8.
+2. An undispositioned item is stop-and-ask; do not triage or guess it.
+3. Act only on `**Accepted**` items and leave `**Rejected**` items alone.
+4. This boundary covers E9 fixes and E13 replies only. E10 critique
+   findings and E12's bounded cross-round batching follow their own rules.
 
 ## Stop-and-ask conditions
 
