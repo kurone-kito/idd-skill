@@ -2648,7 +2648,7 @@ function readHeldModule(
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*\()/gu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.)?\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2720,7 +2720,7 @@ function isRegexLiteralStart(text: string, index: number): boolean {
   if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
     return true;
   }
-  return /\b(?:return|case|throw|else|do|break|continue|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
+  return /\b(?:return|case|throw|else|do|break|continue|debugger|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
     text.slice(0, previousIndex + 1),
   );
 }
@@ -2990,6 +2990,12 @@ function findDirectoryScanCalls(
     while (/\s/u.test(text[openIndex] ?? '')) {
       openIndex += 1;
     }
+    if (text.slice(openIndex, openIndex + 2) === '?.') {
+      openIndex += 2;
+      while (/\s/u.test(text[openIndex] ?? '')) {
+        openIndex += 1;
+      }
+    }
     if (text[openIndex] !== '(') {
       continue;
     }
@@ -3091,8 +3097,12 @@ function normalizeManifestScanPath(
 function resolveModuleRelativeScanPath(
   path: string,
   modulePath: string | undefined,
+  leadingSlashIsRelative = false,
 ): string {
-  if (modulePath === undefined) {
+  if (
+    modulePath === undefined ||
+    (path.startsWith('/') && !leadingSlashIsRelative)
+  ) {
     return path;
   }
   const moduleSlash = modulePath.lastIndexOf('/');
@@ -3107,6 +3117,10 @@ function usesModuleRelativePathExpression(text: string): boolean {
   return (
     text.includes('import.meta.dirname') || text.includes('import.meta.url')
   );
+}
+
+function isModuleRelativeFragmentExpression(text: string): boolean {
+  return /import\.meta\.dirname\s*\+\s*['"`]/u.test(text);
 }
 
 function isBareModuleDirectoryExpression(text: string): boolean {
@@ -3344,7 +3358,7 @@ function globPatternToRegex(
         let characterClass = pattern.slice(index + 1, closing);
         const negatedCharacterClass = characterClass.startsWith('!');
         const explicitlyMatchesDot =
-          !negatedCharacterClass && characterClass.includes('.');
+          !negatedCharacterClass && characterClass === '.';
         if (characterClass.startsWith('!')) {
           characterClass = `^${characterClass.slice(1)}`;
         }
@@ -3443,7 +3457,11 @@ function moduleScansManifestDirectory(
     const firstCandidates = pathExpressionCandidates(firstArgument).map(
       (candidate) =>
         usesModuleRelativePathExpression(firstArgument)
-          ? resolveModuleRelativeScanPath(candidate, modulePath)
+          ? resolveModuleRelativeScanPath(
+              candidate,
+              modulePath,
+              isModuleRelativeFragmentExpression(firstArgument),
+            )
           : candidate,
     );
     const cwdCandidates = (() => {
@@ -3466,7 +3484,11 @@ function moduleScansManifestDirectory(
       return pathExpressionCandidates(cwdExpression).map((candidate) =>
         usesModuleRelativePathExpression(cwdExpression) &&
         !isBareModuleDirectoryExpression(cwdExpression)
-          ? resolveModuleRelativeScanPath(candidate, modulePath)
+          ? resolveModuleRelativeScanPath(
+              candidate,
+              modulePath,
+              isModuleRelativeFragmentExpression(cwdExpression),
+            )
           : candidate,
       );
     })();

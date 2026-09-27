@@ -3999,6 +3999,18 @@ test('checkHeldSchemaDrift ignores regex literals after break and continue', () 
   }
 });
 
+test('checkHeldSchemaDrift ignores regex literals after debugger', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "debugger\n/readdirSync('schemas')/.test(text);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after class declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4363,6 +4375,39 @@ test('checkHeldSchemaDrift resolves slash-prefixed module-relative fragments', (
   }
 });
 
+test('checkHeldSchemaDrift keeps standalone absolute fragments absolute', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('*.json', { cwd: enabled ? import.meta.dirname : '/../../schemas' });\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift detects optional-chain scan calls', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync?.('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift recognizes quoted cwd option keys', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4516,6 +4561,38 @@ test('checkHeldSchemaDrift supports POSIX glob character classes', () => {
       heldModulePath: DRIFT_MODULE,
     },
   ]);
+});
+
+test('checkHeldSchemaDrift keeps the dotfile guard for mixed character classes', () => {
+  for (const [pattern, relativePath, expected] of [
+    ['schemas/[a.]foo.json', 'schemas/.foo.json', []],
+    [
+      'schemas/[.]foo.json',
+      'schemas/.foo.json',
+      [
+        {
+          schemaOrFixturePath: 'schemas/.foo.json',
+          heldModulePath: DRIFT_MODULE,
+        },
+      ],
+    ],
+  ] as const) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('${pattern}');\n`;
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, expected);
+  }
 });
 
 test('checkHeldSchemaDrift preserves POSIX regex escapes', () => {
