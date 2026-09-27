@@ -551,6 +551,10 @@ The confirmed substitutions are:
       printf '%s\n' 'REST issue-search request failed' >&2
       exit 1
     fi
+    if [ "$(jq -r '.incomplete_results // false' <<<"$page_json")" = true ]; then
+      printf '%s\n' 'REST issue-search response is incomplete' >&2
+      exit 1
+    fi
     [ "$(jq '.items // [] | length' <<<"$page_json")" -eq 0 ] && break
     jq -c '.items[]' <<<"$page_json" >>"$items_file"
     [ "$(wc -l <"$items_file")" -ge "$limit" ] && break
@@ -581,7 +585,8 @@ comment history was empty before creation: fetch the just-posted
 comment and issue with REST, then recompute the issue body's digest from
 the raw JSON response. Parse the complete `gh api` response and read its
 `body` property; do not capture `gh api ... --jq '.body'` in a shell
-variable, because the added newline can change the digest. This is a
+variable, because CLI output and shell command substitution can
+normalize trailing newlines and change the digest. This is a
 one-time read-back confidence check for a new issue, not a REST fallback
 for verification of an existing generation and not a change to the
 helper's GraphQL dependency. Pass only when the fetched issue still
@@ -589,11 +594,17 @@ carries the configured authoring hold label (normally
 `status:authoring`), the fetched comment is the just-posted trusted
 marker (expected author and canonical marker fields), and its recorded
 `body-sha256` equals the digest recomputed from the fetched issue body.
-If the hold label is absent, enter the same recovery path as any other
-incomplete post-create verification. Also fetch the complete, paginated
-owner-marker log and reconcile it before passing: a later trusted marker
-must not supersede the fetched comment. A single known comment ID is not
-enough to establish current ownership. The read-back requests are:
+If the hold label is absent, re-fetch the current claim and complete,
+paginated owner-marker log, and stop if a competing claim or marker is
+present. If no competitor is present, reapply the configured hold label
+through the authoring recovery path, then re-fetch and verify the label,
+body, claim, and owner-marker log. Continue only after that verification;
+if reapplication or any recovery read is uncertain, do not close or
+treat the issue as a member and leave it open for recovery. The same
+complete owner-marker reconciliation is required even when the label is
+present: a later trusted marker must not supersede the fetched comment.
+A single known comment ID is not enough to establish current ownership.
+The read-back requests are:
 
 ```sh
 gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
