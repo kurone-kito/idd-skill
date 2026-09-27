@@ -604,21 +604,14 @@ Ask these checks:
    changes the `bundleBudgets` or `contextCeiling` policy: evaluate the
    proposed post-change bundle memberships and limits in addition to current
    manifest entries. For a proposed `bundleBudgets.limitBytes` increase,
-   compare the base-reference bundle's measured utilization with the stricter
-   (lower) of the base and proposed `noticeUtilizationPct` values; if the base
-   bundle was already at or above that threshold, the near-ceiling ratchet
-   fails the proposed headroom claim even when the new limit passes the other
-   ceiling checks. Also check the context
-   ceiling's absolute
-   `maxBundleLimitBytes` and honor its `exemptBundles` rules where they are
-   defined; utilization alone is not sufficient. These checks preserve the
-   observed regressions in [#1213](https://github.com/kurone-kito/idd-skill/issues/1213)
-   (closed 2026-07-03) and
-   [#1259](https://github.com/kurone-kito/idd-skill/issues/1259) (closed
-   2026-07-04), where recovered headroom regressed without an upper bound.
-   Record each bundle's measured total, configured limit, utilization,
-   applicable ceiling, the near-ceiling ratchet result (or `not applicable`
-   when no limit increase is proposed), and pass/fail result in the draft's
+   include the base-reference near-ceiling ratchet in the proposed pass/fail
+   result and compare utilization with the stricter (lower) of the base and
+   proposed `noticeUtilizationPct` values. Include every other applicable
+   manifest budget, including `instructionSizeBudgets` per-file limits and
+   their near-ceiling ratchets, when the draft changes a governed file.
+   Record each affected bundle or file's measured total, configured limit,
+   utilization, applicable ceiling, ratchet status (`not applicable` when no
+   relevant increase is proposed), and pass/fail result in the draft's
    headroom claim. If the target repository
    does not define these source-repository-only settings, do not apply this
    repository's values: use the target's own declared budget checks when
