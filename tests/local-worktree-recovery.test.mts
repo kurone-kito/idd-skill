@@ -1748,6 +1748,51 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('retains a partial prunable admin copy and blocks removal', () => {
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: () => {
+      throw new Error('copy interrupted');
+    },
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(verdict.plan.prunableAdminCopy, {
+    source: '/repo/primary/.git/worktrees/linked',
+    copiedTo: '/tmp/preserve/prunable-gitdir',
+    copyFailed: true,
+    plannedTo: '/tmp/preserve/prunable-gitdir',
+  });
+  assert.equal(verdict.preserveDir, '/tmp/preserve');
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /could not copy the prunable/);
+});
+
 test('prunable shortcut rechecks claim identity after copying private admin data', () => {
   let confirmCalls = 0;
   let removeCalled = false;
@@ -2241,6 +2286,7 @@ test('dry-run plans a prunable worktree private admin-directory backup without c
   assert.deepEqual(verdict.plan.prunableAdminCopy, {
     source: '/repo/primary/.git/worktrees/linked',
     copiedTo: null,
+    copyFailed: false,
     plannedTo: '/tmp/explicit/prunable-gitdir',
   });
   assert.equal(verdict.plan.removal?.ran, false);

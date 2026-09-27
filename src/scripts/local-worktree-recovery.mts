@@ -396,6 +396,8 @@ export interface WorktreeAdminCopyEntry {
 export interface PrunableAdminCopyEntry {
   source: string;
   copiedTo: string | null;
+  /** True when the recursive copy may have left a partial destination. */
+  copyFailed: boolean;
   /** Destination that `--apply` will use, when it can be planned without
    * creating the preserve directory during a dry-run. */
   plannedTo: string | null;
@@ -3234,6 +3236,7 @@ export function runLocalWorktreeRecovery(
         verdict.plan.prunableAdminCopy = {
           source: adminLookup.path,
           copiedTo: null,
+          copyFailed: false,
           plannedTo: plannedPreserveDir
             ? join(plannedPreserveDir, 'prunable-gitdir')
             : null,
@@ -4474,6 +4477,7 @@ export function runLocalWorktreeRecovery(
         const entry: PrunableAdminCopyEntry = {
           source: adminLookup.path,
           copiedTo: null,
+          copyFailed: false,
           plannedTo: destination,
         };
         if (
@@ -4492,6 +4496,13 @@ export function runLocalWorktreeRecovery(
           deps.copyPath(adminLookup.path, destination, adminLookup.path);
           entry.copiedTo = destination;
         } catch {
+          // Retain the attempted destination so a partial recursive copy is
+          // visible to the verdict and counts as a mutation, while the
+          // explicit failure flag keeps the recovery fail-closed.
+          entry.copiedTo = destination;
+          entry.copyFailed = true;
+          verdict.preserveDir = preserveDir;
+          verdict.mutated = true;
           verdict.plan.prunableAdminCopy = entry;
           return recordRemovalFailure(
             'could not copy the prunable worktree private admin directory; stopping before removal',
@@ -4574,13 +4585,14 @@ export function runLocalWorktreeRecovery(
       const prunableAdminCopy = verdict.plan.prunableAdminCopy;
       if (
         prunableAdminCopy !== null &&
-        prunableAdminCopy.copiedTo !== null &&
-        (!deps.pathExists(prunableAdminCopy.copiedTo) ||
-          !isCopyDestinationOutsideKnownPaths(
-            prunableAdminCopy.copiedTo,
-            [targetPath, prunableAdminCopy.source],
-            deps,
-          ))
+        (prunableAdminCopy.copyFailed ||
+          (prunableAdminCopy.copiedTo !== null &&
+            (!deps.pathExists(prunableAdminCopy.copiedTo) ||
+              !isCopyDestinationOutsideKnownPaths(
+                prunableAdminCopy.copiedTo,
+                [targetPath, prunableAdminCopy.source],
+                deps,
+              ))))
       ) {
         return recordRemovalFailure(
           'the prunable worktree admin-data backup disappeared or moved before forced removal; stopping before removal',
