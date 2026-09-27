@@ -971,12 +971,13 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
     ? submoduleStatusEntries(submoduleStatus.stdout)
     : [];
   // A clean initialized submodule's own stash scope handles the ` M path`
-  // that the parent status probe reports for its dirty files. Do not exclude
-  // a `+`/`U`/`-` entry, though: those statuses mean the superproject's
-  // gitlink itself differs from the index or cannot be checked out, so the
-  // parent stash must retain that gitlink change (Copilot review #4114207705).
+  // that the parent status probe reports for its dirty files. A `+` entry is
+  // the same case with an unstaged submodule HEAD difference, so exclude it
+  // too; retain `U`/`-` entries because those statuses mean the
+  // superproject's gitlink itself differs from the index or cannot be
+  // checked out (Copilot review #4114207705).
   const submodulePaths = submodules
-    .filter((submodule) => submodule.status === ' ')
+    .filter((submodule) => submodule.status === ' ' || submodule.status === '+')
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
   // Capture ignored files before any stash changes the ignore rules. In
@@ -1374,6 +1375,41 @@ export function runLocalWorktreeRecovery(args, deps) {
     };
     verdict.result = detail;
     return verdict;
+  };
+  const incorporatePreservation = (preserve, append) => {
+    verdict.preserveDir = preserve.preserveDir ?? verdict.preserveDir;
+    if (append) {
+      verdict.plan.stashes.push(...preserve.stashes);
+      verdict.plan.uninitializedSubmodules.push(
+        ...preserve.uninitializedSubmodules,
+      );
+      verdict.plan.backupRefs.push(...preserve.backupRefs);
+      verdict.plan.ignoredFilesCopied.push(...preserve.ignoredFilesCopied);
+      verdict.plan.submoduleAdminCopies.push(...preserve.submoduleAdminCopies);
+    } else {
+      verdict.plan.inProgressOperation = preserve.inProgressOperation;
+      verdict.plan.stashes = preserve.stashes;
+      verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
+      verdict.plan.backupRefs = preserve.backupRefs;
+      verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
+      verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
+    }
+    verdict.plan.ignoredFilesScanFailed ||= preserve.ignoredFilesScanFailed;
+    verdict.plan.submoduleListFailed ||= preserve.submoduleListFailed;
+    verdict.mutated ||= preserve.stashes.some((stash) => stash.stashed);
+    verdict.mutated ||= preserve.backupRefs.some((ref) => ref.written);
+    verdict.mutated ||= preserve.uninitializedSubmodules.some(
+      (submodule) => submodule.copiedTo !== null,
+    );
+    verdict.mutated ||= preserve.ignoredFilesCopied.some(
+      (ignored) => ignored.copiedTo !== null,
+    );
+    verdict.mutated ||= preserve.stashes.some(
+      (stash) => stash.unmergedFallbackCopiedTo !== null,
+    );
+    verdict.mutated ||= preserve.submoduleAdminCopies.some(
+      (admin) => admin.copiedTo !== null,
+    );
   };
   const records = deps.listWorktreeRecords(cwd);
   if (records === null || records.length === 0) {
@@ -2051,6 +2087,57 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = 'primary worktree released';
       return verdict;
     }
+    // A late ignored-file scan is required immediately before linked
+    // worktree removal. An editor can create an ignored file after the
+    // initial step-3 scan; ordinary `git worktree remove` deletes that file
+    // successfully, so waiting for the submodule-removal failure path would
+    // be too late (Codex review #4114350924). Scan only this late-arriving
+    // artifact class here: re-running the complete preservation plan would
+    // duplicate already-created stashes, backup refs, and submodule-admin
+    // copies without adding safety.
+    if (!shortcut.eligible) {
+      const lateIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        deps,
+      );
+      verdict.plan.ignoredFilesCopied.push(...lateIgnored.copied);
+      verdict.plan.ignoredFilesScanFailed ||= lateIgnored.scanFailed;
+      verdict.mutated ||= lateIgnored.copied.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      if (
+        lateIgnored.scanFailed ||
+        lateIgnored.copied.some(
+          (ignored) =>
+            ignored.copiedTo === null || !deps.pathExists(ignored.copiedTo),
+        )
+      ) {
+        return recordRemovalFailure(
+          'late preservation before linked-worktree removal could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+          },
+          targetPath,
+          deps.runGit,
+          deps.pathExists,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a late preservation artifact disappeared before linked-worktree removal; stopping before removal',
+        );
+      }
+    }
     // Linked worktrees have no checkout transition that naturally forces a
     // final routing observation. Re-run routing and the local claim lock
     // immediately before `git worktree remove`, after every preservation
@@ -2169,34 +2256,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         true,
         deps,
       );
-      verdict.preserveDir = latePreserve.preserveDir ?? verdict.preserveDir;
-      verdict.plan.stashes.push(...latePreserve.stashes);
-      verdict.plan.uninitializedSubmodules.push(
-        ...latePreserve.uninitializedSubmodules,
-      );
-      verdict.plan.backupRefs.push(...latePreserve.backupRefs);
-      verdict.plan.ignoredFilesCopied.push(...latePreserve.ignoredFilesCopied);
-      verdict.plan.ignoredFilesScanFailed ||=
-        latePreserve.ignoredFilesScanFailed;
-      verdict.plan.submoduleListFailed ||= latePreserve.submoduleListFailed;
-      verdict.plan.submoduleAdminCopies.push(
-        ...latePreserve.submoduleAdminCopies,
-      );
-      verdict.mutated ||=
-        latePreserve.stashes.some((stash) => stash.stashed) ||
-        latePreserve.backupRefs.some((ref) => ref.written) ||
-        latePreserve.uninitializedSubmodules.some(
-          (submodule) => submodule.copiedTo !== null,
-        ) ||
-        latePreserve.ignoredFilesCopied.some(
-          (ignored) => ignored.copiedTo !== null,
-        ) ||
-        latePreserve.stashes.some(
-          (stash) => stash.unmergedFallbackCopiedTo !== null,
-        ) ||
-        latePreserve.submoduleAdminCopies.some(
-          (admin) => admin.copiedTo !== null,
-        );
+      incorporatePreservation(latePreserve, true);
       if (!preservationVerified(latePreserve, deps.pathExists)) {
         return recordRemovalFailure(
           'late preservation before forced removal could not be fully verified; stopping before removal',
@@ -2243,17 +2303,32 @@ export function runLocalWorktreeRecovery(args, deps) {
           'the forced-removal routing/claim identity no longer matches; stopping before removal',
         );
       }
+      const forceLock = deps.checkLock(targetPath);
       if (
-        !lockMatchesRecoveredClaim(deps.checkLock(targetPath), recoveredClaimId)
+        !lockMatchesRecoveredClaim(forceLock, recoveredClaimId) ||
+        !forceLock.present ||
+        forceLock.malformed
       ) {
         return recordRemovalFailure(
           'the worktree-local claim lock no longer matches before forced removal; stopping before removal',
         );
       }
-      remove = deps.runGit(
-        ['worktree', 'remove', '--force', targetPath],
+      if (!deps.removeWorktreeIfLockMatches) {
+        return recordRemovalFailure(
+          'no identity-bound forced-removal guard is available; stopping before removal',
+        );
+      }
+      const forcedRemove = deps.removeWorktreeIfLockMatches(
+        targetPath,
         repoPath,
+        forceLock,
       );
+      if (forcedRemove === null) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed before the identity-bound forced removal; stopping before removal',
+        );
+      }
+      remove = forcedRemove;
     }
     if (!remove.ok) {
       verdict.plan.removal = {
@@ -2342,7 +2417,12 @@ function resolveDevelopmentBranchProduction(args) {
   return liveInspection.branch;
 }
 function copyPathProduction(from, to) {
-  cpSync(from, to, { recursive: true, errorOnExist: false, force: true });
+  cpSync(from, to, {
+    recursive: true,
+    errorOnExist: false,
+    force: true,
+    verbatimSymlinks: true,
+  });
 }
 let preserveDirMemo = null;
 function ensurePreserveDirProduction(explicit, targetPath) {
@@ -2455,6 +2535,23 @@ function removeClaimLockIfMatchesProduction(worktreePath, expected) {
     throw error;
   }
 }
+/** Run the destructive forced linked-worktree removal only after re-reading
+ * and matching the complete ownership token. This keeps a replacement claim
+ * from winning the check-then-remove window between the caller's final
+ * routing/lock check and `git worktree remove --force` (Copilot review
+ * #4114353778). */
+function removeWorktreeIfLockMatchesProduction(
+  worktreePath,
+  repoPath,
+  expected,
+) {
+  const current = checkClaimLock(worktreePath);
+  if (!sameClaimLock(current, expected)) return null;
+  return runLocalGitCommand(
+    ['worktree', 'remove', '--force', worktreePath],
+    repoPath,
+  );
+}
 function createProductionDeps(args) {
   return {
     cwd: () => process.cwd(),
@@ -2462,6 +2559,7 @@ function createProductionDeps(args) {
     confirmBlock: confirmBlockProduction(args),
     checkLock: (worktreePath) => checkClaimLock(worktreePath),
     removeLockIfMatches: removeClaimLockIfMatchesProduction,
+    removeWorktreeIfLockMatches: removeWorktreeIfLockMatchesProduction,
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
     realpathOrNull,

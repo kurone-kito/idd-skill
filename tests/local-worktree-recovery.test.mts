@@ -1097,6 +1097,43 @@ test('prunable shortcut stops when the record becomes locked immediately before 
   assert.match(verdict.result, /before forced removal/);
 });
 
+test('forced retry uses the identity-bound removal guard', () => {
+  let forcedRunCalled = false;
+  let guardCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (
+        argv[0] === 'worktree' &&
+        argv[1] === 'remove' &&
+        argv[2] === '--force'
+      ) {
+        forcedRunCalled = true;
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'submodules cannot be moved or removed',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeWorktreeIfLockMatches: () => {
+      guardCalls += 1;
+      return null;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(guardCalls, 1);
+  assert.equal(forcedRunCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /identity-bound forced removal/);
+});
+
 test('verified prunable shortcuts may keep unreadable routing at final check', () => {
   let removeCalled = false;
   const record = {
@@ -1462,7 +1499,7 @@ test('a submodule-only parent status does not create a pointless parent stash', 
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
-test('a changed superproject gitlink is not excluded as a submodule-only change', () => {
+test('an unstaged submodule HEAD difference is handled by the submodule scope', () => {
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -1491,8 +1528,8 @@ test('a changed superproject gitlink is not excluded as a submodule-only change'
   );
   assert.equal(
     verdict.plan.stashes[0]?.hasChanges,
-    true,
-    'a `+` submodule status denotes a superproject gitlink change that the parent scope must preserve',
+    false,
+    'a `+` submodule status is an unstaged submodule-only change for the parent scope',
   );
 });
 
@@ -1562,6 +1599,34 @@ test('captures ignored files before stash can change the ignore rules', () => {
     deps,
   );
   assert.deepEqual(events.slice(0, 2), ['copy', 'stash']);
+});
+
+test('rescans ignored files immediately before ordinary linked removal', () => {
+  let ignoredScanCalls = 0;
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        ignoredScanCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout: ignoredScanCalls === 1 ? '' : '!! late.env\0',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(ignoredScanCalls, 2);
+  assert.deepEqual(copied, ['/tmp/preserve/ignored/late.env']);
+  assert.equal(verdict.plan.ignoredFilesCopied.at(-1)?.path, 'late.env');
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {
