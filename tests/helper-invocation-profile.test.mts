@@ -202,7 +202,7 @@ const NON_ADOPTER_SCRIPT_NAMES = new Set<string>();
 // supported package-manager path. The machine-readable exception lives in
 // helper-runtime-manifest.mts; this test consumes that same declaration so a
 // new direct installed-package path cannot bypass the manifest contract.
-const PACKAGE_MANAGER_ONLY_ENTRY_PATHS = new Set(
+const PACKAGE_MANAGER_ONLY_ENTRY_PATHS = new Set<string>(
   PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
 );
 
