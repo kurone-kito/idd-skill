@@ -327,8 +327,8 @@ const LIST_ITEM_MARKER_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 // not a hoisted function declaration.
 const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // Matches a Markdown reference-style link *usage*: `[text][ref]`, where a
-// separate `[ref]: <target>` definition (matched by
-// LINK_REFERENCE_DEFINITION_PATTERN below) supplies the actual target
+// separate `[ref]: <target>` definition (collected by
+// collectReferenceStyleLinkDefinitions below) supplies the actual target
 // elsewhere in the document — commonly far from the usage, so this is
 // resolved as a whole-document pre-processing step (see
 // resolveReferenceStyleLinks) rather than as a fifth alternative inside
@@ -339,13 +339,6 @@ const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // explicit-ref shape named in issue #1472 is in scope here. Same
 // TDZ-avoidance placement rationale as LIST_ITEM_MARKER_PATTERN above.
 const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
-// Matches the content of a Markdown link reference definition after its
-// block-container markers have been removed. A definition may be nested in
-// block quotes or list items, but its destination must remain on the same
-// physical line; `\s*` would incorrectly consume a blank paragraph and
-// borrow a later URL as the definition's target (Copilot review, PR #3554).
-const LINK_REFERENCE_DEFINITION_PATTERN =
-  /^(?: {0,3}(?:>[ \t]?|(?:[*+-]|\d{1,9}[.)])[ \t]+))* {0,3}\[([^\]\n]+)\]:[ \t]*(\S+)/gm;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `shape:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --shape spec key
@@ -2386,9 +2379,8 @@ function normalizeLinkReferenceLabel(label) {
   return label.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 // CommonMark §6.6 allows a reference definition's destination to be
-// wrapped in angle brackets (`[ref]: <https://...>`), captured verbatim
-// (brackets included) by LINK_REFERENCE_DEFINITION_PATTERN's `\S+`.
-// Without unwrapping, resolveReferenceStyleLinks would rewrite a usage to
+// wrapped in angle brackets (`[ref]: <https://...>`). Without unwrapping,
+// resolveReferenceStyleLinks would rewrite a usage to
 // `[text](<https://...>)`, which ISSUE_OR_PR_REFERENCE_PATTERN's
 // Markdown-link alternative does not recognize (it expects the URL
 // immediately after the opening paren, no angle brackets) — silently
@@ -2399,6 +2391,75 @@ function unwrapAngleBracketDestination(target) {
   return target.startsWith('<') && target.endsWith('>')
     ? target.slice(1, -1)
     : target;
+}
+/**
+ * Remove the block-container prefixes that can precede a reference
+ * definition. The input has already had code and HTML-comment regions
+ * masked, so four-space indented code cannot become a definition merely
+ * because this helper trims its indentation. Repeating the operation lets
+ * the same small parser handle `> - [ref]: ...` and other nested
+ * blockquote/list combinations.
+ */
+function stripReferenceDefinitionContainers(line) {
+  let content = line;
+  const containerKinds = [];
+  for (let iteration = 0; iteration < 16; iteration += 1) {
+    content = content.replace(/^ +/u, '');
+    if (content.startsWith('>')) {
+      containerKinds.push('quote');
+      content = content.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    const listMarker = content.match(/^(?:[*+-]|\d{1,9}[.)])(?=[ \t]+)/u);
+    if (listMarker) {
+      containerKinds.push('list');
+      content = content.slice(listMarker[0].length);
+      continue;
+    }
+    break;
+  }
+  return { content, containerKinds };
+}
+/**
+ * Read the first destination token from a reference-definition suffix.
+ * A missing suffix is represented by `undefined` so the caller can allow
+ * exactly one nonblank continuation line, while an unmatched angle
+ * bracket is rejected instead of being mistaken for a bare destination.
+ */
+function readReferenceDefinitionDestination(suffix) {
+  if (suffix.length === 0) {
+    return undefined;
+  }
+  if (suffix.startsWith('<')) {
+    const closingBracket = suffix.indexOf('>');
+    if (closingBracket <= 1) {
+      return undefined;
+    }
+    return suffix.slice(0, closingBracket + 1);
+  }
+  return suffix.match(/^\S+/u)?.[0];
+}
+function parseReferenceDefinitionCandidate(line) {
+  const { content, containerKinds } = stripReferenceDefinitionContainers(line);
+  const match = content.match(/^\[([^\]\n]+)\]:[ \t]*(.*)$/u);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    label: match[1],
+    destination: readReferenceDefinitionDestination(match[2]),
+    containerKinds,
+  };
+}
+function isReferenceDefinitionBlockBoundary(content) {
+  return (
+    /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^(`{3,}|~{3,})/u.test(content) ||
+    /^(?:\*\s*){3,}$|^(?:-\s*){3,}$|^(?:_\s*){3,}$/u.test(content)
+  );
+}
+function isReferenceDefinitionTitleContinuation(content) {
+  return /^(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*\))[ \t]*$/u.test(content);
 }
 /**
  * Resolves every `[text][ref]` reference-style link usage in `text`
@@ -2413,11 +2474,82 @@ function unwrapAngleBracketDestination(target) {
  */
 function collectReferenceStyleLinkDefinitions(text) {
   const definitions = new Map();
-  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
-    const key = normalizeLinkReferenceLabel(match[1]);
-    if (!definitions.has(key)) {
-      definitions.set(key, unwrapAngleBracketDestination(match[2]));
+  let paragraphOpen = false;
+  let previousDefinition = false;
+  let previousContainerKinds = [];
+  let pendingContinuation;
+  for (const line of text.split('\n')) {
+    const { content, containerKinds } =
+      stripReferenceDefinitionContainers(line);
+    if (content.trim().length === 0) {
+      paragraphOpen = false;
+      previousDefinition = false;
+      previousContainerKinds = [];
+      pendingContinuation = undefined;
+      continue;
     }
+    if (pendingContinuation) {
+      const destination = readReferenceDefinitionDestination(content.trim());
+      if (destination !== undefined && !content.trim().startsWith('[')) {
+        const key = normalizeLinkReferenceLabel(pendingContinuation.label);
+        if (!definitions.has(key)) {
+          definitions.set(key, unwrapAngleBracketDestination(destination));
+        }
+        pendingContinuation = undefined;
+        paragraphOpen = false;
+        previousDefinition = true;
+        previousContainerKinds = containerKinds;
+        continue;
+      }
+      pendingContinuation = undefined;
+      paragraphOpen = true;
+      previousDefinition = false;
+    }
+    const candidate = parseReferenceDefinitionCandidate(line);
+    if (candidate) {
+      const startsNewContainerBlock =
+        candidate.containerKinds.includes('list') ||
+        (candidate.containerKinds.includes('quote') &&
+          candidate.containerKinds.join('/') !==
+            previousContainerKinds.join('/'));
+      const canStart =
+        !paragraphOpen ||
+        previousDefinition ||
+        startsNewContainerBlock ||
+        isReferenceDefinitionBlockBoundary(content);
+      if (canStart) {
+        const key = normalizeLinkReferenceLabel(candidate.label);
+        if (candidate.destination !== undefined) {
+          if (!definitions.has(key)) {
+            definitions.set(
+              key,
+              unwrapAngleBracketDestination(candidate.destination),
+            );
+          }
+          paragraphOpen = false;
+          previousDefinition = true;
+          previousContainerKinds = candidate.containerKinds;
+        } else {
+          pendingContinuation = {
+            label: candidate.label,
+            containerKinds: candidate.containerKinds,
+          };
+          paragraphOpen = false;
+          previousDefinition = false;
+          previousContainerKinds = candidate.containerKinds;
+        }
+        continue;
+      }
+    }
+    if (previousDefinition && isReferenceDefinitionTitleContinuation(content)) {
+      paragraphOpen = false;
+      previousDefinition = true;
+      previousContainerKinds = containerKinds;
+      continue;
+    }
+    paragraphOpen = !isReferenceDefinitionBlockBoundary(content);
+    previousDefinition = false;
+    previousContainerKinds = containerKinds;
   }
   return definitions;
 }

@@ -1555,6 +1555,34 @@ test('dependency-line-grammar does not resolve a definition across a blank parag
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar resolves a definition with a nonblank continuation line', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n[ref]:\n  https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar does not resolve a definition that interrupts a paragraph', () => {
+  const body = childBody({
+    extraMarkers:
+      'A paragraph is already open here.\n' +
+      '[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',
