@@ -124,6 +124,72 @@ test('autopilot-suitability consistency: score 1 without blocked-by-human warns'
   );
 });
 
+test('autopilot-suitability consistency: needs-decision bucket uses its own label semantics', () => {
+  const body = `human decision\n${ap(1)}\n<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const coherent = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 3497, body, labels: ['status:needs-decision'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(coherent.warnings, []);
+
+  const missingLabel = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 3497, body, labels: [] }],
+    { floor: 3 },
+  );
+  assert.equal(missingLabel.warnings.length, 1);
+  assert.match(
+    missingLabel.warnings[0],
+    /issue #3497 has an authoring-bucket: needs-decision marker but is missing the status:needs-decision label/,
+  );
+});
+
+test('autopilot-suitability consistency: blocked-by-human bucket requires its label', () => {
+  const body = `human-only\n${ap(4)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const missingLabel = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 40, body, labels: [] }],
+    { floor: 3 },
+  );
+  assert.equal(missingLabel.warnings.length, 1);
+  assert.match(
+    missingLabel.warnings[0],
+    /issue #40 has an authoring-bucket: blocked-by-human marker but is missing the status:blocked-by-human label/,
+  );
+
+  const coherent = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 40, body, labels: ['status:blocked-by-human'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(coherent.warnings, []);
+});
+
+test('autopilot-suitability consistency: malformed buckets retain legacy score checks', () => {
+  const malformed = `legacy\n${ap(1)}\n<!-- idd-skill-authoring-bucket: unknown -->`;
+  const conflicting = `legacy\n${ap(1)}\n<!-- idd-skill-authoring-bucket: needs-decision -->\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      { number: 41, body: malformed, labels: [] },
+      { number: 42, body: conflicting, labels: [] },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every((warning) => /scored 1/.test(warning)));
+});
+
+test('autopilot-suitability consistency: authoring-bucket honors configured prefix and labels case-insensitively', () => {
+  const body =
+    'human decision\n<!-- custom-autopilot-suitability: 1 -->\n<!-- custom-authoring-bucket: needs-decision -->';
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 43, body, labels: ['Status:Needs-Decision'] }],
+    {
+      floor: 3,
+      markerPrefix: 'custom',
+      needsDecisionLabelName: 'STATUS:NEEDS-DECISION',
+    },
+  );
+  assert.deepEqual(warnings, []);
+});
+
 test('autopilot-suitability consistency: score >= floor with blocked-by-human warns', () => {
   const { warnings } = evaluateAutopilotSuitabilityConsistency(
     [
@@ -385,6 +451,7 @@ test('resolveAutopilotSuitabilityPolicy reads floor and blockedByHumanLabelName 
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: 3,
       blockedByHumanLabelName: 'status:human-only',
+      needsDecisionLabelName: undefined,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -403,6 +470,7 @@ test('resolveAutopilotSuitabilityPolicy also reads the legacy idd-policy.json pa
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: 2,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -418,6 +486,7 @@ test('resolveAutopilotSuitabilityPolicy returns undefined fields when config is 
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: undefined,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
 
     // Malformed canonical JSON must fail closed, not fall through to a
@@ -431,6 +500,7 @@ test('resolveAutopilotSuitabilityPolicy returns undefined fields when config is 
     assert.deepEqual(resolveAutopilotSuitabilityPolicy(dir), {
       floor: undefined,
       blockedByHumanLabelName: undefined,
+      needsDecisionLabelName: undefined,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });

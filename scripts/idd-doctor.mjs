@@ -29,7 +29,10 @@ import {
 } from './helper-cli-runner.mjs';
 import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
-import { isValidIsoTimestamp } from './marker-helpers.mjs';
+import {
+  isValidIsoTimestamp,
+  parseAuthoringBucketMarker,
+} from './marker-helpers.mjs';
 import {
   inspectHelperRuntimeConfig,
   POLICY_DEFAULTS,
@@ -142,14 +145,27 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
     options.blockedByHumanLabelName.length > 0
       ? options.blockedByHumanLabelName
       : POLICY_DEFAULTS.labels.blockedByHumanLabelName;
+  const needsDecisionLabelName =
+    typeof options.needsDecisionLabelName === 'string' &&
+    options.needsDecisionLabelName.length > 0
+      ? options.needsDecisionLabelName
+      : POLICY_DEFAULTS.labels.needsDecisionLabelName;
+  const normalizedBlockedByHumanLabelName = blockedByHumanLabelName
+    .trim()
+    .toLowerCase();
+  const normalizedNeedsDecisionLabelName = needsDecisionLabelName
+    .trim()
+    .toLowerCase();
   const warnings = [];
   for (const issue of Array.isArray(issues) ? issues : []) {
     const labelNames = new Set(
-      (issue?.labels ?? []).map((label) =>
-        typeof label === 'string' ? label : (label?.name ?? ''),
-      ),
+      (issue?.labels ?? []).map((label) => {
+        const name = typeof label === 'string' ? label : (label?.name ?? '');
+        return String(name).trim().toLowerCase();
+      }),
     );
-    const blockedByHuman = labelNames.has(blockedByHumanLabelName);
+    const blockedByHuman = labelNames.has(normalizedBlockedByHumanLabelName);
+    const needsDecision = labelNames.has(normalizedNeedsDecisionLabelName);
     const marker = parseAutopilotSuitabilityMarker(issue?.body, prefix);
     if (!marker.present) {
       continue;
@@ -159,6 +175,26 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
       warnings.push(
         `autopilot-suitability: issue #${number} has a malformed or out-of-range score marker (expected a single integer 1-5)`,
       );
+      continue;
+    }
+    const authoringBucket = parseAuthoringBucketMarker(
+      typeof issue?.body === 'string' ? maskMarkdownForScan(issue.body) : '',
+      prefix,
+    );
+    if (authoringBucket.value === 'needs-decision') {
+      if (!needsDecision) {
+        warnings.push(
+          `autopilot-suitability: issue #${number} has an authoring-bucket: needs-decision marker but is missing the ${needsDecisionLabelName} label`,
+        );
+      }
+      continue;
+    }
+    if (authoringBucket.value === 'blocked-by-human') {
+      if (!blockedByHuman) {
+        warnings.push(
+          `autopilot-suitability: issue #${number} has an authoring-bucket: blocked-by-human marker but is missing the ${blockedByHumanLabelName} label`,
+        );
+      }
       continue;
     }
     if (marker.value === 1 && !blockedByHuman) {
@@ -233,12 +269,13 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
   if (!issues) {
     return null;
   }
-  const { floor, blockedByHumanLabelName } =
+  const { floor, blockedByHumanLabelName, needsDecisionLabelName } =
     resolveAutopilotSuitabilityPolicy(root);
   const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
     floor,
     markerPrefix: options.markerPrefix,
     blockedByHumanLabelName,
+    needsDecisionLabelName,
   });
   for (const warning of warnings) {
     report.warnings.push(warning);
@@ -1097,7 +1134,7 @@ function resolveLiveConfigDocument(root) {
   return { config: null, file: null };
 }
 /**
- * Resolve `autopilotSuitability.floor` and `labels.blockedByHumanLabelName`
+ * Resolve `autopilotSuitability.floor` and the suitability label names
  * from the live IDD config (canonical-first, legacy-`idd-policy.json`
  * fallback via {@link resolveLiveConfigDocument}), for
  * `checkAutopilotSuitabilityConsistency`'s cross-field check. Extracted as
@@ -1111,6 +1148,7 @@ export function resolveAutopilotSuitabilityPolicy(root) {
   return {
     floor: typedConfig?.autopilotSuitability?.floor,
     blockedByHumanLabelName: typedConfig?.labels?.blockedByHumanLabelName,
+    needsDecisionLabelName: typedConfig?.labels?.needsDecisionLabelName,
   };
 }
 /**
