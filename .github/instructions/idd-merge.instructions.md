@@ -522,27 +522,27 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Off-default `{development-branch}`: `git switch <default-branch>`
    once F4 completes/holds, for B1's checkout.
-5. Run from the **primary worktree**, never inside the one being
-   removed. Any removal (plain or `--force`) silently discards
-   ignored files too, including inside a submodule. Scope Git
-   commands to `<path>`. Inspect leftover files under a `-`
-   submodule path (not a repo).
+5. Run from the **primary worktree**, not one being removed.
+   Removal discards ignored submodule data. Scope
+   to `<path>`. Inspect leftovers under `-` (not a repo).
 
-   Use `--untracked-files=normal` (not `all`). A clean submodule
-   worktree can still hide a stash or unpushed commit:
+   Use `--untracked-files=normal` (not `all`). A clean submodule can
+   still hide a stash or unpushed commit; tag-only detached history is
+   not counted; local refs are:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
-   - `git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list;
-     git rev-list --all --not --remotes --count'`
+   - Probe:
 
-   Generated output is disposable only when a configured command
-   reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
-   out — never commit or push them. Copy other work to a different
-   ref or path.
-   Before each `git worktree remove`, `cd` to the primary worktree
-   and stay there. While the issue worktree exists, revalidate:
+     ```sh
+     git -C <path> submodule foreach --recursive 'git status
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     ```
+
+   Discard only reproducible configured-command output; preserve all else.
+   Copy secrets (`.env`) outside `<path>` — never commit or push them.
+   Preserve work in backup ref or external path. Before removal, `cd`
+   to primary; stay; revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \

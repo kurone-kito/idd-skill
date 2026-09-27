@@ -441,15 +441,20 @@ could ever observe it as 'alive'".
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
    unpushed work is otherwise invisible here
-   (`idd-merge.instructions.md`):
+   (`idd-merge.instructions.md`); tag-only detached history is not
+   counted, but local refs are:
+   See issue `#3540` for the observed upstream-tag incident.
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> log @{u}..HEAD` (or all commits when there is no
      upstream) for this worktree's own unpushed commits
    - `git -C <path> submodule status --recursive`
-   - `git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list;
-     git rev-list --all --not --remotes --count'`
+   - Probe:
+
+     ```sh
+     git -C <path> submodule foreach --recursive 'git status
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     ```
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
    found no lock (the legacy pre-claim-id release case has no
