@@ -1505,6 +1505,18 @@ test('dependency-line-grammar resolves a shortcut reference link', () => {
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar leaves an unresolved shortcut reference unchanged', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by [Issue #12]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar resolves a reference definition with a query string', () => {
   const body = childBody({
     extraMarkers:

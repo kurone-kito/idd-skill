@@ -1706,13 +1706,17 @@ function looksLikeIssueMarkdownLink(
     return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
   }
   const shortcutMatch = text.match(MARKDOWN_SHORTCUT_LINK_START_PATTERN);
-  if (shortcutMatch === null || /#\d+/.test(shortcutMatch[1])) {
-    return shortcutMatch !== null;
+  if (shortcutMatch === null) {
+    return false;
   }
   const target = referenceDefinitions.get(
     normalizeLinkReferenceLabel(shortcutMatch[1]),
   );
-  return target !== undefined && GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target);
+  return (
+    target !== undefined &&
+    (/#\d+/.test(shortcutMatch[1]) ||
+      GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target))
+  );
 }
 
 /**
