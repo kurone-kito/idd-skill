@@ -3204,6 +3204,26 @@ test('checkManifestCompleteness forwards --profile to resolveImportFiles, coveri
   assert.deepEqual(result.missingTarget, []);
 });
 
+test('runVerify excludes held missing targets while keeping other gaps blocking', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const heldTargets = ['.cspell.config.yml', '.markdownlint.yml'];
+  for (const targetPath of heldTargets) {
+    rmSync(join(targetRoot, targetPath));
+  }
+
+  const heldResult = runVerify(REPO_ROOT, targetRoot, undefined, heldTargets);
+  assert.deepEqual(heldResult.manifestCompleteness.missingTarget, []);
+  assert.equal(heldResult.blocking, false);
+
+  const notHeldResult = runVerify(REPO_ROOT, targetRoot);
+  assert.deepEqual(
+    [...notHeldResult.manifestCompleteness.missingTarget].sort(),
+    [...heldTargets].sort(),
+  );
+  assert.equal(notHeldResult.blocking, true);
+});
+
 // #3291: a file the manifest never imported -- LEFTOVER.md at the
 // target root -- is exactly the pre-fix bug shape (issue reproduction:
 // an adopter-owned src/greeting.mustache). Its tokens must land in
@@ -4159,6 +4179,42 @@ test('bin/idd-onboard.mjs --verify accepts --hold and stays exit 0 when the held
   };
   assert.deepEqual(heldSchemaDrift.findings, []);
   assert.equal(heldSchemaDrift.warning, null);
+});
+
+test('bin/idd-onboard.mjs --verify excludes an absent held manifest entry from blocking completeness', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  rmSync(join(targetRoot, '.cspell.config.yml'));
+
+  const held = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--hold',
+    '.cspell.config.yml',
+  ]);
+  assert.equal(held.status, 0, JSON.stringify(held.verdict));
+  assert.equal(held.verdict.blocking, false);
+  const heldCompleteness = held.verdict.manifestCompleteness as {
+    missingTarget: string[];
+  };
+  assert.deepEqual(heldCompleteness.missingTarget, []);
+
+  const notHeld = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(notHeld.status, 1, JSON.stringify(notHeld.verdict));
+  assert.equal(notHeld.verdict.blocking, true);
+  const notHeldCompleteness = notHeld.verdict.manifestCompleteness as {
+    missingTarget: string[];
+  };
+  assert.deepEqual(notHeldCompleteness.missingTarget, ['.cspell.config.yml']);
 });
 
 test('bin/idd-onboard.mjs --verify exits 2 for an unknown --hold path', () => {

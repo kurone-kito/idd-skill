@@ -690,7 +690,7 @@ error), so an agent can gate on the exit code without parsing prose.
   check for a target tree after `--import` and `--substitute` have run,
   replacing a manual walkthrough of the checklist below with six check
   groups: manifest completeness (reusing `--import`'s own file-set
-  resolution; `--hold` does not shrink this set), placeholder residue
+  resolution; held targets are exempt), placeholder residue
   (reusing `--substitute`'s scanner), a helper-load check
   (`vendored-node` only: spawns each cataloged helper under `--target`
   with `--help`), an informational stale-import signal, a non-blocking
