@@ -50,6 +50,7 @@ import {
   realpathSync,
   renameSync,
   rmdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -525,6 +526,8 @@ export interface LocalWorktreeRecoveryDeps {
     sourceRoot?: string,
     additionalSourceRoots?: string[],
   ) => void;
+  /** Remove one already-verified recovery source path. */
+  removePath: (path: string) => void;
   ensurePreserveDir: () => string;
   now: () => string;
 }
@@ -1791,6 +1794,49 @@ function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
       if (deps.pathExists(join(scopePath, path))) {
         return `preserved ignored path ${scope}/${path} remained after cleanup`;
       }
+    }
+  }
+  return null;
+}
+
+/** Remove deinitialized-submodule checkout directories that were copied out
+ * before a primary-worktree checkout. `git submodule update --recursive` does
+ * not initialize or remove those directories, so leaving them in place would
+ * leak recovered issue data into the development branch. Restrict removal to
+ * Git-reported safe relative submodule paths and fail closed if any copied
+ * path remains or becomes unreadable. */
+function cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
+  entries: readonly UninitializedSubmoduleEntry[],
+  targetPath: string,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'pathExists' | 'pathPresence' | 'removePath'
+  >,
+): string | null {
+  const paths = new Set<string>();
+  for (const entry of entries) {
+    if (entry.copiedTo === null) {
+      return `uninitialized submodule ${entry.path} was not preserved`;
+    }
+    if (!isSafeRelativePath(entry.path)) {
+      return `uninitialized submodule ${entry.path} is unsafe`;
+    }
+    paths.add(entry.path);
+  }
+  if (paths.size === 0) return null;
+  for (const path of paths) {
+    const sourcePath = join(targetPath, path);
+    try {
+      deps.removePath(sourcePath);
+    } catch (error) {
+      return `could not remove preserved uninitialized submodule ${path}: ${errorMessageForProduction(error)}`;
+    }
+    const presence = pathPresenceForDeps(deps, sourcePath);
+    if (presence === 'unknown') {
+      return `could not verify cleanup of uninitialized submodule ${path}`;
+    }
+    if (presence === 'present') {
+      return `preserved uninitialized submodule ${path} remained after cleanup`;
     }
   }
   return null;
@@ -3491,6 +3537,23 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      const uninitializedCleanupError =
+        cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
+          verdict.plan.uninitializedSubmodules,
+          targetPath,
+          deps,
+        );
+      if (uninitializedCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${uninitializedCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
       if (!checkout.ok) {
         verdict.plan.removal = {
@@ -5058,6 +5121,8 @@ function createProductionDeps(
       return resolveDevelopmentBranchProduction(args, repositoryRoot);
     },
     copyPath: copyPathProduction,
+    removePath: (path: string) =>
+      rmSync(path, { recursive: true, force: true }),
     ensurePreserveDir: ensurePreserveDirProduction(
       args.preserveDir,
       resolve(process.cwd(), args.worktree),

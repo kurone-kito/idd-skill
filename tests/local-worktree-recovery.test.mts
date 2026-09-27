@@ -878,6 +878,7 @@ function fakeDeps(
     releaseCloneLock: () => {},
     resolveDevelopmentBranch: () => 'main',
     copyPath: () => {},
+    removePath: () => {},
     ensurePreserveDir: () => '/tmp/preserve',
     now: () => '2026-09-25T00:00:00Z',
   };
@@ -4577,6 +4578,125 @@ test('primary recovery removes preserved ignored files before reporting release'
       'update',
       '--recursive',
     ]);
+    assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(preserveDir, { recursive: true, force: true });
+  }
+});
+
+test('primary recovery removes preserved deinitialized submodule paths before checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-submodule-'));
+  const preserveDir = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-submodule-preserve-'),
+  );
+  const submodulePath = join(root, 'vendor');
+  let submodulePresent = true;
+  let confirmCalls = 0;
+  const events: string[] = [];
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) =>
+        path === root ||
+        path === join(root, '.git') ||
+        path.startsWith(preserveDir) ||
+        (submodulePresent && path === submodulePath),
+      ensurePreserveDir: () => preserveDir,
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 3;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      copyPath: (_from, to) => {
+        events.push(`copy:${to}`);
+        mkdirSync(to, { recursive: true });
+      },
+      removePath: (path) => {
+        events.push(`remove:${path}`);
+        submodulePresent = false;
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === root
+                ? '-0000000000000000000000000000000000000000 vendor\n'
+                : '',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'checkout') events.push('checkout');
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          events.push('submodule-update');
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return { ok: true, status: 0, stdout: `${root}/.git\n`, stderr: '' };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.deepEqual(events.slice(-4), [
+      `copy:${join(
+        preserveDir,
+        `uninitialized-${Buffer.from('vendor').toString('base64url')}`,
+      )}`,
+      `remove:${submodulePath}`,
+      'checkout',
+      'submodule-update',
+    ]);
+    assert.equal(submodulePresent, false);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
   } finally {
     rmSync(root, { recursive: true, force: true });
