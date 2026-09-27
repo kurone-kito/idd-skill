@@ -3625,6 +3625,55 @@ test('checkHeldSchemaDrift ignores bare enumeration words', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores similarly named scanned directories', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { readdirSync } from 'node:fs';\nreaddirSync('schemas-old');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift reads a nested Git target baseline from its target root', () => {
+  const sourceRoot = makeFixtureDir();
+  const outerRoot = makeFixtureDir();
+  const targetRoot = join(outerRoot, 'nested-target');
+  mkdirSync(targetRoot, { recursive: true });
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  mkdirSync(join(outerRoot, 'schemas'), { recursive: true });
+  writeFileSync(join(outerRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  execFileSync('git', ['init', '--initial-branch=main', outerRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', outerRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', outerRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', outerRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', outerRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

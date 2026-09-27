@@ -2636,8 +2636,12 @@ function readHeldModule(
  * string alone is not enough to infer a dependency, because modules often
  * mention a directory in comments or diagnostics without reading it.
  */
-const DIRECTORY_SCAN_PATTERN =
-  /\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(/iu;
+const DIRECTORY_SCAN_CALL_PATTERN =
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(\s*(['"`])([^'"`\r\n)]*)\1/giu;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
 
 function moduleScansManifestDirectory(
   text: string,
@@ -2648,7 +2652,13 @@ function moduleScansManifestDirectory(
     return false;
   }
   const directory = targetPath.slice(0, slash);
-  return DIRECTORY_SCAN_PATTERN.test(text) && text.includes(directory);
+  const directoryPrefix = new RegExp(`^${escapeRegExp(directory)}(?=$|/)`, 'u');
+  for (const match of text.matchAll(DIRECTORY_SCAN_CALL_PATTERN)) {
+    if (directoryPrefix.test(match[2] ?? '')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function moduleReferencesManifestPath(
@@ -2680,18 +2690,33 @@ function resolveGitTargetBaseline(
   targetRoot: string,
   targetBaseRef?: string,
 ): GitTargetBaseline | undefined {
-  let isWorkTree = false;
+  let gitRoot: string;
   try {
-    isWorkTree =
-      execFileSync(
-        'git',
-        ['-C', targetRoot, 'rev-parse', '--is-inside-work-tree'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-      ).trim() === 'true';
+    gitRoot = execFileSync(
+      'git',
+      ['-C', targetRoot, 'rev-parse', '--show-toplevel'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
   } catch {
     return undefined;
   }
-  if (!isWorkTree) {
+  const normalize = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  const normalizedGitRoot = normalize(gitRoot);
+  const normalizedTargetRoot = normalize(targetRoot);
+  const targetPrefix = relative(normalizedGitRoot, normalizedTargetRoot)
+    .split(sep)
+    .join('/');
+  if (
+    isAbsolute(targetPrefix) ||
+    targetPrefix === '..' ||
+    targetPrefix.startsWith('../')
+  ) {
     return undefined;
   }
   if (targetBaseRef !== undefined && !SAFE_GIT_REF.test(targetBaseRef)) {
@@ -2719,9 +2744,12 @@ function resolveGitTargetBaseline(
   return {
     read: (targetPath: string): Buffer | null => {
       try {
+        const treePath = targetPrefix
+          ? `${targetPrefix}/${targetPath}`
+          : targetPath;
         return execFileSync(
           'git',
-          ['-C', targetRoot, 'show', `${baselineRef}:${targetPath}`],
+          ['-C', normalizedGitRoot, 'show', `${baselineRef}:${treePath}`],
           { encoding: null, stdio: ['ignore', 'pipe', 'ignore'] },
         );
       } catch {
