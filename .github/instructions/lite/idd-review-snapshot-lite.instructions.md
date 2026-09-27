@@ -16,11 +16,12 @@ standard file.
 
 ## Triage hand-off boundary (E4-E8 excluded)
 
-This file only fetches, freezes, and routes ReviewItems_snapshot; it
-never classifies, scores severity, assigns a PATH, or decides
-Accept/Reject. A non-empty E3 result hands off to
-`idd-review-triage.instructions.md` (E4-E8) for a stronger session or a
-human; never run E4-E8 here, even for a trivial finding.
+Only fetch/routes ReviewItems_snapshot; never classify
+or decide Accept/Reject. Non-empty E3 result hands off to
+`idd-review-triage.instructions.md` (E4-E8). A deferred Step 2 handoff
+must carry E1 Step 1 SHA, `watermark deferred`, and reason; the
+receiver restores or reruns E1 before E8 without a same-claim watermark.
+Never branch-sync/F1/F2 from an unverified handoff
 
 ## Stop-and-ask conditions
 
@@ -132,8 +133,9 @@ The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run. Otherwise skip
-Step 2 and use the E15/E14 wait route after Step 3.
+--apply` — stays available when `--from-pr` cannot run. If the
+precondition remains incomplete, skip Step 2 and use the E15/E14 wait
+route after Step 3; otherwise post Step 2.
 
 The rendered body is exactly:
 

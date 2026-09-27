@@ -9,8 +9,8 @@ Before any E-phase side effect, apply the [claim revalidation gate](idd-overview
 
 **Skip condition E8**: zero Accepted PATH A → branch-sync below when
 Step 2 was not deferred (its `clean`/`behind-no-conflict` exit applies
-the **Zero-Accepted-PATH-A advisory re-review gate**). If deferred, use
-the E15/E14 route in `idd-review-snapshot.instructions.md`.
+the **Zero-Accepted-PATH-A advisory re-review gate**). Missing deferred
+evidence → E1; otherwise E15/E14 in `idd-review-snapshot.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -483,7 +483,7 @@ otherwise branch-sync. Non-zero →
 
 ## E-phase branch-sync check
 
-After review confirms no PATH A items remain (E3 or E8),
+After no PATH A items remain (E3/E8),
 check the current branch state before routing to F-phase. This gate uses
 merge-from-`{development-branch}` (never rebase) when synchronization is
 required, preserving review history on the already-published PR branch.
