@@ -1809,15 +1809,20 @@ function reverifyPreservationArtifactsFresh(
     submoduleAdminCopies: SubmoduleAdminCopyEntry[];
   },
   targetPath: string,
-  runGit: LocalWorktreeRecoveryDeps['runGit'],
-  pathExists: (path: string) => boolean,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'runGit' | 'pathExists' | 'realpathOrNull' | 'readlinkOrNull'
+  >,
 ): boolean {
   const scopePath = (scope: string): string =>
     scope === '.' ? targetPath : join(targetPath, scope);
+  const copyVerified = (destination: string): boolean =>
+    deps.pathExists(destination) &&
+    isCopyDestinationOutsideTarget(destination, targetPath, deps);
   for (const stash of preserve.stashes) {
     if (stash.stashListReadFailed) return false;
     if (stash.stashed) {
-      const list = runGit(['stash', 'list'], scopePath(stash.scope));
+      const list = deps.runGit(['stash', 'list'], scopePath(stash.scope));
       if (!list.ok) return false;
       const taggedCount = countTaggedStashEntries(list.stdout, stash.tag);
       if (
@@ -1837,13 +1842,13 @@ function reverifyPreservationArtifactsFresh(
     // every copy destination this scope recorded still exists.
     if (
       stash.unmergedFallbackCopiedTo !== null &&
-      !pathExists(stash.unmergedFallbackCopiedTo)
+      !copyVerified(stash.unmergedFallbackCopiedTo)
     ) {
       return false;
     }
     if (
       stash.unmergedFallbackCopiedFiles.some(
-        (destination) => !pathExists(destination),
+        (destination) => !copyVerified(destination),
       )
     ) {
       return false;
@@ -1851,7 +1856,7 @@ function reverifyPreservationArtifactsFresh(
   }
   for (const ref of preserve.backupRefs) {
     if (!ref.written) continue;
-    const verify = runGit(
+    const verify = deps.runGit(
       ['rev-parse', '--verify', ref.ref],
       scopePath(ref.scope),
     );
@@ -1860,17 +1865,17 @@ function reverifyPreservationArtifactsFresh(
     }
   }
   for (const submodule of preserve.uninitializedSubmodules) {
-    if (submodule.copiedTo !== null && !pathExists(submodule.copiedTo)) {
+    if (submodule.copiedTo !== null && !copyVerified(submodule.copiedTo)) {
       return false;
     }
   }
   for (const ignored of preserve.ignoredFilesCopied) {
-    if (ignored.copiedTo !== null && !pathExists(ignored.copiedTo)) {
+    if (ignored.copiedTo !== null && !copyVerified(ignored.copiedTo)) {
       return false;
     }
   }
   for (const admin of preserve.submoduleAdminCopies) {
-    if (admin.copiedTo !== null && !pathExists(admin.copiedTo)) {
+    if (admin.copiedTo !== null && !copyVerified(admin.copiedTo)) {
       return false;
     }
   }
@@ -2499,8 +2504,7 @@ export function runLocalWorktreeRecovery(
             submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
           },
           targetPath,
-          deps.runGit,
-          deps.pathExists,
+          deps,
         )
       ) {
         verdict.plan.removal = {
@@ -2632,8 +2636,7 @@ export function runLocalWorktreeRecovery(
             submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
           },
           targetPath,
-          deps.runGit,
-          deps.pathExists,
+          deps,
         )
       ) {
         verdict.plan.removal = {
@@ -2777,8 +2780,7 @@ export function runLocalWorktreeRecovery(
             submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
           },
           targetPath,
-          deps.runGit,
-          deps.pathExists,
+          deps,
         )
       ) {
         return recordRemovalFailure(
@@ -2854,8 +2856,7 @@ export function runLocalWorktreeRecovery(
           submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
         },
         targetPath,
-        deps.runGit,
-        deps.pathExists,
+        deps,
       )
     ) {
       verdict.plan.removal = {
@@ -2990,8 +2991,7 @@ export function runLocalWorktreeRecovery(
             submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
           },
           targetPath,
-          deps.runGit,
-          deps.pathExists,
+          deps,
         )
       ) {
         return recordRemovalFailure(
@@ -3533,7 +3533,10 @@ export function parseArgs(argv: string[]): LocalWorktreeRecoveryArgs {
   const issueRaw = values.issue as string | undefined;
   const parsedIssue =
     issueRaw !== undefined && /^\d+$/.test(issueRaw) ? Number(issueRaw) : null;
-  const issue = parsedIssue !== null && parsedIssue > 0 ? parsedIssue : null;
+  const issue =
+    parsedIssue !== null && Number.isSafeInteger(parsedIssue) && parsedIssue > 0
+      ? parsedIssue
+      : null;
   const owner = ((values.owner as string | undefined) ?? '').trim();
   const repo = ((values.repo as string | undefined) ?? '').trim();
   if ((owner === '') !== (repo === '')) {

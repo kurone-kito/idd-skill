@@ -35,6 +35,7 @@ import {
   type LocalGitCommandResult,
   type LocalWorktreeRecoveryDeps,
   normalizeGitWorktreePathForComparison,
+  parseArgs,
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
   submoduleStatusEntries,
@@ -87,6 +88,36 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('parseArgs rejects issue numbers that are not safe positive integers', () => {
+  assert.equal(
+    parseArgs(['--issue', '3536', '--worktree', '/repo/linked']).issue,
+    3536,
+  );
+  assert.equal(
+    parseArgs([
+      '--issue',
+      String(Number.MAX_SAFE_INTEGER),
+      '--worktree',
+      '/repo/linked',
+    ]).issue,
+    Number.MAX_SAFE_INTEGER,
+  );
+  assert.equal(
+    parseArgs(['--issue', '9007199254740992', '--worktree', '/repo/linked'])
+      .issue,
+    null,
+  );
+  assert.equal(
+    parseArgs([
+      '--issue',
+      '999999999999999999999',
+      '--worktree',
+      '/repo/linked',
+    ]).issue,
+    null,
+  );
 });
 
 test('isAcceptedBlockReason accepts only the two §LWR step 1 prefixes', () => {
@@ -2164,6 +2195,39 @@ test('fresh stash verification rejects a stale duplicate tag after the new stash
   assert.equal(verdict.plan.stashes[0]?.verifiedCount, 2);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /no longer verifies fresh under the clone lock/);
+});
+
+test('fresh preservation verification rejects a copied artifact redirected into the target', () => {
+  let redirected = false;
+  let removeCalled = false;
+  const copiedIgnoredFile = '/tmp/preserve/ignored/.env';
+  const deps = fakeDeps({
+    acquireCloneLock: () => {
+      redirected = true;
+      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+    },
+    ensurePreserveDir: () => '/tmp/preserve',
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
+        return { ok: true, status: 0, stdout: '!! .env\0', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    realpathOrNull: (path) =>
+      redirected && path === copiedIgnoredFile
+        ? '/repo/linked/.git/redirected-artifact'
+        : path,
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /preservation artifact/);
 });
 
 test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
