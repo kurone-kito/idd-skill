@@ -2688,6 +2688,7 @@ function isBlockClosingBrace(text: string, index: number): boolean {
           /(?:\b(?:else|do|try|finally)\s*|\)\s*$|=>\s*$)/u.test(
             text.slice(0, current),
           ) ||
+          /(?:^|;)\s*$/u.test(text.slice(0, current)) ||
           /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
             text.slice(0, current),
           )
@@ -3167,10 +3168,14 @@ function expandGlobRange(text: string): string[] | null {
     const direction = start <= end ? 1 : -1;
     const step = direction * (Math.abs(requestedStep) || 1);
     const values: string[] = [];
-    const width = Math.max(
-      numeric.groups.start.length,
-      numeric.groups.end.length,
+    const startDigits = numeric.groups.start.replace(/^-/u, '');
+    const endDigits = numeric.groups.end.replace(/^-/u, '');
+    const hasPadding = [startDigits, endDigits].some(
+      (digits) => digits.length > 1 && digits.startsWith('0'),
     );
+    const width = hasPadding
+      ? Math.max(numeric.groups.start.length, numeric.groups.end.length)
+      : 0;
     for (
       let value = start;
       (step > 0 && value <= end) || (step < 0 && value >= end);
@@ -3180,9 +3185,13 @@ function expandGlobRange(text: string): string[] | null {
         return ['*'];
       }
       const sign = value < 0 ? '-' : '';
-      const absolute = Math.abs(value)
-        .toString()
-        .padStart(sign === '' ? width : Math.max(0, width - 1), '0');
+      const absoluteText = Math.abs(value).toString();
+      const absolute = hasPadding
+        ? absoluteText.padStart(
+            sign === '' ? width : Math.max(0, width - 1),
+            '0',
+          )
+        : absoluteText;
       values.push(`${sign}${absolute}`);
     }
     return values;
@@ -3195,12 +3204,9 @@ function expandGlobRange(text: string): string[] | null {
     const start = alphabetic.groups.start.codePointAt(0) ?? 0;
     const end = alphabetic.groups.end.codePointAt(0) ?? 0;
     const requestedStep = Number(alphabetic.groups.step ?? 0);
-    const step = requestedStep || (start <= end ? 1 : -1);
-    if (
-      !Number.isSafeInteger(step) ||
-      (start < end && step < 0) ||
-      (start > end && step > 0)
-    ) {
+    const direction = start <= end ? 1 : -1;
+    const step = direction * (Math.abs(requestedStep) || 1);
+    if (!Number.isSafeInteger(requestedStep) || !Number.isSafeInteger(step)) {
       return null;
     }
     const values: string[] = [];
@@ -3217,6 +3223,33 @@ function expandGlobRange(text: string): string[] | null {
     return values;
   }
   return null;
+}
+
+function expandGlobBracePatterns(text: string): string[] {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '{') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(text, index, '{', '}');
+    if (closing === -1) {
+      continue;
+    }
+    const content = text.slice(index + 1, closing);
+    const expandedRange = expandGlobRange(content);
+    const alternatives = expandedRange ?? splitGlobAlternatives(content, ',');
+    if (expandedRange === null && alternatives.length === 1) {
+      index = closing;
+      continue;
+    }
+    const prefixes = expandGlobBracePatterns(text.slice(0, index));
+    const suffixes = expandGlobBracePatterns(text.slice(closing + 1));
+    return prefixes.flatMap((prefix) =>
+      alternatives.flatMap((alternative) =>
+        suffixes.map((suffix) => `${prefix}${alternative}${suffix}`),
+      ),
+    );
+  }
+  return [text];
 }
 
 function globPatternToRegex(
@@ -3236,25 +3269,31 @@ function globPatternToRegex(
         continue;
       }
       const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
-      const inner = splitGlobAlternatives(
+      const innerExpressions = expandGlobBracePatterns(
         pattern.slice(index + 2, closing),
-        '|',
-      )
-        .map((alternative) =>
-          globPatternToRegex(alternative, segmentStart, trailingPattern),
-        )
-        .join('|');
-      if (character === '!') {
-        const slash = trailingPattern.indexOf('/');
-        const suffix = trailingPattern.slice(
-          0,
-          slash === -1 ? trailingPattern.length : slash,
-        );
-        expression += `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
-      } else {
+      ).map((expandedGroup) =>
+        splitGlobAlternatives(expandedGroup, '|')
+          .map((alternative) =>
+            globPatternToRegex(alternative, segmentStart, trailingPattern),
+          )
+          .join('|'),
+      );
+      const translatedGroups = innerExpressions.map((inner) => {
+        if (character === '!') {
+          const slash = trailingPattern.indexOf('/');
+          const suffix = trailingPattern.slice(
+            0,
+            slash === -1 ? trailingPattern.length : slash,
+          );
+          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false)}(?=$|/))[^/]*`;
+        }
         const quantifier = character === '@' ? '' : character;
-        expression += `(?:${inner})${quantifier}`;
-      }
+        return `(?:${inner})${quantifier}`;
+      });
+      expression +=
+        translatedGroups.length === 1
+          ? translatedGroups[0]
+          : `(?:${translatedGroups.join('|')})`;
       index = closing;
     } else if (character === '*' && pattern[index + 1] === '*') {
       index += 1;
@@ -3411,6 +3450,9 @@ function moduleScansManifestDirectory(
       const cwdExpression = firstCallArgument(
         argumentsText.slice(cwd.index + cwd[0].length),
       );
+      if (/^undefined(?:\s*\})?$/u.test(cwdExpression.trim())) {
+        return [''];
+      }
       return pathExpressionCandidates(cwdExpression).map((candidate) =>
         usesModuleRelativePathExpression(cwdExpression)
           ? resolveModuleRelativeScanPath(candidate, modulePath)
