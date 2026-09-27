@@ -815,7 +815,7 @@ function clearInProgressOperation(
 ): string | null {
   const command: string[] =
     operation.kind === 'rebase'
-      ? ['rebase', '--quit']
+      ? ['rebase', '--abort']
       : operation.kind === 'merge'
         ? ['merge', '--abort']
         : operation.kind === 'cherry-pick'
@@ -1008,6 +1008,19 @@ export function extractDirtyEntries(statusPorcelain: string): DirtyPathEntry[] {
     }
   }
   return entries;
+}
+
+/** True only for Git's structured diagnostics for an unmerged-path stash
+ * refusal. A filename containing the word "unmerged" (or an unrelated
+ * permission/lock error mentioning it) must not activate the copy-out
+ * fallback, because a plain worktree copy cannot preserve the index state. */
+function isUnmergedStashFailure(result: LocalGitCommandResult): boolean {
+  const lines = `${result.stdout}\n${result.stderr}`.split(/\r?\n/);
+  return lines.some(
+    (line) =>
+      /^\s*(?:error:\s*)?.+?:\s*needs merge\s*$/i.test(line) ||
+      /^\s*unmerged paths:\s*$/i.test(line),
+  );
 }
 
 // audit:ignore-dead-export: exported for focused parser tests; production use remains in this module
@@ -1396,7 +1409,7 @@ function planAndMaybeStashScope(
     // index state stash would have captured is not equivalent
     // preservation, so this must fail closed instead of silently
     // "succeeding" via the fallback.
-    if (!/unmerged|needs merge/i.test(`${stash.stdout}\n${stash.stderr}`)) {
+    if (!isUnmergedStashFailure(stash)) {
       entry.hardStashFailure = true;
       return entry;
     }
@@ -1842,7 +1855,12 @@ function planAndMaybePreserve(
         if (apply && destination) {
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
             try {
-              deps.copyPath(submodulePath, destination, path);
+              deps.copyPath(
+                submodulePath,
+                destination,
+                path,
+                targetGitDirForScope ? [targetGitDirForScope] : undefined,
+              );
             } catch {
               destination = null;
             }
@@ -2319,41 +2337,117 @@ function reverifyPreservationArtifactsFresh(
 }
 
 /** Refresh uninitialized-submodule copies immediately before linked-worktree
- * removal. Unlike an initialized submodule, an uninitialized one has no Git
- * status or stash scope to rescan; files can still appear in its plain
- * checkout directory after the initial step-3 copy. Re-copying into the same
- * destination preserves both the original backup and any late-arriving
- * entries, while the containment and existence checks fail closed if the
- * source or destination becomes unsafe. */
+ * removal. An uninitialized submodule has no stash scope, and its plain
+ * checkout directory can appear or gain files after the initial step-3
+ * snapshot. Re-scan the status list, copy newly present paths, and re-copy
+ * known paths into the same destination; containment and existence checks
+ * fail closed if the source or destination becomes unsafe. */
+interface UninitializedSubmoduleRefresh {
+  error: string | null;
+  added: UninitializedSubmoduleEntry[];
+  preserveDir: string | null;
+}
+
 function refreshUninitializedSubmoduleCopies(
   entries: readonly UninitializedSubmoduleEntry[],
   targetPath: string,
+  targetGitDir: string | null,
   deps: Pick<
     LocalWorktreeRecoveryDeps,
-    'copyPath' | 'pathExists' | 'runGit' | 'realpathOrNull' | 'readlinkOrNull'
+    | 'copyPath'
+    | 'ensurePreserveDir'
+    | 'pathExists'
+    | 'runGit'
+    | 'realpathOrNull'
+    | 'readlinkOrNull'
   >,
-): string | null {
-  for (const entry of entries) {
-    if (entry.copiedTo === null) {
-      return `late preservation for uninitialized submodule ${entry.path} has no verified destination; stopping before removal`;
+): UninitializedSubmoduleRefresh {
+  const added: UninitializedSubmoduleEntry[] = [];
+  let preserveDir: string | null = null;
+  // A prunable shortcut has no live target or private gitdir to rescan. Keep
+  // this fast path side-effect-free as well as avoiding an extra target
+  // existence probe in the already-absent branch.
+  if (targetGitDir === null && entries.length === 0) {
+    return { error: null, added, preserveDir };
+  }
+  if (!deps.pathExists(targetPath)) {
+    return { error: null, added, preserveDir };
+  }
+
+  const status = deps.runGit(
+    ['submodule', 'status', '--recursive'],
+    targetPath,
+  );
+  if (!status.ok || !submoduleStatusOutputIsValid(status.stdout)) {
+    return {
+      error:
+        'could not rescan uninitialized submodules immediately before removal; stopping before removal',
+      added,
+      preserveDir,
+    };
+  }
+  const knownEntries = new Map(entries.map((entry) => [entry.path, entry]));
+  const lateSubmodules = submoduleStatusEntries(status.stdout).filter(
+    (submodule) => submodule.status === '-',
+  );
+  const ensurePreserveDir = (): string => {
+    preserveDir ??= deps.ensurePreserveDir();
+    return preserveDir;
+  };
+  for (const submodule of lateSubmodules) {
+    let entry = knownEntries.get(submodule.path);
+    const submodulePath = join(targetPath, submodule.path);
+    if (entry === undefined && deps.pathExists(submodulePath)) {
+      const destination = join(
+        ensurePreserveDir(),
+        `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
+      );
+      entry = { path: submodule.path, copiedTo: destination };
+      knownEntries.set(submodule.path, entry);
+      added.push(entry);
     }
-    if (!deps.pathExists(join(targetPath, entry.path))) continue;
+    if (entry === undefined) continue;
+    if (entry.copiedTo === null) {
+      return {
+        error: `late preservation for uninitialized submodule ${entry.path} has no verified destination; stopping before removal`,
+        added,
+        preserveDir,
+      };
+    }
+    if (!deps.pathExists(submodulePath)) continue;
     if (!isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)) {
-      return `late preservation for uninitialized submodule ${entry.path} has an unsafe destination; stopping before removal`;
+      return {
+        error: `late preservation for uninitialized submodule ${entry.path} has an unsafe destination; stopping before removal`,
+        added,
+        preserveDir,
+      };
     }
     try {
-      deps.copyPath(join(targetPath, entry.path), entry.copiedTo, targetPath);
+      deps.copyPath(
+        submodulePath,
+        entry.copiedTo,
+        targetPath,
+        targetGitDir ? [targetGitDir] : undefined,
+      );
     } catch {
-      return `late preservation for uninitialized submodule ${entry.path} could not be copied; stopping before removal`;
+      return {
+        error: `late preservation for uninitialized submodule ${entry.path} could not be copied; stopping before removal`,
+        added,
+        preserveDir,
+      };
     }
     if (
       !deps.pathExists(entry.copiedTo) ||
       !isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)
     ) {
-      return `late preservation for uninitialized submodule ${entry.path} could not be verified; stopping before removal`;
+      return {
+        error: `late preservation for uninitialized submodule ${entry.path} could not be verified; stopping before removal`,
+        added,
+        preserveDir,
+      };
     }
   }
-  return null;
+  return { error: null, added, preserveDir };
 }
 
 /**
@@ -3643,13 +3737,25 @@ export function runLocalWorktreeRecovery(
       return verdict;
     }
 
-    const lateUninitializedError = refreshUninitializedSubmoduleCopies(
-      verdict.plan.uninitializedSubmodules,
-      targetPath,
-      deps,
-    );
-    if (lateUninitializedError !== null) {
-      return recordRemovalFailure(lateUninitializedError);
+    const lateUninitialized = shortcut.eligible
+      ? { error: null, added: [], preserveDir: null }
+      : refreshUninitializedSubmoduleCopies(
+          verdict.plan.uninitializedSubmodules,
+          targetPath,
+          targetGitDir,
+          deps,
+        );
+    if (lateUninitialized.preserveDir !== null) {
+      verdict.preserveDir ??= lateUninitialized.preserveDir;
+    }
+    if (lateUninitialized.added.length > 0) {
+      verdict.plan.uninitializedSubmodules.push(...lateUninitialized.added);
+      verdict.mutated ||= lateUninitialized.added.some(
+        (entry) => entry.copiedTo !== null,
+      );
+    }
+    if (lateUninitialized.error !== null) {
+      return recordRemovalFailure(lateUninitialized.error);
     }
 
     // The late uninitialized-submodule refresh above copies filesystem data

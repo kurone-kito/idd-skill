@@ -3087,7 +3087,10 @@ test('records partial ignored-file copies and blocks removal when a later copy f
 });
 
 test('late preservation refreshes uninitialized submodule copies before removal', () => {
-  const copied: string[] = [];
+  const copied: Array<{
+    to: string;
+    additionalSourceRoots: string[] | undefined;
+  }> = [];
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -3101,20 +3104,82 @@ test('late preservation refreshes uninitialized submodule copies before removal'
           stderr: '',
         };
       }
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stderr: '',
+        };
+      }
       if (argv[0] === 'status') {
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
       return cleanRepoRunGit(argv, cwd);
     },
     pathExists: (path) => !path.includes('/.git/worktrees/linked/modules/'),
-    copyPath: (_from, to) => copied.push(to),
+    copyPath: (_from, to, _sourceRoot, additionalSourceRoots) =>
+      copied.push({ to, additionalSourceRoots }),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
   assert.equal(copied.length, 2);
-  assert.equal(copied[0], copied[1]);
+  assert.equal(copied[0]?.to, copied[1]?.to);
+  assert.deepEqual(copied[0]?.additionalSourceRoots, [
+    '/repo/primary/.git/worktrees/linked',
+  ]);
+  assert.deepEqual(copied[1]?.additionalSourceRoots, [
+    '/repo/primary/.git/worktrees/linked',
+  ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('late preservation discovers an uninitialized submodule that appears after the initial scan', () => {
+  let submoduleStatusCalls = 0;
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        if (cwd === '/repo/linked') submoduleStatusCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 late-submodule\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    pathExists: (path) =>
+      path === '/repo/linked' ||
+      (path === '/repo/linked/late-submodule' && submoduleStatusCalls >= 2) ||
+      path.startsWith('/tmp/preserve'),
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(submoduleStatusCalls, 2);
+  assert.equal(copied.length, 1);
+  assert.equal(verdict.plan.uninitializedSubmodules[0]?.path, 'late-submodule');
+  assert.equal(verdict.plan.uninitializedSubmodules[0]?.copiedTo, copied[0]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -3672,7 +3737,7 @@ test('fresh preservation verification rejects a copied artifact redirected into 
 
 for (const operationCase of [
   { kind: 'merge', cleanup: ['merge', '--abort'] },
-  { kind: 'rebase', cleanup: ['rebase', '--quit'] },
+  { kind: 'rebase', cleanup: ['rebase', '--abort'] },
   { kind: 'cherry-pick', cleanup: ['cherry-pick', '--abort'] },
   { kind: 'bisect', cleanup: ['bisect', 'reset'] },
 ] as const) {
@@ -3987,7 +4052,7 @@ test('primary-worktree cleanup clears an in-progress submodule operation before 
             stderr: '',
           };
         }
-        if (argv[0] === 'rebase' && argv[1] === '--quit') {
+        if (argv[0] === 'rebase' && argv[1] === '--abort') {
           events.push('submodule-cleanup');
           operationActive = false;
           rmSync(rebaseDir, { recursive: true, force: true });
@@ -4718,6 +4783,32 @@ test('a genuinely unmerged-path stash failure still takes the copy-out fallback'
     verdict.plan.stashes[0]?.unmergedFallbackCopiedTo !== null,
     true,
   );
+});
+
+test('a non-unmerged stash error mentioning an unmerged filename stays a hard failure', () => {
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'UU conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'fatal: cannot open unmerged.txt: Permission denied',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.hardStashFailure, true);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackCopiedTo, null);
+  assert.equal(verdict.mutated, false);
 });
 
 test('an unmerged index entry preserves its working-tree conflict file', () => {
