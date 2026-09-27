@@ -1505,6 +1505,20 @@ test('dependency-line-grammar resolves a reference-style link whose label wraps 
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar resolves a multiline shortcut reference link', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue\n12]\n\n' +
+      '[Issue 12]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar resolves a definition whose label wraps across a nonblank line', () => {
   const body = childBody({
     extraMarkers:
@@ -1517,6 +1531,21 @@ test('dependency-line-grammar resolves a definition whose label wraps across a n
   );
   assert.ok(finding);
   assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar does not merge reference labels across sibling list items', () => {
+  const body = childBody({
+    extraMarkers:
+      '- [ref\n' +
+      '- label]: https://github.com/kurone-kito/idd-skill/issues/12\n\n' +
+      'Blocked by [Issue 12][ref label]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
 });
 
 test('dependency-line-grammar resolves a shortcut reference link', () => {
@@ -1564,6 +1593,20 @@ test('dependency-line-grammar decodes numeric character references in destinatio
     extraMarkers:
       'Blocked by [Issue 12][ref]\n\n' +
       '[ref]: https://github.com/kurone-kito/idd-skill/issues/&#49;2',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar decodes named character references in destinations', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n' +
+      '[ref]: https://github.com/kurone-kito/idd-skill&sol;issues&sol;12',
   });
   const report = auditAuthoredIssue(body, { shape: 'child' });
   const finding = report.findings.find(

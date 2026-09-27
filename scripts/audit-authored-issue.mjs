@@ -43,6 +43,7 @@
 // the drafted body from a file or stdin rather than fetching a live issue.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { decodeNamedCharacterReference } from 'decode-named-character-reference';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -474,7 +475,9 @@ const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
 // per-line near-miss scan cannot see this shape, so checkDependencyLineGrammar
 // handles it with a whole-body pass after masking opaque regions.
 const MULTILINE_REFERENCE_LINK_USAGE_PATTERN =
-  /\[([^\]\n]*)\]\[([^\]\n]*(?:\n[^\]\n]+)+)\]/g;
+  /\[([^\]\n]*(?:\n[^\]\n]+)*)\]\[([^\]\n]*(?:\n[^\]\n]+)*)\]/g;
+const MULTILINE_SHORTCUT_LINK_USAGE_PATTERN =
+  /\[([^\]\n]*(?:\n[^\]\n]+)+)\](?![[(:])/g;
 // Matches a CommonMark shortcut reference link at the start of a string:
 // `[text]` whose next character is not `[` (full/collapsed reference), `(`
 // (inline link), or `:` (reference-definition declaration). Its visible
@@ -1454,6 +1457,9 @@ function findDependencyKeywordMisuse(line, referenceDefinitions) {
 function findMultilineReferenceLinkMisuses(text, referenceDefinitions) {
   const misuses = new Map();
   for (const match of text.matchAll(MULTILINE_REFERENCE_LINK_USAGE_PATTERN)) {
+    if (!match[1].includes('\n') && !match[2].includes('\n')) {
+      continue;
+    }
     const matchIndex = match.index ?? -1;
     if (matchIndex < 0) {
       continue;
@@ -1466,9 +1472,37 @@ function findMultilineReferenceLinkMisuses(text, referenceDefinitions) {
     }
     const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1;
     const linePrefix = text.slice(lineStart, matchIndex);
-    const normalizedReference = `[${match[1]}][${match[2].replace(/\s+/gu, ' ')}]`;
+    const normalizedReference =
+      `[${match[1].replace(/\s+/gu, ' ')}]` +
+      `[${match[2].replace(/\s+/gu, ' ')}]`;
     const misuse = findDependencyKeywordMisuse(
       `${linePrefix}${normalizedReference}`,
+      referenceDefinitions,
+    );
+    if (misuse !== undefined) {
+      misuses.set(text.slice(0, lineStart).split('\n').length, misuse);
+    }
+  }
+  return misuses;
+}
+function findMultilineShortcutLinkMisuses(text, referenceDefinitions) {
+  const misuses = new Map();
+  for (const match of text.matchAll(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN)) {
+    const matchIndex = match.index ?? -1;
+    if (matchIndex < 0) {
+      continue;
+    }
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(match[1]),
+    );
+    if (target === undefined || !GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target)) {
+      continue;
+    }
+    const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1;
+    const linePrefix = text.slice(lineStart, matchIndex);
+    const normalizedShortcut = `[${match[1].replace(/\s+/gu, ' ')}]`;
+    const misuse = findDependencyKeywordMisuse(
+      `${linePrefix}${normalizedShortcut}`,
       referenceDefinitions,
     );
     if (misuse !== undefined) {
@@ -1600,6 +1634,10 @@ function checkDependencyLineGrammar(rawText, currentRepo, markerPrefix) {
     }),
   );
   const multilineReferenceLinkMisuses = findMultilineReferenceLinkMisuses(
+    nearMissScanText.join(''),
+    referenceDefinitions,
+  );
+  const multilineShortcutLinkMisuses = findMultilineShortcutLinkMisuses(
     nearMissScanText.join(''),
     referenceDefinitions,
   );
@@ -1737,7 +1775,8 @@ function checkDependencyLineGrammar(rawText, currentRepo, markerPrefix) {
           scanLine.slice(scanLine.length - remainingLength);
     const misuse =
       findDependencyKeywordMisuse(scanText, referenceDefinitions) ??
-      multilineReferenceLinkMisuses.get(lineNo);
+      multilineReferenceLinkMisuses.get(lineNo) ??
+      multilineShortcutLinkMisuses.get(lineNo);
     if (misuse !== undefined) {
       issues.push(
         `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,
@@ -2493,22 +2532,24 @@ function unwrapAngleBracketDestination(target) {
 }
 function decodeMarkdownCharacterReferences(value) {
   return value.replace(
-    /&#(?:x([0-9a-f]+)|([0-9]+));/giu,
-    (whole, hexadecimal, decimal) => {
+    /&(?:#(?:x([0-9a-f]+)|([0-9]+))|([a-z][a-z0-9]+));/giu,
+    (whole, hexadecimal, decimal, named) => {
       const rawCodePoint = hexadecimal ?? decimal;
-      if (rawCodePoint === undefined) {
-        return whole;
+      if (rawCodePoint !== undefined) {
+        const codePoint = Number.parseInt(rawCodePoint, hexadecimal ? 16 : 10);
+        if (
+          !Number.isInteger(codePoint) ||
+          codePoint <= 0 ||
+          codePoint > 0x10ffff ||
+          (codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ) {
+          return whole;
+        }
+        return String.fromCodePoint(codePoint);
       }
-      const codePoint = Number.parseInt(rawCodePoint, hexadecimal ? 16 : 10);
-      if (
-        !Number.isInteger(codePoint) ||
-        codePoint <= 0 ||
-        codePoint > 0x10ffff ||
-        (codePoint >= 0xd800 && codePoint <= 0xdfff)
-      ) {
-        return whole;
-      }
-      return String.fromCodePoint(codePoint);
+      const decoded =
+        named === undefined ? false : decodeNamedCharacterReference(named);
+      return decoded === false ? whole : decoded;
     },
   );
 }
@@ -2649,7 +2690,13 @@ function mergeMultilineReferenceDefinitionLabels(text) {
       if (
         /^\[[^\]\n]*$/u.test(current.content) &&
         /^[^\u005B\u005D\n]+\u005D:[ \t]*/u.test(next.content) &&
-        current.containerKinds.join('/') === next.containerKinds.join('/')
+        current.containerKinds.join('/') === next.containerKinds.join('/') &&
+        !(
+          current.containerKinds.includes('list') &&
+          next.containerKinds.includes('list') &&
+          startsReferenceDefinitionListItem(line) &&
+          startsReferenceDefinitionListItem(nextLine)
+        )
       ) {
         const currentPrefix = line.slice(
           0,
@@ -2663,6 +2710,18 @@ function mergeMultilineReferenceDefinitionLabels(text) {
     mergedLines.push(line);
   }
   return mergedLines;
+}
+function startsReferenceDefinitionListItem(line) {
+  let content = line;
+  for (let iteration = 0; iteration < 16; iteration += 1) {
+    content = content.replace(/^ +/u, '');
+    if (content.startsWith('>')) {
+      content = content.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    return /^(?:[*+-]|\d{1,9}[.)])[ \t]+/u.test(content);
+  }
+  return false;
 }
 function isReferenceDefinitionBlockBoundary(content, paragraphOpen) {
   return (
@@ -2841,8 +2900,19 @@ function resolveReferenceStyleLinks(text) {
     return text;
   }
   return text
+    .replace(MULTILINE_REFERENCE_LINK_USAGE_PATTERN, (whole, label, ref) => {
+      if (!label.includes('\n') && !ref.includes('\n')) {
+        return whole;
+      }
+      const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
     .replace(REFERENCE_STYLE_LINK_USAGE_PATTERN, (whole, label, ref) => {
       const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
+    .replace(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN, (whole, label) => {
+      const target = definitions.get(normalizeLinkReferenceLabel(label));
       return target === undefined ? whole : `[${label}](${target})`;
     })
     .replace(MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN, (whole, label) => {
