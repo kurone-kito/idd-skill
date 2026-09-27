@@ -18,10 +18,10 @@ E1 re-fetches all of its state from GitHub on every entry, so, unlike
 B1/B3, there is no local plan or worktree artifact that could go stale
 between checks.
 
-After E3, an empty snapshot proceeds to branch-sync unless Step 2 was
-deferred; deferred state uses the E15/E14 route below and returns to E1.
-A non-empty snapshot proceeds to `idd-review-triage.instructions.md`
-(E4).
+After E3, empty → branch-sync unless Step 2 deferred → E15/E14 then E1.
+Non-empty → `idd-review-triage.instructions.md` (E4); a deferred handoff
+carries E1 Step 1 SHA, `watermark deferred`, and reason, or reruns E1
+before E8 when that evidence is missing.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
@@ -271,13 +271,9 @@ after the note" rule applies here too.
 
 ## E3 — Empty list check
 
-If ReviewItems_snapshot is empty and Step 2 was not deferred → proceed
-to the E-phase branch-sync check in `idd-review-triage.instructions.md`.
-
-If Step 2 was deferred → use the E15/E14 wait route above, then return
-to E1 before branch-sync.
-
-Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
+Empty + Step 2 ready → branch-sync. Empty + deferred → use the E15/E14
+route above, then E1. Non-empty → `idd-review-triage.instructions.md`
+(E4).
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
