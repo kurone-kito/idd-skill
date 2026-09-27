@@ -382,20 +382,27 @@ association) are read-only checks the instruction file specifies
 directly — no command block needed here.
 
 ```sh
+revalidate_head() {
+  <profile-selected-claim-revalidation-command> || return 2
+  LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
+  [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
+    echo "PR HEAD moved; restart from E1" >&2
+    return 2
+  }
+}
+
 # Step 1 — remove the stale request. PENDING entry only (COPILOT_PENDING
 # was "true"). Skip this step entirely for the non-pending entry (#2327 --
 # COPILOT_PENDING was already "false", nothing is pending to remove) and
 # start at Step 3 instead.
-# Re-run the shared claim revalidation gate before each mutation below;
-# stop if it does not confirm the active claim.
-<profile-selected-claim-revalidation-command> || exit 2
+revalidate_head || exit 2
 gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
 # on a GraphQL login-resolution failure, this DELETE is an attempt only:
 # a 422 "Could not resolve to a User node" for the default bot (PR #3471)
 # is not a removal result -- retry gh pr edit --remove-reviewer alone
 # (3 attempts) before any AW4 hold; never conclude from this call or an
 # empty requested_reviewers read (#2167, #3503).
-<profile-selected-claim-revalidation-command> || exit 2
+revalidate_head || exit 2
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
 
@@ -410,9 +417,7 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # non-pending entry (#2327 -- see the instruction file's step 4).
 # Re-run the shared claim gate and compare the live PR head immediately
 # before posting; on either mismatch, abort and restart from E1.
-<profile-selected-claim-revalidation-command> || exit 2
-LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || exit 2
-[ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || exit 2
+revalidate_head || exit 2
 # source repo / vendored-node profile:
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
