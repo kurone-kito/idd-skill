@@ -580,16 +580,19 @@ issue-comment responses do not provide that field, and `updated_at` is
 not an equivalent. This boundary was established by #3174 and protects
 the tamper-detection fix in #2901.
 
-There is one narrow manual exception for a freshly created issue whose
-comment history was empty before creation: fetch the just-posted
-comment and issue with REST, then recompute the issue body's digest from
-the raw JSON response. Parse the complete `gh api` response and read its
-`body` property; do not capture `gh api ... --jq '.body'` in a shell
-variable, because CLI output and shell command substitution can
-normalize trailing newlines and change the digest. This is a
-one-time read-back confidence check for a new issue, not a REST fallback
-for verification of an existing generation and not a change to the
-helper's GraphQL dependency. Pass only when the fetched issue still
+There is one narrow manual exception only for an issue returned by an
+approved `issue-authoring` Stage 1 atomic create whose label, publication
+token, and returned identity were already recorded, and whose comment
+history was empty before creation: fetch the just-posted comment and
+issue with REST, then recompute the issue body's digest from the raw JSON
+response. Do not apply this exception to an arbitrary REST POST or use it
+to bypass the authoring flow. Parse the complete `gh api` response and
+read its `body` property; do not capture `gh api ... --jq '.body'` in a
+shell variable, because CLI output and shell command substitution can
+normalize trailing newlines and change the digest. This is a one-time
+read-back confidence check for that approved new issue, not a REST
+fallback for verification of an existing generation and not a change to
+the helper's GraphQL dependency. Pass only when the fetched issue still
 carries the configured authoring hold label (normally
 `status:authoring`), the fetched comment is the just-posted trusted
 marker (expected author and canonical marker fields), and its recorded
