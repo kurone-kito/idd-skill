@@ -310,7 +310,8 @@ prefix produces no comparison:
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path <idd-skill>/idd-template \
-  --path-prefix .github --path-prefix docs --path-prefix profiles \
+  --path-prefix .github/instructions --path-prefix .github/workflows \
+  --path-prefix docs --path-prefix profiles \
   --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
@@ -332,7 +333,8 @@ bin:
 node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
-  --path-prefix .github --path-prefix docs --path-prefix profiles \
+  --path-prefix .github/instructions --path-prefix .github/workflows \
+  --path-prefix docs --path-prefix profiles \
   --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
