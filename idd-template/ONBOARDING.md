@@ -695,8 +695,9 @@ error), so an agent can gate on the exit code without parsing prose.
   package-pin advisories, and held-schema drift (a held `src/scripts` or
   vendored `scripts` module still names or scans a schema/fixture that
   `--import` would update). The last three are non-blocking. Git targets
-  compare drift with pre-import `HEAD`; an unborn `HEAD` uses the
-  current-target fallback. Use `--target-base-ref <ref>` for another base.
+  must compare drift with an explicit pre-import ref passed through
+  `--target-base-ref`; after the checkpoint commit, `HEAD` is the
+  post-import tree. An unborn `HEAD` uses the current-target fallback.
   Git discovery/configuration failures are errors; non-Git targets use the
   source-vs-current-target fallback. Missing manifests, placeholders, or
   helper-load failures block. Repeat `--hold` to name unchanged manifest
@@ -705,7 +706,7 @@ error), so an agent can gate on the exit code without parsing prose.
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
     --target <target-repo> [--profile <name>] [--hold <target-path>] \
-    [--target-base-ref <ref>]
+    --target-base-ref <pre-import-ref>
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
