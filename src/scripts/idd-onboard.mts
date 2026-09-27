@@ -1311,6 +1311,8 @@ jobs:
           PR_NUMBER: \${{ github.event.pull_request.number }}
           LABEL_NAME: \${{ github.event.label.name }}
         run: |
+          export GH_HOST="\${GITHUB_SERVER_URL#https://}"
+          export GH_HOST="\${GH_HOST#http://}"
           if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ]; then
             gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL_NAME"
           else
