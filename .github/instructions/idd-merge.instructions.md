@@ -523,7 +523,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Off-default `{development-branch}`: `git switch <default-branch>`
    once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, not one being removed.
-   Removal discards ignored files, including in submodules. Scope
+   Removal discards ignored submodule files. Scope
    to `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
@@ -539,10 +539,10 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --all --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
-   Discard only command output; preserve all else.
+   Discard only reproducible configured-command output; preserve all else.
    Copy secrets (`.env`) outside `<path>` — never commit or push them.
    Preserve work in a backup ref or external path. Before removal, `cd`
-   to primary; stay. Revalidate while present:
+   to primary; stay and revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
