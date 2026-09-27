@@ -225,16 +225,16 @@ below instead.
      --answers <answers-file> --target <target-repo>
    ```
 
-   **Check the transcript's `bootstrap-execution-mode` answer before
-   continuing.** If it is `issue-mediated`, stop here — switch to
+   **Check `bootstrap-execution-mode`.** If `issue-mediated`, stop and use
    [Onboarding Reference — Issue-Mediated
-   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
-   running steps 3-5 below, which write the template with a direct,
-   unreviewed commit (the `direct-import` default only).
+   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
+   3-5; they write the template directly without review (`direct-import`
+   default).
 
-   Before Step 3, require a clean target:
+   Require a clean target before Step 3:
 
    ```sh
+   git -C <target-repo> rev-parse --show-toplevel >/dev/null 2>&1 &&
    test -z "$(git -C <target-repo> status --short --untracked-files=all)" || exit 1
    ```
 
@@ -246,7 +246,7 @@ below instead.
      --source <idd-skill-clone> --target <target-repo>
    ```
 
-   **Checkpoint.** Commit the imported tree before `--substitute`:
+   **Checkpoint.** Commit before `--substitute`:
 
    ```sh
    git -C <target-repo> status --short
@@ -254,8 +254,8 @@ below instead.
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   `--target-ref` must name it. Keep it reachable through a ref until
-   verification and reruns finish; do not squash it first.
+   `--target-ref` must name it; keep it reachable through a ref until
+   verification and reruns finish. Do not squash it.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
