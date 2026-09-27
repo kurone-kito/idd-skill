@@ -347,6 +347,14 @@ test('submoduleStatusEntries keeps a parenthesized uninitialized submodule path 
   ]);
 });
 
+test('submoduleStatusEntries accepts SHA-256 object ids (Copilot review finding)', () => {
+  const sha256 = 'a'.repeat(64);
+  assert.deepEqual(
+    submoduleStatusEntries(` ${sha256} modules/sha256 (heads/main)`),
+    [{ status: ' ', path: 'modules/sha256' }],
+  );
+});
+
 test('detectInProgressOperation preserves the BISECT_START ref tip, not the mid-bisect HEAD (Codex review finding)', () => {
   const runGit = (argv: string[]): LocalGitCommandResult => {
     if (argv[0] === 'rev-parse' && argv.includes('MERGE_HEAD')) {
@@ -634,6 +642,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   assert.deepEqual(callOrder, [
     'confirm-step1',
     'acquire',
+    'confirm-recheck',
     'confirm-recheck',
     'remove',
     'release',
@@ -1009,6 +1018,66 @@ test('refuses a dangling preserve-dir symlink into the target worktree', () => {
   );
   assert.equal(verdict.step1.outcome, 'preserve-dir-inside-target');
   assert.equal(verdict.mutated, false);
+});
+
+test('refuses an ignored-file destination whose child symlink points into the target', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    realpathOrNull: (p) => (p === '/repo/linked' ? p : null),
+    readlinkOrNull: (p) =>
+      p === '/tmp/preserve/ignored' ? '/repo/linked/.redirect' : null,
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! secret.env\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: '/tmp/preserve',
+    }),
+    deps,
+  );
+  assert.equal(verdict.plan.ignoredFilesScanFailed, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+});
+
+test('uses collision-safe destinations for uninitialized submodule paths', () => {
+  const copiedTo: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        const sha = '0'.repeat(40);
+        return {
+          ok: true,
+          status: 0,
+          stdout: `-${sha} a/b\n-${sha} a_b\n`,
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: (_from, to) => copiedTo.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(copiedTo.length, 2);
+  assert.notEqual(copiedTo[0], copiedTo[1]);
 });
 
 test('refuses a fresh routing state of `-local-worktree-unreadable` outside the prunable shortcut (Copilot review finding)', () => {
@@ -1533,6 +1602,82 @@ test('primary-worktree release stops when the recovered claim lock disappears at
   assert.equal(unlinkAttempted, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /lock disappeared before the final check/);
+});
+
+test('primary legacy release refuses a non-legacy lock at the final check', () => {
+  let checkLockCalls = 0;
+  let unlinkAttempted = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    checkLock: () => {
+      checkLockCalls += 1;
+      return checkLockCalls < 3
+        ? {
+            path: '/repo/primary/.git/idd-claim.lock',
+            present: false,
+          }
+        : {
+            path: '/repo/primary/.git/idd-claim.lock',
+            present: true,
+            holder: {
+              agentId: 'new-agent',
+              claimId: 'new-claim',
+              acquiredAt: '2026-09-27T00:01:00Z',
+            },
+          };
+    },
+    confirmBlock: (() => {
+      let call = 0;
+      return () => {
+        call += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'released-claim-local-worktree-occupied',
+            active_claim: null,
+            evidence: {
+              released_claim: { claim_id: null, branch: 'issue/1-task' },
+              local_worktree: {
+                status: call <= 2 ? 'occupied' : 'absent',
+                paths: call <= 2 ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        unlinkAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(checkLockCalls, 3);
+  assert.equal(unlinkAttempted, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /different claim-id/);
 });
 
 test('hard stash-push failure (not the verified unmerged-path case) blocks removal (Copilot review finding)', () => {

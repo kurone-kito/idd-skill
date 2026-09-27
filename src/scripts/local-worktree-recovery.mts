@@ -226,6 +226,9 @@ export interface StashPlanEntry {
   stashed: boolean;
   verifiedCount: number | null;
   unmergedFallbackCopiedTo: string | null;
+  /** Every individual destination attempted by the unmerged-path fallback.
+   * The directory itself is not proof that each dirty path survived. */
+  unmergedFallbackCopiedFiles: string[];
   /** True only once every dirty path in this scope (not just the
    * `--diff-filter=U` conflicted subset) was confirmed copied out, when the
    * `stash push` fallback ran. `null` when the fallback never ran. */
@@ -257,6 +260,11 @@ export interface UninitializedSubmoduleEntry {
 }
 
 export interface IgnoredFileEntry {
+  path: string;
+  copiedTo: string | null;
+}
+
+export interface SubmoduleAdminCopyEntry {
   path: string;
   copiedTo: string | null;
 }
@@ -305,6 +313,7 @@ export interface LocalWorktreeRecoveryVerdict {
     ignoredFilesCopied: IgnoredFileEntry[];
     ignoredFilesScanFailed: boolean;
     submoduleListFailed: boolean;
+    submoduleAdminCopies: SubmoduleAdminCopyEntry[];
     removal: RemovalPlan | null;
   };
   preserveDir: string | null;
@@ -364,6 +373,20 @@ export function isAcceptedBlockReason(reason: string): boolean {
   return (
     reason.startsWith('stale-claim-') || reason.startsWith('released-claim-')
   );
+}
+
+/** Match a worktree-local lock to the claim recovered by routing. Legacy
+ * releases may have no lock or an explicitly legacy/null holder, but a
+ * non-null holder must never be treated as legacy. */
+function lockMatchesRecoveredClaim(
+  lock: CheckLockOutcome,
+  recoveredClaimId: string | null,
+): boolean {
+  if (lock.malformed) return false;
+  if (recoveredClaimId === null) {
+    return !lock.present || lock.holder?.claimId === null;
+  }
+  return lock.present && lock.holder?.claimId === recoveredClaimId;
 }
 
 /** Extract the recovered claim-id (null for a legacy pre-claim-id release)
@@ -716,6 +739,28 @@ export function isPathContainedIn(child: string, parent: string): boolean {
   );
 }
 
+/** Return false when a copy destination (including a not-yet-existing suffix)
+ * resolves into the worktree that is about to be removed. Checking the
+ * effective path catches a symlinked child directory under an otherwise safe
+ * preserve root. Unknown resolution is fail-closed for an actual copy. */
+function isCopyDestinationOutsideTarget(
+  destination: string,
+  targetPath: string,
+  deps: Pick<LocalWorktreeRecoveryDeps, 'realpathOrNull' | 'readlinkOrNull'>,
+): boolean {
+  const targetReal = deps.realpathOrNull(targetPath);
+  const destinationReal = resolveEffectiveRealpath(
+    destination,
+    deps.realpathOrNull,
+    deps.readlinkOrNull,
+  );
+  return (
+    targetReal !== null &&
+    destinationReal !== null &&
+    !isPathContainedIn(destinationReal, targetReal)
+  );
+}
+
 /**
  * Resolve the effective realpath of `path`, even when it (or some suffix of
  * it) does not exist yet -- by walking up to the nearest ancestor
@@ -805,7 +850,7 @@ export function countTaggedStashEntries(
 // stripping it unconditionally (Codex review finding) mis-parses a valid
 // uninitialized path that itself ends in a parenthesized component, e.g.
 // `lib (foo)`, down to `lib`.
-const SUBMODULE_STATUS_LINE_PATTERN = /^([ +\-U])([0-9a-f]{4,40}) (.+)$/;
+const SUBMODULE_STATUS_LINE_PATTERN = /^([ +\-U])([0-9a-f]{4,64}) (.+)$/;
 const SUBMODULE_DESCRIBE_SUFFIX_PATTERN = / \([^()]*\)$/;
 
 export function submoduleStatusEntries(
@@ -836,9 +881,15 @@ function planAndMaybeStashScope(
   scopeLabel: string,
   tag: string,
   apply: boolean,
+  targetPath: string,
   deps: Pick<
     LocalWorktreeRecoveryDeps,
-    'runGit' | 'copyPath' | 'ensurePreserveDir' | 'pathExists'
+    | 'runGit'
+    | 'copyPath'
+    | 'ensurePreserveDir'
+    | 'pathExists'
+    | 'realpathOrNull'
+    | 'readlinkOrNull'
   >,
   excludedDirtyPaths: readonly string[] = [],
 ): StashPlanEntry {
@@ -869,6 +920,7 @@ function planAndMaybeStashScope(
     stashed: false,
     verifiedCount: null,
     unmergedFallbackCopiedTo: null,
+    unmergedFallbackCopiedFiles: [],
     unmergedFallbackAllPreserved: null,
     hardStashFailure: false,
   };
@@ -912,6 +964,14 @@ function planAndMaybeStashScope(
       for (const relPath of dirtyPaths) {
         const from = join(scopePath, relPath);
         const to = join(destination, relPath);
+        entry.unmergedFallbackCopiedFiles.push(to);
+        if (
+          !isCopyDestinationOutsideTarget(to, targetPath, deps) ||
+          !deps.pathExists(from)
+        ) {
+          allLanded = false;
+          continue;
+        }
         deps.copyPath(from, to);
         if (!deps.pathExists(to)) {
           allLanded = false;
@@ -1024,9 +1084,15 @@ function scanAndMaybeCopyIgnoredFiles(
   scopePath: string,
   scopeLabel: string,
   apply: boolean,
+  targetPath: string,
   deps: Pick<
     LocalWorktreeRecoveryDeps,
-    'runGit' | 'copyPath' | 'ensurePreserveDir'
+    | 'runGit'
+    | 'copyPath'
+    | 'ensurePreserveDir'
+    | 'pathExists'
+    | 'realpathOrNull'
+    | 'readlinkOrNull'
   >,
 ): { copied: IgnoredFileEntry[]; scanFailed: boolean } {
   const status = deps.runGit(
@@ -1037,6 +1103,7 @@ function scanAndMaybeCopyIgnoredFiles(
     return { copied: [], scanFailed: true };
   }
   const copied: IgnoredFileEntry[] = [];
+  let scanFailed = false;
   for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
     if (!isSafeRelativePath(ignoredPath)) {
       continue;
@@ -1051,11 +1118,22 @@ function scanAndMaybeCopyIgnoredFiles(
         )
       : null;
     if (apply && destination) {
+      if (
+        !isCopyDestinationOutsideTarget(destination, targetPath, deps) ||
+        !deps.pathExists(join(scopePath, ignoredPath))
+      ) {
+        // If the source disappeared or a symlinked destination redirects
+        // into the target, do not remove the worktree without a verified
+        // artifact.
+        scanFailed = true;
+        copied.push({ path: ignoredPath, copiedTo: null });
+        continue;
+      }
       deps.copyPath(join(scopePath, ignoredPath), destination);
     }
     copied.push({ path: ignoredPath, copiedTo: destination });
   }
-  return { copied, scanFailed: false };
+  return { copied, scanFailed };
 }
 
 function planAndMaybePreserve(
@@ -1065,7 +1143,12 @@ function planAndMaybePreserve(
   apply: boolean,
   deps: Pick<
     LocalWorktreeRecoveryDeps,
-    'runGit' | 'pathExists' | 'copyPath' | 'ensurePreserveDir'
+    | 'runGit'
+    | 'pathExists'
+    | 'copyPath'
+    | 'ensurePreserveDir'
+    | 'realpathOrNull'
+    | 'readlinkOrNull'
   >,
 ): {
   inProgressOperation: InProgressOperation | null;
@@ -1074,6 +1157,8 @@ function planAndMaybePreserve(
   backupRefs: BackupRefPlanEntry[];
   ignoredFilesCopied: IgnoredFileEntry[];
   ignoredFilesScanFailed: boolean;
+  submoduleAdminCopies: SubmoduleAdminCopyEntry[];
+  submoduleAdminCopyFailed: boolean;
   /** True when `git submodule status --recursive` itself failed --
    * distinct from "no submodules": a failure here must never silently
    * degrade to an empty submodule list, or a dirty/uninitialized
@@ -1107,9 +1192,10 @@ function planAndMaybePreserve(
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
   const stashes: StashPlanEntry[] = [
-    planAndMaybeStashScope(path, '.', tag, apply, deps, submodulePaths),
+    planAndMaybeStashScope(path, '.', tag, apply, path, deps, submodulePaths),
   ];
   const uninitializedSubmodules: UninitializedSubmoduleEntry[] = [];
+  const submoduleOperations = new Map<string, InProgressOperation | null>();
   for (const submodule of submodules) {
     if (!submodule.path) continue;
     if (submodule.status === '-') {
@@ -1124,9 +1210,17 @@ function planAndMaybePreserve(
           const preserveDir = deps.ensurePreserveDir();
           destination = join(
             preserveDir,
-            `uninitialized-${submodule.path.replace(/[\\/]+/g, '_')}`,
+            `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
           );
-          deps.copyPath(submodulePath, destination);
+          if (isCopyDestinationOutsideTarget(destination, path, deps)) {
+            try {
+              deps.copyPath(submodulePath, destination);
+            } catch {
+              destination = null;
+            }
+          } else {
+            destination = null;
+          }
         }
         uninitializedSubmodules.push({
           path: submodule.path,
@@ -1135,12 +1229,21 @@ function planAndMaybePreserve(
       }
       continue;
     }
+    const submodulePath = join(path, submodule.path);
+    const submoduleOperation = detectInProgressOperation(
+      submodulePath,
+      deps.runGit,
+      deps.pathExists,
+      readFile,
+    );
+    submoduleOperations.set(submodule.path, submoduleOperation);
     stashes.push(
       planAndMaybeStashScope(
-        join(path, submodule.path),
+        submodulePath,
         submodule.path,
         tag,
         apply,
+        path,
         deps,
       ),
     );
@@ -1163,7 +1266,7 @@ function planAndMaybePreserve(
         join(path, submodule.path),
         submodule.path,
         branch,
-        null,
+        submoduleOperations.get(submodule.path) ?? null,
         apply,
         deps.runGit,
       ),
@@ -1172,7 +1275,13 @@ function planAndMaybePreserve(
 
   let ignoredFilesCopied: IgnoredFileEntry[] = [];
   let ignoredFilesScanFailed = false;
-  const topLevelIgnored = scanAndMaybeCopyIgnoredFiles(path, '.', apply, deps);
+  const topLevelIgnored = scanAndMaybeCopyIgnoredFiles(
+    path,
+    '.',
+    apply,
+    path,
+    deps,
+  );
   ignoredFilesCopied = ignoredFilesCopied.concat(topLevelIgnored.copied);
   ignoredFilesScanFailed = ignoredFilesScanFailed || topLevelIgnored.scanFailed;
   for (const submodule of submodules) {
@@ -1181,11 +1290,56 @@ function planAndMaybePreserve(
       join(path, submodule.path),
       submodule.path,
       apply,
+      path,
       deps,
     );
     ignoredFilesCopied = ignoredFilesCopied.concat(submoduleIgnored.copied);
     ignoredFilesScanFailed =
       ignoredFilesScanFailed || submoduleIgnored.scanFailed;
+  }
+
+  const submoduleAdminCopies: SubmoduleAdminCopyEntry[] = [];
+  let submoduleAdminCopyFailed = false;
+  if (apply) {
+    for (const submodule of submodules) {
+      if (!submodule.path || submodule.status === '-') continue;
+      const stash = stashes.find((entry) => entry.scope === submodule.path);
+      const ref = backupRefs.find((entry) => entry.scope === submodule.path);
+      const operation = submoduleOperations.get(submodule.path);
+      if (!stash?.stashed && !ref?.written && operation === null) continue;
+      const submodulePath = join(path, submodule.path);
+      const gitDir = deps.runGit(
+        ['rev-parse', '--absolute-git-dir'],
+        submodulePath,
+      );
+      if (!gitDir.ok || !gitDir.stdout.trim()) {
+        submoduleAdminCopyFailed = true;
+        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
+        continue;
+      }
+      const preserveDir = deps.ensurePreserveDir();
+      const destination = join(
+        preserveDir,
+        'submodule-gitdir',
+        Buffer.from(submodule.path).toString('base64url'),
+      );
+      if (!isCopyDestinationOutsideTarget(destination, path, deps)) {
+        submoduleAdminCopyFailed = true;
+        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
+        continue;
+      }
+      try {
+        deps.copyPath(gitDir.stdout.trim(), destination);
+      } catch {
+        submoduleAdminCopyFailed = true;
+        submoduleAdminCopies.push({ path: submodule.path, copiedTo: null });
+        continue;
+      }
+      submoduleAdminCopies.push({
+        path: submodule.path,
+        copiedTo: destination,
+      });
+    }
   }
 
   return {
@@ -1195,6 +1349,8 @@ function planAndMaybePreserve(
     backupRefs,
     ignoredFilesCopied,
     ignoredFilesScanFailed,
+    submoduleAdminCopies,
+    submoduleAdminCopyFailed,
     submoduleListFailed: !submoduleStatus.ok,
   };
 }
@@ -1209,6 +1365,8 @@ function preservationVerified(
     ignoredFilesCopied: IgnoredFileEntry[];
     ignoredFilesScanFailed: boolean;
     submoduleListFailed: boolean;
+    submoduleAdminCopies: SubmoduleAdminCopyEntry[];
+    submoduleAdminCopyFailed: boolean;
   },
   pathExists: (path: string) => boolean,
 ): boolean {
@@ -1229,6 +1387,13 @@ function preservationVerified(
       // Copilot review: a non-null destination alone is not proof every
       // dirty path actually landed there.
       if (stash.unmergedFallbackAllPreserved !== true) return false;
+      if (
+        stash.unmergedFallbackCopiedFiles.some(
+          (destination) => !pathExists(destination),
+        )
+      ) {
+        return false;
+      }
       continue;
     }
     if (!stash.stashed) return false;
@@ -1261,6 +1426,10 @@ function preservationVerified(
     if (ignored.copiedTo === null) return false;
     if (!pathExists(ignored.copiedTo)) return false;
   }
+  if (preserve.submoduleAdminCopyFailed) return false;
+  for (const admin of preserve.submoduleAdminCopies) {
+    if (admin.copiedTo === null || !pathExists(admin.copiedTo)) return false;
+  }
   return true;
 }
 
@@ -1280,6 +1449,7 @@ function reverifyPreservationArtifactsFresh(
     backupRefs: BackupRefPlanEntry[];
     uninitializedSubmodules: UninitializedSubmoduleEntry[];
     ignoredFilesCopied: IgnoredFileEntry[];
+    submoduleAdminCopies: SubmoduleAdminCopyEntry[];
   },
   targetPath: string,
   runGit: LocalWorktreeRecoveryDeps['runGit'],
@@ -1316,6 +1486,13 @@ function reverifyPreservationArtifactsFresh(
     ) {
       return false;
     }
+    if (
+      stash.unmergedFallbackCopiedFiles.some(
+        (destination) => !pathExists(destination),
+      )
+    ) {
+      return false;
+    }
   }
   for (const ref of preserve.backupRefs) {
     if (!ref.written) continue;
@@ -1334,6 +1511,11 @@ function reverifyPreservationArtifactsFresh(
   }
   for (const ignored of preserve.ignoredFilesCopied) {
     if (ignored.copiedTo !== null && !pathExists(ignored.copiedTo)) {
+      return false;
+    }
+  }
+  for (const admin of preserve.submoduleAdminCopies) {
+    if (admin.copiedTo !== null && !pathExists(admin.copiedTo)) {
       return false;
     }
   }
@@ -1391,6 +1573,7 @@ export function runLocalWorktreeRecovery(
       ignoredFilesCopied: [],
       ignoredFilesScanFailed: false,
       submoduleListFailed: false,
+      submoduleAdminCopies: [],
       removal: null,
     },
     preserveDir: null,
@@ -1543,10 +1726,7 @@ export function runLocalWorktreeRecovery(
       verdict.result = verdict.step1.reason;
       return verdict;
     }
-    if (
-      (recoveredClaimId !== null && !lock.present) ||
-      (lock.present && lock.holder?.claimId !== recoveredClaimId)
-    ) {
+    if (!lockMatchesRecoveredClaim(lock, recoveredClaimId)) {
       verdict.step1.outcome = 'lock-mismatch';
       verdict.step1.reason = `lock holder claim-id (${lock.holder?.claimId ?? 'unknown'}) does not match the recovered claim-id (${recoveredClaimId ?? 'legacy'})`;
       verdict.result = verdict.step1.reason;
@@ -1583,6 +1763,7 @@ export function runLocalWorktreeRecovery(
       verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
       verdict.plan.ignoredFilesScanFailed = preserve.ignoredFilesScanFailed;
       verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
+      verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
     }
     verdict.plan.removal = {
       kind: verdict.primaryOrLinked ?? 'linked',
@@ -1626,10 +1807,16 @@ export function runLocalWorktreeRecovery(
     verdict.plan.ignoredFilesCopied = preserve.ignoredFilesCopied;
     verdict.plan.ignoredFilesScanFailed = preserve.ignoredFilesScanFailed;
     verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
+    verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
     verdict.mutated =
       preserve.stashes.some((s) => s.stashed) ||
       preserve.backupRefs.some((r) => r.written) ||
-      preserve.uninitializedSubmodules.some((s) => s.copiedTo !== null);
+      preserve.uninitializedSubmodules.some((s) => s.copiedTo !== null) ||
+      preserve.ignoredFilesCopied.some((entry) => entry.copiedTo !== null) ||
+      preserve.stashes.some(
+        (stash) => stash.unmergedFallbackCopiedTo !== null,
+      ) ||
+      preserve.submoduleAdminCopies.some((entry) => entry.copiedTo !== null);
     if (!preservationVerified(preserve, deps.pathExists)) {
       verdict.result =
         'step 3 preservation could not be fully verified; stopping before removal';
@@ -1745,12 +1932,10 @@ export function runLocalWorktreeRecovery(
       // always fails; an active/recovered claim must still have its matching
       // lock, while a legacy release may have no lock or a legacy null-holder
       // lock; a present lock otherwise passes only when its holder matches.
-      const lockStillMatches =
-        !lockRecheck.malformed &&
-        (recoveredClaimId === null
-          ? !lockRecheck.present || lockRecheck.holder?.claimId === null
-          : lockRecheck.present &&
-            lockRecheck.holder?.claimId === recoveredClaimId);
+      const lockStillMatches = lockMatchesRecoveredClaim(
+        lockRecheck,
+        recoveredClaimId,
+      );
       if (!lockStillMatches) {
         verdict.plan.removal = {
           kind: verdict.primaryOrLinked ?? 'linked',
@@ -1774,6 +1959,7 @@ export function runLocalWorktreeRecovery(
             backupRefs: verdict.plan.backupRefs,
             uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
             ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
           },
           targetPath,
           deps.runGit,
@@ -1876,10 +2062,7 @@ export function runLocalWorktreeRecovery(
         verdict.result = 'primary worktree released';
         return verdict;
       }
-      if (
-        recoveredClaimId !== null &&
-        finalLockCheck.holder?.claimId !== recoveredClaimId
-      ) {
+      if (!lockMatchesRecoveredClaim(finalLockCheck, recoveredClaimId)) {
         verdict.plan.removal = {
           kind: 'primary',
           developmentBranch,
@@ -1937,6 +2120,54 @@ export function runLocalWorktreeRecovery(
       verdict.mutated = true;
       verdict.result = 'primary worktree released';
       return verdict;
+    }
+
+    // Linked worktrees have no checkout transition that naturally forces a
+    // final routing observation. Re-run routing and the local claim lock
+    // immediately before `git worktree remove`, after every preservation
+    // check, so a replacement claim cannot be removed by this recovery.
+    const finalLinkedConfirm = deps.confirmBlock(cwd);
+    const finalLinkedRouting = finalLinkedConfirm.routing;
+    const finalLinkedRecovered = finalLinkedRouting
+      ? extractRecoveredClaim(finalLinkedRouting)
+      : null;
+    const finalLinkedStillMatches =
+      finalLinkedConfirm.ok &&
+      finalLinkedRouting !== null &&
+      finalLinkedRouting.state === 'local_worktree_occupied' &&
+      isAcceptedBlockReason(finalLinkedRouting.reason) &&
+      !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable') &&
+      (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).includes(
+        targetPath,
+      ) &&
+      finalLinkedRecovered?.claimId === recoveredClaimId &&
+      finalLinkedRecovered.branch === recoveredBranch;
+    if (!finalLinkedStillMatches) {
+      verdict.plan.removal = {
+        kind: 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail:
+          'the final linked-worktree routing/claim identity no longer matches; stopping before removal',
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
+    if (!shortcut.eligible) {
+      const finalLinkedLock = deps.checkLock(targetPath);
+      if (!lockMatchesRecoveredClaim(finalLinkedLock, recoveredClaimId)) {
+        verdict.plan.removal = {
+          kind: 'linked',
+          developmentBranch: null,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'the final linked-worktree lock no longer matches the recovered claim-id; stopping before removal',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
     }
 
     let remove = deps.runGit(
@@ -2030,16 +2261,39 @@ function copyPathProduction(from: string, to: string): void {
 
 let preserveDirMemo: string | null = null;
 
-function ensurePreserveDirProduction(explicit: string): () => string {
+function ensurePreserveDirProduction(
+  explicit: string,
+  targetPath: string,
+): () => string {
   return () => {
     if (preserveDirMemo) {
       return preserveDirMemo;
     }
     if (explicit) {
-      preserveDirMemo = explicit;
+      preserveDirMemo = resolve(process.cwd(), explicit);
       return preserveDirMemo;
     }
-    preserveDirMemo = mkdtempSync(join(tmpdir(), 'idd-lwr-preserve-'));
+    // Validate the base before mkdtempSync creates anything. Otherwise a
+    // TMPDIR nested under the target would create the very backup directory
+    // that the subsequent worktree removal is meant to preserve.
+    const targetReal = realpathOrNull(targetPath);
+    const tempBase = resolve(tmpdir());
+    const tempBaseEffectiveReal = resolveEffectiveRealpath(
+      tempBase,
+      realpathOrNull,
+      readlinkOrNull,
+    );
+    if (
+      isPathContainedIn(tempBase, targetPath) ||
+      (targetReal !== null &&
+        tempBaseEffectiveReal !== null &&
+        isPathContainedIn(tempBaseEffectiveReal, targetReal))
+    ) {
+      throw new Error(
+        `local-worktree-recovery: generated preserve directory base (${tempBase}) must be outside the target worktree (${targetPath})`,
+      );
+    }
+    preserveDirMemo = mkdtempSync(join(tempBase, 'idd-lwr-preserve-'));
     return preserveDirMemo;
   };
 }
@@ -2133,7 +2387,10 @@ function createProductionDeps(
     releaseCloneLock: (handle: CloneLockHandle) => releaseCloneLock(handle),
     resolveDevelopmentBranch: () => resolveDevelopmentBranchProduction(args),
     copyPath: copyPathProduction,
-    ensurePreserveDir: ensurePreserveDirProduction(args.preserveDir),
+    ensurePreserveDir: ensurePreserveDirProduction(
+      args.preserveDir,
+      resolve(process.cwd(), args.worktree),
+    ),
     now: () => args.now || new Date().toISOString(),
   };
 }
