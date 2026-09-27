@@ -460,6 +460,10 @@ function canonicalizeExistingDir(path: string): string {
 function resolveAcquireWorktreeFacts(worktree: string): {
   path: string;
   isPrimary: boolean;
+  adminDir: string;
+  commonDir: string;
+  adminIdentity: DirectoryIdentity;
+  commonIdentity: DirectoryIdentity;
 } {
   // gitRevParseRaw (not gitRevParse, and not a fresh execFileSync call):
   // reuses the #3434 stderr-non-leak `stdio` setting and
@@ -495,7 +499,45 @@ function resolveAcquireWorktreeFacts(worktree: string): {
   return {
     path: join(adminDirRaw, CLAIM_LOCK_FILE_NAME),
     isPrimary: commonDir === adminDir,
+    adminDir,
+    commonDir,
+    adminIdentity: readDirectoryIdentity(adminDir),
+    commonIdentity: readDirectoryIdentity(commonDir),
   };
+}
+
+/**
+ * Capture the filesystem identity of a git-admin directory before an acquire
+ * waits for the clone mutex. A worktree can disappear and be recreated at
+ * the same path while the mutex is held by recovery; comparing only the
+ * resolved path would then let this stale caller install its old claim lock
+ * in the replacement worktree. Device/inode identity distinguishes that
+ * replacement without treating ordinary child-file changes as a mismatch.
+ */
+interface DirectoryIdentity {
+  dev: number;
+  ino: number;
+}
+
+function readDirectoryIdentity(path: string): DirectoryIdentity {
+  try {
+    const stat = statSync(path);
+    if (!stat.isDirectory()) {
+      throw new Error('not a directory');
+    }
+    return { dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    throw new Error(
+      `could not establish git-admin directory identity for ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function sameDirectoryIdentity(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 /**
@@ -817,10 +859,11 @@ export function acquireClaimLock(
   claimId: string,
   takeover: boolean,
 ): AcquireLockOutcome {
-  const facts = resolveAcquireWorktreeFacts(worktree);
-  const { path } = facts;
-  const adminDir = resolve(path, '..');
-  const refused: AcquireLockOutcome | undefined = facts.isPrimary
+  const initialFacts = resolveAcquireWorktreeFacts(worktree);
+  let facts = initialFacts;
+  let { path } = facts;
+  let adminDir = resolve(path, '..');
+  let refused: AcquireLockOutcome | undefined = facts.isPrimary
     ? {
         mode: 'primary-worktree-refused',
         path,
@@ -837,6 +880,41 @@ export function acquireClaimLock(
     `claim-lock:${agentId}`,
   );
   try {
+    // Recovery may have removed and recreated the requested worktree while
+    // this call waited. Re-resolve both git-admin directories while the
+    // clone mutex is held, and fail closed if either their path or
+    // filesystem identity changed. In particular, a reused worktree-admin
+    // name must not make a stale acquisition look like the original target.
+    const postWaitFacts = resolveAcquireWorktreeFacts(worktree);
+    if (
+      postWaitFacts.path !== initialFacts.path ||
+      postWaitFacts.isPrimary !== initialFacts.isPrimary ||
+      postWaitFacts.adminDir !== initialFacts.adminDir ||
+      postWaitFacts.commonDir !== initialFacts.commonDir ||
+      !sameDirectoryIdentity(
+        postWaitFacts.adminIdentity,
+        initialFacts.adminIdentity,
+      ) ||
+      !sameDirectoryIdentity(
+        postWaitFacts.commonIdentity,
+        initialFacts.commonIdentity,
+      )
+    ) {
+      throw new Error(
+        `worktree git-admin identity changed while waiting for clone lock: ${worktree}`,
+      );
+    }
+    facts = postWaitFacts;
+    path = facts.path;
+    adminDir = resolve(path, '..');
+    refused = facts.isPrimary
+      ? {
+          mode: 'primary-worktree-refused',
+          path,
+          message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
+        }
+      : undefined;
+
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
       const read = readLock(path);
 

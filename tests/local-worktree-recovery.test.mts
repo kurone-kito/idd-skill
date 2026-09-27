@@ -1106,6 +1106,49 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('prunable shortcut stops when private admin-directory ownership cannot be established', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: null,
+      error: 'no readable gitdir pointer matched the target',
+    }),
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /could not locate the prunable worktree/);
+});
+
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
@@ -2110,7 +2153,10 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
 test('primary-worktree release re-checks the lock AFTER checkout, not only the pre-checkout recheck (Copilot review finding)', () => {
   // confirmBlock call sequence: 1 = step 1 (occupied, path included);
   // 2 = step 4's pre-checkout recheck (still occupied, path included);
-  // 3 = the post-checkout confirmAbsent check (now absent). checkLock
+  // 3 = the post-checkout confirmAbsent check (now absent). The production
+  // routing contract keeps the claim stale and omits the occupied state when
+  // the branch probe is absent, but now retains an explicit absent probe in
+  // evidence. checkLock
   // call sequence: 1 = pre-checkout recheck (no lock, so the shared
   // lock-match gate passes); 2 = the FINAL, post-checkout check, which
   // must see a lock created DURING the checkout window (simulating
@@ -2156,8 +2202,11 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
       return {
         ok: true,
         routing: {
-          state: 'local_worktree_occupied',
-          reason: 'stale-claim-local-worktree-occupied',
+          state: confirmCalls <= 2 ? 'local_worktree_occupied' : 'stale',
+          reason:
+            confirmCalls <= 2
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
           active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
           evidence: {
             released_claim: { claim_id: null, branch: 'issue/1-task' },

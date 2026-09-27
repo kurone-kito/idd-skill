@@ -2066,9 +2066,15 @@ export function runLocalWorktreeRecovery(args, deps) {
         return verdict;
       }
       const confirmAbsent = deps.confirmBlock(cwd);
+      const absentRecovered = confirmAbsent.routing
+        ? extractRecoveredClaim(confirmAbsent.routing)
+        : null;
       const nowAbsent =
         confirmAbsent.ok &&
-        confirmAbsent.routing?.evidence?.local_worktree?.status === 'absent';
+        confirmAbsent.routing !== null &&
+        absentRecovered?.claimId === recoveredClaimId &&
+        absentRecovered.branch === recoveredBranch &&
+        confirmAbsent.routing.evidence?.local_worktree?.status === 'absent';
       if (!nowAbsent) {
         verdict.plan.removal = {
           kind: 'primary',
@@ -2076,7 +2082,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           wouldRun: true,
           ran: false,
           detail:
-            'checked out {development-branch}, but resume-claim-routing does not yet report the branch absent; stopping before removing the lock file',
+            'checked out {development-branch}, but resume-claim-routing does not yet report the same recovered claim/branch absent; stopping before removing the lock file',
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
@@ -2809,14 +2815,16 @@ function findWorktreeAdminDirProduction(repoPath, worktreePath) {
         return { path: adminPath, error: null };
       }
     } catch {
-      // An unrelated stale or partially-pruned admin entry must not block a
-      // different prunable target. Only a readable gitdir pointer that
-      // matches targetGitDir establishes that this entry belongs to the
-      // target; an unreadable entry therefore cannot safely be attributed to
-      // it and is skipped.
+      // Keep scanning unrelated entries, but do not treat an unreadable
+      // entry as proof that the target has no recoverable admin directory.
+      // If no readable pointer matches below, the caller fails closed rather
+      // than removing the prunable worktree without a backup.
     }
   }
-  return { path: null, error: null };
+  return {
+    path: null,
+    error: `could not establish ownership of the prunable worktree private admin directory for ${worktreePath}: no readable gitdir pointer matched ${targetGitDir}`,
+  };
 }
 function errorMessageForProduction(error) {
   return error instanceof Error ? error.message : String(error);

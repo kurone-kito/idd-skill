@@ -443,6 +443,38 @@ test('stale takeover is blocked by a live local worktree', () => {
   assert.equal(gate.reason, 'stale-claim-local-worktree-occupied');
 });
 
+test('stale claim preserves an explicit absent local-worktree probe', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'absent',
+        paths: [],
+        reason: null,
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'stale');
+  assert.equal(result.action, 'takeover');
+  assert.equal(result.reason, 'active-claim-stale');
+  assert.deepEqual(result.evidence.local_worktree, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
+});
+
 test('fresh claim gate withholds winningClaimId for a stale claim with an unreadable worktree (#3154)', () => {
   // An unreadable probe cannot verify that the stale active claim's own
   // worktree is what a taker-over would inherit -- exposing its id here

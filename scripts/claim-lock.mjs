@@ -469,7 +469,27 @@ function resolveAcquireWorktreeFacts(worktree) {
   return {
     path: join(adminDirRaw, CLAIM_LOCK_FILE_NAME),
     isPrimary: commonDir === adminDir,
+    adminDir,
+    commonDir,
+    adminIdentity: readDirectoryIdentity(adminDir),
+    commonIdentity: readDirectoryIdentity(commonDir),
   };
+}
+function readDirectoryIdentity(path) {
+  try {
+    const stat = statSync(path);
+    if (!stat.isDirectory()) {
+      throw new Error('not a directory');
+    }
+    return { dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    throw new Error(
+      `could not establish git-admin directory identity for ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 /**
  * Resolve the lock file's path inside `worktree`'s own private git-admin
@@ -723,10 +743,11 @@ function createLockFileExclusively(path, agentId, claimId) {
  * the generated-tokens commands are not this function and are unaffected.
  */
 export function acquireClaimLock(worktree, agentId, claimId, takeover) {
-  const facts = resolveAcquireWorktreeFacts(worktree);
-  const { path } = facts;
-  const adminDir = resolve(path, '..');
-  const refused = facts.isPrimary
+  const initialFacts = resolveAcquireWorktreeFacts(worktree);
+  let facts = initialFacts;
+  let { path } = facts;
+  let adminDir = resolve(path, '..');
+  let refused = facts.isPrimary
     ? {
         mode: 'primary-worktree-refused',
         path,
@@ -742,6 +763,40 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     `claim-lock:${agentId}`,
   );
   try {
+    // Recovery may have removed and recreated the requested worktree while
+    // this call waited. Re-resolve both git-admin directories while the
+    // clone mutex is held, and fail closed if either their path or
+    // filesystem identity changed. In particular, a reused worktree-admin
+    // name must not make a stale acquisition look like the original target.
+    const postWaitFacts = resolveAcquireWorktreeFacts(worktree);
+    if (
+      postWaitFacts.path !== initialFacts.path ||
+      postWaitFacts.isPrimary !== initialFacts.isPrimary ||
+      postWaitFacts.adminDir !== initialFacts.adminDir ||
+      postWaitFacts.commonDir !== initialFacts.commonDir ||
+      !sameDirectoryIdentity(
+        postWaitFacts.adminIdentity,
+        initialFacts.adminIdentity,
+      ) ||
+      !sameDirectoryIdentity(
+        postWaitFacts.commonIdentity,
+        initialFacts.commonIdentity,
+      )
+    ) {
+      throw new Error(
+        `worktree git-admin identity changed while waiting for clone lock: ${worktree}`,
+      );
+    }
+    facts = postWaitFacts;
+    path = facts.path;
+    adminDir = resolve(path, '..');
+    refused = facts.isPrimary
+      ? {
+          mode: 'primary-worktree-refused',
+          path,
+          message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
+        }
+      : undefined;
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
       const read = readLock(path);
       // Never recreate a lock in an admin directory that disappeared while

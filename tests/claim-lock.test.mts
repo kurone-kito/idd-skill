@@ -415,6 +415,70 @@ test('acquire: normal acquisition waits for the clone lock held by recovery', as
   }
 });
 
+test('acquire: refuses a worktree recreated while waiting for the clone lock', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_PATH,
+      '--acquire',
+      '--worktree',
+      fixture.worktree,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+    ],
+    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(
+      child.exitCode,
+      null,
+      'acquisition must still be waiting before recovery replaces the worktree',
+    );
+    git(fixture.primary, ['worktree', 'remove', '--force', fixture.worktree]);
+    git(fixture.primary, [
+      'worktree',
+      'add',
+      fixture.worktree,
+      '-b',
+      'issue/1-replacement',
+      'main',
+    ]);
+    releaseCloneLock(cloneLock);
+    cloneLock = null;
+    assert.notEqual(await exited, 0, stderr);
+    assert.equal(stdout, '');
+    assert.equal(checkClaimLock(fixture.worktree).present, false);
+    assert.match(
+      stderr,
+      /identity changed|could not establish git-admin directory identity/,
+    );
+  } finally {
+    if (cloneLock !== null) releaseCloneLock(cloneLock);
+    if (child.exitCode === null) child.kill();
+    teardown(fixture);
+  }
+});
+
 test('acquire: a same-claim-id reacquire performs no destructive write — the lock file is never removed or replaced (regression for the Codex-reported unlink-then-create race)', () => {
   const fixture = setupLinkedWorktree();
   try {
