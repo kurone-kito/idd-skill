@@ -808,7 +808,7 @@ test('#3572 excludes the trusted disposition when its actor is not an IDD agent'
             createdAt: '2026-09-27T07:34:18Z',
             updatedAt: '2026-09-27T07:34:18Z',
             lastEditedAt: null,
-            author: { login: 'kurone-kito' },
+            author: { login: 'reviewer' },
           },
         ],
       },
@@ -818,7 +818,7 @@ test('#3572 excludes the trusted disposition when its actor is not an IDD agent'
       iddAgentLogins: ['codex-agent'],
     },
   );
-  assert.deepEqual(result.prs, []);
+  assert.equal(result.prs[0].unaddressedComments.length, 2);
 });
 
 test('#3572 keeps a notice visible when its rejection was edited', () => {
