@@ -4259,6 +4259,21 @@ test('checkHeldSchemaDrift detects glob scans that set cwd', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves grouped glob pattern arrays', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync((['schemas/*.schema.json', 'fixtures/*.json']));\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift does not treat a literal glob directory as recursive', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5049,6 +5064,49 @@ test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', 
     });
     assert.deepEqual(result.findings, expected);
   }
+});
+
+test('checkHeldSchemaDrift bounds pathological ordinary-star globs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const pattern = `${'*a'.repeat(20)}b`;
+  const moduleText = `globSync('schemas/${pattern}');\n`;
+  const relativePath = `schemas/${'a'.repeat(40)}.json`;
+  writeDriftManifest(sourceRoot, {
+    [relativePath]: '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [relativePath]: '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  assert.doesNotThrow(() =>
+    checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    }),
+  );
+});
+
+test('checkHeldSchemaDrift bounds ordinary brace alternative expansion', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const pattern = `${'{a,b}'.repeat(12)}.json`;
+  const relativePath = `schemas/${'a'.repeat(12)}.json`;
+  const moduleText = `globSync('schemas/${pattern}');\n`;
+  writeDriftManifest(sourceRoot, {
+    [relativePath]: '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [relativePath]: '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  assert.deepEqual(
+    checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    }).findings,
+    [{ schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE }],
+  );
 });
 
 test('checkHeldSchemaDrift excludes dotfiles from wildcard glob matches', () => {

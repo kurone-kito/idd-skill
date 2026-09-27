@@ -2641,7 +2641,7 @@ function pathExpressionCandidates(text) {
   if (/\+\s*/u.test(expressionText)) {
     return literals.length === 0 ? [] : [literals.join('')];
   }
-  if (expressionText.includes('(')) {
+  if (/\bjoin\s*\(/u.test(expressionText)) {
     return literals.length === 0 ? [] : [literals.join('/')];
   }
   return literals;
@@ -2828,6 +2828,9 @@ function expandGlobRange(text) {
 }
 const MAX_GLOB_BRACE_EXPANSIONS = 1024;
 const MAX_GLOB_BRACE_EXPANSION_DEPTH = 32;
+const MAX_GLOB_REGEX_PATTERN_LENGTH = 2048;
+const MAX_GLOB_REGEX_TARGET_LENGTH = 2048;
+const MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT = 4;
 function expandGlobBracePatternsBounded(text, depth, maxExpansions, maxDepth) {
   if (depth > maxDepth) {
     return null;
@@ -2876,6 +2879,82 @@ function expandGlobBracePatternsBounded(text, depth, maxExpansions, maxDepth) {
     );
   }
   return [text];
+}
+function matchSimpleStarGlob(pattern, targetPath) {
+  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?]\(/u.test(pattern)) {
+    return null;
+  }
+  let patternIndex = 0;
+  let targetIndex = 0;
+  let lastStarIndex = -1;
+  let lastStarStartTargetIndex = -1;
+  let lastStarTargetIndex = -1;
+  while (targetIndex < targetPath.length) {
+    const character = pattern[patternIndex] ?? '';
+    if (character !== '*' && character === targetPath[targetIndex]) {
+      patternIndex += 1;
+      targetIndex += 1;
+      continue;
+    }
+    if (character === '*') {
+      if (
+        (patternIndex === 0 || pattern[patternIndex - 1] === '/') &&
+        targetPath[targetIndex] === '.'
+      ) {
+        return false;
+      }
+      lastStarIndex = patternIndex;
+      lastStarStartTargetIndex = targetIndex;
+      lastStarTargetIndex = targetIndex;
+      patternIndex += 1;
+      continue;
+    }
+    if (lastStarIndex === -1) {
+      return false;
+    }
+    const nextStarTargetIndex = lastStarTargetIndex + 1;
+    const starTarget = targetPath[nextStarTargetIndex] ?? '';
+    const starAtSegmentStart =
+      (lastStarIndex === 0 || pattern[lastStarIndex - 1] === '/') &&
+      nextStarTargetIndex === lastStarStartTargetIndex;
+    if (starTarget === '/' || (starAtSegmentStart && starTarget === '.')) {
+      return false;
+    }
+    lastStarTargetIndex = nextStarTargetIndex;
+    targetIndex = lastStarTargetIndex;
+    patternIndex = lastStarIndex + 1;
+  }
+  while (pattern[patternIndex] === '*') {
+    patternIndex += 1;
+  }
+  return patternIndex === pattern.length;
+}
+function hasBoundedGlobRegexComplexity(pattern, targetPath) {
+  if (
+    pattern.length > MAX_GLOB_REGEX_PATTERN_LENGTH ||
+    targetPath.length > MAX_GLOB_REGEX_TARGET_LENGTH
+  ) {
+    return false;
+  }
+  let wildcardsInSegment = 0;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '/') {
+      wildcardsInSegment = 0;
+      continue;
+    }
+    if (character === '*' || character === '+' || character === '?') {
+      wildcardsInSegment += 1;
+      if (wildcardsInSegment > MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 function globPatternToRegex(
   pattern,
@@ -3053,10 +3132,30 @@ function globPatternToRegex(
       } else {
         const content = pattern.slice(index + 1, closing);
         const expandedRange = expandGlobRange(content);
-        const alternatives =
+        const rawAlternatives =
           expandedRange ?? splitGlobAlternatives(content, ',');
+        const alternatives =
+          expandedRange === null
+            ? rawAlternatives.flatMap(
+                (alternative) =>
+                  expandGlobBracePatternsBounded(
+                    alternative,
+                    0,
+                    MAX_GLOB_BRACE_EXPANSIONS,
+                    MAX_GLOB_BRACE_EXPANSION_DEPTH,
+                  ) ?? [],
+              )
+            : rawAlternatives;
         if (expandedRange === null && alternatives.length === 1) {
           expression += escapeRegExp(pattern.slice(index, closing + 1));
+          index = closing;
+          continue;
+        }
+        if (
+          alternatives.length === 0 ||
+          alternatives.length > MAX_GLOB_BRACE_EXPANSIONS
+        ) {
+          expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
           index = closing;
           continue;
         }
@@ -3081,6 +3180,23 @@ function globPatternToRegex(
 }
 function globPatternMatchesPath(pattern, targetPath) {
   if (!isGlobPattern(pattern)) {
+    return false;
+  }
+  const simpleMatch = matchSimpleStarGlob(pattern, targetPath);
+  if (simpleMatch !== null) {
+    return simpleMatch;
+  }
+  if (
+    expandGlobBracePatternsBounded(
+      pattern,
+      0,
+      MAX_GLOB_BRACE_EXPANSIONS,
+      MAX_GLOB_BRACE_EXPANSION_DEPTH,
+    ) === null
+  ) {
+    return true;
+  }
+  if (!hasBoundedGlobRegexComplexity(pattern, targetPath)) {
     return false;
   }
   const questionCaptures = [];
