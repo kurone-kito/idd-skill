@@ -2419,7 +2419,9 @@ function maskJavaScriptStringContents(text) {
   }
   return result;
 }
-function firstCallArgument(text) {
+function splitTopLevelArguments(text) {
+  const argumentsList = [];
+  let start = 0;
   let quote = null;
   let escaped = false;
   let depth = 0;
@@ -2442,10 +2444,34 @@ function firstCallArgument(text) {
     } else if (character === ')' || character === ']' || character === '}') {
       depth = Math.max(0, depth - 1);
     } else if (character === ',' && depth === 0) {
-      return text.slice(0, index);
+      argumentsList.push(text.slice(start, index));
+      start = index + 1;
     }
   }
-  return text;
+  argumentsList.push(text.slice(start));
+  return argumentsList;
+}
+function firstCallArgument(text) {
+  return splitTopLevelArguments(text)[0] ?? '';
+}
+function topLevelOptionPropertyValue(argumentsText, property) {
+  const options = splitTopLevelArguments(argumentsText)[1]?.trim();
+  if (options === undefined || !options.startsWith('{')) {
+    return null;
+  }
+  const optionEntries = splitTopLevelArguments(options.slice(1, -1));
+  const propertyPattern = new RegExp(
+    `^(?:${escapeRegExp(property)}|['"]${escapeRegExp(property)}['"])\\s*:\\s*`,
+    'u',
+  );
+  for (const entry of optionEntries) {
+    const trimmed = entry.trim();
+    const match = propertyPattern.exec(trimmed);
+    if (match !== null) {
+      return trimmed.slice(match[0].length);
+    }
+  }
+  return null;
 }
 function normalizeComputedDirectoryScanMembers(text) {
   return text.replace(
@@ -2639,9 +2665,53 @@ function scanStringLiterals(text) {
     decodeJavaScriptStringLiteral(literal[2] ?? ''),
   );
 }
+function unwrapParenthesizedExpression(text) {
+  let expression = text.trim();
+  while (expression.startsWith('(') && expression.endsWith(')')) {
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    let closesAt = -1;
+    for (let index = 0; index < expression.length; index += 1) {
+      const character = expression[index] ?? '';
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          closesAt = index;
+          break;
+        }
+      }
+    }
+    if (closesAt !== expression.length - 1) {
+      break;
+    }
+    expression = expression.slice(1, -1).trim();
+  }
+  return expression;
+}
 function pathExpressionCandidates(text) {
-  const literals = scanStringLiterals(text);
-  const expressionText = maskJavaScriptStringContents(text);
+  const expression = unwrapParenthesizedExpression(text);
+  if (expression.startsWith('[') && expression.endsWith(']')) {
+    return splitTopLevelArguments(expression.slice(1, -1)).flatMap((entry) =>
+      pathExpressionCandidates(entry),
+    );
+  }
+  const literals = scanStringLiterals(expression);
+  const expressionText = maskJavaScriptStringContents(expression);
   if (/\+\s*/u.test(expressionText)) {
     return literals.length === 0 ? [] : [literals.join('')];
   }
@@ -2746,7 +2816,7 @@ function usesModuleRelativePathExpression(text) {
 function isModuleRelativeFragmentExpression(text) {
   return (
     /import\.meta\.dirname\s*\+\s*['"`]/u.test(text) ||
-    /\bjoin\s*\(\s*import\.meta\.dirname\s*,\s*['"`]/u.test(text)
+    /\b(?:join|resolve)\s*\(\s*import\.meta\.dirname\s*,\s*['"`]/u.test(text)
   );
 }
 function isBareModuleDirectoryExpression(text) {
@@ -3311,13 +3381,10 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
       if (!isGlobScanApi) {
         return [];
       }
-      const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(optionText);
-      if (cwd === null) {
+      const cwdExpression = topLevelOptionPropertyValue(argumentsText, 'cwd');
+      if (cwdExpression === null) {
         return [];
       }
-      const cwdExpression = firstCallArgument(
-        argumentsText.slice(cwd.index + cwd[0].length),
-      );
       if (
         /^(?:undefined|import\.meta\.dirname)(?:\s*\})?$/u.test(
           cwdExpression.trim(),
@@ -3338,19 +3405,15 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
           : candidate,
       );
     })();
-    const hasCwd =
-      isGlobScanApi && /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(optionText);
-    const excludeMatch = isGlobScanApi
-      ? /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(optionText)
+    const cwdExpression = isGlobScanApi
+      ? topLevelOptionPropertyValue(argumentsText, 'cwd')
+      : null;
+    const hasCwd = cwdExpression !== null;
+    const excludeExpression = isGlobScanApi
+      ? topLevelOptionPropertyValue(argumentsText, 'exclude')
       : null;
     const excludeCandidates =
-      excludeMatch === null
-        ? []
-        : scanStringLiterals(
-            firstCallArgument(
-              argumentsText.slice(excludeMatch.index + excludeMatch[0].length),
-            ),
-          );
+      excludeExpression === null ? [] : scanStringLiterals(excludeExpression);
     const joinScanPath = (base, path) =>
       base === '' ? path : `${base}/${path}`;
     const candidates = (
