@@ -920,7 +920,9 @@ function planAndMaybeStashScope(
       : extractDirtyEntries(status.stdout).some(
           (entry) =>
             !excludedDirtyPaths.includes(entry.path) ||
-            entry.indexStatus !== ' ',
+            (entry.indexStatus !== ' ' &&
+              entry.indexStatus !== '?' &&
+              entry.indexStatus !== '!'),
         ));
   const baselineList = deps.runGit(['stash', 'list'], scopePath);
   const baselineCount = countTaggedStashEntries(baselineList.stdout, tag);
@@ -943,10 +945,17 @@ function planAndMaybeStashScope(
   if (statusReadFailed || entry.stashListReadFailed || !hasChanges || !apply) {
     return entry;
   }
-  const stash = deps.runGit(
-    ['stash', 'push', '--include-untracked', '-m', tag],
-    scopePath,
-  );
+  const stashArgv = ['stash', 'push', '--include-untracked', '-m', tag];
+  if (excludedDirtyPaths.length > 0) {
+    stashArgv.push(
+      '--',
+      '.',
+      ...excludedDirtyPaths.map(
+        (excludedPath) => `:(exclude)${excludedPath}/**`,
+      ),
+    );
+  }
+  const stash = deps.runGit(stashArgv, scopePath);
   if (!stash.ok) {
     // Copilot review: only a `stash push` failure actually CAUSED by
     // unmerged paths (the documented §LWR case: a backed-up interrupted
@@ -1283,11 +1292,14 @@ function planAndMaybePreserve(
   // means the submodule HEAD differs from the superproject's recorded
   // gitlink, so retain it as a parent-level change: the submodule scope alone
   // cannot preserve the superproject index state. Retain `U`/`-` entries for
-  // the same reason (Copilot review #4114207705). The per-submodule loop below
-  // still preserves every initialized submodule, including `+`, in its own
-  // scope so ordinary files inside a changed submodule are not lost.
+  // the same reason (Copilot review #4114207705), while excluding their
+  // contents from the parent stash below so an uninitialized checkout is
+  // preserved by its own copy plan first (Copilot review #4116363405). The
+  // per-submodule loop below still preserves every initialized submodule,
+  // including `+`, in its own scope so ordinary files inside a changed
+  // submodule are not lost.
   const submodulePaths = submodules
-    .filter((submodule) => submodule.status === ' ')
+    .filter((submodule) => submodule.status === ' ' || submodule.status === '-')
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
   // Capture ignored files before any stash changes the ignore rules. In
@@ -2386,15 +2398,36 @@ export function runLocalWorktreeRecovery(args, deps) {
     let staleReason;
     if (shortcut.eligible) {
       const freshRecords = deps.listWorktreeRecords(cwd);
+      const freshShortcut =
+        freshRecords === null
+          ? null
+          : evaluatePrunableShortcut(
+              freshRecords,
+              targetPath,
+              recoveredBranch,
+              deps.pathExists,
+            );
+      // The occupancy helper deliberately reports a matching prunable record
+      // whose path is absent as `unreadable`, because its general callers do
+      // not own the destructive cleanup decision. This helper has an
+      // independent record/branch/unlocked check, so it may accept that
+      // narrow shape while retaining the stale/released routing and claim
+      // identity gates below (Copilot review #4116363405).
+      const prunableStillIndependentlyAbsent =
+        freshShortcut?.eligible === true &&
+        recheck.routing.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(recheck.routing.reason) &&
+        recheck.routing.reason.endsWith('-local-worktree-unreadable') &&
+        (recheck.routing.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
       stillEligible =
-        freshRecords !== null &&
-        evaluatePrunableShortcut(
-          freshRecords,
-          targetPath,
-          recoveredBranch,
-          deps.pathExists,
-        ).eligible &&
-        (ordinaryStillOccupied || prunableStillExplicitlyAbsent);
+        freshShortcut?.eligible === true &&
+        (ordinaryStillOccupied ||
+          prunableStillExplicitlyAbsent ||
+          prunableStillIndependentlyAbsent);
       staleReason =
         'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, no longer names the recovered branch, or the issue claim state itself changed); stopping';
     } else {

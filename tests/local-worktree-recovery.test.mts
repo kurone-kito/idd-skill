@@ -2372,7 +2372,7 @@ test('legacy lockless claims may complete the forced retry through the guard', (
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
-test('verified prunable shortcuts may keep unreadable routing at final check', () => {
+test('verified prunable shortcuts may keep unreadable routing during final checks', () => {
   let removeCalled = false;
   let confirmCalls = 0;
   const record = {
@@ -2398,7 +2398,7 @@ test('verified prunable shortcuts may keep unreadable routing at final check', (
     pathExists: (p) => p !== '/repo/linked',
     confirmBlock: () => {
       confirmCalls += 1;
-      const finalCheck = confirmCalls >= 3;
+      const finalCheck = confirmCalls >= 2;
       return {
         ok: true,
         routing: {
@@ -2455,6 +2455,73 @@ test('dry-run never creates the preserve directory for an uninitialized submodul
   );
   assert.equal(ensureCalls, 0, 'dry-run must have zero side effects');
   assert.equal(verdict.plan.uninitializedSubmodules[0]?.copiedTo, null);
+});
+
+test('excludes uninitialized submodule contents from the parent stash', () => {
+  const stashCalls: string[][] = [];
+  let stashPushed = false;
+  const sha = '0'.repeat(40);
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? `-${sha} uninitialized\n` : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked' ? ' M tracked.txt\n?? uninitialized\n' : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: stashPushed
+            ? 'stash@{0}: On issue/1-task: idd-lwr claim-x\n'
+            : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        stashPushed = true;
+        stashCalls.push(argv);
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(stashCalls, [
+    [
+      'stash',
+      'push',
+      '--include-untracked',
+      '-m',
+      'idd-lwr claim-x',
+      '--',
+      '.',
+      ':(exclude)uninitialized/**',
+    ],
+  ]);
+  assert.equal(
+    verdict.plan.uninitializedSubmodules[0]?.copiedTo !== null,
+    true,
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('refuses the cwd-inside-target invariant before step 1 ever runs', () => {
@@ -2692,7 +2759,7 @@ test('refuses a fresh routing state of `-local-worktree-unreadable` outside the 
   assert.equal(verdict.mutated, false);
 });
 
-test('does not shortcut a prunable worktree that becomes unreadable at recheck', () => {
+test('independently verified prunable worktrees may be unreadable at recheck', () => {
   let confirmCalls = 0;
   let removeCalled = false;
   const record = {
@@ -2751,9 +2818,8 @@ test('does not shortcut a prunable worktree that becomes unreadable at recheck',
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(removeCalled, false);
-  assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /no longer matches at recheck time/);
+  assert.equal(removeCalled, true);
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('a failed status probe blocks removal even with no other changes detected (Codex/Copilot review finding)', () => {
