@@ -298,6 +298,11 @@ test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
   assert.equal(isSafeRelativePath('/etc/passwd'), false);
   assert.equal(isSafeRelativePath('../escape.txt'), false);
   assert.equal(isSafeRelativePath('a/../../escape.txt'), false);
+  assert.equal(
+    isSafeRelativePath('a\\..\\secret'),
+    process.platform !== 'win32',
+    'backslashes are separators only on Windows',
+  );
   assert.equal(isSafeRelativePath(''), false);
 });
 
@@ -947,6 +952,60 @@ test('prunable shortcut removes the worktree with `--force`', () => {
   assert.deepEqual(removeArgv, [
     ['worktree', 'remove', '--force', '/repo/linked'],
   ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('verified prunable shortcuts may keep unreadable routing at final check', () => {
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: (p) => p !== '/repo/linked',
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-unreadable',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'unreadable',
+            paths: ['/repo/linked'],
+            reason: 'prunable path is absent',
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removeCalled, true);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 

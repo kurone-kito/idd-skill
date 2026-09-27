@@ -52,6 +52,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { type CheckLockOutcome, checkClaimLock } from './claim-lock.mts';
@@ -712,7 +713,8 @@ export function isSafeRelativePath(relativePath: string): boolean {
   if (relativePath.length === 0 || isAbsolute(relativePath)) {
     return false;
   }
-  return relativePath.split(/[\\/]+/).every((segment) => segment !== '..');
+  const separators = sep === '\\' ? /[\\/]+/ : /[/]+/;
+  return relativePath.split(separators).every((segment) => segment !== '..');
 }
 
 /**
@@ -871,6 +873,19 @@ export function submoduleStatusEntries(
   return entries;
 }
 
+/** Convert recursive repository-relative submodule paths into paths relative
+ * to one initialized submodule, so its parent scope can exclude nested
+ * submodules from its own stash probe. */
+function nestedSubmodulePathsForScope(
+  submodulePaths: readonly string[],
+  scope: string,
+): string[] {
+  const prefix = `${scope}/`;
+  return submodulePaths
+    .filter((candidate) => candidate.startsWith(prefix))
+    .map((candidate) => candidate.slice(prefix.length));
+}
+
 /** Preserve one scope (the worktree itself, or a submodule path relative to
  * it) -- stash tracked/untracked changes under `tag`, or fall back to
  * copying conflicted files out on an unmerged-path stash failure. Returns
@@ -951,16 +966,15 @@ function planAndMaybeStashScope(
     // (Codex review finding: a coexisting untracked file or non-conflicting
     // modification would otherwise be silently lost), and verify each one
     // actually landed before trusting this scope as preserved.
-    const dirtyPaths = extractDirtyPaths(status.stdout).filter(
-      isSafeRelativePath,
-    );
+    const allDirtyPaths = extractDirtyPaths(status.stdout);
+    const dirtyPaths = allDirtyPaths.filter(isSafeRelativePath);
     if (dirtyPaths.length > 0) {
       const preserveDir = deps.ensurePreserveDir();
       const destination = join(
         preserveDir,
-        `unmerged-${scopeLabel.replace(/[\\/]+/g, '_')}`,
+        `unmerged-${Buffer.from(scopeLabel).toString('base64url')}`,
       );
-      let allLanded = true;
+      let allLanded = dirtyPaths.length === allDirtyPaths.length;
       for (const relPath of dirtyPaths) {
         const from = join(scopePath, relPath);
         const to = join(destination, relPath);
@@ -982,7 +996,7 @@ function planAndMaybeStashScope(
     } else {
       // Nothing dirty by this scan's own accounting, so there is nothing to
       // preserve -- vacuously satisfied.
-      entry.unmergedFallbackAllPreserved = true;
+      entry.unmergedFallbackAllPreserved = allDirtyPaths.length === 0;
     }
     return entry;
   }
@@ -1106,6 +1120,8 @@ function scanAndMaybeCopyIgnoredFiles(
   let scanFailed = false;
   for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
     if (!isSafeRelativePath(ignoredPath)) {
+      scanFailed = true;
+      copied.push({ path: ignoredPath, copiedTo: null });
       continue;
     }
     const preserveDir = apply ? deps.ensurePreserveDir() : null;
@@ -1245,6 +1261,7 @@ function planAndMaybePreserve(
         apply,
         path,
         deps,
+        nestedSubmodulePathsForScope(submodulePaths, submodule.path),
       ),
     );
   }
@@ -2136,7 +2153,8 @@ export function runLocalWorktreeRecovery(
       finalLinkedRouting !== null &&
       finalLinkedRouting.state === 'local_worktree_occupied' &&
       isAcceptedBlockReason(finalLinkedRouting.reason) &&
-      !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable') &&
+      (shortcut.eligible ||
+        !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable')) &&
       (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).includes(
         targetPath,
       ) &&
