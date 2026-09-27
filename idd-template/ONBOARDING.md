@@ -254,8 +254,8 @@ below instead.
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   `--target-ref` must name it; squash later only if policy permits, retaining
-   its SHA for reruns.
+   `--target-ref` must name it. Keep it reachable through a ref until
+   verification and reruns finish; do not squash it first.
 
 4. Replace the seven placeholders from the confirmed transcript.
 

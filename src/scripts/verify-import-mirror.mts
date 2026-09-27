@@ -74,7 +74,8 @@
 //    trailing newline, spacing) is tolerated by default. With
 //    `--normalize-json-key`, a selected key may additionally differ when
 //    the target already equals upstream or exactly preserves its
-//    `--target-base-ref` value; the baseline is required only for that
+//    `--target-base-ref` value while upstream still carries the raw
+//    restoration placeholder; the baseline is required only for that
 //    differing-key case. A parsed value containing a
 //    non-finite number (`JSON.parse` silently converts an overflowing
 //    number like `1e400` to `Infinity`, which `JSON.stringify`
@@ -487,6 +488,14 @@ function writeJsonKey(
   return true;
 }
 
+const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
+
+function isRestorableJsonPlaceholder(value: unknown): value is string {
+  return (
+    typeof value === 'string' && RESTORABLE_JSON_PLACEHOLDER_RE.test(value)
+  );
+}
+
 function canonicalizeJsonWithTargetKeys(
   path: string,
   upstreamContent: string,
@@ -514,6 +523,9 @@ function canonicalizeJsonWithTargetKeys(
       JSON.stringify(targetValue.value) === JSON.stringify(upstreamValue.value)
     ) {
       continue;
+    }
+    if (!isRestorableJsonPlaceholder(upstreamValue.value)) {
+      return null;
     }
     if (targetBase === undefined) {
       targetBase =

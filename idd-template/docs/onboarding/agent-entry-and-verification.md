@@ -293,8 +293,8 @@ During a re-import, `idd-onboard --import` may restore three validate-command
 rows in `.github/idd/config.json`. Keep the file in scope and repeat
 `--normalize-json-key` for only `commands.fix-validate`,
 `commands.pre-push-validate`, and `commands.post-fix-validate`; each is
-normalized only when the target still matches its pre-import value, so every
-other config field stays checked. Never omit it. This preservation
+normalized only when the target preserves its base and upstream still has the
+placeholder; other config fields stay checked. Never omit it. This preservation
 behavior is tracked by
 [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
 

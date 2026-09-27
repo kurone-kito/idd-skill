@@ -440,6 +440,27 @@ test('rule 2 fail: JSON normalization rejects a changed restored value', () => {
   assert.equal(result.contentClass, 'content-mismatch');
 });
 
+test('rule 2 fail: JSON normalization rejects a baseline when upstream is literal', () => {
+  const result = classifyFileContent({
+    path: '.github/idd/config.json',
+    upstreamContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run newer"}}',
+    ),
+    targetContent: Buffer.from('{"commands":{"fix-validate":"pnpm run old"}}'),
+    targetBaseContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run old"}}',
+    ),
+    generatedDirs: [],
+    jsonKeyNormalizations: [
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'fix-validate'],
+      },
+    ],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
 test('rule 2 fail: a real value change is never whitespace-tolerant', () => {
   const upstream = Buffer.from('{"a":1}');
   const target = Buffer.from('{"a":2}');

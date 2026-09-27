@@ -1129,8 +1129,9 @@ future inventory reviews do not need to re-infer their role from code.
 
   `--normalize-json-key <path>:<key.path>` replaces only the upstream JSON key
   with the pre-import target-base value after proving the target still matches
-  it; repeat it for the three validate-command keys above and add the config
-  path prefix to this command.
+  it and upstream still has its restoration placeholder; repeat it for the
+  three validate-command keys above and add the config path prefix to this
+  command.
 
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
