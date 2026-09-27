@@ -2652,6 +2652,24 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
+function isControlFlowClosingParenthesis(text: string, index: number): boolean {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return /\b(?:if|while|for|with|switch|catch)\s*$/u.test(
+          text.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
+
 function isRegexLiteralStart(text: string, index: number): boolean {
   let previousIndex = index - 1;
   while (previousIndex >= 0 && /\s/u.test(text[previousIndex] ?? '')) {
@@ -2664,34 +2682,193 @@ function isRegexLiteralStart(text: string, index: number): boolean {
   if (/[=([{,:;!?&|+\-*%^~<>]/u.test(previous)) {
     return true;
   }
+  if (
+    previous === ')' &&
+    isControlFlowClosingParenthesis(text, previousIndex)
+  ) {
+    return true;
+  }
   return /\b(?:return|case|throw|else|do)$/u.test(
     text.slice(0, previousIndex + 1),
   );
 }
 
-function stripJavaScriptComments(text: string): string {
+function maskDirectoryApiNamesInString(text: string): string {
   let result = '';
-  let quote: string | null = null;
-  let escaped = false;
   for (let index = 0; index < text.length; index += 1) {
-    const character = text[index] ?? '';
-    const next = text[index + 1] ?? '';
-    if (quote !== null) {
-      const apiName = text
-        .slice(index)
-        .match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0];
-      const previous = text[index - 1] ?? '';
-      const after = text[index + (apiName?.length ?? 0)] ?? '';
-      if (
-        apiName !== undefined &&
-        !/[A-Za-z0-9_$]/u.test(previous) &&
-        !/[A-Za-z0-9_$]/u.test(after)
-      ) {
-        result += ' '.repeat(apiName.length);
-        index += apiName.length - 1;
+    const apiName = text
+      .slice(index)
+      .match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0];
+    const previous = text[index - 1] ?? '';
+    const after = text[index + (apiName?.length ?? 0)] ?? '';
+    if (
+      apiName !== undefined &&
+      !/[A-Za-z0-9_$]/u.test(previous) &&
+      !/[A-Za-z0-9_$]/u.test(after)
+    ) {
+      result += ' '.repeat(apiName.length);
+      index += apiName.length - 1;
+      continue;
+    }
+    result += text[index] ?? '';
+  }
+  return result;
+}
+
+function stripJavaScriptComments(text: string): string {
+  type ScanResult = { text: string; nextIndex: number };
+  let scanCode: (start: number, stopAtClosingBrace: boolean) => ScanResult;
+  let scanTemplate: (start: number) => ScanResult;
+
+  scanTemplate = (start) => {
+    let result = '`';
+    let index = start + 1;
+    let literalStart = index;
+    while (index < text.length) {
+      const character = text[index] ?? '';
+      if (character === '\\') {
+        index += 2;
         continue;
       }
+      if (character === '`') {
+        result += maskDirectoryApiNamesInString(
+          text.slice(literalStart, index),
+        );
+        result += '`';
+        return { text: result, nextIndex: index + 1 };
+      }
+      if (character === '$' && text[index + 1] === '{') {
+        result += maskDirectoryApiNamesInString(
+          text.slice(literalStart, index),
+        );
+        result += '${';
+        const expression = scanCode(index + 2, true);
+        result += expression.text;
+        index = expression.nextIndex;
+        literalStart = index;
+        continue;
+      }
+      index += 1;
+    }
+    result += maskDirectoryApiNamesInString(text.slice(literalStart));
+    return { text: result, nextIndex: text.length };
+  };
+
+  scanCode = (start, stopAtClosingBrace) => {
+    let result = '';
+    let index = start;
+    let braceDepth = 0;
+    while (index < text.length) {
+      const character = text[index] ?? '';
+      const next = text[index + 1] ?? '';
+      if (stopAtClosingBrace && character === '}' && braceDepth === 0) {
+        return { text: result, nextIndex: index + 1 };
+      }
+      if (character === "'" || character === '"') {
+        let end = index + 1;
+        let escaped = false;
+        while (end < text.length) {
+          const quotedCharacter = text[end] ?? '';
+          if (escaped) {
+            escaped = false;
+          } else if (quotedCharacter === '\\') {
+            escaped = true;
+          } else if (quotedCharacter === character) {
+            end += 1;
+            break;
+          }
+          end += 1;
+        }
+        result += maskDirectoryApiNamesInString(text.slice(index, end));
+        index = end;
+        continue;
+      }
+      if (character === '`') {
+        const template = scanTemplate(index);
+        result += template.text;
+        index = template.nextIndex;
+        continue;
+      }
+      if (character === '/' && next === '/') {
+        result += ' ';
+        index += 2;
+        while (index < text.length && text[index] !== '\n') {
+          index += 1;
+        }
+        continue;
+      }
+      if (character === '/' && next === '*') {
+        result += ' ';
+        index += 2;
+        while (index < text.length) {
+          if (text[index] === '*' && text[index + 1] === '/') {
+            index += 2;
+            break;
+          }
+          if (text[index] === '\n' || text[index] === '\r') {
+            result += text[index];
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (
+        character === '/' &&
+        next !== '/' &&
+        next !== '*' &&
+        isRegexLiteralStart(text, index)
+      ) {
+        result += ' ';
+        index += 1;
+        let inCharacterClass = false;
+        let regexEscaped = false;
+        while (index < text.length) {
+          const regexCharacter = text[index] ?? '';
+          if (regexCharacter === '\n' || regexCharacter === '\r') {
+            result += regexCharacter;
+            index += 1;
+            break;
+          }
+          if (regexEscaped) {
+            regexEscaped = false;
+          } else if (regexCharacter === '\\') {
+            regexEscaped = true;
+          } else if (regexCharacter === '[') {
+            inCharacterClass = true;
+          } else if (regexCharacter === ']') {
+            inCharacterClass = false;
+          } else if (regexCharacter === '/' && !inCharacterClass) {
+            index += 1;
+            while (/[A-Za-z]/u.test(text[index] ?? '')) {
+              index += 1;
+            }
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (character === '{') {
+        braceDepth += 1;
+      } else if (character === '}') {
+        braceDepth -= 1;
+      }
       result += character;
+      index += 1;
+    }
+    return { text: result, nextIndex: index };
+  };
+
+  return scanCode(0, false).text;
+}
+
+function firstCallArgument(text: string): string {
+  let quote: string | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
       if (escaped) {
         escaped = false;
       } else if (character === '\\') {
@@ -2703,71 +2880,55 @@ function stripJavaScriptComments(text: string): string {
     }
     if (character === "'" || character === '"' || character === '`') {
       quote = character;
-      result += character;
-      continue;
+    } else if (character === '(' || character === '[' || character === '{') {
+      depth += 1;
+    } else if (character === ')' || character === ']' || character === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (character === ',' && depth === 0) {
+      return text.slice(0, index);
     }
-    if (character === '/' && next === '/') {
-      result += ' ';
-      index += 1;
-      while (index + 1 < text.length && text[index + 1] !== '\n') {
-        index += 1;
-      }
-      continue;
-    }
-    if (character === '/' && next === '*') {
-      result += ' ';
-      index += 1;
-      while (index + 1 < text.length) {
-        index += 1;
-        if (text[index] === '*' && text[index + 1] === '/') {
-          index += 1;
-          break;
-        }
-        if (text[index] === '\n' || text[index] === '\r') {
-          result += text[index];
-        }
-      }
-      continue;
-    }
-    if (
-      character === '/' &&
-      next !== '/' &&
-      next !== '*' &&
-      isRegexLiteralStart(text, index)
-    ) {
-      result += ' ';
-      index += 1;
-      let inCharacterClass = false;
-      let regexEscaped = false;
-      while (index + 1 < text.length) {
-        index += 1;
-        const regexCharacter = text[index] ?? '';
-        if (regexCharacter === '\n' || regexCharacter === '\r') {
-          result += regexCharacter;
-          break;
-        }
-        if (regexEscaped) {
-          regexEscaped = false;
-          continue;
-        }
-        if (regexCharacter === '\\') {
-          regexEscaped = true;
-        } else if (regexCharacter === '[') {
-          inCharacterClass = true;
-        } else if (regexCharacter === ']') {
-          inCharacterClass = false;
-        } else if (regexCharacter === '/' && !inCharacterClass) {
-          while (/[A-Za-z]/u.test(text[index + 1] ?? '')) {
-            index += 1;
-          }
-          break;
-        }
-      }
-      continue;
-    }
-    result += character;
   }
-  return result;
+  return text;
+}
+
+function scanStringLiterals(text: string): string[] {
+  return [...text.matchAll(DIRECTORY_SCAN_STRING_PATTERN)].map(
+    (literal) => literal[2] ?? '',
+  );
+}
+
+function pathExpressionCandidates(text: string): string[] {
+  const literals = scanStringLiterals(text);
+  if (text.includes('(')) {
+    return literals.length === 0 ? [] : [literals.join('/')];
+  }
+  return literals;
+}
+
+function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
+  if (!/[?*[\]]/u.test(pattern)) {
+    return false;
+  }
+  let expression = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? '';
+    if (character === '*' && pattern[index + 1] === '*') {
+      index += 1;
+      if (pattern[index + 1] === '/') {
+        index += 1;
+        expression += '(?:.*/)?';
+      } else {
+        expression += '.*';
+      }
+    } else if (character === '*') {
+      expression += '[^/]*';
+    } else if (character === '?') {
+      expression += '[^/]';
+    } else {
+      expression += escapeRegExp(character);
+    }
+  }
+  return new RegExp(`${expression}$`, 'u').test(targetPath);
 }
 
 function moduleScansManifestDirectory(
@@ -2783,11 +2944,26 @@ function moduleScansManifestDirectory(
   for (const match of stripJavaScriptComments(text).matchAll(
     DIRECTORY_SCAN_CALL_PATTERN,
   )) {
-    const literals = [
-      ...(match[1] ?? '').matchAll(DIRECTORY_SCAN_STRING_PATTERN),
-    ].map((literal) => literal[2] ?? '');
-    const candidate = literals.join('/');
-    if (directoryPrefix.test(candidate)) {
+    const argumentsText = match[1] ?? '';
+    const firstArgument = firstCallArgument(argumentsText);
+    const candidates = [
+      pathExpressionCandidates(firstArgument),
+      (() => {
+        const cwd = /\bcwd\s*:\s*/u.exec(argumentsText);
+        return cwd === null
+          ? []
+          : pathExpressionCandidates(
+              firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
+            );
+      })(),
+    ].flat();
+    if (
+      candidates.some(
+        (candidate) =>
+          directoryPrefix.test(candidate) ||
+          globPatternMatchesPath(candidate, targetPath),
+      )
+    ) {
       return true;
     }
   }
@@ -2809,6 +2985,8 @@ function moduleReferencesManifestPath(
 interface GitTargetBaseline {
   read: (targetPath: string) => Buffer | null;
 }
+
+const GIT_BASELINE_MAX_BUFFER = 32 * 1024 * 1024;
 
 /**
  * Keep target baseline reads tied to the requested repository instead of
@@ -3007,6 +3185,7 @@ function resolveGitTargetBaseline(
         ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
         {
           encoding: null,
+          maxBuffer: GIT_BASELINE_MAX_BUFFER,
           stdio: ['ignore', 'pipe', 'ignore'],
           env: sanitizedGitEnvironment(),
         },
