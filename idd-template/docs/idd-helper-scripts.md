@@ -5211,7 +5211,16 @@ same as `AW4`/`AW5`.
     discrete comment or thread an ordinary disposition reply could
     address. As with every `hasTrustedReviewAckAfter`/`hasFreshDisposition`
     caller, an edited or edit-state-unresolved marker or disposition reply
-    never clears anything here either (kurone-kito/idd-skill#3249).
+    never clears anything here either (kurone-kito/idd-skill#3249). A
+    historical thread-less primary-bot finding is superseded only when the
+    absolute-latest eligible primary review is verified on the merged pull
+    request's effective feature-branch head, has a known zero review-comment
+    count, and has a recognized body with `suppressedCount === 0`. Missing or
+    incomplete head/review evidence, an off-head or dirty latest review, and
+    an unrecognized body remain findings; this fail-closed boundary covers
+    the repeated historical findings observed after the merged pull request
+    [#3507](https://github.com/kurone-kito/idd-skill/pull/3507)
+    (kurone-kito/idd-skill#3564).
     Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
