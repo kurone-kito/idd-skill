@@ -284,6 +284,15 @@ ad hoc or improvise worker-side authoring.
 
 ### C1 — Critique pass
 
+#### Delegated critique wait ceiling
+
+Delegated pass: resolve `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
+and enforce a harness timeout, never a command wrapper (#3449). Background
+wait requires cancellation/cleanup and late-output suppression. Timeout,
+cancel, interruption, or error without findings is delegate failure: obey
+`mode`; self-critique when it calls for it, otherwise hold. Record no return;
+without bound/cleanup, record risk.
+
 A critique pass asks whether the implementation is correct, whether the issue's
 requirements are satisfied, whether coverage is adequate, and whether any other
 problems exist. Every mechanism below answers those questions. They are what a

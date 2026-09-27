@@ -1286,9 +1286,13 @@ The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
 through the harness's own per-invocation timeout control, never through a
 timeout utility wrapped inside the delegated command, following the
-principle from issue `#3449`. Where the harness supports it, launching in
+principle from issue `kurone-kito/idd-skill#3449`. Where the harness supports
+it, launching in
 the background and applying a bounded wait is an equivalent way to enforce
-the same ceiling.
+the same ceiling only when the harness also cancels or cleans up the timed-out
+subagent and ignores any late output. Otherwise the background process may
+continue consuming resources or race with the structured fallback, so do not
+use that pattern as an equivalent implementation.
 
 Reaching the ceiling without a findings list is a delegation failure. A
 wait that ends through cancellation, interruption, or error without a

@@ -690,7 +690,8 @@ reach its structured fallback (issue `#3542`). The default
 without treating the slower returning passes from `#2825` as failures.
 The parent must apply the ceiling through the harness's own per-invocation
 timeout control, rather than wrapping the delegated command in a timeout
-utility as the failure mode documented by `#3449` warns against. A
+utility as the failure mode documented by
+`kurone-kito/idd-skill#3449` warns against. A
 harness that cannot bound its delegation primitive must record that
 residual risk and use structured self-critique instead.
 
