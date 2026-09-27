@@ -522,25 +522,25 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Off-default `{development-branch}`: `git switch <default-branch>`
    once F4 completes/holds, for B1's checkout.
-5. Run from the **primary worktree**, never inside the one being
-   removed. Removal (plain or `--force`) silently discards ignored
-   files, including inside submodules. Scope Git
-   commands to `<path>`. Inspect leftover files under a `-`
-   submodule path (not a repo).
+5. Run from the **primary worktree**, not one being removed.
+   Removal discards ignored files, including in submodules. Scope
+   commands to `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
-   still hide a stash or unpushed commit:
+   still hide a stash or unpushed commit; detached tag-only history is
+   ignored:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
-   - `git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list;
-     git rev-list HEAD --branches --not --remotes --tags --count'`
+   - Recursive submodule probe:
 
-   Generated output is disposable only when a configured command
-   reproduces it; preserve anything else. Copy secrets (e.g. `.env`)
-   out — never commit or push them. Copy other work to a different
-   ref or path.
+     ```sh
+     git -C <path> submodule foreach --recursive 'git status
+     --porcelain --ignored --untracked-files=normal; git stash list; git symbolic-ref -q HEAD >/dev/null && git rev-list --branches --not --remotes --count || git rev-list HEAD --not --remotes --tags --count'
+     ```
+
+   Generated output is disposable only when reproduced; preserve it.
+   Never commit or push secrets; move other work elsewhere.
    Before each `git worktree remove`, `cd` to the primary worktree
    and stay there. While the issue worktree exists, revalidate:
 
