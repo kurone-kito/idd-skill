@@ -780,13 +780,18 @@ export function isPathContainedIn(child: string, parent: string): boolean {
 }
 
 /** Return false when a copy destination (including a not-yet-existing suffix)
- * resolves into the worktree that is about to be removed. Checking the
- * effective path catches a symlinked child directory under an otherwise safe
- * preserve root. Unknown resolution is fail-closed for an actual copy. */
+ * resolves into the worktree or its private linked-worktree gitdir, either of
+ * which can disappear during removal. Checking the effective path catches a
+ * symlinked child directory under an otherwise safe preserve root. Unknown
+ * resolution is fail-closed for an actual copy (Codex/Copilot review).
+ */
 function isCopyDestinationOutsideTarget(
   destination: string,
   targetPath: string,
-  deps: Pick<LocalWorktreeRecoveryDeps, 'realpathOrNull' | 'readlinkOrNull'>,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'runGit' | 'realpathOrNull' | 'readlinkOrNull'
+  >,
 ): boolean {
   const targetReal = deps.realpathOrNull(targetPath);
   const destinationReal = resolveEffectiveRealpath(
@@ -794,10 +799,27 @@ function isCopyDestinationOutsideTarget(
     deps.realpathOrNull,
     deps.readlinkOrNull,
   );
+  const targetGitDirResult = deps.runGit(
+    ['rev-parse', '--absolute-git-dir'],
+    targetPath,
+  );
+  const targetGitDir =
+    targetGitDirResult.ok && targetGitDirResult.stdout.trim().length > 0
+      ? resolve(targetGitDirResult.stdout.trim())
+      : null;
+  const targetGitDirReal = targetGitDir
+    ? resolveEffectiveRealpath(
+        targetGitDir,
+        deps.realpathOrNull,
+        deps.readlinkOrNull,
+      )
+    : null;
   return (
     targetReal !== null &&
     destinationReal !== null &&
-    !isPathContainedIn(destinationReal, targetReal)
+    !isPathContainedIn(destinationReal, targetReal) &&
+    targetGitDirReal !== null &&
+    !isPathContainedIn(destinationReal, targetGitDirReal)
   );
 }
 

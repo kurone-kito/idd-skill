@@ -519,7 +519,21 @@ function baseArgs(
  * real repo only ever resolves `MERGE_HEAD` etc. when that operation is
  * genuinely active).
  */
-function cleanRepoRunGit(argv: string[]): LocalGitCommandResult {
+function cleanRepoRunGit(
+  argv: string[],
+  cwd = '/repo/linked',
+): LocalGitCommandResult {
+  if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+    return {
+      ok: true,
+      status: 0,
+      stdout:
+        cwd === '/repo/primary'
+          ? '/repo/primary/.git\n'
+          : '/repo/primary/.git/worktrees/linked\n',
+      stderr: '',
+    };
+  }
   if (
     (argv[0] === 'rev-parse' &&
       argv.includes('-q') &&
@@ -1208,6 +1222,42 @@ test('refuses an ignored-file destination whose child symlink points into the ta
         removeCalled = true;
       }
       return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: '/tmp/preserve',
+    }),
+    deps,
+  );
+  assert.equal(verdict.plan.ignoredFilesScanFailed, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+});
+
+test('refuses an ignored-file destination whose child symlink points into the linked private gitdir', () => {
+  let removeCalled = false;
+  const privateGitDir = '/repo/primary/.git/worktrees/linked';
+  const deps = fakeDeps({
+    realpathOrNull: (p) =>
+      p === '/repo/linked' || p === privateGitDir ? p : null,
+    readlinkOrNull: (p) =>
+      p === '/tmp/preserve/ignored' ? `${privateGitDir}/redirect` : null,
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! secret.env\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
     },
   });
   const verdict = runLocalWorktreeRecovery(
