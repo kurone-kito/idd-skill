@@ -1733,7 +1733,9 @@ function planAndMaybePreserve(
               ? result.stdout.trim()
               : null;
           })();
-    return gitDir ? [gitDir] : [];
+    return [path, scopePath, ...(gitDir ? [gitDir] : [])].filter(
+      (root, index, roots) => roots.indexOf(root) === index,
+    );
   };
   const submoduleListFailed =
     !submoduleStatus.ok ||
@@ -3434,7 +3436,7 @@ export function runLocalWorktreeRecovery(
         true,
         targetPath,
         null,
-        lateTargetGitDir ? [lateTargetGitDir] : [],
+        [targetPath, ...(lateTargetGitDir ? [lateTargetGitDir] : [])],
         deps,
       );
       verdict.plan.ignoredFilesCopied.push(...lateIgnored.copied);
@@ -3450,7 +3452,11 @@ export function runLocalWorktreeRecovery(
           true,
           targetPath,
           null,
-          lateTargetGitDir ? [lateTargetGitDir] : [],
+          [
+            targetPath,
+            join(targetPath, stash.scope),
+            ...(lateTargetGitDir ? [lateTargetGitDir] : []),
+          ],
           deps,
         );
         verdict.plan.ignoredFilesCopied.push(...lateSubmoduleIgnored.copied);
@@ -3815,6 +3821,60 @@ export function runLocalWorktreeRecovery(
       if (!shortcutRoutingStillMatches()) {
         return recordRemovalFailure(
           'the final prunable-worktree routing/claim identity no longer matches; stopping before forced removal',
+        );
+      }
+    }
+
+    // The guarded removal checks the local lock atomically, but a replacement
+    // claim can still be posted after the last routing observation above and
+    // before that guard runs. Re-read routing and the lock immediately before
+    // the destructive call so the removal cannot act on a stale remote claim
+    // (Copilot review #4116307851).
+    if (!shortcut.eligible) {
+      const immediatelyBeforeRemovalConfirm = deps.confirmBlock(cwd);
+      const immediatelyBeforeRemovalRouting =
+        immediatelyBeforeRemovalConfirm.routing;
+      const immediatelyBeforeRemovalRecovered = immediatelyBeforeRemovalRouting
+        ? extractRecoveredClaim(immediatelyBeforeRemovalRouting)
+        : null;
+      const immediatelyBeforeRemovalReleased =
+        immediatelyBeforeRemovalRouting !== null &&
+        isLegacyReleasedRouting(immediatelyBeforeRemovalRouting);
+      const immediatelyBeforeRemovalReportsTarget =
+        immediatelyBeforeRemovalRouting !== null &&
+        immediatelyBeforeRemovalRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(immediatelyBeforeRemovalRouting.reason) &&
+        !immediatelyBeforeRemovalRouting.reason.endsWith(
+          '-local-worktree-unreadable',
+        ) &&
+        (
+          immediatelyBeforeRemovalRouting.evidence?.local_worktree?.paths ?? []
+        ).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      if (
+        !immediatelyBeforeRemovalConfirm.ok ||
+        !immediatelyBeforeRemovalReportsTarget ||
+        immediatelyBeforeRemovalRecovered?.claimId !== recoveredClaimId ||
+        immediatelyBeforeRemovalRecovered.branch !== recoveredBranch ||
+        immediatelyBeforeRemovalReleased !== recoveredFromReleasedClaim
+      ) {
+        return recordRemovalFailure(
+          'the linked-worktree routing/claim identity changed immediately before removal; stopping before removal',
+        );
+      }
+      finalLinkedLock = deps.checkLock(targetPath);
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLinkedLock,
+          recoveredClaimId,
+          immediatelyBeforeRemovalReleased,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed immediately before removal; stopping before removal',
         );
       }
     }

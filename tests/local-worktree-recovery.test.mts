@@ -105,6 +105,36 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
   }
 });
 
+test('copyPathWithSafeSymlinks materializes links into the enclosing worktree', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-scope-'));
+  const worktree = join(root, 'worktree');
+  const scope = join(worktree, 'submodule');
+  const gitDir = join(root, 'gitdir');
+  const destination = join(root, 'preserve', 'shared-link');
+  try {
+    mkdirSync(scope, { recursive: true });
+    mkdirSync(gitDir);
+    writeFileSync(join(worktree, 'shared.txt'), 'shared\n');
+    symlinkSync('../shared.txt', join(scope, 'link.txt'));
+
+    copyPathWithSafeSymlinks(scope, destination, gitDir, [worktree, scope]);
+    rmSync(worktree, { recursive: true, force: true });
+
+    assert.equal(
+      readFileSync(join(destination, 'link.txt'), 'utf8'),
+      'shared\n',
+    );
+    assert.equal(
+      lstatSync(join(destination, 'link.txt')).isSymbolicLink(),
+      false,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('copyPathWithSafeSymlinks refuses a symlinked destination parent', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-parent-'));
   const source = join(root, 'source.txt');
@@ -938,6 +968,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   assert.deepEqual(callOrder, [
     'confirm-step1',
     'acquire',
+    'confirm-recheck',
     'confirm-recheck',
     'confirm-recheck',
     'remove',
@@ -2890,7 +2921,11 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
 });
 
 test('late preservation rescans initialized submodule ignored files before removal', () => {
-  const copied: Array<{ to: string; sourceRoot: string | undefined }> = [];
+  const copied: Array<{
+    to: string;
+    sourceRoot: string | undefined;
+    additionalSourceRoots: string[] | undefined;
+  }> = [];
   let submoduleIgnoredScans = 0;
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
@@ -2927,7 +2962,8 @@ test('late preservation rescans initialized submodule ignored files before remov
       }
       return cleanRepoRunGit(argv, cwd);
     },
-    copyPath: (_from, to, sourceRoot) => copied.push({ to, sourceRoot }),
+    copyPath: (_from, to, sourceRoot, additionalSourceRoots) =>
+      copied.push({ to, sourceRoot, additionalSourceRoots }),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
@@ -2937,6 +2973,11 @@ test('late preservation rescans initialized submodule ignored files before remov
     {
       to: '/tmp/preserve/ignored/submodule/cache.tmp',
       sourceRoot: '/repo/linked',
+      additionalSourceRoots: [
+        '/repo/linked',
+        '/repo/linked/submodule',
+        '/repo/primary/.git/worktrees/linked',
+      ],
     },
   ]);
   assert.equal(submoduleIgnoredScans, 2);
@@ -3197,6 +3238,49 @@ test('late preservation refuses a claim change before removal', () => {
   assert.equal(removeCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /changed during late preservation/);
+});
+
+test('ordinary linked removal rechecks claim identity immediately before removal', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: {
+            claim_id: confirmCalls >= 4 ? 'claim-y' : 'claim-x',
+            branch: 'issue/1-task',
+          },
+          evidence: {
+            local_worktree: {
+              status: 'occupied',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 4);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /immediately before removal/);
 });
 
 test('a staged superproject gitlink is not excluded as a submodule-only change', () => {
