@@ -176,6 +176,14 @@ function readlinkOrNull(path: string): string | null {
   }
 }
 
+function readFileOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -813,6 +821,25 @@ function clearInProgressOperation(
   return remaining === null
     ? null
     : `the in-progress ${operation.kind} remained after cleanup`;
+}
+
+function resolveDeinitializedSubmoduleGitDir(
+  targetGitDir: string | null,
+  submodulePath: string,
+): string | null {
+  if (targetGitDir === null) return null;
+  const segments = submodulePath.split(/[\\/]/g).filter(Boolean);
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => segment === '.' || segment === '..')
+  ) {
+    return null;
+  }
+  let gitDir = targetGitDir;
+  for (const segment of segments) {
+    gitDir = join(gitDir, 'modules', segment);
+  }
+  return gitDir;
 }
 
 /** True when `git status --porcelain --ignored --untracked-files=normal`
@@ -1561,12 +1588,22 @@ function scanAndMaybeCopyIgnoredFiles(
         copied.push({ path: ignoredPath, copiedTo: null });
         continue;
       }
-      deps.copyPath(
-        join(scopePath, ignoredPath),
-        destination,
-        targetPath,
-        sourceRoots,
-      );
+      try {
+        deps.copyPath(
+          join(scopePath, ignoredPath),
+          destination,
+          targetPath,
+          sourceRoots,
+        );
+      } catch {
+        // Earlier entries may already have landed and the preserve directory
+        // may already exist. Keep those entries in the returned plan, mark
+        // this scan failed, and let the caller report the partial mutation
+        // while still stopping before removal (Codex review).
+        scanFailed = true;
+        copied.push({ path: ignoredPath, copiedTo: null });
+        continue;
+      }
     }
     copied.push({ path: ignoredPath, copiedTo: destination });
   }
@@ -1848,9 +1885,10 @@ function planAndMaybePreserve(
     const operation = submoduleOperations.get(submodule.path);
     const submodulePath = join(path, submodule.path);
     const gitDir = deinitialized
-      ? targetGitDirForScope !== null
-        ? join(targetGitDirForScope, 'modules', submodule.path)
-        : null
+      ? resolveDeinitializedSubmoduleGitDir(
+          targetGitDirForScope,
+          submodule.path,
+        )
       : (() => {
           const result = preserveDeps.runGit(
             ['rev-parse', '--absolute-git-dir'],
@@ -2957,21 +2995,49 @@ export function runLocalWorktreeRecovery(
     if (verdict.primaryOrLinked === 'primary') {
       const developmentBranch = deps.resolveDevelopmentBranch();
       if (verdict.plan.inProgressOperation !== null) {
-        const operationError = clearInProgressOperation(
+        // `stash push` can clear a paused merge/cherry-pick while preserving
+        // its working-tree state. Re-detect the operation after preservation:
+        // a vanished operation is already cleaned up, while a changed
+        // operation must block rather than aborting a different operation.
+        const currentOperation = detectInProgressOperation(
           targetPath,
-          verdict.plan.inProgressOperation,
           deps.runGit,
+          deps.pathExists,
+          readFileOrNull,
         );
-        if (operationError !== null) {
+        if (
+          currentOperation !== null &&
+          (currentOperation.kind !== verdict.plan.inProgressOperation.kind ||
+            currentOperation.tipSha !== verdict.plan.inProgressOperation.tipSha)
+        ) {
           verdict.plan.removal = {
             kind: 'primary',
             developmentBranch,
             wouldRun: true,
             ran: false,
-            detail: `checked out ${developmentBranch}, but ${operationError}`,
+            detail:
+              'the in-progress operation changed during preservation; stopping before cleanup',
           };
           verdict.result = verdict.plan.removal.detail;
           return verdict;
+        }
+        if (currentOperation !== null) {
+          const operationError = clearInProgressOperation(
+            targetPath,
+            currentOperation,
+            deps.runGit,
+          );
+          if (operationError !== null) {
+            verdict.plan.removal = {
+              kind: 'primary',
+              developmentBranch,
+              wouldRun: true,
+              ran: false,
+              detail: `checked out ${developmentBranch}, but ${operationError}`,
+            };
+            verdict.result = verdict.plan.removal.detail;
+            return verdict;
+          }
         }
       }
       const checkout = deps.runGit(['checkout', developmentBranch], targetPath);

@@ -2712,6 +2712,42 @@ test('late preservation rescans initialized submodule ignored files before remov
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('records partial ignored-file copies and blocks removal when a later copy fails', () => {
+  let copyCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! first.tmp\0!! second.tmp\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: (_from, to) => {
+      copyCalls += 1;
+      if (to.endsWith('second.tmp')) {
+        throw new Error('synthetic copy failure');
+      }
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(copyCalls, 2);
+  assert.equal(verdict.plan.ignoredFilesScanFailed, true);
+  assert.equal(verdict.plan.ignoredFilesCopied[0]?.copiedTo !== null, true);
+  assert.equal(verdict.plan.ignoredFilesCopied[1]?.copiedTo, null);
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal, null);
+});
+
 test('late preservation refreshes uninitialized submodule copies before removal', () => {
   const copied: string[] = [];
   const deps = fakeDeps({
@@ -2800,6 +2836,43 @@ test('late preservation rejects an unreadable ownership suffix after refresh', (
   assert.equal(removeCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /changed during late preservation/);
+});
+
+test('preserves nested deinitialized submodule admin data', () => {
+  const copied: Array<{ from: string; to: string }> = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 parent/child\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (from, to) => copied.push({ from, to }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.ok(
+    copied.some(
+      ({ from, to }) =>
+        from ===
+          '/repo/primary/.git/worktrees/linked/modules/parent/modules/child' &&
+        to === '/tmp/preserve/submodule-gitdir/cGFyZW50L2NoaWxk',
+    ),
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('late preservation refuses a claim change before removal', () => {
@@ -3384,6 +3457,130 @@ for (const operationCase of [
     }
   });
 }
+
+test('primary recovery does not abort a merge already cleared by stash', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-stash-merge-'));
+  mkdirSync(join(root, '.git'), { recursive: true });
+  let operationActive = true;
+  let stashCreated = false;
+  let confirmCalls = 0;
+  let abortCalled = false;
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) => path === root || existsSync(path),
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 3;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (
+          argv[0] === 'rev-parse' &&
+          argv.includes('-q') &&
+          argv.includes('MERGE_HEAD')
+        ) {
+          return operationActive
+            ? { ok: true, status: 0, stdout: 'merge-head\n', stderr: '' }
+            : { ok: false, status: 1, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout: ' M tracked.txt\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'stash' && argv[1] === 'list') {
+          return {
+            ok: true,
+            status: 0,
+            stdout: stashCreated ? 'stash@{0}: On main: idd-lwr claim-x\n' : '',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'stash' && argv[1] === 'push') {
+          stashCreated = true;
+          operationActive = false;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'merge' && argv[1] === '--abort') {
+          abortCalled = true;
+          return {
+            ok: false,
+            status: 128,
+            stdout: '',
+            stderr: 'There is no merge to abort',
+          };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return { ok: true, status: 0, stdout: `${root}/.git\n`, stderr: '' };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('HEAD')) {
+          return { ok: true, status: 0, stdout: 'head-sha\n', stderr: '' };
+        }
+        if (argv[0] === 'rev-parse' && argv[1] === '--verify') {
+          return { ok: true, status: 0, stdout: 'head-sha\n', stderr: '' };
+        }
+        if (argv[0] === 'checkout') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(abortCalled, false);
+    assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
   let unlinkAttempted = false;
