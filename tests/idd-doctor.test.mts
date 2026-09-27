@@ -144,7 +144,7 @@ test('autopilot-suitability consistency: needs-decision bucket uses its own labe
 });
 
 test('autopilot-suitability consistency: blocked-by-human bucket requires its label', () => {
-  const body = `human-only\n${ap(4)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
+  const body = `human-only\n${ap(1)}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->`;
   const missingLabel = evaluateAutopilotSuitabilityConsistency(
     [{ number: 40, body, labels: [] }],
     { floor: 3 },
@@ -160,6 +160,42 @@ test('autopilot-suitability consistency: blocked-by-human bucket requires its la
     { floor: 3 },
   );
   assert.deepEqual(coherent.warnings, []);
+});
+
+test('autopilot-suitability consistency: validates buckets without a suitability footer', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 45,
+        body: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+        labels: [],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /issue #45 has an authoring-bucket: needs-decision marker but is missing the status:needs-decision label/,
+  );
+});
+
+test('autopilot-suitability consistency: bucket semantics do not suppress score contradictions', () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 46,
+        body: `task\n${ap(4)}\n<!-- idd-skill-authoring-bucket: needs-decision -->`,
+        labels: ['status:needs-decision', 'status:blocked-by-human'],
+      },
+    ],
+    { floor: 3 },
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /issue #46 is scored 4 \(>= floor 3\) but carries status:blocked-by-human/,
+  );
 });
 
 test('autopilot-suitability consistency: malformed buckets retain legacy score checks', () => {
@@ -182,6 +218,15 @@ test('autopilot-suitability consistency: ignores escaped authoring-bucket exampl
   const body = `legacy\n${ap(1)}\n\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
   const { warnings } = evaluateAutopilotSuitabilityConsistency(
     [{ number: 44, body, labels: ['status:blocked-by-human'] }],
+    { floor: 3 },
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('autopilot-suitability consistency: accepts an authoring bucket after an even backslash run', () => {
+  const body = `legacy\n${ap(1)}\n\\\\<!-- idd-skill-authoring-bucket: needs-decision -->`;
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 47, body, labels: ['status:needs-decision'] }],
     { floor: 3 },
   );
   assert.deepEqual(warnings, []);

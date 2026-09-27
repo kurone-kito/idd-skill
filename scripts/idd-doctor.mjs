@@ -166,38 +166,38 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
     );
     const blockedByHuman = labelNames.has(normalizedBlockedByHumanLabelName);
     const needsDecision = labelNames.has(normalizedNeedsDecisionLabelName);
+    const authoringBucket = parseAuthoringBucketMarker(
+      typeof issue?.body === 'string' ? maskMarkdownForScan(issue.body) : '',
+      prefix,
+    );
+    const number = issue?.number;
+    if (authoringBucket.value === 'needs-decision' && !needsDecision) {
+      warnings.push(
+        `autopilot-suitability: issue #${number} has an authoring-bucket: needs-decision marker but is missing the ${needsDecisionLabelName} label`,
+      );
+    } else if (
+      authoringBucket.value === 'blocked-by-human' &&
+      !blockedByHuman
+    ) {
+      warnings.push(
+        `autopilot-suitability: issue #${number} has an authoring-bucket: blocked-by-human marker but is missing the ${blockedByHumanLabelName} label`,
+      );
+    }
     const marker = parseAutopilotSuitabilityMarker(issue?.body, prefix);
     if (!marker.present) {
       continue;
     }
-    const number = issue?.number;
     if (marker.malformed) {
       warnings.push(
         `autopilot-suitability: issue #${number} has a malformed or out-of-range score marker (expected a single integer 1-5)`,
       );
       continue;
     }
-    const authoringBucket = parseAuthoringBucketMarker(
-      typeof issue?.body === 'string' ? maskMarkdownForScan(issue.body) : '',
-      prefix,
-    );
-    if (authoringBucket.value === 'needs-decision') {
-      if (!needsDecision) {
-        warnings.push(
-          `autopilot-suitability: issue #${number} has an authoring-bucket: needs-decision marker but is missing the ${needsDecisionLabelName} label`,
-        );
-      }
-      continue;
-    }
-    if (authoringBucket.value === 'blocked-by-human') {
-      if (!blockedByHuman) {
-        warnings.push(
-          `autopilot-suitability: issue #${number} has an authoring-bucket: blocked-by-human marker but is missing the ${blockedByHumanLabelName} label`,
-        );
-      }
-      continue;
-    }
-    if (marker.value === 1 && !blockedByHuman) {
+    if (
+      marker.value === 1 &&
+      authoringBucket.value === null &&
+      !blockedByHuman
+    ) {
       warnings.push(
         `autopilot-suitability: issue #${number} is scored 1 (human-only) but is missing the ${blockedByHumanLabelName} label`,
       );

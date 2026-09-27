@@ -2684,6 +2684,18 @@ export function isAuthoringBucketValue(
   return value === 'needs-decision' || value === 'blocked-by-human';
 }
 
+function isEscapedMarkerOpener(text: string, index: number): boolean {
+  let backslashCount = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && text[cursor] === '\\';
+    cursor -= 1
+  ) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
+
 /**
  * Canonical parser for the authored
  * `<!-- {prefix}-authoring-bucket: needs-decision|blocked-by-human -->`
@@ -2707,22 +2719,27 @@ export function parseAuthoringBucketMarker(
 ): AuthoringBucketMarkerDetection {
   // A backslash-escaped opener renders as literal text in CommonMark, so it
   // must not turn an issue's documented marker syntax into a live bucket.
-  // Keep this in step with findHtmlCommentRanges's escaped-opener handling.
+  // Count the full preceding run: an even run leaves the opener live.
   const rawMarker = createMarkerRegex(markerPrefix, 'authoring-bucket');
-  const rawCount = [
-    ...text.matchAll(new RegExp(`(?<!\\\\)${rawMarker.source}`, 'gi')),
-  ].length;
+  const rawRegex = new RegExp(rawMarker.source, 'gi');
+  const rawCount = [...text.matchAll(rawRegex)].filter(
+    (match) => !isEscapedMarkerOpener(text, match.index ?? 0),
+  ).length;
   if (rawCount === 0) {
     return { present: false, value: null, malformed: false };
   }
   const regex = new RegExp(
-    `(?<!\\\\)<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-bucket:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
   let coherentCount = 0;
   let value: AuthoringBucketMarkerValue | null = null;
   let match = regex.exec(text);
   while (match) {
+    if (isEscapedMarkerOpener(text, match.index)) {
+      match = regex.exec(text);
+      continue;
+    }
     coherentCount += 1;
     const raw = match[1];
     const parsed = isAuthoringBucketValue(raw) ? raw : null;
