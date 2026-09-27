@@ -218,6 +218,8 @@ export interface StashPlanEntry {
   scope: string;
   tag: string;
   hasChanges: boolean;
+  /** True when the scope already had any stash entry, not only this tag. */
+  hasStashes: boolean;
   /** True when the `git status` probe itself failed (not merely "clean") --
    * Codex/Copilot review: this must block removal, never read as `hasChanges:
    * false`. */
@@ -252,6 +254,11 @@ export interface BackupRefPlanEntry {
    * `hasUnpushed` reads `false` in that case (Copilot/Codex review). */
   unpushedQueryFailed: boolean;
   tipSha: string | null;
+  /** True when any local ref is reachable from a commit not advertised by a
+   * remote; submodule admin data must be copied before worktree removal. */
+  hasLocalOnlyRefs: boolean;
+  /** True when the local-only-ref probe failed and preservation is unknown. */
+  localRefsQueryFailed: boolean;
   written: boolean;
   verifiedOid: string | null;
 }
@@ -356,6 +363,11 @@ export interface LocalWorktreeRecoveryDeps {
   confirmBlock: (cwd: string) => ConfirmBlockOutcome;
   /** `checkClaimLock`, called directly (no network, no subprocess). */
   checkLock: (worktreePath: string) => CheckLockOutcome;
+  /** Remove only a lock whose ownership token still matches the final read. */
+  removeLockIfMatches: (
+    worktreePath: string,
+    expected: CheckLockOutcome,
+  ) => boolean;
   /** Non-throwing `git <argv>` in `cwd`. */
   runGit: (argv: string[], cwd: string) => LocalGitCommandResult;
   pathExists: (path: string) => boolean;
@@ -392,6 +404,22 @@ function lockMatchesRecoveredClaim(
     return !lock.present || lock.holder?.claimId === null;
   }
   return lock.present && lock.holder?.claimId === recoveredClaimId;
+}
+
+function sameClaimLock(
+  left: CheckLockOutcome,
+  right: CheckLockOutcome,
+): boolean {
+  return (
+    left.path === right.path &&
+    left.present &&
+    !left.malformed &&
+    right.present &&
+    !right.malformed &&
+    left.holder?.agentId === right.holder?.agentId &&
+    left.holder?.claimId === right.holder?.claimId &&
+    left.holder?.acquiredAt === right.holder?.acquiredAt
+  );
 }
 
 /** Extract the recovered claim-id (null for a legacy pre-claim-id release)
@@ -994,6 +1022,7 @@ function planAndMaybeStashScope(
     scope: scopeLabel,
     tag,
     hasChanges,
+    hasStashes: baselineList.ok && baselineList.stdout.trim().length > 0,
     statusReadFailed,
     stashListReadFailed: !baselineList.ok,
     baselineCount,
@@ -1031,6 +1060,22 @@ function planAndMaybeStashScope(
     // (Codex review finding: a coexisting untracked file or non-conflicting
     // modification would otherwise be silently lost), and verify each one
     // actually landed before trusting this scope as preserved.
+    const dirtyEntries = extractDirtyEntries(status.stdout);
+    if (
+      dirtyEntries.some(
+        (entry) =>
+          entry.indexStatus !== ' ' &&
+          entry.indexStatus !== '?' &&
+          entry.indexStatus !== '!',
+      )
+    ) {
+      // A worktree copy cannot preserve the staged/index side of an `MM`,
+      // `UU`, or similar entry. Fail closed instead of removing the private
+      // index while claiming that the working-tree version was sufficient
+      // (Codex review #4114324399).
+      entry.unmergedFallbackAllPreserved = false;
+      return entry;
+    }
     const allDirtyPaths = extractDirtyPaths(status.stdout);
     const dirtyPaths = allDirtyPaths.filter(isSafeRelativePath);
     if (dirtyPaths.length > 0) {
@@ -1086,6 +1131,12 @@ function planAndMaybeBackupRef(
   const ref = `refs/idd-lwr/${branch}`;
   let tipSha: string | null = null;
   let hasUnpushed = false;
+  const localRefs = runGit(
+    ['rev-list', '--all', '--not', '--remotes'],
+    scopePath,
+  );
+  const localRefsQueryFailed = !localRefs.ok;
+  const hasLocalOnlyRefs = localRefs.ok && localRefs.stdout.trim().length > 0;
   // Copilot/Codex review: a failed `git log @{u}..HEAD` (or `git rev-parse
   // HEAD`) probe must never read as "no unpushed commits" -- unlike the
   // other preservation probes, this one previously failed OPEN. Recorded
@@ -1129,10 +1180,18 @@ function planAndMaybeBackupRef(
     hasUnpushed,
     unpushedQueryFailed,
     tipSha,
+    hasLocalOnlyRefs,
+    localRefsQueryFailed,
     written: false,
     verifiedOid: null,
   };
-  if (unpushedQueryFailed || !hasUnpushed || !tipSha || !apply) {
+  if (
+    localRefsQueryFailed ||
+    unpushedQueryFailed ||
+    !hasUnpushed ||
+    !tipSha ||
+    !apply
+  ) {
     return entry;
   }
   const write = runGit(['update-ref', ref, tipSha], scopePath);
@@ -1417,7 +1476,14 @@ function planAndMaybePreserve(
       const stash = stashes.find((entry) => entry.scope === submodule.path);
       const ref = backupRefs.find((entry) => entry.scope === submodule.path);
       const operation = submoduleOperations.get(submodule.path);
-      if (!stash?.stashed && !ref?.written && operation === null) continue;
+      if (
+        !stash?.stashed &&
+        !stash?.hasStashes &&
+        !ref?.written &&
+        !ref?.hasLocalOnlyRefs &&
+        operation === null
+      )
+        continue;
       const submodulePath = join(path, submodule.path);
       const gitDir = preserveDeps.runGit(
         ['rev-parse', '--absolute-git-dir'],
@@ -1517,6 +1583,7 @@ function preservationVerified(
     }
   }
   for (const ref of preserve.backupRefs) {
+    if (ref.localRefsQueryFailed) return false;
     if (ref.unpushedQueryFailed) return false;
     if (!ref.hasUnpushed) continue;
     if (
@@ -2360,41 +2427,31 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
-      const lockPath = deps.runGit(
-        ['rev-parse', '--absolute-git-dir'],
-        targetPath,
-      );
-      if (!lockPath.ok) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `checked out ${developmentBranch}, but could not resolve the git directory to remove the lock file: ${lockPath.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const idLockFile = join(lockPath.stdout.trim(), 'idd-claim.lock');
       try {
-        unlinkSync(idLockFile);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== 'ENOENT') {
+        if (
+          !deps.removeLockIfMatches(targetPath, immediatelyBeforeDeleteLock)
+        ) {
           verdict.plan.removal = {
             kind: 'primary',
             developmentBranch,
             wouldRun: true,
             ran: false,
-            detail: `checked out ${developmentBranch}, but removing the lock file failed: ${(error as Error).message}`,
+            detail:
+              'the primary-worktree lock changed before compare-and-delete; stopping before lock removal',
           };
           verdict.result = verdict.plan.removal.detail;
           return verdict;
         }
-        // ENOENT: already gone (e.g. removed by the same recovery on a
-        // retried attempt) -- the positively-observed lock is confirmed
-        // absent either way, matching claim-lock.mts's own release
-        // semantics for an absent lock.
+      } catch (error) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checked out ${developmentBranch}, but compare-and-delete of the lock file failed: ${(error as Error).message}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
       }
       verdict.plan.removal = {
         kind: 'primary',
@@ -2488,6 +2545,23 @@ export function runLocalWorktreeRecovery(
       };
       verdict.result = verdict.plan.removal.detail;
       return verdict;
+    }
+
+    if (shortcut.eligible) {
+      const finalShortcutRecords = deps.listWorktreeRecords(cwd);
+      if (
+        finalShortcutRecords === null ||
+        !evaluatePrunableShortcut(
+          finalShortcutRecords,
+          targetPath,
+          recoveredBranch,
+          deps.pathExists,
+        ).eligible
+      ) {
+        return recordRemovalFailure(
+          'the prunable-and-absent record changed before forced removal; stopping before removal',
+        );
+      }
     }
 
     let remove = deps.runGit(
@@ -2804,6 +2878,24 @@ function listWorktreeRecordsProduction(
   }
 }
 
+/** Delete the final primary-worktree lock only after re-reading and matching
+ * its complete ownership token. This keeps the cleanup operation from
+ * unlinking a replacement lock observed after the caller's earlier check. */
+function removeClaimLockIfMatchesProduction(
+  worktreePath: string,
+  expected: CheckLockOutcome,
+): boolean {
+  const current = checkClaimLock(worktreePath);
+  if (!sameClaimLock(current, expected)) return false;
+  try {
+    unlinkSync(current.path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function createProductionDeps(
   args: LocalWorktreeRecoveryArgs,
 ): LocalWorktreeRecoveryDeps {
@@ -2812,6 +2904,7 @@ function createProductionDeps(
     listWorktreeRecords: listWorktreeRecordsProduction,
     confirmBlock: confirmBlockProduction(args),
     checkLock: (worktreePath: string) => checkClaimLock(worktreePath),
+    removeLockIfMatches: removeClaimLockIfMatchesProduction,
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
     realpathOrNull,

@@ -592,6 +592,7 @@ function fakeDeps(
         acquiredAt: '2026-09-24T00:00:00Z',
       },
     }),
+    removeLockIfMatches: () => true,
     runGit: cleanRepoRunGit,
     pathExists: () => true,
     realpathOrNull: (p: string) => p,
@@ -1050,6 +1051,50 @@ test('prunable shortcut removes the worktree with `--force`', () => {
     ['worktree', 'remove', '--force', '/repo/linked'],
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('prunable shortcut stops when the record becomes locked immediately before force removal', () => {
+  let listCalls = 0;
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => {
+      listCalls += 1;
+      return [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        listCalls >= 3 ? { ...record, locked: true } : record,
+      ];
+    },
+    pathExists: () => false,
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(listCalls, 3);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /before forced removal/);
 });
 
 test('verified prunable shortcuts may keep unreadable routing at final check', () => {
@@ -1760,6 +1805,10 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
         },
       };
     },
+    removeLockIfMatches: () => {
+      unlinkAttempted = true;
+      return true;
+    },
     confirmBlock: () => {
       confirmCalls += 1;
       return {
@@ -2095,6 +2144,100 @@ test('a genuinely unmerged-path stash failure still takes the copy-out fallback'
     verdict.plan.stashes[0]?.unmergedFallbackCopiedTo !== null,
     true,
   );
+});
+
+test('an unmerged fallback refuses staged index contents it cannot copy', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'MM conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, false);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackCopiedTo, null);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+});
+
+test('copies an initialized submodule admin dir for pre-existing stashes or local-only refs', () => {
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'stash' &&
+        argv[1] === 'list'
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'stash@{0}: On main: pre-existing\n',
+          stderr: '',
+        };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-list' &&
+        argv.includes('--not')
+      ) {
+        return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
+      }
+      if (
+        cwd === '/repo/linked/submodule' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir')
+      ) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/linked/.git/modules/submodule\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(
+    verdict.plan.submoduleAdminCopies.length,
+    1,
+    'pre-existing submodule admin data must be copied before removal',
+  );
+  assert.equal(verdict.plan.submoduleAdminCopies[0]?.path, 'submodule');
+  assert.equal(verdict.plan.submoduleAdminCopies[0]?.copiedTo !== null, true);
+  assert.equal(copied.length, 1);
+  assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('a failed `git log @{u}..HEAD` (or HEAD) probe blocks removal instead of reading as no unpushed commits (Copilot/Codex review finding)', () => {
