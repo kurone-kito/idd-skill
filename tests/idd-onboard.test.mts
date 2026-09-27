@@ -3573,6 +3573,7 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
   commitFixtureBaseline(targetRoot);
   execFileSync('git', ['-C', targetRoot, 'branch', 'release+candidate'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   // Simulate --import copying the non-held schema after the baseline commit.
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
@@ -3644,6 +3645,7 @@ test('checkHeldSchemaDrift falls back for an unborn Git target', () => {
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
@@ -3695,20 +3697,25 @@ test('checkHeldSchemaDrift fails when an existing Git HEAD cannot resolve', () =
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], {
+    stdio: 'ignore',
+    env: fixtureGitEnv(),
+  });
   execFileSync(
     'git',
     ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   writeFileSync(
     join(targetRoot, '.git', 'refs', 'heads', 'main'),
@@ -3731,25 +3738,30 @@ test('checkHeldSchemaDrift fails when a Git baseline blob cannot be read', () =>
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], {
+    stdio: 'ignore',
+    env: fixtureGitEnv(),
+  });
   execFileSync(
     'git',
     ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   const blobOid = execFileSync(
     'git',
     ['-C', targetRoot, 'rev-parse', `HEAD:${DRIFT_SCHEMA}`],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', env: fixtureGitEnv() },
   ).trim();
   rmSync(
     join(targetRoot, '.git', 'objects', blobOid.slice(0, 2), blobOid.slice(2)),
@@ -3773,20 +3785,25 @@ test('checkHeldSchemaDrift reads baseline blobs larger than the child-process de
   writeDriftManifest(targetRoot, driftFiles(targetSchema, moduleText));
   execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], {
+    stdio: 'ignore',
+    env: fixtureGitEnv(),
+  });
   execFileSync(
     'git',
     ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), sourceSchema);
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -4588,6 +4605,29 @@ test('checkHeldSchemaDrift keeps glob array patterns separate from path joins', 
   ]);
 });
 
+test('checkHeldSchemaDrift matches grouped directory-scan callees', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "(fs.globSync)('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/widget.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift routes star extglobs through the regex matcher', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4846,6 +4886,24 @@ test('checkHeldSchemaDrift supports glob character classes', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift treats escaped class hyphens literally', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `${String.raw`globSync('schemas/[a\\-z].json');`}\n`;
+  writeDriftManifest(sourceRoot, {
+    'schemas/c.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/c.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift preserves UTF-16 code-unit ordinary class semantics', () => {
@@ -5125,6 +5183,29 @@ test('checkHeldSchemaDrift bounds pathological ordinary-star globs', () => {
       hold: [DRIFT_MODULE],
     }),
   );
+});
+
+test('checkHeldSchemaDrift lets a star consume one directory segment', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/*/*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/schemas/widget.valid.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/schemas/widget.valid.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'fixtures/schemas/widget.valid.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
 });
 
 test('checkHeldSchemaDrift bounds ordinary brace alternative expansion', () => {
@@ -5720,20 +5801,25 @@ test('checkHeldSchemaDrift reads a nested Git target baseline from its target ro
   writeFileSync(join(outerRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
   execFileSync('git', ['init', '--initial-branch=main', outerRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', outerRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', outerRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
-  execFileSync('git', ['-C', outerRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', outerRoot, 'add', '.'], {
+    stdio: 'ignore',
+    env: fixtureGitEnv(),
+  });
   execFileSync(
     'git',
     ['-C', outerRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -5758,20 +5844,25 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
   for (const root of [targetRoot, overrideRoot]) {
     execFileSync('git', ['init', '--initial-branch=main', root], {
       stdio: 'ignore',
+      env: fixtureGitEnv(),
     });
     execFileSync(
       'git',
       ['-C', root, 'config', 'user.email', 'fixture@example.com'],
-      { stdio: 'ignore' },
+      { stdio: 'ignore', env: fixtureGitEnv() },
     );
     execFileSync('git', ['-C', root, 'config', 'user.name', 'Fixture'], {
       stdio: 'ignore',
+      env: fixtureGitEnv(),
     });
-    execFileSync('git', ['-C', root, 'add', '.'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'add', '.'], {
+      stdio: 'ignore',
+      env: fixtureGitEnv(),
+    });
     execFileSync(
       'git',
       ['-C', root, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-      { stdio: 'ignore' },
+      { stdio: 'ignore', env: fixtureGitEnv() },
     );
   }
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
@@ -5823,20 +5914,25 @@ test('checkHeldSchemaDrift ignores Git baseline non-file collisions', () => {
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], {
+    stdio: 'ignore',
+    env: fixtureGitEnv(),
+  });
   execFileSync(
     'git',
     ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   rmSync(join(targetRoot, DRIFT_SCHEMA));
   mkdirSync(join(targetRoot, DRIFT_SCHEMA));
@@ -6546,6 +6642,7 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
 function writeHearFixture(root: string): void {
   execFileSync('git', ['init', '--initial-branch=main', root], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
@@ -6557,7 +6654,7 @@ function writeHearFixture(root: string): void {
       'origin',
       'git@github.com:trusted-user-a/hear-fixture.git',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   writeFileSync(
     join(root, 'package.json'),
@@ -6968,30 +7065,35 @@ function makeGitRemoteFixture(): { root: string; remoteRoot: string } {
   const remoteRoot = trackedMkdtemp('idd-onboard-remote-');
   execFileSync('git', ['init', '--initial-branch=main', remoteRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', remoteRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['-C', remoteRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   writeFileSync(join(remoteRoot, 'README.md'), '# fixture\n');
   execFileSync('git', ['-C', remoteRoot, 'add', 'README.md'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', remoteRoot, 'commit', '--no-gpg-sign', '-m', 'fixture'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   const root = makeFixtureDir();
   execFileSync('git', ['init', '--initial-branch=main', root], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync('git', ['-C', root, 'remote', 'add', 'origin', remoteRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   return { root, remoteRoot };
 }
@@ -7814,32 +7916,37 @@ function writeRecordPolicyFixture(root: string): void {
       `--initial-branch=${RECORD_POLICY_FIXTURE_DEVELOPMENT_BRANCH}`,
       remoteRoot,
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync(
     'git',
     ['-C', remoteRoot, 'config', 'user.email', 'fixture@example.com'],
     {
       stdio: 'ignore',
+      env: fixtureGitEnv(),
     },
   );
   execFileSync('git', ['-C', remoteRoot, 'config', 'user.name', 'Fixture'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   writeFileSync(join(remoteRoot, 'README.md'), '# fixture remote\n');
   execFileSync('git', ['-C', remoteRoot, 'add', 'README.md'], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync(
     'git',
     ['-C', remoteRoot, 'commit', '--no-gpg-sign', '-m', 'fixture'],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: fixtureGitEnv() },
   );
   execFileSync('git', ['init', '--initial-branch=main', root], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
   execFileSync('git', ['-C', root, 'remote', 'add', 'origin', remoteRoot], {
     stdio: 'ignore',
+    env: fixtureGitEnv(),
   });
 }
 

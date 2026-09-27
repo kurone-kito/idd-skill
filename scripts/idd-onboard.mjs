@@ -2101,7 +2101,7 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\()/gu;
+  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\)?\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2473,6 +2473,10 @@ function findDirectoryScanCalls(text) {
         openIndex += 1;
         continue;
       }
+      if (normalizedText[openIndex] === ')') {
+        openIndex += 1;
+        continue;
+      }
       if (normalizedText[openIndex] === '<') {
         let angleDepth = 0;
         let closed = false;
@@ -2646,8 +2650,44 @@ function pathExpressionCandidates(text) {
   }
   return literals;
 }
-function normalizeManifestScanPath(path, preserveTrailingSlash = false) {
-  const normalized = path.replaceAll('\\', '/');
+function normalizeManifestScanPath(
+  path,
+  preserveTrailingSlash = false,
+  preserveGlobCharacterClassEscapes = false,
+) {
+  let normalized = '';
+  let inCharacterClass = false;
+  let inPosixCharacterClass = false;
+  for (let index = 0; index < path.length; index += 1) {
+    const character = path[index] ?? '';
+    if (character === '\\') {
+      if (preserveGlobCharacterClassEscapes && inCharacterClass) {
+        normalized += character;
+        const escapedCharacter = path[index + 1];
+        if (escapedCharacter !== undefined) {
+          normalized += escapedCharacter;
+          index += 1;
+        }
+      } else {
+        normalized += '/';
+      }
+      continue;
+    }
+    normalized += character;
+    if (preserveGlobCharacterClassEscapes && inCharacterClass) {
+      if (character === '[' && /[:.=]/u.test(path[index + 1] ?? '')) {
+        inPosixCharacterClass = true;
+      } else if (character === ']') {
+        if (inPosixCharacterClass) {
+          inPosixCharacterClass = false;
+        } else {
+          inCharacterClass = false;
+        }
+      }
+    } else if (preserveGlobCharacterClassEscapes && character === '[') {
+      inCharacterClass = true;
+    }
+  }
   const hasTrailingSlash = preserveTrailingSlash && normalized.endsWith('/');
   if (normalized.startsWith('/')) {
     return normalized;
@@ -2686,7 +2726,11 @@ function resolveModuleRelativeScanPath(
     return path;
   }
   const base = modulePath.slice(0, moduleSlash);
-  return normalizeManifestScanPath(`${base}/${path}`);
+  return normalizeManifestScanPath(
+    `${base}/${path}`,
+    false,
+    isGlobPattern(path),
+  );
 }
 function usesModuleRelativePathExpression(text) {
   return (
@@ -2887,7 +2931,6 @@ function matchSimpleStarGlob(pattern, targetPath) {
   let patternIndex = 0;
   let targetIndex = 0;
   let lastStarIndex = -1;
-  let lastStarStartTargetIndex = -1;
   let lastStarTargetIndex = -1;
   while (targetIndex < targetPath.length) {
     const character = pattern[patternIndex] ?? '';
@@ -2904,7 +2947,6 @@ function matchSimpleStarGlob(pattern, targetPath) {
         return false;
       }
       lastStarIndex = patternIndex;
-      lastStarStartTargetIndex = targetIndex;
       lastStarTargetIndex = targetIndex;
       patternIndex += 1;
       continue;
@@ -2912,14 +2954,10 @@ function matchSimpleStarGlob(pattern, targetPath) {
     if (lastStarIndex === -1) {
       return false;
     }
-    const nextStarTargetIndex = lastStarTargetIndex + 1;
-    const starTarget = targetPath[nextStarTargetIndex] ?? '';
-    const starAtSegmentStart =
-      (lastStarIndex === 0 || pattern[lastStarIndex - 1] === '/') &&
-      nextStarTargetIndex === lastStarStartTargetIndex;
-    if (starTarget === '/' || (starAtSegmentStart && starTarget === '.')) {
+    if ((targetPath[lastStarTargetIndex] ?? '') === '/') {
       return false;
     }
+    const nextStarTargetIndex = lastStarTargetIndex + 1;
     lastStarTargetIndex = nextStarTargetIndex;
     targetIndex = lastStarTargetIndex;
     patternIndex = lastStarIndex + 1;
@@ -3106,12 +3144,33 @@ function globPatternToRegex(
           /\[:(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]/gu,
           (_match, name) => `__IDD_POSIX_${name}__`,
         );
-        characterClass = characterClass
-          .replaceAll('\\', '\\\\')
-          .replace(
-            /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
-            (_match, name) => posixClassReplacements[name] ?? _match,
-          );
+        let escapedCharacterClass = '';
+        for (
+          let classIndex = 0;
+          classIndex < characterClass.length;
+          classIndex += 1
+        ) {
+          const classCharacter = characterClass[classIndex] ?? '';
+          if (classCharacter !== '\\') {
+            escapedCharacterClass += classCharacter;
+            continue;
+          }
+          const escapedCharacter = characterClass[classIndex + 1];
+          if (escapedCharacter === undefined) {
+            escapedCharacterClass += '\\\\';
+            continue;
+          }
+          if (/[-[\\\]^]/u.test(escapedCharacter)) {
+            escapedCharacterClass += `\\${escapedCharacter}`;
+          } else {
+            escapedCharacterClass += escapeRegExp(escapedCharacter);
+          }
+          classIndex += 1;
+        }
+        characterClass = escapedCharacterClass.replace(
+          /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
+          (_match, name) => posixClassReplacements[name] ?? _match,
+        );
         if (characterClass.startsWith('^]')) {
           characterClass = `^\\]${characterClass.slice(2)}`;
         } else if (characterClass.startsWith(']')) {
@@ -3294,7 +3353,11 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
     )
       .flat()
       .map((candidate) =>
-        normalizeManifestScanPath(candidate, /^glob(?:Sync)?$/u.test(apiName)),
+        normalizeManifestScanPath(
+          candidate,
+          /^glob(?:Sync)?$/u.test(apiName),
+          isGlobPattern(candidate),
+        ),
       );
     const exclusions = (
       hasCwd
@@ -3306,7 +3369,9 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
         : excludeCandidates
     )
       .flat()
-      .map((candidate) => normalizeManifestScanPath(candidate));
+      .map((candidate) =>
+        normalizeManifestScanPath(candidate, false, isGlobPattern(candidate)),
+      );
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
     const normalizedDirectory = normalizeManifestScanPath(directory);
     const readsDirectoryEntries = !/^glob(?:Sync)?$/u.test(apiName);
