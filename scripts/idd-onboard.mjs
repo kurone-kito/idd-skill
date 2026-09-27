@@ -2870,7 +2870,7 @@ function globPatternToRegex(
           digit: '\\p{Nd}',
           graph: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}',
           lower: '\\p{Ll}',
-          print: '\\x20-\\x7E',
+          print: '\\x00',
           punct: '\\p{P}',
           space: '\\s',
           upper: '\\p{Lu}',
@@ -2892,7 +2892,16 @@ function globPatternToRegex(
         } else if (characterClass.startsWith(']')) {
           characterClass = `\\]${characterClass.slice(1)}`;
         }
-        expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}[${characterClass}]`;
+        const classPrefix =
+          segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : '';
+        const hasPosixClass = /\\p\{|\\s/u.test(characterClass);
+        if (hasPosixClass) {
+          expression += `${classPrefix}[${characterClass}]`;
+        } else {
+          const captureName = `__iddQuestion${questionCaptures.length}`;
+          questionCaptures.push({ name: captureName, codeUnitCount: 1 });
+          expression += `(?<${captureName}>${classPrefix}[${characterClass}])`;
+        }
         index = closing;
       }
     } else if (character === '{') {

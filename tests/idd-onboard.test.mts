@@ -4670,6 +4670,24 @@ test('checkHeldSchemaDrift supports glob character classes', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves UTF-16 code-unit ordinary class semantics', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift supports POSIX glob character classes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4828,6 +4846,24 @@ test('checkHeldSchemaDrift preserves Unicode POSIX punctuation matches', () => {
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: 'schemas/¿.json', heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift follows Node print-class semantics', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[[:print:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/A.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/A.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {
