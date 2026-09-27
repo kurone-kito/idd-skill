@@ -295,7 +295,8 @@ below instead.
 
    ```sh
    node scripts/idd-onboard.mjs --verify \
-     --source <idd-skill-clone> --target <target-repo> [--profile <name>]
+     --source <idd-skill-clone> --target <target-repo> [--profile <name>] \
+     --target-base-ref <pre-import-ref>
    ```
 
 If any step reports a blocking finding, open the referenced companion
