@@ -150,15 +150,16 @@ const IDD_CLEANUP_EVIDENCE_PREFIX = '<!-- idd-cleanup-evidence:';
  * ALSO trusted from this same actor (checked separately, since it is also
  * trusted from a configured trustedMarkerActor, unlike this one). Deliberately
  * NOT `PR_OPERATIONAL_COMMENT_PREFIXES` or `OPERATIONAL_MARKERS` -- this is
- * narrow trust for this ONE actor, for exactly this one shape, never a
- * blanket trust grant for every operational marker that actor's login
- * could theoretically post (a `github-actions[bot]` comment starting with
- * any OTHER operational prefix, e.g. `<!-- claimed-by:`, is not trusted by
- * this path and counts as ordinary activity).
+ * narrow trust for this ONE actor identity, for exactly this one shape, never
+ * a blanket trust grant for every operational marker that actor's login could
+ * theoretically post (a `github-actions[bot]` or GraphQL `github-actions`
+ * comment starting with any OTHER operational prefix, e.g.
+ * `<!-- claimed-by:`, is not trusted by this path and counts as ordinary
+ * activity).
  */
 const GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX =
   '<!-- idd-external-check-waiver:';
-/** The GitHub Actions bot identity the two constants above scope trust to. */
+/** The canonical GitHub Actions bot login the two constants above scope to. */
 const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 /**
  * Classify one PR comment as IDD's own operational bookkeeping, an IDD
@@ -189,8 +190,8 @@ const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
  *    review feedback -- OR its first line is one of the three
  *    live-status digest forms (current/historical/repair-evidence) OR it
  *    starts with `IDD_CLEANUP_EVIDENCE_PREFIX`);
- *  - the author is exactly `github-actions[bot]` and the body starts with
- *    `IDD_CLEANUP_EVIDENCE_PREFIX` or
+ *  - the author is `github-actions[bot]` or the GraphQL `github-actions`
+ *    variant, and the body starts with `IDD_CLEANUP_EVIDENCE_PREFIX` or
  *    `GITHUB_ACTIONS_BOT_ONLY_TRUSTED_PR_PREFIX` -- independent of
  *    `trustedMarkerLogins`/`iddAgentLogins` membership.
  *
@@ -220,20 +221,24 @@ export function classifyIddPrComment(comment, options = {}) {
     ...normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
   ]);
   const isTrustedAuthor = trustedLogins.has(authorLogin);
-  // #3267 (Copilot review, PR #3437): dispatch the github-actions[bot]
+  // #3267 (Copilot review, PR #3437): dispatch the GitHub Actions
   // narrow-trust check FIRST, unconditionally -- never fold into the
   // `isTrustedAuthor` branch below. That account can be posted as by ANY
-  // same-repository GitHub Actions workflow via `GITHUB_TOKEN`, so it must
-  // never gain the FULL trusted-marker-actor grant just because some
-  // caller's `trustedMarkerLogins`/`iddAgentLogins` set happens to also
+  // same-repository GitHub Actions workflow via `GITHUB_TOKEN`, so neither
+  // identity variant may gain the FULL trusted-marker-actor grant merely
+  // because a caller's `trustedMarkerLogins`/`iddAgentLogins` set happens to
   // include it for an unrelated reason (for example,
   // `idd-doctor.mts`'s `readCleanupEvidenceTrustedLogins` always unions it
   // in for its own cleanup-evidence check). Checking `isTrustedAuthor`
   // first here would let a general-purpose marker (e.g. `<!-- claimed-by:`)
   // slip through as `idd-operational` from that shared identity, contrary
   // to the issue's "no other operational-marker family is trusted from
-  // github-actions[bot]" rule -- true regardless of trust configuration.
-  if (authorLogin === GITHUB_ACTIONS_BOT_LOGIN) {
+  // the GitHub Actions identity" rule -- true regardless of trust
+  // configuration.
+  if (
+    advisoryBotIdentityToken(authorLogin) ===
+    advisoryBotIdentityToken(GITHUB_ACTIONS_BOT_LOGIN)
+  ) {
     const trimmedBody = body.trimStart();
     if (
       trimmedBody.startsWith(IDD_CLEANUP_EVIDENCE_PREFIX) ||

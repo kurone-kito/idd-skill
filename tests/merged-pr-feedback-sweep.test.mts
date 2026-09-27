@@ -476,30 +476,29 @@ test('excludes a trusted historical live-status digest', () => {
   assert.equal(result.prs.length, 0);
 });
 
-test('surfaces a github-actions claimed-by comment when that login is an IDD agent', () => {
-  const prs: MergedPrInput[] = [
-    {
-      number: 16,
-      comments: [
-        {
-          body: '<!-- claimed-by: github-actions[bot] claim-abc supersedes: none 2026-06-09T00:00:00Z branch: issue/1-test -->\n\n_note_',
-          createdAt: '2026-06-09T00:00:00Z',
-          author: { login: 'github-actions[bot]' },
-        },
-      ],
-    },
-  ];
-  const result = buildMergedPrFeedbackSweep(prs, {
-    ...OPTIONS,
-    trustedMarkerActors: ['kurone-kito', 'github-actions[bot]'],
-    iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
-  });
-  assert.equal(result.prs.length, 1);
-  assert.equal(result.prs[0].unaddressedComments.length, 1);
-  assert.equal(
-    result.prs[0].unaddressedComments[0].author,
-    'github-actions[bot]',
-  );
+test('surfaces a GitHub Actions claimed-by comment when either login is an IDD agent', () => {
+  for (const login of ['github-actions[bot]', 'github-actions']) {
+    const prs: MergedPrInput[] = [
+      {
+        number: 16,
+        comments: [
+          {
+            body: `<!-- claimed-by: ${login} claim-abc supersedes: none 2026-06-09T00:00:00Z branch: issue/1-test -->\n\n_note_`,
+            createdAt: '2026-06-09T00:00:00Z',
+            author: { login },
+          },
+        ],
+      },
+    ];
+    const result = buildMergedPrFeedbackSweep(prs, {
+      ...OPTIONS,
+      trustedMarkerActors: ['kurone-kito', login],
+      iddAgentLogins: ['kurone-kito', login],
+    });
+    assert.equal(result.prs.length, 1);
+    assert.equal(result.prs[0].unaddressedComments.length, 1);
+    assert.equal(result.prs[0].unaddressedComments[0].author, login);
+  }
 });
 
 test('still excludes github-actions cleanup evidence when that login is an IDD agent', () => {
@@ -520,6 +519,28 @@ test('still excludes github-actions cleanup evidence when that login is an IDD a
     iddAgentLogins: ['kurone-kito', 'github-actions[bot]'],
   });
   assert.equal(result.prs.length, 0);
+});
+
+test('excludes GraphQL github-actions waiver and cleanup evidence from the merged-PR sweep', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3566,
+      comments: [
+        {
+          body: '<!-- idd-external-check-waiver: idd-advisory-convergence head:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reason:self-referential-bootstrap-auto expires:2099-01-01T00:00:00Z run-id:123456789 claim:none -->',
+          createdAt: '2026-09-27T00:00:00Z',
+          author: { login: 'github-actions' },
+        },
+        {
+          body: '<!-- idd-cleanup-evidence: complete applied:1 failed:0 skipped:0 viewer-cannot-minimize:0 retry-attempts:0 retry-bound-exhausted:false -->',
+          createdAt: '2026-09-27T00:01:00Z',
+          author: { login: 'github-actions' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.deepEqual(result.prs, []);
 });
 
 test('surfaces an untrusted <!-- idd- comment instead of unconditionally dropping it', () => {
