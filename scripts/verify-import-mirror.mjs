@@ -424,15 +424,8 @@ function canonicalizeJsonWithTargetKeys(
   }
   const upstream = parseJsonForComparison(upstreamContent);
   const target = parseJsonForComparison(targetContent);
-  const targetBase =
-    targetBaseContent === null
-      ? null
-      : parseJsonForComparison(targetBaseContent);
-  if (
-    upstream === null ||
-    target === null ||
-    (targetBaseContent !== null && targetBase === null)
-  ) {
+  let targetBase;
+  if (upstream === null || target === null) {
     return null;
   }
   for (const entry of applicable) {
@@ -445,6 +438,12 @@ function canonicalizeJsonWithTargetKeys(
       JSON.stringify(targetValue.value) === JSON.stringify(upstreamValue.value)
     ) {
       continue;
+    }
+    if (targetBase === undefined) {
+      targetBase =
+        targetBaseContent === null
+          ? null
+          : parseJsonForComparison(targetBaseContent);
     }
     if (targetBase === null) {
       return null;
