@@ -160,6 +160,18 @@ finding and re-run before publishing; a `passed: false` report means
 the draft is not ready yet, regardless of how complete the narrative
 reads.
 
+When the proposed issue touches a file governed by the target repository's
+configured `bundleBudgets` or `instructionSizeBudgets` entries — or an
+`idd-template/` source that maps to a generated target through
+`syncPairs` (or an equivalent source-to-target mapping), including
+onboarding documents — also apply the contract's
+[context-ceiling check](contract.md#codebase-fidelity-validation) before treating
+`bundleBudgets.limitBytes` as available headroom; that limit is not the
+only constraint. Apply the same check when the proposed issue adds a bundle
+member or changes the `bundleBudgets`, `instructionSizeBudgets`, or
+`contextCeiling` policy, evaluating
+the proposed post-change memberships and limits as well as current entries.
+
 **No helper runtime available (`instructions-only` profile):** the
 linter cannot run. `instructions-only` is a first-class supported
 fallback, not a waiver — manually re-verify the same checks against

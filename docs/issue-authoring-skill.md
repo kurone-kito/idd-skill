@@ -589,6 +589,52 @@ Ask these checks:
    asserting a file needs no placeholder substitution as an unverified
    default (observed 2026-08-12/13 on an adopter repository,
    `setup.ubuntu`, kurone-kito/idd-skill#2012).
+6. When a draft proposes changes to files covered by the target repository's
+   configured `bundleBudgets` or `instructionSizeBudgets` entries — including
+   `.github/instructions/` files, their `idd-template/` sources, and
+   onboarding documents — first
+   resolve that repository's own bundle-budget policy. For a changed
+   `idd-template/` source that is not itself listed in `bundleBudgets.files`,
+   resolve its generated target through the target repository's `syncPairs`
+   (or equivalent source-to-target mapping) before selecting bundles;
+   evaluate that target path as changed. For each applicable
+   `instructionSizeBudgets` entry covering a changed file, run its per-file
+   limit and near-ceiling-ratchet checks on banner-stripped byte totals before
+   claiming headroom. For every
+   configured
+   bundle containing a changed file, compare its measured,
+   banner-stripped total with its `bundleBudgets.limitBytes` and apply the
+   `contextCeiling.maxUtilizationPct` constraint before claiming byte-budget
+   headroom. Apply the same check when a draft adds a file to a bundle or
+   changes the `bundleBudgets`, `instructionSizeBudgets`, or
+   `contextCeiling` policy: evaluate the
+   proposed post-change bundle memberships and limits in addition to current
+   manifest entries. For a proposed `bundleBudgets.limitBytes` increase,
+   include the base-reference near-ceiling ratchet and full
+   `contextCeiling` policy in the proposed pass/fail result. Use the linked
+   Context ceiling section for threshold, absolute-limit, and exemption
+   mechanics. When the draft also changes `noticeUtilizationPct`, record the
+   lower of the base and proposed values for the near-ceiling-ratchet result.
+   Include every other applicable
+   manifest budget, including `instructionSizeBudgets` per-file limits and
+   their near-ceiling ratchets, when the draft changes a governed file or
+   proposes a budget-policy edit, using the target repository's own
+   configured values.
+   Record each affected bundle or file's measured total, configured limit,
+   utilization, applicable ceiling, ratchet status (`not applicable` when no
+   relevant increase is proposed), and pass/fail result in the draft's
+   headroom claim. If no applicable budget entry is configured, or the target
+   repository does not define these source-repository-only settings, do not
+   claim headroom: state that no repository-configured byte/context ceiling
+   was found or use the target's own declared budget checks when available.
+   These checks preserve the observed regressions in
+   [#1213](https://github.com/kurone-kito/idd-skill/issues/1213) (closed
+   2026-07-03) and [#1259](https://github.com/kurone-kito/idd-skill/issues/1259)
+   (closed 2026-07-04), where recovered headroom regressed without an upper
+   bound. Use the
+   [Context ceiling](policy-constants.md#context-ceiling) section as the
+   authoritative policy reference instead of copying its mechanics into
+   the issue.
 
 ## Live-observed claim citation
 
