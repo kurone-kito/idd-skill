@@ -1309,6 +1309,46 @@ test('a valid --now followed by a later blank occurrence, together with --apply,
   assert.deepEqual(calls.merged, [`994:${HEAD}`]);
 });
 
+// #3551 Codex review (P1, round 4): a bare --now with NO value at all
+// (the last argv token, or immediately followed by another recognized
+// flag) is a malformed invocation, distinct from an EXPLICIT blank value
+// (--now= or a quoted whitespace value) -- silently treating it as "not
+// provided" would let a probably-mistyped --apply invocation proceed to
+// merge using the live clock instead of refusing.
+test('a bare --now with no value at all is a usage error, not silently "not provided"', () => {
+  const { deps } = depsFor(readyReport());
+  let collectCalls = 0;
+  const countingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      collectCalls += 1;
+      return deps.collect(passthrough);
+    },
+  };
+  const run = () => runMergeExecute([...BASE_ARGS, '--now'], countingDeps);
+  assert.doesNotThrow(run);
+  const result = run();
+  assert.equal(collectCalls, 0);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.nowFlagError ?? '', /--now/);
+});
+
+test('a bare --now immediately followed by --apply is a usage error and never reaches the mutual-exclusion gate or a merge', () => {
+  const { deps, calls } = depsFor(readyReport());
+  const result = runMergeExecute([...BASE_ARGS, '--now', '--apply'], deps);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.nowFlagError ?? '', /--now/);
+  assert.doesNotMatch(result.nowFlagError ?? '', /mutually exclusive/);
+  assert.deepEqual(calls.merged, []);
+});
+
+test('an explicit blank --now (--now=) still stays the deliberate not-provided sentinel, unaffected by the bare-value fix', () => {
+  const { deps } = depsFor(readyReport());
+  const result = runMergeExecute([...BASE_ARGS, '--now='], deps);
+  assert.equal(result.nowFlagError, undefined);
+  assert.equal(result.verdict.ready, true);
+});
+
 test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
   // A fully ready report → no blockers, and both entry points agree.
   assert.deepEqual(evaluateMergeGates(readyReport()), []);

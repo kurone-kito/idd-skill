@@ -786,7 +786,23 @@ function parseArgs(argv) {
           value = undefined;
         }
       }
-      const provided = value !== undefined && value.trim() !== '';
+      if (value === undefined) {
+        // #3551 Codex review (P1): a bare `--now` with NO value at all --
+        // the last argv token, or immediately followed by another
+        // recognized flag (e.g. `--now --apply`) -- is a malformed
+        // invocation, not an intentional "no override": unlike an
+        // EXPLICIT blank value (`--now=` or a quoted whitespace value,
+        // handled below as the deliberate not-provided sentinel), nothing
+        // here indicates the caller meant to omit `--now` at all. Treating
+        // it the same as a genuinely omitted flag would let a probably
+        // mistyped `--apply` invocation proceed to merge using the live
+        // clock instead of refusing.
+        parsed.nowProvided = true;
+        parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
+        resolvedNowToken = null;
+        continue;
+      }
+      const provided = value.trim() !== '';
       parsed.nowProvided = provided;
       if (!provided) {
         parsed.nowFlagError = null;
