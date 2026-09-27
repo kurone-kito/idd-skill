@@ -3060,7 +3060,7 @@ export function createGithubProviderAdapter(
     ): ProviderMergedChangeRequestMeta | null {
       const query = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){ number merged mergedAt mergeCommit{oid} }
+    pullRequest(number:$number){ number merged mergedAt headRefOid mergeCommit{oid} }
   }
 }`;
       const apiArgs = [
@@ -3085,6 +3085,7 @@ export function createGithubProviderAdapter(
               number?: unknown;
               merged?: unknown;
               mergedAt?: unknown;
+              headRefOid?: unknown;
               mergeCommit?: { oid?: unknown } | null;
             } | null;
           } | null;
@@ -3098,6 +3099,7 @@ export function createGithubProviderAdapter(
         number: Number(pr.number ?? number),
         merged: true,
         mergedAt: pr.mergedAt == null ? null : String(pr.mergedAt),
+        headRefOid: pr.headRefOid == null ? null : String(pr.headRefOid),
         mergeCommitOid:
           pr.mergeCommit?.oid == null ? null : String(pr.mergeCommit.oid),
       };
@@ -3443,7 +3445,18 @@ export function createGithubProviderAdapter(
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       reviews(first:100,after:$cursor){
-        nodes { body url state submittedAt author { login } commit { oid } }
+        nodes {
+          body
+          url
+          state
+          submittedAt
+          author { login }
+          commit { oid }
+          comments(first:100) {
+            totalCount
+            nodes { replyTo { id } }
+          }
+        }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -3484,6 +3497,12 @@ export function createGithubProviderAdapter(
                     submittedAt?: unknown;
                     author?: { login?: unknown } | null;
                     commit?: { oid?: unknown } | null;
+                    comments?: {
+                      totalCount?: unknown;
+                      nodes?:
+                        | ({ replyTo?: { id?: unknown } | null } | null)[]
+                        | null;
+                    } | null;
                   }[];
                   pageInfo?: {
                     hasNextPage?: boolean;
@@ -3511,6 +3530,20 @@ export function createGithubProviderAdapter(
           );
         }
         for (const node of connection.nodes ?? []) {
+          const commentCount =
+            typeof node.comments?.totalCount === 'number'
+              ? node.comments.totalCount
+              : null;
+          const commentNodes = node.comments?.nodes ?? null;
+          const commentsComplete =
+            commentCount !== null &&
+            commentCount >= 0 &&
+            commentNodes !== null &&
+            commentCount <= commentNodes.length;
+          const replyOnly =
+            commentsComplete &&
+            commentNodes.length > 0 &&
+            commentNodes.every((comment) => comment?.replyTo?.id != null);
           out.push({
             body: String(node.body ?? ''),
             url: String(node.url ?? ''),
@@ -3520,6 +3553,8 @@ export function createGithubProviderAdapter(
             authorLogin: String(node.author?.login ?? ''),
             commitOid:
               node.commit?.oid == null ? null : String(node.commit.oid),
+            commentCount,
+            replyOnly,
           });
         }
         const pageInfo = connection.pageInfo;

@@ -2442,7 +2442,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
     getMergedChangeRequestMeta(number) {
       const query = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){ number merged mergedAt mergeCommit{oid} }
+    pullRequest(number:$number){ number merged mergedAt headRefOid mergeCommit{oid} }
   }
 }`;
       const apiArgs = [
@@ -2469,6 +2469,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         number: Number(pr.number ?? number),
         merged: true,
         mergedAt: pr.mergedAt == null ? null : String(pr.mergedAt),
+        headRefOid: pr.headRefOid == null ? null : String(pr.headRefOid),
         mergeCommitOid:
           pr.mergeCommit?.oid == null ? null : String(pr.mergeCommit.oid),
       };
@@ -2749,7 +2750,18 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       reviews(first:100,after:$cursor){
-        nodes { body url state submittedAt author { login } commit { oid } }
+        nodes {
+          body
+          url
+          state
+          submittedAt
+          author { login }
+          commit { oid }
+          comments(first:100) {
+            totalCount
+            nodes { replyTo { id } }
+          }
+        }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2796,6 +2808,20 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           );
         }
         for (const node of connection.nodes ?? []) {
+          const commentCount =
+            typeof node.comments?.totalCount === 'number'
+              ? node.comments.totalCount
+              : null;
+          const commentNodes = node.comments?.nodes ?? null;
+          const commentsComplete =
+            commentCount !== null &&
+            commentCount >= 0 &&
+            commentNodes !== null &&
+            commentCount <= commentNodes.length;
+          const replyOnly =
+            commentsComplete &&
+            commentNodes.length > 0 &&
+            commentNodes.every((comment) => comment?.replyTo?.id != null);
           out.push({
             body: String(node.body ?? ''),
             url: String(node.url ?? ''),
@@ -2805,6 +2831,8 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             authorLogin: String(node.author?.login ?? ''),
             commitOid:
               node.commit?.oid == null ? null : String(node.commit.oid),
+            commentCount,
+            replyOnly,
           });
         }
         const pageInfo = connection.pageInfo;

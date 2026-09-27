@@ -262,6 +262,8 @@ export interface ProviderMergedChangeRequestMeta {
   merged: boolean;
   mergedAt: string | null;
   mergeCommitOid: string | null;
+  /** The feature-branch commit reviewed before the merge, not the merge commit. */
+  headRefOid: string | null;
 }
 
 /** One reply-target comment inside a review thread, as
@@ -379,6 +381,10 @@ export interface ProviderGraphqlReview {
    * specific review's own reviewed commit, mirroring
    * `ProviderReviewClauseNode.commitId` below. */
   commitOid: string | null;
+  /** `comments.totalCount`; `null` means the review item count was unavailable. */
+  commentCount?: number | null;
+  /** True only when the complete fetched comment set is non-empty and reply-only. */
+  replyOnly?: boolean;
 }
 
 /** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
@@ -1038,8 +1044,8 @@ export interface ProviderPort {
 
   /**
    * change-requests. GraphQL `pullRequest(number){number merged mergedAt
-   * mergeCommit{oid}}` -- `null` when the PR is not (yet) merged, matching
-   * `merged-pr-feedback-sweep.mts`'s existing `pr.merged` guard.
+   * headRefOid mergeCommit{oid}}` -- `null` when the PR is not (yet) merged,
+   * matching `merged-pr-feedback-sweep.mts`'s existing `pr.merged` guard.
    */
   getMergedChangeRequestMeta(
     number: number,
