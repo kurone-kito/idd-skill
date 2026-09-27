@@ -79,6 +79,7 @@ import {
   loadPolicyConfig,
 } from './idd-config.mts';
 import {
+  findHtmlCommentRanges,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
@@ -566,10 +567,10 @@ function extractNonBlockingReferenceIssueNumbers(text: string): number[] {
 // class). This is the standard non-overlapping idiom for a
 // backslash-escaped quoted string and applies to both quote styles.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:\?[^\s)#"']+)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 
 const GITHUB_ISSUE_OR_PR_URL_PATTERN =
-  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:#[^\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+(?:\/)?(?:\?[^\s#"']+)?(?:#[^\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?$/iu;
 
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
@@ -858,7 +859,6 @@ export function auditAuthoredIssue(
     ),
     checkDependencyMarkerRule(text, rawText, markerPrefix, shape),
     checkDependencyLineGrammar(
-      text,
       rawText,
       normalizeCurrentRepo(options.currentRepo),
       markerPrefix,
@@ -1780,27 +1780,20 @@ function findDependencyKeywordMisuse(
  * silently mis-masking a validly indented/nested line; see
  * `matchDependencyKeywordLine`'s own doc comment):
  *
- * - `text` (already computed by the caller via `maskMarkdownForScan`
- *   with its default options -- fenced/indented/inline code masked, HTML
- *   comments left visible) is the base for the near-miss/mid-line scan
- *   below, since a hidden dependency line inside an HTML comment must
- *   stay visible to this check.
- * - `nearMissScanLines` additionally masks every well-formed
- *   `{markerPrefix}-blocked-by` sequential-roadmap marker out of `text`
+ * - `discoverMaskedLines` masks HTML comments and blocks, matching
+ *   Discover's real view of the body for accepted-line matching and
+ *   reference-definition collection.
+ * - `nearMissScanLines` starts from a second view that also masks raw HTML
+ *   blocks while keeping HTML comments visible, then additionally masks
+ *   every well-formed `{markerPrefix}-blocked-by` sequential-roadmap marker
+ *   out of that view
  *   (#3285 review, Copilot) before the near-miss scan runs, since that
  *   marker's own grammar accepts a reference-shaped value (`#12`) and
  *   would otherwise be misread as a "blocked-by" near-miss/mid-line
  *   mention -- the two grammars are unrelated and only coincidentally
  *   share the substring "blocked-by".
- * - `referenceDefinitions` is collected from the same comment-masked view
- *   used by the shared grammar, so a `[ref]: ...` definition inside an HTML
- *   comment is not treated as active CommonMark metadata.
- * - A second, separately masked view, masked here with
- *   `{ htmlComments: 'mask' }` -- matching `extractDependencyReferences`'s
- *   own internal masking, i.e. Discover's real view of the body -- is
- *   used to ask "does the shared grammar already accept this line", via
- *   `matchDependencyKeywordLine` (which never masks its input, so
- *   calling it per line here never re-masks).
+ * - A `[ref]: ...` definition inside an HTML comment is therefore not
+ *   treated as active CommonMark metadata.
  *
  * A line the shared grammar already accepts is only re-examined for a
  * cross-repository token (`unresolvable`, and only when `currentRepo` is
@@ -1808,7 +1801,6 @@ function findDependencyKeywordMisuse(
  * also run through the near-miss/mid-line scan.
  */
 function checkDependencyLineGrammar(
-  text: string,
   rawText: string,
   currentRepo: string | undefined,
   markerPrefix: string,
@@ -1848,7 +1840,22 @@ function checkDependencyLineGrammar(
     `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*[^\\s>]+\\s*-->`,
     'gi',
   );
-  const nearMissScanLines = text
+  const nearMissScanText = maskMarkdownForScan(rawText, {
+    htmlBlocks: 'mask',
+  }).split('');
+  // `htmlBlocks: 'mask'` also masks standalone HTML comments because
+  // CommonMark treats them as HTML blocks. Restore comment ranges after the
+  // block pass so the existing near-miss behavior still audits hidden
+  // dependency mentions in comments, while real raw-HTML content stays
+  // invisible to this scan.
+  const normalizedRawText = rawText.replace(/\r\n/g, '\n');
+  for (const range of findHtmlCommentRanges(normalizedRawText)) {
+    for (let index = range.start; index < range.end; index += 1) {
+      nearMissScanText[index] = normalizedRawText[index] ?? ' ';
+    }
+  }
+  const nearMissScanLines = nearMissScanText
+    .join('')
     .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
     .split('\n');
   const referenceDefinitions = collectReferenceStyleLinkDefinitions(

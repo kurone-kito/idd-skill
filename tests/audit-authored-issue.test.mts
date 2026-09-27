@@ -1491,6 +1491,20 @@ test('dependency-line-grammar resolves a reference-style Markdown-link definitio
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
 });
 
+test('dependency-line-grammar resolves a reference definition with a query string', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n' +
+      '[ref]: https://github.com/kurone-kito/idd-skill/issues/12?tab=comments',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar leaves unresolved and non-issue reference-style links unchanged', () => {
   for (const markerLine of [
     'Blocked by [Issue 12][missing]',
@@ -1656,6 +1670,18 @@ test('dependency-line-grammar ignores definitions inside raw HTML blocks', () =>
     extraMarkers:
       '<div>\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n</div>\n\n' +
       'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar ignores dependency mentions inside raw HTML blocks', () => {
+  const body = childBody({
+    extraMarkers: '<div>\nBlocked by #12\n</div>',
   });
   const report = auditAuthoredIssue(body, { shape: 'child' });
   const finding = report.findings.find(
@@ -2635,6 +2661,23 @@ test('prose-dependency does not warn on a cross-repo reference-style Markdown li
     extraMarkers:
       'Before starting, [PR #1391][upstream] must land.\n\n' +
       '[upstream]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo reference-style link with a query string', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: https://github.com/acme/other-repo/pull/1391?tab=files',
   });
   const report = auditAuthoredIssue(body, {
     shape: 'child',
