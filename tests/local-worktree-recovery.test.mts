@@ -1106,6 +1106,51 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
+  let ensureCalls = 0;
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    ensurePreserveDir: () => {
+      ensureCalls += 1;
+      return '/tmp/explicit';
+    },
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    deps,
+  );
+  assert.equal(ensureCalls, 0);
+  assert.equal(verdict.preserveDir, '/tmp/explicit');
+  assert.deepEqual(verdict.plan.prunableAdminCopy, {
+    source: '/repo/primary/.git/worktrees/linked',
+    copiedTo: null,
+    plannedTo: '/tmp/explicit/prunable-gitdir',
+  });
+  assert.equal(verdict.plan.removal?.ran, false);
+});
+
 test('prunable shortcut stops when the record becomes locked immediately before force removal', () => {
   let listCalls = 0;
   let removeCalled = false;

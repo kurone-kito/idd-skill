@@ -45,16 +45,18 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
 } from './policy-helpers.mjs';
 /**
- * Read and parse `.github/idd/config.json` from the current working
- * directory, returning `null` when the file is missing, unreadable, or
- * not valid JSON — the existing fail-safe every per-helper copy already
- * implements: treat a missing or malformed config the same as "no policy
- * configured". Always re-reads the file; see the module header for why
- * this does not memoize.
+ * Read and parse `.github/idd/config.json` from `baseDir` (the current
+ * working directory by default), returning `null` when the file is missing,
+ * unreadable, or not valid JSON — the existing fail-safe every per-helper
+ * copy already implements: treat a missing or malformed config the same as
+ * "no policy configured". Always re-reads the file; see the module header
+ * for why this does not memoize.
  */
-export function loadIddConfig() {
+export function loadIddConfig(baseDir = process.cwd()) {
   try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    return JSON.parse(
+      readFileSync(join(baseDir, '.github/idd/config.json'), 'utf8'),
+    );
   } catch {
     return null;
   }

@@ -733,7 +733,13 @@ function planAndMaybeStashScope(
   excludedDirtyPaths = [],
 ) {
   const status = deps.runGit(
-    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
+    [
+      'status',
+      '--porcelain',
+      '--ignored',
+      '--untracked-files=normal',
+      '--ignore-submodules=none',
+    ],
     scopePath,
   );
   // Codex/Copilot review: a failed status probe must never read as "clean".
@@ -957,7 +963,14 @@ function scanAndMaybeCopyIgnoredFiles(
   deps,
 ) {
   const status = deps.runGit(
-    ['status', '--porcelain=v1', '-z', '--ignored', '--untracked-files=normal'],
+    [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--ignored',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ],
     scopePath,
   );
   if (!status.ok) {
@@ -1717,7 +1730,29 @@ export function runLocalWorktreeRecovery(args, deps) {
   // gate below applies to the ACTUAL mutation only.
   if (!args.apply) {
     const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
-    if (!shortcut.eligible) {
+    if (shortcut.eligible) {
+      const adminLookup = deps.findWorktreeAdminDir
+        ? deps.findWorktreeAdminDir(verdict.primaryWorktree ?? cwd, targetPath)
+        : { path: null, error: null };
+      if (adminLookup.error) {
+        return recordRemovalFailure(
+          `could not plan the prunable worktree private admin-directory backup: ${adminLookup.error}`,
+        );
+      }
+      if (adminLookup.path !== null) {
+        const plannedPreserveDir = args.preserveDir
+          ? resolve(cwd, args.preserveDir)
+          : null;
+        verdict.preserveDir = plannedPreserveDir;
+        verdict.plan.prunableAdminCopy = {
+          source: adminLookup.path,
+          copiedTo: null,
+          plannedTo: plannedPreserveDir
+            ? join(plannedPreserveDir, 'prunable-gitdir')
+            : null,
+        };
+      }
+    } else {
       const preserve = planAndMaybePreserve(
         targetPath,
         recoveredBranch ?? '',
@@ -2319,6 +2354,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         const entry = {
           source: adminLookup.path,
           copiedTo: null,
+          plannedTo: destination,
         };
         if (
           !isCopyDestinationOutsideKnownPaths(
@@ -2520,8 +2556,8 @@ export function runLocalWorktreeRecovery(args, deps) {
  * `resolveCurrentGithubRepository` (never a direct `gh` spawn;
  * `tests/gh-spawn-guard.test.mts` enforces this repository-wide).
  */
-function resolveDevelopmentBranchProduction(args) {
-  const config = loadIddConfig();
+function resolveDevelopmentBranchProduction(args, repositoryRoot) {
+  const config = loadIddConfig(repositoryRoot);
   const inspection = inspectDevelopmentBranch(config);
   if (inspection.status === 'invalid') {
     throw new Error(
@@ -2701,10 +2737,7 @@ function findWorktreeAdminDirProduction(repoPath, worktreePath) {
       if (!lstatSync(adminPath).isDirectory()) continue;
       const pointer = readFileSync(join(adminPath, 'gitdir'), 'utf8').trim();
       if (!pointer) {
-        return {
-          path: null,
-          error: `the private worktree admin directory ${adminPath} has an empty gitdir pointer`,
-        };
+        continue;
       }
       const pointedPath = resolve(dirname(join(adminPath, 'gitdir')), pointer);
       if (
@@ -2713,11 +2746,12 @@ function findWorktreeAdminDirProduction(repoPath, worktreePath) {
       ) {
         return { path: adminPath, error: null };
       }
-    } catch (error) {
-      return {
-        path: null,
-        error: `could not inspect private worktree admin directory ${adminPath}: ${errorMessageForProduction(error)}`,
-      };
+    } catch {
+      // An unrelated stale or partially-pruned admin entry must not block a
+      // different prunable target. Only a readable gitdir pointer that
+      // matches targetGitDir establishes that this entry belongs to the
+      // target; an unreadable entry therefore cannot safely be attributed to
+      // it and is skipped.
     }
   }
   return { path: null, error: null };
@@ -2758,6 +2792,14 @@ function removeWorktreeIfLockMatchesProduction(
   );
 }
 function createProductionDeps(args) {
+  const repositoryRootResult = runLocalGitCommand(
+    ['rev-parse', '--show-toplevel'],
+    process.cwd(),
+  );
+  const repositoryRoot =
+    repositoryRootResult.ok && repositoryRootResult.stdout.trim().length > 0
+      ? resolve(repositoryRootResult.stdout.trim())
+      : null;
   return {
     cwd: () => process.cwd(),
     listWorktreeRecords: listWorktreeRecordsProduction,
@@ -2773,7 +2815,14 @@ function createProductionDeps(args) {
     acquireCloneLock: (repoPath, agentId) =>
       acquireCloneLock(repoPath, agentId),
     releaseCloneLock: (handle) => releaseCloneLock(handle),
-    resolveDevelopmentBranch: () => resolveDevelopmentBranchProduction(args),
+    resolveDevelopmentBranch: () => {
+      if (repositoryRoot === null) {
+        throw new Error(
+          'local-worktree-recovery: could not resolve the primary repository root before reading developmentBranch',
+        );
+      }
+      return resolveDevelopmentBranchProduction(args, repositoryRoot);
+    },
     copyPath: copyPathProduction,
     ensurePreserveDir: ensurePreserveDirProduction(
       args.preserveDir,
