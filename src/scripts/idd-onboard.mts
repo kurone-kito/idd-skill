@@ -3092,7 +3092,7 @@ function resolveModuleRelativeScanPath(
   path: string,
   modulePath: string | undefined,
 ): string {
-  if (modulePath === undefined || path.startsWith('/')) {
+  if (modulePath === undefined) {
     return path;
   }
   const moduleSlash = modulePath.lastIndexOf('/');

@@ -3514,6 +3514,33 @@ function driftFiles(
   };
 }
 
+function fixtureGitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+function commitFixtureBaseline(root: string, message = 'baseline'): void {
+  const options = { stdio: 'ignore' as const, env: fixtureGitEnv() };
+  execFileSync('git', ['init', '--initial-branch=main', root], options);
+  execFileSync(
+    'git',
+    ['-C', root, 'config', 'user.email', 'fixture@example.com'],
+    options,
+  );
+  execFileSync('git', ['-C', root, 'config', 'user.name', 'Fixture'], options);
+  execFileSync('git', ['-C', root, 'add', '.'], options);
+  execFileSync(
+    'git',
+    ['-C', root, 'commit', '--no-gpg-sign', '-m', message],
+    options,
+  );
+}
+
 test('checkHeldSchemaDrift flags a held module that references a changed schema', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -3538,23 +3565,7 @@ test('checkHeldSchemaDrift compares a post-import target with its Git baseline',
   const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
-  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
-    stdio: 'ignore',
-  });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
-  );
-  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
-    stdio: 'ignore',
-  });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
-  );
+  commitFixtureBaseline(targetRoot);
   execFileSync('git', ['-C', targetRoot, 'branch', 'release+candidate'], {
     stdio: 'ignore',
   });
@@ -3590,23 +3601,7 @@ test('checkHeldSchemaDrift treats Git baseline paths with glob characters litera
     [schemaPath]: '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
   });
-  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
-    stdio: 'ignore',
-  });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
-  );
-  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
-    stdio: 'ignore',
-  });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
-  );
+  commitFixtureBaseline(targetRoot);
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
     targetBaseRef: 'HEAD',
@@ -3627,23 +3622,7 @@ test('checkHeldSchemaDrift reads Git baseline blobs larger than 32 MiB', () => {
     [DRIFT_SCHEMA]: baselineSchema,
     [DRIFT_MODULE]: moduleText,
   });
-  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
-    stdio: 'ignore',
-  });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
-  );
-  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
-    stdio: 'ignore',
-  });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
-  );
+  commitFixtureBaseline(targetRoot);
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
   });
@@ -3693,23 +3672,7 @@ test('checkHeldSchemaDrift validates an explicit baseline without held files', (
   const targetRoot = makeFixtureDir();
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', ''));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', ''));
-  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
-    stdio: 'ignore',
-  });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
-  );
-  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
-    stdio: 'ignore',
-  });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
-  );
+  commitFixtureBaseline(targetRoot);
   assert.throws(
     () =>
       checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -4371,6 +4334,33 @@ test('checkHeldSchemaDrift resolves a bare module-relative glob cwd', () => {
       heldModulePath: DRIFT_MODULE,
     },
   ]);
+});
+
+test('checkHeldSchemaDrift resolves slash-prefixed module-relative fragments', () => {
+  for (const moduleText of [
+    "globSync(import.meta.dirname + '/../../schemas/*.json');\n",
+    "globSync('*.json', { cwd: import.meta.dirname + '/../../schemas' });\n",
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    writeDriftManifest(sourceRoot, {
+      'schemas/widget.json': '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      'schemas/widget.json': '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      {
+        schemaOrFixturePath: 'schemas/widget.json',
+        heldModulePath: DRIFT_MODULE,
+      },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift recognizes quoted cwd option keys', () => {
@@ -5337,23 +5327,7 @@ test('bin/idd-onboard.mjs --verify wires --target-base-ref through the CLI', () 
   const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
-  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
-    stdio: 'ignore',
-  });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
-    { stdio: 'ignore' },
-  );
-  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
-    stdio: 'ignore',
-  });
-  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
-  execFileSync(
-    'git',
-    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
-    { stdio: 'ignore' },
-  );
+  commitFixtureBaseline(targetRoot);
   writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
   const { status, verdict } = runCliBin([
     '--verify',

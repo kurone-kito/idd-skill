@@ -2517,7 +2517,7 @@ function normalizeManifestScanPath(path, preserveTrailingSlash = false) {
   return hasTrailingSlash && result !== '' ? `${result}/` : result;
 }
 function resolveModuleRelativeScanPath(path, modulePath) {
-  if (modulePath === undefined || path.startsWith('/')) {
+  if (modulePath === undefined) {
     return path;
   }
   const moduleSlash = modulePath.lastIndexOf('/');
