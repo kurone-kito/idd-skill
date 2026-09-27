@@ -4867,14 +4867,13 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
   );
 });
 
-test('primary-worktree release re-checks the lock AFTER checkout, not only the pre-checkout recheck (Copilot review finding)', () => {
+test('primary-worktree release accepts a new-format claim after checkout', () => {
   // confirmBlock call sequence: 1 = step 1 (occupied, path included);
   // 2 = step 4's first recheck (still occupied, path included);
   // 3 = the immediate pre-checkout identity recheck (still occupied);
-  // 4 = the post-checkout confirmAbsent check (now absent). The production
-  // routing contract keeps the claim stale and omits the occupied state when
-  // the branch probe is absent, but now retains an explicit absent probe in
-  // evidence. checkLock
+  // 4 = the post-checkout confirmAbsent check (new-format released claim,
+  // absent path). The routing contract retains the released claim-id in
+  // evidence after the active claim is gone. checkLock
   // call sequence: 1 = step 1; 2 = step 4's first recheck; 3 = immediate
   // pre-checkout identity recheck; 4 = the FINAL, post-checkout check, which
   // must see a lock created DURING the checkout window (simulating
@@ -4921,14 +4920,14 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
       return {
         ok: true,
         routing: {
-          state: confirmCalls <= 3 ? 'local_worktree_occupied' : 'stale',
+          state: confirmCalls <= 3 ? 'local_worktree_occupied' : 'unclaimed',
           reason:
             confirmCalls <= 3
-              ? 'stale-claim-local-worktree-occupied'
-              : 'active-claim-stale',
-          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+              ? 'released-claim-local-worktree-occupied'
+              : 'no-active-claim',
+          active_claim: null,
           evidence: {
-            released_claim: { claim_id: null, branch: 'issue/1-task' },
+            released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             local_worktree: {
               status: confirmCalls <= 3 ? 'occupied' : 'absent',
               paths: confirmCalls <= 3 ? ['/repo/primary'] : [],

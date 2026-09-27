@@ -553,28 +553,28 @@ export function isAcceptedBlockReason(reason: string): boolean {
   );
 }
 
-/** True only for a legacy claim explicitly classified as released. An
- * active legacy claim also has a null claim-id, but its lockless recovery is
- * not safe because the absence of a lock does not prove release. */
-function isLegacyReleasedRouting(routing: ConfirmBlockRouting): boolean {
+/** True when routing proves that the prior claim was released. An active
+ * legacy claim also has a null claim-id, but its lockless recovery is not
+ * safe because the absence of a lock does not prove release. */
+function isReleasedClaimRouting(routing: ConfirmBlockRouting): boolean {
   return (
     routing.active_claim === null &&
     (routing.reason.startsWith('released-claim-') ||
-      (routing.state === 'unclaimed' && routing.reason === 'legacy-released'))
+      (routing.state === 'unclaimed' &&
+        (routing.reason === 'legacy-released' ||
+          (routing.reason === 'no-active-claim' &&
+            routing.evidence?.released_claim?.claim_id !== null &&
+            routing.evidence?.released_claim?.branch !== null))))
   );
 }
 
 /** True when an explicit absent probe still belongs to a takeover-eligible
- * stale claim or to a released legacy claim. A prunable record is not enough
- * by itself: a fresh claim can leave the record absent while its live owner
- * still has the right to recreate or use the worktree. */
+ * stale claim or to a released claim with retained released-claim evidence.
+ * A prunable record is not enough by itself: a fresh claim can leave the
+ * record absent while its live owner still has the right to recreate or use
+ * the worktree. */
 function isPrunableShortcutRouting(routing: ConfirmBlockRouting): boolean {
-  return (
-    routing.state === 'stale' ||
-    (routing.state === 'unclaimed' && routing.reason === 'legacy-released') ||
-    (routing.state === 'local_worktree_occupied' &&
-      isLegacyReleasedRouting(routing))
-  );
+  return routing.state === 'stale' || isReleasedClaimRouting(routing);
 }
 
 /** True only when an absent worktree is still eligible for stale/legacy
@@ -2956,7 +2956,7 @@ export function runLocalWorktreeRecovery(
   const recovered = extractRecoveredClaim(routing);
   const recoveredClaimId = recovered.claimId;
   const recoveredBranch = recovered.branch;
-  const recoveredFromReleasedClaim = isLegacyReleasedRouting(routing);
+  const recoveredFromReleasedClaim = isReleasedClaimRouting(routing);
   // A prunable record whose checkout is already absent is represented by the
   // routing helper as an explicit `absent` local-worktree probe, which keeps
   // the overall routing state stale rather than producing the ordinary
@@ -3318,7 +3318,7 @@ export function runLocalWorktreeRecovery(
     // remove the new claim's worktree while tagging preserved artifacts
     // under the OLD, no-longer-current claim-id.
     const freshRecovered = extractRecoveredClaim(recheck.routing);
-    const freshRecoveredFromReleasedClaim = isLegacyReleasedRouting(
+    const freshRecoveredFromReleasedClaim = isReleasedClaimRouting(
       recheck.routing,
     );
     if (
@@ -3579,7 +3579,7 @@ export function runLocalWorktreeRecovery(
         : null;
       const preCheckoutLegacyReleased =
         preCheckoutRouting !== null &&
-        isLegacyReleasedRouting(preCheckoutRouting);
+        isReleasedClaimRouting(preCheckoutRouting);
       const preCheckoutStillOccupied =
         preCheckoutConfirm.ok &&
         preCheckoutRouting !== null &&
@@ -3687,7 +3687,7 @@ export function runLocalWorktreeRecovery(
         isTakeoverEligibleAbsentRouting(absentRouting) &&
         absentRecovered?.claimId === recoveredClaimId &&
         absentRecovered.branch === recoveredBranch &&
-        isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim;
+        isReleasedClaimRouting(absentRouting) === recoveredFromReleasedClaim;
       // The post-checkout routing query is a network-backed confirmation. A
       // transient fetch/API failure must not strand the primary worktree on
       // the development branch with the recovered lock still present. Retry
@@ -3706,7 +3706,7 @@ export function runLocalWorktreeRecovery(
           isTakeoverEligibleAbsentRouting(absentRouting) &&
           absentRecovered?.claimId === recoveredClaimId &&
           absentRecovered.branch === recoveredBranch &&
-          isLegacyReleasedRouting(absentRouting) === recoveredFromReleasedClaim;
+          isReleasedClaimRouting(absentRouting) === recoveredFromReleasedClaim;
       }
       if (!nowAbsent || absentRouting === null) {
         verdict.plan.removal = {
@@ -3777,7 +3777,7 @@ export function runLocalWorktreeRecovery(
         !lockMatchesRecoveredClaim(
           finalLockCheck,
           recoveredClaimId,
-          isLegacyReleasedRouting(absentRouting),
+          isReleasedClaimRouting(absentRouting),
         )
       ) {
         verdict.plan.removal = {
@@ -3832,7 +3832,7 @@ export function runLocalWorktreeRecovery(
         !lockMatchesRecoveredClaim(
           immediatelyBeforeDeleteLock,
           recoveredClaimId,
-          isLegacyReleasedRouting(absentRouting),
+          isReleasedClaimRouting(absentRouting),
         )
       ) {
         verdict.plan.removal = {
@@ -3988,8 +3988,7 @@ export function runLocalWorktreeRecovery(
       ? extractRecoveredClaim(finalLinkedRouting)
       : null;
     const finalLinkedFromReleasedClaim =
-      finalLinkedRouting !== null &&
-      isLegacyReleasedRouting(finalLinkedRouting);
+      finalLinkedRouting !== null && isReleasedClaimRouting(finalLinkedRouting);
     const finalLinkedReportsTargetPath =
       finalLinkedRouting !== null &&
       finalLinkedRouting.state === 'local_worktree_occupied' &&
@@ -4113,7 +4112,7 @@ export function runLocalWorktreeRecovery(
         : null;
       const postRefreshFromReleasedClaim =
         postRefreshRouting !== null &&
-        isLegacyReleasedRouting(postRefreshRouting);
+        isReleasedClaimRouting(postRefreshRouting);
       const postRefreshReportsTargetPath =
         postRefreshRouting !== null &&
         postRefreshRouting.state === 'local_worktree_occupied' &&
@@ -4274,7 +4273,7 @@ export function runLocalWorktreeRecovery(
           (reportsTargetPath || reportsPrunableAbsence) &&
           recovered?.claimId === recoveredClaimId &&
           recovered.branch === recoveredBranch &&
-          isLegacyReleasedRouting(routing) === recoveredFromReleasedClaim
+          isReleasedClaimRouting(routing) === recoveredFromReleasedClaim
         );
       };
       // The private admin-directory copy above is itself a mutation window:
@@ -4324,7 +4323,7 @@ export function runLocalWorktreeRecovery(
         : null;
       const immediatelyBeforeRemovalReleased =
         immediatelyBeforeRemovalRouting !== null &&
-        isLegacyReleasedRouting(immediatelyBeforeRemovalRouting);
+        isReleasedClaimRouting(immediatelyBeforeRemovalRouting);
       const immediatelyBeforeRemovalReportsTarget =
         immediatelyBeforeRemovalRouting !== null &&
         immediatelyBeforeRemovalRouting.state === 'local_worktree_occupied' &&
@@ -4438,7 +4437,7 @@ export function runLocalWorktreeRecovery(
         ? extractRecoveredClaim(forceRouting)
         : null;
       const forceFromReleasedClaim =
-        forceRouting !== null && isLegacyReleasedRouting(forceRouting);
+        forceRouting !== null && isReleasedClaimRouting(forceRouting);
       const forceStillMatches =
         forceConfirm.ok &&
         forceRouting !== null &&
