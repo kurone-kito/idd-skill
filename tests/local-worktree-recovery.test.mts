@@ -1371,6 +1371,79 @@ test('prunable shortcut rechecks claim identity after copying private admin data
   assert.match(verdict.result, /final prunable-worktree routing/);
 });
 
+test('prunable shortcut rechecks legacy release status before removal', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      const released = confirmCalls < 5;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: released
+            ? 'released-claim-local-worktree-occupied'
+            : 'stale-claim-local-worktree-occupied',
+          active_claim: released
+            ? null
+            : { claim_id: null, branch: 'issue/1-task' },
+          evidence: {
+            released_claim: {
+              claim_id: null,
+              branch: 'issue/1-task',
+            },
+            local_worktree: {
+              status: 'unreadable',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: () => {},
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 5);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /final prunable-worktree routing/);
+});
+
 test('prunable shortcut re-verifies the admin backup immediately before removal', () => {
   let confirmCalls = 0;
   let backupExists = false;

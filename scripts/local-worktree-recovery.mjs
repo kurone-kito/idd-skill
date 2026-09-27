@@ -2675,7 +2675,8 @@ export function runLocalWorktreeRecovery(args, deps) {
           routing !== null &&
           (reportsTargetPath || reportsPrunableAbsence) &&
           recovered?.claimId === recoveredClaimId &&
-          recovered.branch === recoveredBranch
+          recovered.branch === recoveredBranch &&
+          isLegacyReleasedRouting(routing) === recoveredFromReleasedClaim
         );
       };
       // The private admin-directory copy above is itself a mutation window:
