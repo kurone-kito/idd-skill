@@ -380,6 +380,10 @@ const CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN =
   /\b(?:missing|absent|unavailable|not\s+(?:available|provided|supplied))\s+$/i;
 const CREDENTIAL_ACQUISITION_ASSERTION_PATTERN =
   /\b(?:request|obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
+const CREDENTIAL_EXTERNAL_REQUEST_PATTERN = new RegExp(
+  String.raw`\bask(?:s|ed|ing)?\b[^.;:!?]{0,60}\b(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?]{0,40}\bfor\b[^.;:!?]{0,40}\b(?:credentials?|keys?|tokens?|access|permission|authorization)\b`,
+  'i',
+);
 const CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN =
   /\b(?:cannot|can't|impossible|unable)\b[^.;:!?]{0,80}\b(?:without|unless)\s+(?:(?:an?|the)\s+)?$/i;
 const CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN = new RegExp(
@@ -1227,7 +1231,8 @@ function isDescribedSecurityVocabulary(
         CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN.test(
           requirementContextBefore,
         ))) ||
-    CREDENTIAL_ACQUISITION_ASSERTION_PATTERN.test(requirementContextBefore)
+    CREDENTIAL_ACQUISITION_ASSERTION_PATTERN.test(requirementContextBefore) ||
+    CREDENTIAL_EXTERNAL_REQUEST_PATTERN.test(directRequirementContext)
   ) {
     return false;
   }

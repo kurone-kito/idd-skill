@@ -3475,3 +3475,14 @@ test('keeps approval-source documentation autonomous (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let an external credential request pass as description (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 209,
+    title: 'document credential acquisition',
+    body: 'Ask the vendor for API keys before deploying. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
