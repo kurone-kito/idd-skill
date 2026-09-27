@@ -1061,6 +1061,9 @@ future inventory reviews do not need to re-infer their role from code.
   (observed in [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
   The target commit must be the mirror-only commit made after copying the
   upstream files and before `--substitute` rewrites placeholders.
+  Set `--target-base-ref` to the pre-import commit. For a root
+  mirror-only commit, use `git -C <target-repo> hash-object -t tree /dev/null`
+  as the base so the first commit is diffable too.
   During a re-import, `idd-onboard --import` may restore the target's three
   validate-command rows in `.github/idd/config.json` after the template copy.
   Keep that file in scope with `--path-prefix .github/idd/config.json`, and
@@ -1081,6 +1084,7 @@ future inventory reviews do not need to re-infer their role from code.
   ```sh
   node <idd-skill>/scripts/verify-import-mirror.mjs \
     --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
     --upstream-path <idd-skill>/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
     --path-prefix .github/idd/config.json \
@@ -1118,6 +1122,7 @@ future inventory reviews do not need to re-infer their role from code.
   ```sh
   node <idd-skill>/scripts/verify-import-mirror.mjs \
     --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
     --upstream-path <idd-skill> \
     --path-prefix scripts \
     --path-prefix schemas --path-prefix fixtures
@@ -1136,6 +1141,7 @@ future inventory reviews do not need to re-infer their role from code.
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
     --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
     --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
     --path-prefix .github/idd/config.json \

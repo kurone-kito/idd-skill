@@ -302,11 +302,14 @@ The helper is not an `idd-*` bin. Invoke it directly from a source checkout
 with one `--path-prefix` per touched imported root or root-level file. The
 example includes the template core files `.cspell.config.yml`,
 `.markdownlint.yml`, and `.markdownlint-cli2.yaml`; remove any untouched
-prefix because it produces no comparison:
+prefix because it produces no comparison. Set `<target-base-ref>` to the
+pre-import commit; for a root mirror-only commit, use
+`git -C <target-repo> hash-object -t tree /dev/null` as the base:
 
 ```sh
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --target-base-ref <target-base-ref> \
   --upstream-path <idd-skill>/idd-template \
   --path-prefix .github/instructions --path-prefix .github/workflows \
   --path-prefix .github/idd/config.json \
@@ -336,6 +339,7 @@ bin:
 ```sh
 node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --target-base-ref <target-base-ref> \
   --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
   --path-prefix .github/instructions --path-prefix .github/workflows \
   --path-prefix .github/idd/config.json \
@@ -367,6 +371,7 @@ present in that target commit:
 ```sh
 node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --target-base-ref <target-base-ref> \
   --upstream-path <idd-skill> \
   --path-prefix scripts \
   --path-prefix schemas --path-prefix fixtures
