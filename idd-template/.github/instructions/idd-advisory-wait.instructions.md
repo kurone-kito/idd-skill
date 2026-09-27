@@ -292,23 +292,22 @@ E14's **Primary advisory bot**):
    pending-refresh-failed hold and stops — no cycle counted.
 2. **Verify** removal and current HEAD before proceeding.
 3. **Request** Copilot again, same fallback pattern.
-4. **Verify association**: confirm `review_requested` follows HEAD's
-   `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). Not
-   yet true is ordinary lag, not failure — do **not** redo steps 1-3;
-   re-check alone after a brief pause (default: 3 attempts, a few
-   seconds apart). Disposition after that budget depends on entry type:
+4. **Verify association**: keep step 3's event/node baselines. A node
+   absent from the baseline is fresh proof through step 5; do not discard
+   node-only proof. Otherwise require `review_requested` after HEAD's
+   `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). If
+   not yet true, this is ordinary lag: do **not** redo steps 1-3; recheck
+   alone after a brief pause (default: 3 attempts). Disposition then
+   depends on entry type:
    - **Pending entry**: still unproven → abort without posting a
      marker or counting a cycle, return to the polling loop (or E1)
      next interval — never tight-loop on unresolved lag.
-   - **Non-pending entry** (`#2327`): the event appearing proves this
-     re-request actually registered — abort without counting (ordinary
-     success, no cycle needed; the next pass's `COPILOT_PENDING_COVERS_HEAD`
-     check picks it up normally). No event within the same short budget
-     is itself the proof this re-request _also_ failed to register —
-     the entry condition already spent a full `SETTLED_WINDOW_MINUTES`
-     confirming the original request's silence before this cycle
-     started, so the short budget is sufficient here, not a redundant
-     wait — proceed to step 5 and count the cycle.
+   - **Non-pending entry** (`#2327`): fresh node or event proves this
+     re-request registered — abort without counting (ordinary success;
+     the next `COPILOT_PENDING_COVERS_HEAD` check picks it up). No fresh
+     proof in the short budget proves this re-request _also_ failed: the
+     entry already spent `SETTLED_WINDOW_MINUTES` confirming silence, so
+     proceed to step 5 and count the cycle.
 5. **Post exactly one** bound marker, once step 4 concludes in a
    counted disposition — proven re-registration for a pending entry, or
    proven failure-to-register for a non-pending entry (`#2327`). `<n>`

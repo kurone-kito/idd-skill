@@ -308,7 +308,7 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 For an **advisory bot**, try the add-reviewer command with the bot's
 **login** first — on some `gh` versions the GraphQL mutation fails a
 bot login outright (`Could not resolve user with login '{login}'
-(requestReviewsByLogin)`); on failure, fall back to REST
+(requestReviewsByLogin)`); if registration evidence is absent, use REST
 `requested_reviewers` with the bot's real account login (REST also
 silently no-ops on a **display name**). See **Primary advisory bot**
 below for the exact login each path needs.
@@ -366,10 +366,9 @@ login).
      stop; otherwise (`phase-specific`, default) skip the wait,
      proceed to E15.
    - **REQUEST_NEEDED**, `COPILOT_PENDING` `"false"`: request via
-     add-reviewer/REST. Post only after current-attempt evidence: a
-     newer matching event than the pre-request snapshot and after HEAD,
-     or a non-empty node after requesting. Exit status is not evidence
-     (issue `#3500`).
+     add-reviewer/REST. Snapshot event/node before mutation; post only
+     with a newer event after HEAD or a fresh node absent from that
+     snapshot. Exit status is not evidence (issue `#3500`).
      See the [registration fallback](../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
      if absent, ask the maintainer and do not poll or continue to E15.
 

@@ -213,46 +213,67 @@ curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/com
 ## Registration-proven review request
 
 E14's `REQUEST_NEEDED` branch (and AW3-S step 3 below) uses this
-procedure. The two `gh` calls are attempts. Before the first request
-mutation, snapshot the latest matching `review_requested` event for the
-bot (its id or timestamp). Post an E14 `advisory-wait` marker only when
-the re-read finds a newer matching event that also follows the current
-HEAD `committed` event, or a non-empty `requested_reviewers` node for
-that bot read after the attempt. An older event, exit status, or HTTP
-201 is not evidence. Observed 2026-09-26 in issue `#3500` (refs issues
-`#3481` and `#3491`): both calls returned success while
-`requested_reviewers` stayed empty and no `review_requested` event was
-recorded.
+procedure. Snapshot both matching proofs before the first mutation: the
+latest `review_requested` event and the matching `reviewRequests` node
+ids. Post an E14 `advisory-wait` marker only when a re-read finds a
+newer matching event after the current HEAD `committed` event, or a
+request node whose id was absent from the snapshot. An older event,
+exit status, or HTTP 201 is not evidence. Observed 2026-09-26 in issue
+`#3500` (refs issues `#3481` and `#3491`): both calls returned success
+while `requested_reviewers` stayed empty and no `review_requested` event
+was recorded.
 
 ```sh
-gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
-# If that leaves registration evidence absent, including a zero exit
-# with no event and no node for this bot (not only a GraphQL
-# login-resolution failure):
-gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-  -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
-```
-
-Re-read the evidence. The review-request node counts only when it is
-for `{primary-advisory-bot-rest-login}` on this PR, not some other
-reviewer. If evidence is still absent, resolve both node ids live.
-Do not paste a node id. GraphQL `user(login:)` does not resolve a
-`Bot`; use the REST users endpoint. `gh api -f` sends `botIds` as a
-string and fails node-id resolution, so pass a JSON body:
-
-```sh
+BOT_REST_LOGIN={primary-advisory-bot-rest-login}
+export BOT_REST_LOGIN
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
-BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
-# jq binds the ids. The query's $id / $botIds are jq/GraphQL, not shell.
-jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
-  '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' \
-  | gh api graphql --input -
+HEAD_COMMITTED_AT=$(gh pr view {pr-number} --json commits --jq '.commits[-1].committedDate')
+request_event() {
+  gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate --jq \
+    '.[] | select(.event == "review_requested" and .reviewer.login == env.BOT_REST_LOGIN) | [.id, .created_at] | @tsv' | tail -1
+}
+request_nodes() {
+  gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}' |
+    jq -r '.data.repository.pullRequest.reviewRequests.nodes[] | select(.requestedReviewer.login == env.BOT_REST_LOGIN) | .id'
+}
+EVENT_BEFORE=$(request_event)
+NODES_BEFORE=$(request_nodes)
+registration_ok() {
+  EVENT_AFTER=$(request_event)
+  NODES_AFTER=$(request_nodes)
+  EVENT_ID=${EVENT_AFTER%%$'\t'*}; EVENT_AT=${EVENT_AFTER#*$'\t'}
+  EVENT_NEW=false
+  if [ -n "$EVENT_ID" ] && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
+    && [ "$EVENT_AT" \> "$HEAD_COMMITTED_AT" ]; then EVENT_NEW=true; fi
+  NODE_FRESH=false
+  while IFS= read -r node; do
+    [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
+  done <<EOF
+$NODES_AFTER
+EOF
+  [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
+}
+
+gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
+registration_ok || {
+  gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+    -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
+  registration_ok || {
+  # Resolve ids live; GraphQL user(login:) does not resolve a Bot.
+  BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id')
+  jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
+    '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
+    gh api graphql --input -
+    registration_ok || { echo "registration evidence absent" >&2; exit 1; }
+  }
+}
 ```
 
-Confirm the same current-attempt evidence. E14 then posts its
-`advisory-wait` marker.
-AW3-S keeps its own step 4 disposition and does not treat this block
-as that proof.
+The post-request reads must run after each mutating attempt. The
+`EVENT_BEFORE`/`NODES_BEFORE` values are the AW3-S baselines; carry a
+fresh node proof into step 4 and step 5 rather than discarding it when
+the event is delayed. E14 then posts its `advisory-wait` marker.
+AW3-S keeps its own step 4 disposition, but uses either fresh proof.
 
 ## AW3-S
 
@@ -273,9 +294,8 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 
 # Step 3 — request again (non-pending entry: the first mutating step;
 # pending entry: after step 2 verifies the removal). Run the
-# registration-proven review request above. The two gh/REST calls
-# there are attempts, not a complete request; snapshot the matching
-# event before them. Step 4 below stays the counted proof rule.
+# registration-proven review request above. Its event/node snapshots
+# precede both mutations; step 4 carries either fresh proof forward.
 
 # Step 5 -- post exactly one bound marker, only once step 4 reaches a
 # counted disposition: proven re-registration for a pending entry, or

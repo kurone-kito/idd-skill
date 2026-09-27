@@ -334,16 +334,15 @@ other GitHub side effect, confirm all of the following:
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer, then
-     REST `requested_reviewers`. Post
+   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer and
+     REST. Post
      `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
-     as plain text only after current-attempt evidence (newer matching
-     event than a pre-request snapshot and after HEAD, or non-empty
-     request node read after requesting); exit status is not evidence
-     (issue `#3500`). If absent,
-     call `requestReviews` (`botIds` JSON array, `union: true`,
-     resolved node id — never hard-coded). Still absent: stop and
-     ask; do not post. Then go to the polling loop.
+     as plain text only after current-attempt evidence: a newer event
+     after HEAD or a fresh node absent from the pre-request snapshot;
+     exit status is not evidence (issue `#3500`). If absent, see
+     [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
+     use `requestReviews` with live `botIds` and `union: true`; never
+     hard-code ids. Still absent: stop and ask; poll after success.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the

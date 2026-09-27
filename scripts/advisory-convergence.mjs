@@ -3622,12 +3622,13 @@ export function collectAssertNextActions(verdict) {
       token: T.REQUEST_REVIEW,
       summary:
         `${bot} has not reviewed this PR. Request a review (E14) and post an advisory-wait marker only after registration evidence ` +
-        `(snapshot the matching review_requested event before requesting and require a newer one that follows the current HEAD commit, or a non-empty requested_reviewers node read after the attempt). Exit status is not evidence:`,
+        `(snapshot the matching review_requested event and request node before mutation; require a newer event after the current HEAD commit or a fresh node absent from that snapshot). Exit status is not evidence:`,
       pointer: [
+        `# snapshot the matching event and request node before either mutation; see docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request`,
         `gh pr edit ${pr} --add-reviewer ${reviewer}`,
         `# if that leaves evidence absent, including a zero exit with no event and no node for ${restLogin}:`,
         `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
-        `# snapshot the matching event before mutation; accept only a newer event or a current request node`,
+        `# re-read both proofs; accept only a newer event after HEAD or a fresh node absent from the snapshot`,
         `# if evidence for ${restLogin} is still absent, resolve ids live. GraphQL user(login:) does not resolve a Bot; use REST. Never hard-code a node id. gh api -f sends botIds as a string.`,
         `PR_NODE_ID=$(gh pr view ${pr} --json id --jq .id)`,
         `BOT_NODE_ID=$(gh api "users/${restLogin}" --jq .node_id)`,

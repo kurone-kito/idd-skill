@@ -6821,7 +6821,7 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   assert.match(noneText, /registration evidence/);
   assert.match(
     noneText,
-    /snapshot the matching review_requested event before requesting/,
+    /snapshot the matching review_requested event and request node before mutation/,
   );
   assert.match(noneText, /newer event/);
   assert.match(noneText, /review_requested/);
@@ -6834,10 +6834,7 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
     noneText,
     /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
   );
-  assert.match(
-    noneText,
-    /non-empty requested_reviewers node read after the attempt/,
-  );
+  assert.match(noneText, /fresh node absent from that snapshot/);
   assert.match(
     noneText,
     /gh api "users\/copilot-pull-request-reviewer\[bot\]" --jq \.node_id/,
@@ -6852,6 +6849,11 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(noneText, /botIds:\[\$bot\]/);
   assert.doesNotMatch(noneText, /<<EOF/);
+  const snapshotAt = noneText.indexOf(
+    'snapshot the matching event and request node before either mutation',
+  );
+  const requestAt = noneText.indexOf('gh pr edit');
+  assert.ok(snapshotAt > 0 && requestAt > snapshotAt);
   const payloadAt = noneText.indexOf('jq -n');
   const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
   assert.ok(payloadAt > 0 && markerAt > payloadAt);
