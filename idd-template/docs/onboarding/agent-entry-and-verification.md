@@ -297,27 +297,31 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path <idd-skill>/idd-template \
   --path-prefix .github --path-prefix docs --path-prefix profiles \
-  --path-prefix .githooks --path-prefix .claude \
+  --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-For a `package-manager` adopter without the source checkout, run the same
-helper from the installed package. It is intentionally not an `idd-*` bin:
+For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
+or Yarn configured for `node_modules`) without the source checkout, run the
+same helper from the installed package. It is intentionally not an `idd-*`
+bin:
 
 ```sh
 node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --target-root <target-repo> --target-ref <mirror-only-commit> \
   --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
   --path-prefix .github --path-prefix docs --path-prefix profiles \
-  --path-prefix .githooks --path-prefix .claude \
+  --path-prefix .githooks \
   --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-The `ephemeral-npx` profile does not install a supported copy of this
-source-repository helper, so use a source checkout or the `vendored-node`
-profile for this verification.
+This direct path does not apply to Yarn Plug'n'Play, which has no
+`node_modules/@kurone-kito/idd-skill/` tree. Use a source checkout or the
+`vendored-node` profile for package-manager adopters using PnP. The
+`ephemeral-npx` profile also does not install a supported copy of this
+source-repository helper, so use a source checkout or `vendored-node`.
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes

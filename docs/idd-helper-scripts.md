@@ -1068,7 +1068,7 @@ future inventory reviews do not need to re-infer their role from code.
     --target-root <target-repo> --target-ref <mirror-only-commit> \
     --upstream-path <idd-skill>/idd-template \
     --path-prefix .github --path-prefix docs --path-prefix profiles \
-    --path-prefix .githooks --path-prefix .claude \
+    --path-prefix .githooks \
     --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
     --path-prefix .markdownlint-cli2.yaml
   ```
@@ -1091,22 +1091,27 @@ future inventory reviews do not need to re-infer their role from code.
     --path-prefix schemas --path-prefix fixtures
   ```
 
-  For a `package-manager` adopter, run the installed package's copy directly
-  when the source checkout is unavailable:
+  For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
+  or Yarn configured for `node_modules`), run the installed package's copy
+  directly when the source checkout is unavailable:
 
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
     --target-root <target-repo> --target-ref <mirror-only-commit> \
     --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
     --path-prefix .github --path-prefix docs --path-prefix profiles \
-    --path-prefix .githooks --path-prefix .claude \
+    --path-prefix .githooks \
     --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
     --path-prefix .markdownlint-cli2.yaml
   ```
 
   `verify-import-mirror` is not an `idd-*` bin in the `package-manager` or
   `ephemeral-npx` profiles. The installed-package path above is supported for
-  `package-manager`; `ephemeral-npx` does not install a supported copy of this
+  `package-manager` only when its `node_modules` linker exposes the path. It
+  is not available under Yarn Plug'n'Play, which has no
+  `node_modules/@kurone-kito/idd-skill/` tree; use a source checkout or the
+  `vendored-node` profile for package-manager adopters using PnP. The
+  `ephemeral-npx` profile does not install a supported copy of this
   source-repository helper, so use a source checkout or the `vendored-node`
   profile instead.
 
