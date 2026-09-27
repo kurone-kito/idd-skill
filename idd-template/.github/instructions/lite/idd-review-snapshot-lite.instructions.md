@@ -11,12 +11,12 @@ standard file.
 
 ## Triage hand-off boundary (E4-E8 excluded)
 
-Only fetch/routes ReviewItems_snapshot; never classify
-or decide Accept/Reject. Non-empty E3 hands off to
-`idd-review-triage.instructions.md` (E4-E8). Deferred Step 2 handoff
-must carry E1 Step 1 SHA, `watermark deferred`, and reason; receiver
-restores or reruns E1 before E8 without same-claim watermark.
-Never branch-sync/F1/F2 from an unverified handoff
+Only fetch/routes ReviewItems_snapshot; never classify or decide
+Accept/Reject. Non-empty E3 hands off to
+`idd-review-triage.instructions.md` (E4-E8). A deferred Step 2 handoff
+carries E1 Step 1 SHA, `watermark deferred`, and reason; the receiver
+restores or reruns E1 before E8 without same-claim watermark. Never
+branch-sync/F1/F2 from an unverified handoff.
 
 ## Stop-and-ask conditions
 
@@ -54,12 +54,12 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Before Step 2, confirm merge-gate CI completion. If the primary advisory
-bot reviewed an earlier head, run `advisory-wait-state`; Step 2 is
-eligible when `lastCopilotCommit == prHeadSha`, outcome `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED`. Do not wait here. Take Steps 1 and 3
-regardless; if incomplete, skip Step 2, use E15/E14 before
-branch-sync/F2, and return E1 to post the watermark
+Before Step 2, confirm merge-gate CI completion. If the primary
+advisory bot reviewed an earlier head, run `advisory-wait-state`; Step 2
+is eligible at `lastCopilotCommit == prHeadSha`, `SATISFIED`, or
+phase-specific `CAP_EXHAUSTED`. Do not wait here: take Steps 1 and 3
+regardless. If incomplete, skip Step 2, use E15/E14 before
+branch-sync/F2, and return to E1 to post the watermark.
 
 ### Step 1 — Snapshot the activity universe
 
@@ -114,8 +114,8 @@ branch-sync/F2, and return E1 to post the watermark
 
 ### Step 2 — Record the watermark
 
-When the precondition above is satisfied, post one marker per E1 pass.
-Prefer the one-command path: `node
+Post one marker per E1 pass when the precondition is satisfied. Prefer
+the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
@@ -128,9 +128,8 @@ The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run. If the
-precondition remains incomplete, skip Step 2 and use the E15/E14 wait
-route after Step 3; otherwise post Step 2.
+--apply` — stays available when `--from-pr` cannot run. If incomplete,
+skip Step 2 and use E15/E14 after Step 3; otherwise post Step 2.
 
 The rendered body is exactly:
 
