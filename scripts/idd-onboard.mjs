@@ -2173,7 +2173,9 @@ function isBlockClosingBrace(text, index) {
       if (depth === 0) {
         const openingPrefix = text.slice(0, current);
         return (
-          /(?:^|[;}])\s*(?:else|do|try|finally)\s*$/u.test(openingPrefix) ||
+          /(?:^|[;}])\s*(?:else|do|try|finally|catch)\s*$/u.test(
+            openingPrefix,
+          ) ||
           isFunctionDeclarationPrefix(openingPrefix) ||
           (/\)\s*$/u.test(openingPrefix) &&
             !isFunctionClosingParenthesis(
@@ -2557,25 +2559,37 @@ function parseStaticOptionKey(text) {
   }
   return null;
 }
-function topLevelOptionPropertyValue(argumentsText, property) {
-  const options = topLevelObjectExpression(
-    splitTopLevelArguments(argumentsText)[1] ?? '',
-  );
+function objectPropertyValue(objectExpression, property) {
+  const options = topLevelObjectExpression(objectExpression);
   if (options === null) {
     return null;
   }
+  let value = null;
   const optionEntries = splitTopLevelArguments(options.slice(1, -1));
   for (const entry of optionEntries) {
     const trimmed = entry.trim();
+    if (trimmed.startsWith('...')) {
+      const spreadValue = objectPropertyValue(trimmed.slice(3), property);
+      if (spreadValue !== null) {
+        value = spreadValue;
+      }
+      continue;
+    }
     const colon = findTopLevelCharacter(trimmed, ':');
     if (
       colon !== -1 &&
       parseStaticOptionKey(trimmed.slice(0, colon)) === property
     ) {
-      return trimmed.slice(colon + 1).trim();
+      value = trimmed.slice(colon + 1).trim();
     }
   }
-  return null;
+  return value;
+}
+function topLevelOptionPropertyValue(argumentsText, property) {
+  return objectPropertyValue(
+    splitTopLevelArguments(argumentsText)[1] ?? '',
+    property,
+  );
 }
 function isFunctionValuedExpression(text) {
   const expression = maskJavaScriptStringContents(text).trim();
