@@ -1745,6 +1745,21 @@ test('dependency-line-grammar ignores dependency mentions inside raw HTML blocks
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar keeps cross-repository references inside raw HTML aligned with Discover', () => {
+  const body = childBody({
+    extraMarkers: '<div>\nBlocked by acme/other-repo#12\n</div>',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar keeps comments nested inside opaque blocks masked', () => {
   for (const opaqueBody of [
     '<div>\n<!-- Blocked by #12 -->\n</div>',
@@ -1839,6 +1854,20 @@ test('dependency-line-grammar recognizes short hyphen setext headings', () => {
     assert.ok(finding, underline);
     assert.equal(finding.result, 'fail', underline);
   }
+});
+
+test('dependency-line-grammar does not treat a bare setext underline as a block boundary without an open paragraph', () => {
+  const body = childBody({
+    extraMarkers:
+      '=\n[ref]: https://github.com/kurone-kito/idd-skill/issues/12\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
 });
 
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {

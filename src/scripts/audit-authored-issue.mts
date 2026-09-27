@@ -1842,9 +1842,10 @@ function findMultilineReferenceLinkMisuses(
  * silently mis-masking a validly indented/nested line; see
  * `matchDependencyKeywordLine`'s own doc comment):
  *
- * - `discoverMaskedLines` masks HTML comments and blocks, matching
- *   Discover's real view of the body for accepted-line matching and
- *   reference-definition collection.
+ * - `discoverMaskedLines` masks HTML comments only, matching Discover's
+ *   real view of the body for accepted-line matching. Reference-definition
+ *   collection uses a separate view that also masks raw HTML blocks, because
+ *   those definitions are not active CommonMark metadata.
  * - `nearMissScanLines` starts from a second view that also masks raw HTML
  *   blocks while keeping HTML comments visible, then additionally masks
  *   every well-formed `{markerPrefix}-blocked-by` sequential-roadmap marker
@@ -1872,7 +1873,6 @@ function checkDependencyLineGrammar(
     'Blocked by / Depends on lines use the canonical line-anchored form';
   const discoverMaskedLines = maskMarkdownForScan(rawText, {
     htmlComments: 'mask',
-    htmlBlocks: 'mask',
   }).split('\n');
   // A well-formed `<!-- {markerPrefix}-blocked-by: <value> -->` sequential-
   // roadmap marker (checkDependencyMarkerRule above) coincidentally
@@ -1942,7 +1942,10 @@ function checkDependencyLineGrammar(
     .replace(blockedByMarkerPattern, (match) => match.replace(/[^\n]/g, ' '))
     .split('\n');
   const referenceDefinitions = collectReferenceStyleLinkDefinitions(
-    discoverMaskedLines.join('\n'),
+    maskMarkdownForScan(rawText, {
+      htmlComments: 'mask',
+      htmlBlocks: 'mask',
+    }),
   );
   const multilineReferenceLinkMisuses = findMultilineReferenceLinkMisuses(
     nearMissScanText.join(''),
@@ -3017,12 +3020,15 @@ function parseReferenceDefinitionCandidate(
   };
 }
 
-function isReferenceDefinitionBlockBoundary(content: string): boolean {
+function isReferenceDefinitionBlockBoundary(
+  content: string,
+  paragraphOpen: boolean,
+): boolean {
   return (
     /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
-    /^=+[ \t]*$/u.test(content) ||
+    (paragraphOpen && /^(?:=+|-{1,2})[ \t]*$/u.test(content)) ||
     /^(`{3,}|~{3,})/u.test(content) ||
-    /^(?:\*\s*){3,}$|^-+[ \t]*$|^(?:_\s*){3,}$/u.test(content)
+    /^(?:\*\s*){3,}$|^-{3,}[ \t]*$|^(?:_\s*){3,}$/u.test(content)
   );
 }
 
@@ -3134,7 +3140,7 @@ function collectReferenceStyleLinkDefinitions(
         !paragraphOpen ||
         previousDefinition ||
         startsNewContainerBlock ||
-        isReferenceDefinitionBlockBoundary(content);
+        isReferenceDefinitionBlockBoundary(content, paragraphOpen);
       if (canStart) {
         const key = normalizeLinkReferenceLabel(candidate.label);
         if (
@@ -3178,7 +3184,7 @@ function collectReferenceStyleLinkDefinitions(
       previousContainerKinds = containerKinds;
       continue;
     }
-    paragraphOpen = !isReferenceDefinitionBlockBoundary(content);
+    paragraphOpen = !isReferenceDefinitionBlockBoundary(content, paragraphOpen);
     previousDefinition = false;
     previousContainerKinds = containerKinds;
   }
