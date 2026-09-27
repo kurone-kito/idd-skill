@@ -371,8 +371,8 @@ The post-request reads must run after each mutating attempt. The
 fresh node proof into step 4 and step 5 rather than discarding it when
 the event is delayed. E14 posts its `advisory-wait` marker only when
 `REGISTRATION_STATUS` is `0`; statuses `1`/`2` stop and ask. AW3-S
-keeps its step 4 disposition and uses either fresh proof, even when the
-shared routine returned an unresolved status.
+uses step 4 only after readable evidence; status `2` routes to AW4 and
+cannot count a failed cycle or post a marker.
 
 ## AW3-S
 

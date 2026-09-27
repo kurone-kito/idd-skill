@@ -7158,6 +7158,26 @@ test('computeAdvisoryConvergenceVerdict: ready nextActions is empty (#2143)', ()
   assert.deepEqual(collectAssertNextActions(verdict), []);
 });
 
+test('#3500 shell fallback guards the GraphQL request and marker order', () => {
+  const fallback = readFileSync(
+    new URL(
+      '../idd-template/docs/idd-advisory-wait-shell-fallback.md',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const mutationAt = fallback.indexOf(
+    'requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true})',
+  );
+  const markerAt = fallback.indexOf(
+    'node scripts/post-idd-marker.mjs --type advisory-recovery',
+  );
+  assert.ok(mutationAt > 0 && markerAt > mutationAt);
+  assert.match(fallback, /requestedReviewer\{__typename/);
+  assert.match(fallback, /variables:\{id:\$id,botIds:\[\$bot\]\}/);
+  assert.match(fallback, /claim_revalidate \|\| return 2[\s\S]*?jq -n/);
+});
+
 test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#2143)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs(),
