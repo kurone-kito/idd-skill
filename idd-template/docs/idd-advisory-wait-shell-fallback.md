@@ -227,40 +227,93 @@ was recorded.
 BOT_REST_LOGIN={primary-advisory-bot-rest-login}
 export BOT_REST_LOGIN
 PR_NODE_ID=$(gh pr view {pr-number} --json id --jq '.id')
-HEAD_COMMITTED_AT=$(gh pr view {pr-number} --json commits --jq '.commits[-1].committedDate')
+PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+BOT_REST_LOGIN_BARE=${BOT_REST_LOGIN%\[bot\]}
+export BOT_REST_LOGIN_BARE
+claim_revalidate() {
+  # Resolve this to the profile-selected shared claim gate, including the
+  # worktree lock, active claim id, activation nonce, and branch/cwd check.
+  <profile-selected-claim-revalidation-command>
+}
+head_timeline_index() {
+  local result
+  result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
+  printf '%s' "$result" | jq -r -s --arg sha "$PR_HEAD_SHA" '
+    (add // [])
+    | to_entries
+    | map(select(.value.event == "committed"
+        and ((.value.sha // .value.commit_id // "") == $sha)))
+    | last | .key // empty' || return 1
+}
 request_event() {
   local result
-  result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate --jq \
-    '.[] | select(.event == "review_requested" and (((.requested_reviewer.login // "" | ascii_downcase) as $l
-      | $l == (env.BOT_REST_LOGIN | ascii_downcase)
-        or $l == "copilot"
-        or $l == "copilot-pull-request-reviewer"
-        or $l == "copilot-pull-request-reviewer[bot]"))) | [.id, .created_at] | @tsv') || return 1
-  printf '%s\n' "$result" | tail -1
+  result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
+  printf '%s' "$result" | jq -r -s '
+    def matches_configured_bot($login):
+      ($login // "" | ascii_downcase) as $l
+      | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
+      | ($l == $bare
+         or $l == ($bare + "[bot]")
+         or (($bare == "copilot"
+              or $bare == "copilot-pull-request-reviewer")
+             and ($l == "copilot"
+                  or $l == "copilot-pull-request-reviewer"
+                  or $l == "copilot-pull-request-reviewer[bot]")));
+    (add // [])
+    | to_entries
+    | map(select(.value.event == "review_requested"
+        and matches_configured_bot(.value.requested_reviewer.login)))
+    | last
+    | if . == null then empty
+      else [.value.id, .value.created_at, .key] | @tsv end' || return 1
 }
 request_nodes() {
   local result
   result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}') || return 1
   printf '%s' "$result" |
-    jq -r --arg configured "$BOT_REST_LOGIN" '
+    jq -r '
+      def matches_configured_bot($login):
+        ($login // "" | ascii_downcase) as $l
+        | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
+        | ($l == $bare
+           or $l == ($bare + "[bot]")
+           or (($bare == "copilot"
+                or $bare == "copilot-pull-request-reviewer")
+               and ($l == "copilot"
+                    or $l == "copilot-pull-request-reviewer"
+                    or $l == "copilot-pull-request-reviewer[bot]")));
       .data.repository.pullRequest.reviewRequests.nodes[]
-      | select((((.requestedReviewer.login // "") | ascii_downcase) as $l
-        | $l == ($configured | ascii_downcase)
-          or $l == "copilot"
-          or $l == "copilot-pull-request-reviewer"
-          or $l == "copilot-pull-request-reviewer[bot]"))
+      | select(matches_configured_bot(.requestedReviewer.login))
       | .id'
 }
 registration_attempt() {
+  HEAD_TIMELINE_INDEX=$(head_timeline_index) || {
+    echo "HEAD timeline snapshot unreadable" >&2
+    return 2
+  }
+  [ -n "$HEAD_TIMELINE_INDEX" ] || {
+    echo "HEAD committed timeline event absent" >&2
+    return 2
+  }
   EVENT_BEFORE=$(request_event) || { echo "event snapshot unreadable" >&2; return 2; }
   NODES_BEFORE=$(request_nodes) || { echo "request-node snapshot unreadable" >&2; return 2; }
   registration_ok() {
     EVENT_AFTER=$(request_event) || return 2
     NODES_AFTER=$(request_nodes) || return 2
-    EVENT_ID=${EVENT_AFTER%%$'\t'*}; EVENT_AT=${EVENT_AFTER#*$'\t'}
+    IFS=$'\t' read -r EVENT_ID EVENT_AT EVENT_INDEX <<EOF
+$EVENT_AFTER
+EOF
     EVENT_NEW=false
-    if [ -n "$EVENT_ID" ] && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
-      && [ "$EVENT_AT" \> "$HEAD_COMMITTED_AT" ]; then EVENT_NEW=true; fi
+    case "$EVENT_INDEX" in
+      ''|*[!0-9]*) ;;
+      *)
+        if [ -n "$EVENT_ID" ] \
+          && ! printf '%s\n' "$EVENT_BEFORE" | cut -f1 | grep -Fxq "$EVENT_ID" \
+          && [ "$EVENT_INDEX" -gt "$HEAD_TIMELINE_INDEX" ]; then
+          EVENT_NEW=true
+        fi
+        ;;
+    esac
     NODE_FRESH=false
     while IFS= read -r node; do
       [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
@@ -272,13 +325,13 @@ EOF
 
   # Re-run the shared claim revalidation gate immediately before every
   # reviewer-request mutation. A failed gate must stop this attempt.
-  <profile-selected-claim-revalidation-command> || return 2
+  claim_revalidate || return 2
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
   registration_ok; status=$?
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
-  <profile-selected-claim-revalidation-command> || return 2
+  claim_revalidate || return 2
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
   registration_ok; status=$?
@@ -287,7 +340,7 @@ EOF
 
   # Resolve ids live; GraphQL user(login:) does not resolve a Bot.
   BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id') || return 2
-  <profile-selected-claim-revalidation-command> || return 2
+  claim_revalidate || return 2
   jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
     '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
     gh api graphql --input - || :
