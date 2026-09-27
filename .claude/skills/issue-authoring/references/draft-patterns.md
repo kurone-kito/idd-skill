@@ -162,8 +162,8 @@ reads.
 
 When the proposed issue touches a file governed by the target repository's
 configured `bundleBudgets` or `instructionSizeBudgets` entries — or an
-`idd-template/` source that maps to
-one through `syncPairs` (or an equivalent source-to-target mapping), including
+`idd-template/` source that maps to a generated target through
+`syncPairs` (or an equivalent source-to-target mapping), including
 onboarding documents — also apply the contract's
 [context-ceiling check](contract.md#codebase-fidelity-validation) before treating
 `bundleBudgets.limitBytes` as available headroom; that limit is not the

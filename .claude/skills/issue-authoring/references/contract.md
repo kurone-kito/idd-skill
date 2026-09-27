@@ -559,7 +559,8 @@ Ask these checks:
    (or equivalent source-to-target mapping) before selecting bundles;
    evaluate that target path as changed. For each applicable
    `instructionSizeBudgets` entry covering a changed file, run its per-file
-   limit and near-ceiling-ratchet checks before claiming headroom. For every
+   limit and near-ceiling-ratchet checks on banner-stripped byte totals before
+   claiming headroom. For every
    configured
    bundle containing a changed file, compare its measured,
    banner-stripped total with its `bundleBudgets.limitBytes` and apply the
