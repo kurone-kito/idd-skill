@@ -3279,10 +3279,22 @@ function parseStepOneOwnClaimFlags(
   // token, not merely the token's own presence. Reusing `hasExactToken`'s
   // boundary class up front keeps the same word-boundary guarantee
   // (`--claim-id-extra` still can't match) before demanding the operand.
+  //
+  // #3533 (Codex review, PR #3537, round 2): the placeholder alternation
+  // alone has no anchor after its own closing `}`/`>`, so `.test()` still
+  // matches the well-formed prefix of a corrupted placeholder such as
+  // `{claim-id}.bak` -- a documentation edit that appended stray text
+  // after an otherwise-valid placeholder would silently keep passing.
+  // Require the closing brace/bracket to be followed by an allowed
+  // documentation-token delimiter: whitespace, the `]` that closes this
+  // file's own `[--flag {value}]` optional-bracket convention (both live
+  // Step 1 lines wrap every flag this way), or end of line -- never a
+  // bare `(?=\s|$)`, which would reject the real `{claim-id}]` line
+  // shape and regress the two live-file tests below.
   const hasOperandAfterToken = (line: string, token: string): boolean => {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(
-      `(?<![\\w-])${escaped}(?![\\w-])\\s+(?:\\{[^\\s{}<>]+\\}|<[^\\s{}<>]+>)`,
+      `(?<![\\w-])${escaped}(?![\\w-])\\s+(?:\\{[^\\s{}<>]+\\}|<[^\\s{}<>]+>)(?=[\\s\\]]|$)`,
     ).test(line);
   };
   // #3533 (Copilot review, PR #3531): match the documented helper filename
@@ -3293,10 +3305,24 @@ function parseStepOneOwnClaimFlags(
   // class on both sides (unlike the option-token boundary above) because
   // the filename itself contains a literal `.`, so a `[\w-]`-only boundary
   // would let a `.bak`-style suffix pass the lookahead unmatched.
+  //
+  // #3533 (Codex review, PR #3537, round 2): a *negative* lookahead
+  // exclusion class can never enumerate every shell-word-continuing
+  // character -- `resume-claim-routing.mjs/backup` and
+  // `resume-claim-routing.mjs~` both still passed the original
+  // `(?![\w.-])` lookahead, since `/` and `~` (and every other character
+  // outside `[\w.-]`, e.g. `:`, `\`, `+`) are absent from that class too.
+  // Replace the lookahead with a *positive* delimiter allowlist instead:
+  // the filename must be followed by whitespace or end of line, the only
+  // two shapes either live Step 1 invocation line actually uses. The
+  // lookbehind stays the original negative-class form (deliberately
+  // asymmetric): every real invocation is `node scripts/resume-claim-
+  // routing.mjs ...`, immediately preceded by `/`, which a positive
+  // "preceded by whitespace/start-of-line" allowlist would reject.
   const HELPER_SCRIPT_NAME = 'resume-claim-routing.mjs';
   const isExactHelperScriptToken = (line: string): boolean => {
     const escaped = HELPER_SCRIPT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?<![\\w.-])${escaped}(?![\\w.-])`).test(line);
+    return new RegExp(`(?<![\\w.-])${escaped}(?=\\s|$)`).test(line);
   };
   // Word-boundary-aware, not `.includes()`: an accidental `--issue-number`
   // or `--fresh-claim-gate-only` edit must not still count as the
@@ -3435,6 +3461,59 @@ node scripts/resume-claim-routing.mjs.bak --issue {issue-number} --claim-id {cla
 `;
   const found = parseStepOneOwnClaimFlags(corruptedFilenameFixture);
   assert.deepEqual([...found], []);
+});
+
+test('parseStepOneOwnClaimFlags reports an own-claim flag as missing when its operand placeholder carries a stray trailing suffix (#3533)', () => {
+  // `{claim-id}.bak` is a well-formed placeholder *prefix* followed by
+  // stray text -- a naive placeholder regex with no anchor after its own
+  // closing brace still matches the `{claim-id}` substring and reports
+  // the flag present. `--nonce`/`--worktree` both keep clean placeholders
+  // with no trailing suffix, so a pass here can only come from the
+  // operand-boundary check itself, not from the line failing to be
+  // selected as an invocation at all (Codex review, PR #3537, round 2).
+  const trailingSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs --issue {issue-number} --claim-id {claim-id}.bak --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  const found = parseStepOneOwnClaimFlags(trailingSuffixFixture);
+  assert.deepEqual([...found].sort(), ['--nonce', '--worktree']);
+});
+
+test('parseStepOneOwnClaimFlags does not select a helper filename with a stray trailing suffix as a Step 1 invocation (#3533)', () => {
+  // Two corrupted-filename shapes a *negative* lookahead exclusion class
+  // can never fully enumerate (Codex review, PR #3537, round 2): a
+  // path-continuing `/backup` suffix, and a shell-tilde `~` suffix.
+  // Neither `/` nor `~` was ever in the original `[\w.-]` exclusion
+  // class, so both slipped through the same way `.bak` did before
+  // #3531's own fix -- exactly the same false-positive-drift risk this
+  // whole parser exists to close. Each fixture is otherwise identical to
+  // the `.bak` corrupted-filename fixture above (well-formed `--issue`
+  // and all three own-claim flags, no other invocation-shaped line
+  // anywhere earlier), so a pass proves the filename-delimiter check
+  // alone rejects the line.
+  const pathSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs/backup --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(pathSuffixFixture)], []);
+
+  const tildeSuffixFixture = `## Step 1 — Identify claim state
+
+\`\`\`sh
+node scripts/resume-claim-routing.mjs~ --issue {issue-number} --claim-id {claim-id} --nonce {nonce} --worktree {path}
+\`\`\`
+
+## Step 2 — Locate or restore worktree
+`;
+  assert.deepEqual([...parseStepOneOwnClaimFlags(tildeSuffixFixture)], []);
 });
 
 test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree present is already_owned, omitted is owner_evidence_required", () => {
