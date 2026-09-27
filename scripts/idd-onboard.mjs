@@ -2098,6 +2098,56 @@ const DIRECTORY_SCAN_CALL_PATTERN =
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
+function stripJavaScriptComments(text) {
+  let result = '';
+  let quote = null;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    const next = text[index + 1] ?? '';
+    if (quote !== null) {
+      result += character;
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      result += character;
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      result += ' ';
+      index += 1;
+      while (index + 1 < text.length && text[index + 1] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      result += ' ';
+      index += 1;
+      while (index + 1 < text.length) {
+        index += 1;
+        if (text[index] === '*' && text[index + 1] === '/') {
+          index += 1;
+          break;
+        }
+        if (text[index] === '\n' || text[index] === '\r') {
+          result += text[index];
+        }
+      }
+      continue;
+    }
+    result += character;
+  }
+  return result;
+}
 function moduleScansManifestDirectory(text, targetPath) {
   const slash = targetPath.lastIndexOf('/');
   if (slash <= 0) {
@@ -2105,7 +2155,9 @@ function moduleScansManifestDirectory(text, targetPath) {
   }
   const directory = targetPath.slice(0, slash);
   const directoryPrefix = new RegExp(`^${escapeRegExp(directory)}(?=$|/)`, 'u');
-  for (const match of text.matchAll(DIRECTORY_SCAN_CALL_PATTERN)) {
+  for (const match of stripJavaScriptComments(text).matchAll(
+    DIRECTORY_SCAN_CALL_PATTERN,
+  )) {
     if (directoryPrefix.test(match[2] ?? '')) {
       return true;
     }
