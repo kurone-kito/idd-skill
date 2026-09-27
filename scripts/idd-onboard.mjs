@@ -2426,10 +2426,24 @@ function findDirectoryScanCalls(text) {
       } else if (character === ')') {
         depth -= 1;
         if (depth === 0) {
-          calls.push({
-            apiName,
-            argumentsText: text.slice(openIndex + 1, index),
-          });
+          let afterCall = index + 1;
+          while (/\s/u.test(text[afterCall] ?? '')) {
+            afterCall += 1;
+          }
+          const matchIndex = match.index ?? 0;
+          const declarationPrefix = text.slice(
+            Math.max(0, matchIndex - 64),
+            matchIndex,
+          );
+          const isDeclaration =
+            text[afterCall] === '{' ||
+            /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
+          if (!isDeclaration) {
+            calls.push({
+              apiName,
+              argumentsText: text.slice(openIndex + 1, index),
+            });
+          }
           break;
         }
       }
@@ -2452,8 +2466,9 @@ function pathExpressionCandidates(text) {
   }
   return literals;
 }
-function normalizeManifestScanPath(path) {
+function normalizeManifestScanPath(path, preserveTrailingSlash = false) {
   const normalized = path.replaceAll('\\', '/');
+  const hasTrailingSlash = preserveTrailingSlash && normalized.endsWith('/');
   if (normalized.startsWith('/')) {
     return normalized;
   }
@@ -2472,7 +2487,8 @@ function normalizeManifestScanPath(path) {
     }
     segments.push(segment);
   }
-  return segments.join('/');
+  const result = segments.join('/');
+  return hasTrailingSlash && result !== '' ? `${result}/` : result;
 }
 function resolveModuleRelativeScanPath(path, modulePath) {
   if (modulePath === undefined || path.startsWith('/')) {
@@ -2699,8 +2715,14 @@ function globPatternToRegex(pattern, initialSegmentStart = true) {
         expression += '\\{';
       } else {
         const content = pattern.slice(index + 1, closing);
+        const expandedRange = expandGlobRange(content);
         const alternatives =
-          expandGlobRange(content) ?? splitGlobAlternatives(content, ',');
+          expandedRange ?? splitGlobAlternatives(content, ',');
+        if (expandedRange === null && alternatives.length === 1) {
+          expression += escapeRegExp(pattern.slice(index, closing + 1));
+          index = closing;
+          continue;
+        }
         expression += `(?:${alternatives
           .map((alternative) => globPatternToRegex(alternative, segmentStart))
           .join('|')})`;
@@ -2778,7 +2800,9 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
         : firstCandidates
     )
       .flat()
-      .map(normalizeManifestScanPath);
+      .map((candidate) =>
+        normalizeManifestScanPath(candidate, /^glob(?:Sync)?$/u.test(apiName)),
+      );
     const exclusions = (
       hasCwd
         ? excludeCandidates.flatMap((candidate) =>
@@ -2789,7 +2813,7 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
         : excludeCandidates
     )
       .flat()
-      .map(normalizeManifestScanPath);
+      .map((candidate) => normalizeManifestScanPath(candidate));
     const normalizedTargetPath = normalizeManifestScanPath(targetPath);
     const normalizedDirectory = normalizeManifestScanPath(directory);
     const readsDirectoryEntries = !/^glob(?:Sync)?$/u.test(apiName);

@@ -4055,6 +4055,24 @@ test('checkHeldSchemaDrift does not treat a literal glob directory as recursive'
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores directory-scan declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "function readdirSync(path = 'fixtures') {}\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift detects opendir directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4507,6 +4525,36 @@ test('checkHeldSchemaDrift supports numeric and alphabetic brace ranges', () => 
       { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
     ]);
   }
+});
+
+test('checkHeldSchemaDrift keeps trailing-slash globs directory-only', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/**/');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift keeps non-expanding brace groups literal', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/{widget}.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift applies negative extglob suffixes', () => {
