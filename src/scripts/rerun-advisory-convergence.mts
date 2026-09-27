@@ -546,10 +546,10 @@ const RECOVERY_REFRESH_CAVEAT =
 // classification (#1806) combined with an already-PASSING sibling
 // instance for this check proves the rollup is otherwise resolved --
 // rerunning it here is bounded cleanup of a redundant stale sibling, not a
-// second automated rerun-budget grant. A budget-held instance without a
-// qualifying newer same-HEAD passing sibling remains a manual decision.
+// second automated rerun-budget grant. An instance qualifying for neither
+// bounded recovery exception remains a manual decision.
 const LIVE_COVERAGE_RECOVERY_CAVEAT =
-  'Per docs/idd-helper-scripts.md (#2549): each instance below was previously withheld by its own exhausted rerun-once budget, but its live-coverage-recovery classification (#1806) combined with an already-PASSING sibling instance for this check proves the rollup is otherwise resolved -- rerunning it here is bounded cleanup of a redundant stale sibling, not a second automated rerun-budget grant. A budget-held instance without a qualifying newer same-HEAD passing sibling remains withheld for manual review.';
+  'Per docs/idd-helper-scripts.md (#2549): each instance below was previously withheld by its own exhausted rerun-once budget, but its live-coverage-recovery classification (#1806) combined with an already-PASSING sibling instance for this check proves the rollup is otherwise resolved -- rerunning it here is bounded cleanup of a redundant stale sibling, not a second automated rerun-budget grant. An instance qualifying for neither bounded recovery exception remains withheld for manual review.';
 
 const PASSED_SIBLING_RECOVERY_CAVEAT =
   'Per docs/idd-helper-scripts.md (#3539): each instance below was previously withheld because its rerun-once budget was exhausted, but a different workflow run for this check and HEAD has since completed successfully. The strictly later passing sibling proves the held run is stale; rerun these entries only as bounded cleanup, after the ordinary and live-coverage recovery sections. Unknown attempts, unparseable timestamps, and non-later siblings remain manual holds.';
