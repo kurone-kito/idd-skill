@@ -1308,6 +1308,57 @@ test('prunable shortcut accepts the explicit absent probe from routing', () => {
   assert.equal(removeCalled, true);
 });
 
+test('prunable shortcut accepts the legacy-released routing shape', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'unclaimed',
+        reason: 'legacy-released',
+        active_claim: null,
+        evidence: {
+          released_claim: { claim_id: null, branch: 'issue/1-task' },
+          local_worktree: { status: 'absent', paths: [], reason: null },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'blocked-prunable');
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(removeCalled, true);
+});
+
 test('prunable shortcut refuses a fresh non-stale absent routing result', () => {
   let removeCalled = false;
   const deps = fakeDeps({
@@ -3673,6 +3724,183 @@ for (const operationCase of [
     }
   });
 }
+
+test('primary-worktree cleanup clears an in-progress submodule operation before checkout', () => {
+  const root = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-submodule-operation-'),
+  );
+  const submodulePath = join(root, 'submodule');
+  const submoduleGitDir = join(submodulePath, '.git');
+  const rebaseDir = join(submoduleGitDir, 'rebase-merge');
+  const preserveDir = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-submodule-preserve-'),
+  );
+  let operationActive = true;
+  let submoduleRefWritten = false;
+  let confirmCalls = 0;
+  const events: string[] = [];
+  try {
+    mkdirSync(rebaseDir, { recursive: true });
+    writeFileSync(join(rebaseDir, 'orig-head'), 'submodule-tip\n');
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 3;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      pathExists: (path) =>
+        path === root ||
+        path === submodulePath ||
+        path === submoduleGitDir ||
+        path.startsWith(preserveDir) ||
+        existsSync(path),
+      realpathOrNull: (path) => path,
+      readlinkOrNull: () => null,
+      ensurePreserveDir: () => preserveDir,
+      copyPath: (_from, to) => {
+        mkdirSync(to, { recursive: true });
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              '+1234567890abcdef1234567890abcdef12345678 submodule (heads/main)\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `${cwd === submodulePath ? submoduleGitDir : join(root, '.git')}\n`,
+            stderr: '',
+          };
+        }
+        if (
+          argv[0] === 'rev-parse' &&
+          argv.includes('-q') &&
+          (argv.includes('MERGE_HEAD') || argv.includes('CHERRY_PICK_HEAD'))
+        ) {
+          return { ok: false, status: 1, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--git-path')) {
+          if (
+            cwd === submodulePath &&
+            argv.includes('rebase-merge') &&
+            operationActive
+          ) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: `${rebaseDir}\n`,
+              stderr: '',
+            };
+          }
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('HEAD')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: 'primary-head\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'rebase' && argv[1] === '--quit') {
+          events.push('submodule-cleanup');
+          operationActive = false;
+          rmSync(rebaseDir, { recursive: true, force: true });
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (
+          argv[0] === 'update-ref' &&
+          cwd === submodulePath &&
+          argv[1] === 'refs/idd-lwr/issue/1-task'
+        ) {
+          submoduleRefWritten = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (
+          argv[0] === 'rev-parse' &&
+          argv.includes('--verify') &&
+          argv.includes('refs/idd-lwr/issue/1-task') &&
+          cwd === submodulePath &&
+          submoduleRefWritten
+        ) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: 'submodule-tip\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'checkout') {
+          events.push('checkout');
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.deepEqual(verdict.plan.submoduleInProgressOperations, [
+      {
+        path: 'submodule',
+        operation: { kind: 'rebase', tipSha: 'submodule-tip' },
+      },
+    ]);
+    assert.equal(verdict.plan.removal?.ran, true);
+    assert.deepEqual(events, ['submodule-cleanup', 'checkout']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(preserveDir, { recursive: true, force: true });
+  }
+});
 
 test('primary recovery refuses a fresh claim during post-checkout absence confirmation', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-fresh-claim-'));

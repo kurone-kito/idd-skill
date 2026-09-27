@@ -202,7 +202,8 @@ export function isAcceptedBlockReason(reason) {
 function isLegacyReleasedRouting(routing) {
   return (
     routing.active_claim === null &&
-    routing.reason.startsWith('released-claim-')
+    (routing.reason.startsWith('released-claim-') ||
+      (routing.state === 'unclaimed' && routing.reason === 'legacy-released'))
   );
 }
 /** True when an explicit absent probe still belongs to a takeover-eligible
@@ -1573,9 +1574,14 @@ function planAndMaybePreserve(
       plannedTo: destination,
     });
   }
+  const submoduleInProgressOperations = Array.from(submoduleOperations).flatMap(
+    ([submodulePath, operation]) =>
+      operation === null ? [] : [{ path: submodulePath, operation }],
+  );
   return {
     preserveDir,
     inProgressOperation,
+    submoduleInProgressOperations,
     stashes,
     uninitializedSubmodules,
     backupRefs,
@@ -1867,6 +1873,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     plan: {
       prunableShortcut: false,
       inProgressOperation: null,
+      submoduleInProgressOperations: [],
       stashes: [],
       uninitializedSubmodules: [],
       backupRefs: [],
@@ -1909,8 +1916,13 @@ export function runLocalWorktreeRecovery(args, deps) {
       if (preserve.worktreeAdminCopy != null) {
         verdict.plan.worktreeAdminCopy = preserve.worktreeAdminCopy;
       }
+      verdict.plan.submoduleInProgressOperations.push(
+        ...preserve.submoduleInProgressOperations,
+      );
     } else {
       verdict.plan.inProgressOperation = preserve.inProgressOperation;
+      verdict.plan.submoduleInProgressOperations =
+        preserve.submoduleInProgressOperations;
       verdict.plan.stashes = preserve.stashes;
       verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
       verdict.plan.backupRefs = preserve.backupRefs;
@@ -2241,6 +2253,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
       verdict.preserveDir = preserve.preserveDir;
       verdict.plan.inProgressOperation = preserve.inProgressOperation;
+      verdict.plan.submoduleInProgressOperations =
+        preserve.submoduleInProgressOperations;
       verdict.plan.stashes = preserve.stashes;
       verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
       verdict.plan.backupRefs = preserve.backupRefs;
@@ -2488,6 +2502,8 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
       verdict.preserveDir = preserve.preserveDir;
       verdict.plan.inProgressOperation = preserve.inProgressOperation;
+      verdict.plan.submoduleInProgressOperations =
+        preserve.submoduleInProgressOperations;
       verdict.plan.stashes = preserve.stashes;
       verdict.plan.uninitializedSubmodules = preserve.uninitializedSubmodules;
       verdict.plan.backupRefs = preserve.backupRefs;
@@ -2583,6 +2599,49 @@ export function runLocalWorktreeRecovery(args, deps) {
               wouldRun: true,
               ran: false,
               detail: `checked out ${developmentBranch}, but ${operationError}`,
+            };
+            verdict.result = verdict.plan.removal.detail;
+            return verdict;
+          }
+        }
+      }
+      for (const { path: submodulePath, operation } of verdict.plan
+        .submoduleInProgressOperations) {
+        const submoduleRoot = join(targetPath, submodulePath);
+        const currentOperation = detectInProgressOperation(
+          submoduleRoot,
+          deps.runGit,
+          deps.pathExists,
+          readFileOrNull,
+        );
+        if (
+          currentOperation !== null &&
+          (currentOperation.kind !== operation.kind ||
+            currentOperation.tipSha !== operation.tipSha)
+        ) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `the in-progress operation in submodule ${submodulePath} changed during preservation; stopping before cleanup`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        if (currentOperation !== null) {
+          const operationError = clearInProgressOperation(
+            submoduleRoot,
+            currentOperation,
+            deps.runGit,
+          );
+          if (operationError !== null) {
+            verdict.plan.removal = {
+              kind: 'primary',
+              developmentBranch,
+              wouldRun: true,
+              ran: false,
+              detail: `checked out ${developmentBranch}, but could not release submodule ${submodulePath}: ${operationError}`,
             };
             verdict.result = verdict.plan.removal.detail;
             return verdict;
