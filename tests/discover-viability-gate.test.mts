@@ -3425,3 +3425,29 @@ test('keeps quoted status approval text descriptive (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let pending approval prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 205,
+    title: 'document credential storage',
+    body:
+      'Implementation is blocked pending maintainer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps removal after a past investigation autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 206,
+    title: 'automate deployment approval',
+    body:
+      'Investigation found that deployment requires maintainer approval. ' +
+      'Replace that flow with automation. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});

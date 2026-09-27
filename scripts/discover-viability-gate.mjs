@@ -130,7 +130,7 @@ const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
   'i',
 );
 const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN = new RegExp(
-  String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
+  String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+(?:by|pending)|pending)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
   'gi',
 );
 const REMOVAL_FRAMING_CUE_PATTERN =
@@ -258,7 +258,7 @@ const PARAGRAPH_BREAK_PATTERN = /\n[ \t]*\n/g;
 //    issue author already performed while drafting, not remaining work
 //    (#2697's shape, applied here to EXTERNAL_COORDINATION_PATTERN).
 const INVESTIGATIVE_PAST_TENSE_PATTERN =
-  /\b(?:already|previously)\s+(?:checked|verified|confirmed|investigated|reviewed|searched)\b|\bi\s+(?:already\s+)?checked\b|\ba\s+search\s+(?:already\s+)?found\b|\bconfirmed\s+via\b/gi;
+  /\b(?:already|previously)\s+(?:checked|verified|confirmed|investigated|reviewed|searched)\b|\bi\s+(?:already\s+)?checked\b|\ba\s+search\s+(?:already\s+)?found\b|\b(?:the\s+)?investigation\s+(?:found|confirmed|verified|reviewed)\b|\bconfirmed\s+via\b/gi;
 const INVESTIGATIVE_PAST_TENSE_WINDOW = 80;
 // 4. Generic mention: the match is followed shortly by a noun naming a
 //    general pattern/example rather than asserting a live requirement of
@@ -1224,6 +1224,7 @@ function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
       isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isDescribedExternalCoordinationExample(corpus, index) ||
+      isDescribedByPastInvestigation(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
@@ -1240,6 +1241,7 @@ function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
       isGovernedByRemovalFraming(corpus, index) ||
       isInsideQuotedExample(corpus, index, end) ||
       isDescribedExternalCoordinationExample(corpus, index) ||
+      isDescribedByPastInvestigation(corpus, index, end) ||
       isGovernedByNegation(corpus, index) ||
       isWithinResolvedDecisionSpan(resolvedDecisionSpans, index)
     ) {
