@@ -2156,7 +2156,7 @@ function isRegexLiteralStart(text, index) {
   if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
     return true;
   }
-  return /\b(?:return|case|throw|else|do)$/u.test(
+  return /\b(?:return|case|throw|else|do|await|yield|typeof|void|delete|new|in|of|instanceof)$/u.test(
     text.slice(0, previousIndex + 1),
   );
 }
@@ -2578,7 +2578,12 @@ function globPatternToRegex(pattern) {
         .map(globPatternToRegex)
         .join('|');
       if (character === '!') {
-        expression += `(?!(?:${inner})(?=$|/))[^/]*`;
+        const slash = pattern.indexOf('/', closing + 1);
+        const suffix = pattern.slice(
+          closing + 1,
+          slash === -1 ? pattern.length : slash,
+        );
+        expression += `(?!(?:${inner})${globPatternToRegex(suffix)}(?=$|/))[^/]*`;
       } else {
         const quantifier = character === '@' ? '' : character;
         expression += `(?:${inner})${quantifier}`;
@@ -2642,7 +2647,7 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
     const { apiName, argumentsText } = match;
     const optionText = maskJavaScriptStringContents(argumentsText);
     const recursive =
-      /\brecursive\s*:\s*true\b/u.test(optionText) ||
+      /(?:\brecursive\b|['"]recursive['"])\s*:\s*true\b/u.test(optionText) ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument).map(
@@ -2652,15 +2657,17 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
           : candidate,
     );
     const cwdCandidates = (() => {
-      const cwd = /\bcwd\s*:\s*/u.exec(argumentsText);
+      const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(argumentsText);
       return cwd === null
         ? []
         : pathExpressionCandidates(
             firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
           );
     })();
-    const hasCwd = /\bcwd\s*:\s*/u.test(argumentsText);
-    const excludeMatch = /\bexclude\s*:\s*/u.exec(argumentsText);
+    const hasCwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(argumentsText);
+    const excludeMatch = /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(
+      argumentsText,
+    );
     const excludeCandidates =
       excludeMatch === null
         ? []
