@@ -3868,10 +3868,12 @@ to post it is the consuming track's job.
   under `rerun-once`, the latest row for a workflow run is promoted when
   it is an ordinary `rerun-budget-held` instance and a different workflow
   run for the same check and HEAD has a parseable `completedAt` that is
-  strictly later and classifies as `pass`. The check-runs response can
-  contain historical rows from the same workflow run, so this decision is
-  made once per run and older rows from a run whose latest row is already
-  pass-equivalent do not create a duplicate hold. Unknown attempts,
+  strictly later and classifies as `pass`. That sibling also needs verified
+  workflow metadata and no unsuperseded non-pass row in its same-run check
+  group. The check-runs response can contain historical rows from the same
+  workflow run, so this decision is made once per run and older rows from a
+  run whose latest row is already pass-equivalent do not create a duplicate
+  hold. Unknown attempts,
   unparseable timestamps, equal or earlier passing siblings, same-run
   passes, live-coverage cases already handled by #2549, and all other
   non-qualifying holds remain withheld. Each promotion records its

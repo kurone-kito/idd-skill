@@ -1806,6 +1806,99 @@ test('#3539: keeps a distinct current-attempt duplicate visible', () => {
   assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
 });
 
+test('#3539: rejects a passing sibling run with an unsuperseded current-attempt failure', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'held',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'sibling-failure',
+          runId: '8002',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:01:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'sibling-pass',
+          runId: '8002',
+          conclusion: 'success',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:02:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 2);
+});
+
+test('#3539: rejects a passing sibling whose run metadata lookup failed', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'held',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'sibling-pass',
+          runId: '8002',
+          conclusion: 'success',
+          runAttempt: null,
+          runLookupFailed: true,
+          runEvent: null,
+          completedAt: '2026-07-16T11:01:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.passedSiblingRecoveryPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+});
+
+test('#2549: excludes a handled refresh candidate from hold totals', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '8101',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'recovered',
+          runId: '8102',
+          conclusion: 'failure',
+          runAttempt: 2,
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+        baseInstance({
+          checkRunId: 'same-run-pass',
+          runId: '8102',
+          conclusion: 'success',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  assert.equal(plan.liveCoverageRecoveryPlan.length, 1);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+});
+
 test('#2549: applyRerunPlan executes a liveCoverageRecoveryPlan entry only after plan and recoveryRefreshPlan are exhausted, carrying originalHoldReason', () => {
   const initialPlan = computeRerunPlan(
     baseInput({

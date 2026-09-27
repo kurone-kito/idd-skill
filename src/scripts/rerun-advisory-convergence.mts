@@ -737,83 +737,19 @@ export function computeRerunPlan(
   }));
 
   // #3539: promote a budget-held latest row when a different workflow run
-  // for this check and HEAD has a strictly later passing latest row. The
-  // check-runs API is fetched with `filter=all`, so several rows can belong
-  // to one workflow run. Decide once per run, never once per historical row,
-  // or a stale row could be promoted again on every --apply invocation.
+  // for this check and HEAD has a strictly later, verified passing latest
+  // row. The check-runs API is fetched with `filter=all`, so several rows can
+  // belong to one workflow run. Decide once per run, never once per
+  // historical row, or a stale row could be promoted again on every
+  // --apply invocation.
   const latestInstancesByRun = selectLatestInstancesByRun(instances);
-  const liveCoverageRecoveryRunIds = new Set(
-    liveCoverageRecoveryPlan.map((command) => command.runId),
-  );
-  const passedSiblingRecoveryHeldInstances = latestInstancesByRun.filter(
-    (instance) => {
-      const runId = String(instance.runId ?? '').trim();
-      if (!runId || liveCoverageRecoveryRunIds.has(runId)) return false;
-      if (instance.classification !== 'rerun-eligible') return false;
-      const decision = eligibleDecisions.get(instance.checkRunId);
-      if (
-        rerunPolicy !== 'rerun-once' ||
-        decision?.action !== 'hold' ||
-        decision.reason !== 'rerun-budget-exhausted'
-      ) {
-        return false;
-      }
-      const heldCompletedAt = parseCompletedAt(instance.completedAt);
-      if (heldCompletedAt === null) return false;
-      return latestInstancesByRun.some((sibling) => {
-        const siblingRunId = String(sibling.runId ?? '').trim();
-        const siblingCompletedAt = parseCompletedAt(sibling.completedAt);
-        return (
-          siblingRunId &&
-          siblingRunId !== runId &&
-          sibling.classification === 'pass' &&
-          siblingCompletedAt !== null &&
-          siblingCompletedAt > heldCompletedAt
-        );
-      });
-    },
-  );
-  const passedSiblingRecoveryPlan = buildOrderedPlan(
-    passedSiblingRecoveryHeldInstances,
-    owner,
-    repo,
-  ).map((command) => {
-    const source = passedSiblingRecoveryHeldInstances.find((instance) =>
-      command.checkRunIds.includes(instance.checkRunId),
-    );
-    const heldRunId = String(source?.runId ?? '').trim();
-    const heldCompletedAt = parseCompletedAt(source?.completedAt);
-    const sibling = latestInstancesByRun.find((candidate) => {
-      const candidateRunId = String(candidate.runId ?? '').trim();
-      const candidateCompletedAt = parseCompletedAt(candidate.completedAt);
-      return (
-        candidateRunId &&
-        candidateRunId !== heldRunId &&
-        candidate.classification === 'pass' &&
-        heldCompletedAt !== null &&
-        candidateCompletedAt !== null &&
-        candidateCompletedAt > heldCompletedAt
-      );
-    });
-    return {
-      ...command,
-      originalHoldReason: `check-run ${source?.checkRunId ?? command.checkRunIds[0] ?? '(unknown)'} was withheld as rerun-budget-exhausted; ${source?.reason ?? 'budget-held'}; newer passing sibling run ${sibling?.runId ?? '(unknown)'} completed later`,
-    };
-  });
-  const passedSiblingRecoveryRunIds = new Set(
-    passedSiblingRecoveryPlan.map((command) => command.runId),
-  );
-  const handledRecoveryRunIds = new Set([
-    ...liveCoverageRecoveryRunIds,
-    ...passedSiblingRecoveryRunIds,
-  ]);
   const instanceByCheckRunId = new Map(
     instances.map((instance) => [instance.checkRunId, instance]),
   );
   const isSupersededHistoricalCheckRun = (checkRunId: string): boolean => {
     const instance = instanceByCheckRunId.get(checkRunId);
     if (!instance) return false;
-    const runId = String(instance?.runId ?? '').trim();
+    const runId = String(instance.runId ?? '').trim();
     if (!runId) return false;
     const latest = latestInstancesByRun.find(
       (candidate) => String(candidate.runId ?? '').trim() === runId,
@@ -834,6 +770,86 @@ export function computeRerunPlan(
       rowCompletedAt < latestAttemptStartedAt
     );
   };
+  const hasUnsupersededNonPassRow = (runId: string): boolean =>
+    instances.some(
+      (candidate) =>
+        String(candidate.runId ?? '').trim() === runId &&
+        !isSupersededHistoricalCheckRun(candidate.checkRunId) &&
+        candidate.classification !== 'pass',
+    );
+  const qualifiesAsPassedSibling = (
+    sibling: RerunPlanClassifiedInstance,
+    heldRunId: string,
+    heldCompletedAt: number,
+  ): boolean => {
+    const siblingRunId = String(sibling.runId ?? '').trim();
+    const siblingCompletedAt = parseCompletedAt(sibling.completedAt);
+    const siblingRunEvent = String(sibling.runEvent ?? '')
+      .trim()
+      .toLowerCase();
+    return (
+      siblingRunId !== '' &&
+      siblingRunId !== heldRunId &&
+      sibling.classification === 'pass' &&
+      !sibling.runLookupFailed &&
+      typeof sibling.runAttempt === 'number' &&
+      PULL_REQUEST_FAMILY_EVENTS.has(siblingRunEvent) &&
+      siblingCompletedAt !== null &&
+      siblingCompletedAt > heldCompletedAt &&
+      !hasUnsupersededNonPassRow(siblingRunId)
+    );
+  };
+  const liveCoverageRecoveryRunIds = new Set(
+    liveCoverageRecoveryPlan.map((command) => command.runId),
+  );
+  const passedSiblingRecoveryHeldInstances = latestInstancesByRun.filter(
+    (instance) => {
+      const runId = String(instance.runId ?? '').trim();
+      if (!runId || liveCoverageRecoveryRunIds.has(runId)) return false;
+      if (instance.classification !== 'rerun-eligible') return false;
+      const decision = eligibleDecisions.get(instance.checkRunId);
+      if (
+        rerunPolicy !== 'rerun-once' ||
+        decision?.action !== 'hold' ||
+        decision.reason !== 'rerun-budget-exhausted'
+      ) {
+        return false;
+      }
+      const heldCompletedAt = parseCompletedAt(instance.completedAt);
+      if (heldCompletedAt === null) return false;
+      return latestInstancesByRun.some((sibling) =>
+        qualifiesAsPassedSibling(sibling, runId, heldCompletedAt),
+      );
+    },
+  );
+  const passedSiblingRecoveryPlan = buildOrderedPlan(
+    passedSiblingRecoveryHeldInstances,
+    owner,
+    repo,
+  ).map((command) => {
+    const source = passedSiblingRecoveryHeldInstances.find((instance) =>
+      command.checkRunIds.includes(instance.checkRunId),
+    );
+    const heldRunId = String(source?.runId ?? '').trim();
+    const heldCompletedAt = parseCompletedAt(source?.completedAt);
+    const sibling = latestInstancesByRun.find((candidate) => {
+      return (
+        heldCompletedAt !== null &&
+        qualifiesAsPassedSibling(candidate, heldRunId, heldCompletedAt)
+      );
+    });
+    return {
+      ...command,
+      originalHoldReason: `check-run ${source?.checkRunId ?? command.checkRunIds[0] ?? '(unknown)'} was withheld as rerun-budget-exhausted; ${source?.reason ?? 'budget-held'}; newer passing sibling run ${sibling?.runId ?? '(unknown)'} completed later`,
+    };
+  });
+  const passedSiblingRecoveryRunIds = new Set(
+    passedSiblingRecoveryPlan.map((command) => command.runId),
+  );
+  const handledRecoveryRunIds = new Set([
+    ...liveCoverageRecoveryRunIds,
+    ...passedSiblingRecoveryRunIds,
+  ]);
   const isHandledRecoveryCheckRun = (checkRunId: string): boolean => {
     const instance = instanceByCheckRunId.get(checkRunId);
     const runId = String(instance?.runId ?? '').trim();
@@ -951,8 +967,9 @@ export function computeRerunPlan(
     ([checkRunId, decision]) =>
       decision.action === 'hold' && !isHandledRecoveryCheckRun(checkRunId),
   ).length;
-  const heldRefreshCount = [...refreshDecisions.values()].filter(
-    (decision) => decision.action === 'hold',
+  const heldRefreshCount = [...refreshDecisions.entries()].filter(
+    ([checkRunId, decision]) =>
+      decision.action === 'hold' && !isHandledRecoveryCheckRun(checkRunId),
   ).length;
   const totalHeldCount = heldEligibleCount + heldRefreshCount;
   // Per-instance reasons a non-"hold" policy still withheld an instance:
