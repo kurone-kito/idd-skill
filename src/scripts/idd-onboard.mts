@@ -2684,8 +2684,13 @@ function isBlockClosingBrace(text: string, index: number): boolean {
     } else if (character === '{') {
       depth -= 1;
       if (depth === 0) {
-        return /(?:\b(?:else|do|try|finally)\s*|\)\s*$|=>\s*$)/u.test(
-          text.slice(0, current),
+        return (
+          /(?:\b(?:else|do|try|finally)\s*|\)\s*$|=>\s*$)/u.test(
+            text.slice(0, current),
+          ) ||
+          /\b(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
+            text.slice(0, current),
+          )
         );
       }
     }
@@ -2888,6 +2893,20 @@ function stripJavaScriptComments(text: string): string {
   return scanCode(0, false).text;
 }
 
+function isTypedMethodDeclarationPrefix(text: string, index: number): boolean {
+  const prefix = text.slice(0, index);
+  const boundary = Math.max(
+    prefix.lastIndexOf('\n'),
+    prefix.lastIndexOf('{'),
+    prefix.lastIndexOf('}'),
+    prefix.lastIndexOf(';'),
+    prefix.lastIndexOf(','),
+  );
+  return /^(?:(?:public|private|protected|static|readonly|abstract|async|get|set|override|declare)\s+|\*\s*)*$/u.test(
+    prefix.slice(boundary + 1).trim(),
+  );
+}
+
 function maskJavaScriptStringContents(text: string): string {
   let result = '';
   for (let index = 0; index < text.length; index += 1) {
@@ -3006,7 +3025,8 @@ function findDirectoryScanCalls(
           );
           const isDeclaration =
             text[afterCall] === '{' ||
-            text[afterCall] === ':' ||
+            (text[afterCall] === ':' &&
+              isTypedMethodDeclarationPrefix(text, matchIndex)) ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
           if (!isDeclaration) {
             calls.push({
@@ -3137,20 +3157,19 @@ function expandGlobRange(text: string): string[] | null {
     const start = Number(numeric.groups.start);
     const end = Number(numeric.groups.end);
     const requestedStep = Number(numeric.groups.step ?? 0);
-    const step = requestedStep || (start <= end ? 1 : -1);
     if (
       !Number.isSafeInteger(start) ||
       !Number.isSafeInteger(end) ||
-      !Number.isSafeInteger(step) ||
-      (start < end && step < 0) ||
-      (start > end && step > 0)
+      !Number.isSafeInteger(requestedStep)
     ) {
       return null;
     }
+    const direction = start <= end ? 1 : -1;
+    const step = direction * (Math.abs(requestedStep) || 1);
     const values: string[] = [];
     const width = Math.max(
-      numeric.groups.start.replace(/^-?/u, '').length,
-      numeric.groups.end.replace(/^-?/u, '').length,
+      numeric.groups.start.length,
+      numeric.groups.end.length,
     );
     for (
       let value = start;
@@ -3161,7 +3180,9 @@ function expandGlobRange(text: string): string[] | null {
         return ['*'];
       }
       const sign = value < 0 ? '-' : '';
-      const absolute = Math.abs(value).toString().padStart(width, '0');
+      const absolute = Math.abs(value)
+        .toString()
+        .padStart(sign === '' ? width : Math.max(0, width - 1), '0');
       values.push(`${sign}${absolute}`);
     }
     return values;
@@ -3251,6 +3272,12 @@ function globPatternToRegex(
       expression += `${segmentStart ? '(?!\\.)' : ''}[^/]`;
     } else if (character === '[') {
       let closing = index + 1;
+      if (pattern[closing] === '!') {
+        closing += 1;
+      }
+      if (pattern[closing] === ']') {
+        closing += 1;
+      }
       while (closing < pattern.length) {
         if (
           pattern[closing] === '[' &&
@@ -3304,6 +3331,11 @@ function globPatternToRegex(
             /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
             (_match, name: string) => posixClassReplacements[name] ?? _match,
           );
+        if (characterClass.startsWith('^]')) {
+          characterClass = `^\\]${characterClass.slice(2)}`;
+        } else if (characterClass.startsWith(']')) {
+          characterClass = `\\]${characterClass.slice(1)}`;
+        }
         expression += `${segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : ''}[${characterClass}]`;
         index = closing;
       }
@@ -3481,6 +3513,7 @@ function sanitizedGitEnvironment(): NodeJS.ProcessEnv {
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_CEILING_DIRECTORIES;
   delete env.GIT_NAMESPACE;
   delete env.GIT_QUARANTINE_PATH;
   delete env.GIT_REPLACE_REF_BASE;

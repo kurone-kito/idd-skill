@@ -3967,6 +3967,18 @@ test('checkHeldSchemaDrift ignores regex literals after block statements', () =>
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after class declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "class Parser {} /readdirSync('schemas')/.test(text);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift keeps directory-scan API matching case-sensitive', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4142,6 +4154,20 @@ test('checkHeldSchemaDrift ignores typed method declarations', () => {
     hold: [DRIFT_MODULE],
   });
   assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift recognizes directory scans used as ternary operands', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "const files = enabled ? readdirSync('schemas') : [];\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
 });
 
 test('checkHeldSchemaDrift detects opendir directory scans', () => {
@@ -4598,6 +4624,52 @@ test('checkHeldSchemaDrift supports numeric and alphabetic brace ranges', () => 
   }
 });
 
+test('checkHeldSchemaDrift follows numeric range direction and signed padding', () => {
+  for (const [pattern, relativePath] of [
+    ['schemas/widget{1..3..-2}.json', 'schemas/widget3.json'],
+    ['schemas/widget{3..1..2}.json', 'schemas/widget1.json'],
+    ['schemas/widget{-02..2}.json', 'schemas/widget001.json'],
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `globSync('${pattern}');\n`;
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
+test('checkHeldSchemaDrift matches glob classes with a leading closing bracket', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[]a].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/a.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift keeps trailing-slash globs directory-only', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4829,6 +4901,7 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
     GIT_DIR: process.env.GIT_DIR,
     GIT_ALTERNATE_OBJECT_DIRECTORIES:
       process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+    GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
     GIT_NAMESPACE: process.env.GIT_NAMESPACE,
     GIT_QUARANTINE_PATH: process.env.GIT_QUARANTINE_PATH,
     GIT_REPLACE_REF_BASE: process.env.GIT_REPLACE_REF_BASE,
@@ -4840,6 +4913,7 @@ test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
     '.git',
     'objects',
   );
+  process.env.GIT_CEILING_DIRECTORIES = join(targetRoot, '..');
   process.env.GIT_NAMESPACE = 'outside-target';
   process.env.GIT_QUARANTINE_PATH = join(overrideRoot, '.git', 'objects');
   process.env.GIT_REPLACE_REF_BASE = 'refs/replace/';
