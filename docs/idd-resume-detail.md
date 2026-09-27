@@ -377,12 +377,28 @@ stop, and Discover marks the candidate ineligible, rather than assume the
 claim is abandoned. In a shared-clone
 setup this stop has no defined recovery when the worktree's own session
 actually crashed, so its issue can never reach the normal stale takeover. This
-section defines that recovery. It is operator-run, never automated, and checks
-no process-liveness signal — `src/scripts/claim-lock.mts`'s header records why:
+section defines that recovery. Step 2 (below) is operator-run, never
+automated, and checks no process-liveness signal —
+`src/scripts/claim-lock.mts`'s header records why:
 this "deliberately excludes any local liveness signal (e.g. process PID)... the
 process invoking this CLI is a one-shot child that exits the moment the call
 returns, so a recorded PID would be a tombstone before any competing session
 could ever observe it as 'alive'".
+
+**Primary path: the `local-worktree-recovery` helper** (kurone-kito/idd-skill#3536)
+consolidates steps 1, 3, and 4 below into a single invocation, composed from
+the `resume-claim-routing`, `claim-lock`, and `clone-lock` building-block
+helpers rather than reimplementing their logic — see
+[Local worktree recovery](idd-helper-scripts.md#local-worktree-recovery) for
+the full CLI surface and invocation forms per `helperRuntime.profile`. It
+never checks step 2 mechanically either: `--operator-confirmed-no-live-session`
+is your own explicit attestation for that step, required before any mutation,
+regardless of `--apply` or what step 1 finds. Default mode is dry-run (no
+mutation); pass `--apply` once you have independently performed step 2 and
+reviewed the dry-run's reported plan. The written procedure below remains the
+canonical spec this helper's own behavior must match, the authoritative
+fallback for an `instructions-only` profile, and the reference for any step
+the helper's dry-run output doesn't make self-explanatory.
 
 1. **Confirm the block.** Run the profile-selected `resume-claim-routing`
    helper (`docs/idd-helper-scripts.md`; source-repo/vendored-node: `node
