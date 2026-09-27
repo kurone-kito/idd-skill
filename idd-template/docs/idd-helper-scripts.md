@@ -453,6 +453,80 @@ nothing about masking.
 this finding. See the function's own JSDoc for the same note attached
 directly to its contract.
 
+## REST
+
+When a GraphQL-backed `gh` command reports `API rate limit already
+exceeded for user ID <n>` while `gh api rate_limit --jq '.resources'`
+still shows healthy primary quotas, treat the failure as GitHub's
+secondary or abuse-detection limit, not as proof that the hourly quota
+is exhausted. This was recorded in a concurrent session's issue
+authoring run (observed 2026-09-27, #3560). The REST forms below were
+confirmed to work for the specific commands observed failing; this is
+not a claim that
+REST is an unconditional fallback for every GitHub API failure.
+
+The confirmed substitutions are:
+
+- For `gh issue list`, use the repository issues endpoint. It may also
+  return pull requests, so preserve the caller's issue-only filtering
+  when that distinction matters.
+
+  ```sh
+  gh api "repos/<owner>/<repo>/issues?state=open&per_page=100"
+  ```
+
+- For `gh issue view <number>`, use the individual issue endpoint.
+
+  ```sh
+  gh api "repos/<owner>/<repo>/issues/<number>"
+  ```
+
+- For `gh issue create`, prepare the complete JSON request body and send
+  it through stdin rather than relying on shell field quoting.
+
+  ```sh
+  gh api "repos/<owner>/<repo>/issues" -X POST --input issue.json
+  ```
+
+- For `gh search issues`, use the REST search endpoint and URL-encode
+  the same repository, issue, and text qualifiers.
+
+  ```sh
+  gh api "search/issues?q=repo%3A<owner>%2F<repo>+is%3Aissue+<url-encoded-query>"
+  ```
+
+- For `gh repo view`, use the repository endpoint directly. Helpers that
+  otherwise resolve the current repository through `gh repo view` can
+  avoid that GraphQL-backed lookup by receiving explicit `--owner` and
+  `--repo` values.
+
+  ```sh
+  gh api "repos/<owner>/<repo>"
+  ```
+
+For `authoring-owner-provenance.mjs`, do not generalize these REST
+substitutions into a fallback for an existing authoring generation. Its
+verification is intentionally GraphQL-only because it must inspect
+`IssueComment.lastEditedAt` to detect a tampered earlier marker. REST
+issue-comment responses do not provide that field, and `updated_at` is
+not an equivalent. This boundary was established by #3174 and protects
+the tamper-detection fix in #2901.
+
+There is one narrow manual exception for a freshly created issue whose
+comment history was empty before creation: fetch the just-posted
+comment and issue with REST, then recompute the issue body's digest from
+the raw JSON response. Parse the complete `gh api` response and read its
+`body` property; do not capture `gh api ... --jq '.body'` in a shell
+variable, because the added newline can change the digest. This is a
+one-time read-back confidence check for a new issue, not a REST fallback
+for verification of an existing generation and not a change to the
+helper's GraphQL dependency. The two read-back requests are:
+
+```sh
+gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
+gh api "repos/<owner>/<repo>/issues/<number>"
+```
+
 ## Decision
 
 In the idd-skill source repository, the following optional helpers were adopted:
