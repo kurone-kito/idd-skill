@@ -270,11 +270,15 @@ EOF
     [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
   }
 
+  # Re-run the shared claim revalidation gate immediately before every
+  # reviewer-request mutation. A failed gate must stop this attempt.
+  <profile-selected-claim-revalidation-command> || return 2
   gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}" || :
   registration_ok; status=$?
   [ "$status" -eq 0 ] && return 0
   [ "$status" -eq 2 ] && return 2
 
+  <profile-selected-claim-revalidation-command> || return 2
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
     -X POST -f "reviewers[]={primary-advisory-bot-rest-login}" || :
   registration_ok; status=$?
@@ -283,6 +287,7 @@ EOF
 
   # Resolve ids live; GraphQL user(login:) does not resolve a Bot.
   BOT_NODE_ID=$(gh api "users/{primary-advisory-bot-rest-login}" --jq '.node_id') || return 2
+  <profile-selected-claim-revalidation-command> || return 2
   jq -n --arg id "$PR_NODE_ID" --arg bot "$BOT_NODE_ID" \
     '{query:"mutation($id:ID!,$botIds:[ID!]!){ requestReviews(input:{pullRequestId:$id,botIds:$botIds,union:true}){ clientMutationId } }",variables:{id:$id,botIds:[$bot]}}' |
     gh api graphql --input - || :
@@ -319,12 +324,16 @@ directly — no command block needed here.
 # was "true"). Skip this step entirely for the non-pending entry (#2327 --
 # COPILOT_PENDING was already "false", nothing is pending to remove) and
 # start at Step 3 instead.
+# Re-run the shared claim revalidation gate before each mutation below;
+# stop if it does not confirm the active claim.
+<profile-selected-claim-revalidation-command> || exit 2
 gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
 # on a GraphQL login-resolution failure, this DELETE is an attempt only:
 # a 422 "Could not resolve to a User node" for the default bot (PR #3471)
 # is not a removal result -- retry gh pr edit --remove-reviewer alone
 # (3 attempts) before any AW4 hold; never conclude from this call or an
 # empty requested_reviewers read (#2167, #3503).
+<profile-selected-claim-revalidation-command> || exit 2
 gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
   -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
 
