@@ -246,12 +246,15 @@ function normalizedVerifiedCommitOid(value: string | null | undefined): string {
 // blanket IDD-author exclusion. Callers may list it in iddAgentLogins
 // (the CLI defaults that set from trusted marker actors), but only the
 // narrow classifyIddPrComment shapes are bookkeeping. A general
-// operational prefix from this login stays review feedback.
+// operational prefix from either REST or GraphQL login stays review feedback.
 function isBlanketIddAuthor(
   login: string,
   isIdd: (login: string) => boolean,
 ): boolean {
-  if (login.trim().toLowerCase() === GITHUB_ACTIONS_BOT_LOGIN) {
+  if (
+    advisoryBotIdentityToken(login) ===
+    advisoryBotIdentityToken(GITHUB_ACTIONS_BOT_LOGIN)
+  ) {
     return false;
   }
   return isIdd(login);
