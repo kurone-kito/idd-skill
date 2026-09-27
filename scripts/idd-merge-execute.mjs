@@ -21,6 +21,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { NOW_FLAG_USAGE_MESSAGE, normalizeNowFlag } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -326,6 +327,36 @@ export function runMergeExecute(argv, deps = defaultDeps) {
         'missing required --claim-id <claim-id> argument (or the deprecated --expected-claim-id alias); pass --claimless only for a PR with no closingIssuesReferences',
       ),
     );
+  }
+  // #3541: checked BEFORE the --now/--apply mutual-exclusion gate below,
+  // and before any collection call -- a malformed --now must never reach
+  // `deps.collect` (which would otherwise throw uncaught deep inside the
+  // shared pre-merge-readiness collector).
+  if (args.nowFlagError) {
+    // This placeholder verdict is NEVER printed: main() below checks
+    // `nowFlagError` first and returns before its own JSON.stringify(verdict)
+    // write. It exists only so a caller that reads `verdict`/`exitCode`
+    // without checking `nowFlagError` still gets a well-shaped (if
+    // internally inconsistent -- `ready: false` with no blocker entry
+    // explaining why) result instead of `undefined`.
+    return {
+      verdict: {
+        protocolVersion: '1',
+        decisionAuthority: 'instructions',
+        mode: args.apply ? 'apply' : 'dry-run',
+        prNumber: args.prNumber,
+        prHeadSha: '',
+        ready: false,
+        blockers: [],
+        mergeCommand: '',
+        merged: false,
+        mergeResult: '',
+        adminFallbackUsed: false,
+        localHeadDrift: null,
+      },
+      exitCode: 1,
+      nowFlagError: args.nowFlagError,
+    };
   }
   // #3252: --now overrides every merge-gate clock (claim staleness,
   // waiver expiry, advisory-convergence deadline, terminal-unavailability
@@ -644,6 +675,7 @@ function parseArgs(argv) {
     claimIdProvided: false,
     claimless: false,
     nowProvided: false,
+    nowFlagError: null,
   };
   // Captured locally so `repoRef` is set only when BOTH are present; these
   // are ALSO forwarded to the collector via passthrough (we do not stop
@@ -726,8 +758,9 @@ function parseArgs(argv) {
     // #3252: same detect-without-changing purpose as `--claim-id` above,
     // for the `--now`/`--apply` mutual-exclusion gate.
     if (token === '--now' || token.startsWith('--now=')) {
+      const isEqualsForm = token.includes('=');
       let value;
-      if (token.includes('=')) {
+      if (isEqualsForm) {
         value = token.slice(token.indexOf('=') + 1);
         parsed.passthrough.push(token);
       } else {
@@ -741,6 +774,23 @@ function parseArgs(argv) {
         }
       }
       parsed.nowProvided = value !== undefined && value.trim() !== '';
+      // #3541: normalize HERE, before the collector (collectPreMergeReadiness)
+      // ever sees it -- replacing the passthrough token's raw value with the
+      // normalized one so a valid numeric-offset value reaches the
+      // collector's own isValidIsoTimestamp gate already converted, and a
+      // malformed value fails closed with a one-line message instead of an
+      // uncaught throw deep inside the shared collector.
+      if (parsed.nowProvided) {
+        const normalizedNow = normalizeNowFlag(value);
+        if (normalizedNow === null) {
+          parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
+        } else if (isEqualsForm) {
+          parsed.passthrough[parsed.passthrough.length - 1] =
+            `--now=${normalizedNow}`;
+        } else {
+          parsed.passthrough[parsed.passthrough.length - 1] = normalizedNow;
+        }
+      }
       continue;
     }
     // Every other flag (and its value, if it takes one) is forwarded
@@ -842,7 +892,14 @@ if (import.meta.main) {
   }
 }
 function main() {
-  const { verdict, exitCode, cause } = runMergeExecute(process.argv.slice(2));
+  const { verdict, exitCode, cause, nowFlagError } = runMergeExecute(
+    process.argv.slice(2),
+  );
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw.
+    process.stderr.write(`${nowFlagError}\n`);
+    return exitCode;
+  }
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running
     // --apply interactively should actually notice it, not just find it

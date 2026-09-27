@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { NOW_FLAG_USAGE_MESSAGE } from '../src/scripts/marker-helpers.mts';
 import {
   applyRefreshLatestPlan,
   applyRerunPlan,
@@ -3026,6 +3027,40 @@ test('runRerunAdvisoryConvergence leaves checkName empty (default) when --check-
     },
   });
   assert.equal(receivedCheckName, '');
+});
+
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test('runRerunAdvisoryConvergence: an offset --now reaches deps.collect already normalized to UTC', () => {
+  let receivedNow: string | undefined;
+  const result = runRerunAdvisoryConvergence(
+    ['--pr', '1431', '--now', '2026-09-27T02:20:20+09:00'],
+    {
+      collect: (args) => {
+        receivedNow = args.now;
+        return { input: baseInput(), options: baseOptions() };
+      },
+    },
+  );
+  assert.equal(receivedNow, '2026-09-26T17:20:20Z');
+  assert.equal(result.nowFlagError, undefined);
+});
+
+test('runRerunAdvisoryConvergence: a malformed --now returns a one-line usage error instead of throwing, without collecting any evidence', () => {
+  let called = false;
+  const run = () =>
+    runRerunAdvisoryConvergence(['--pr', '1431', '--now', 'Sep 27 2026'], {
+      collect: () => {
+        called = true;
+        return { input: baseInput(), options: baseOptions() };
+      },
+    });
+  assert.doesNotThrow(run);
+  const result = run();
+  assert.equal(called, false);
+  assert.equal(result.plan, null);
+  assert.equal(result.refreshLatestPlan, null);
+  assert.equal(result.nowFlagError, NOW_FLAG_USAGE_MESSAGE);
 });
 
 // --- computeRefreshLatestPlan (#2764 Phase 1, Codex P1 review on PR #2855) --

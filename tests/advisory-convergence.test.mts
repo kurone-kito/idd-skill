@@ -46,6 +46,7 @@ import {
 } from '../src/scripts/advisory-convergence.mts';
 import {
   digestExternalCheckWaiverMarkerBody,
+  NOW_FLAG_USAGE_MESSAGE,
   renderAdvisoryWaitRecoveryMarker,
   renderExternalCheckWaiverComment,
   renderReviewReplyStamp,
@@ -6435,6 +6436,45 @@ test('runAdvisoryConvergence: missing --pr throws before any collection happens'
   };
   assert.throws(() => runAdvisoryConvergence([], deps));
   assert.equal(called, false);
+});
+
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test('runAdvisoryConvergence: an offset --now reaches the pure verdict computation already normalized to UTC', () => {
+  let receivedNow: string | undefined;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: (args) => {
+      receivedNow = args.now;
+      return { inputs: baseInputs(), options: baseOptions() };
+    },
+  };
+  const result = runAdvisoryConvergence(
+    ['--pr', '1234', '--now', '2026-09-27T02:20:20+09:00'],
+    deps,
+  );
+  assert.equal(receivedNow, '2026-09-26T17:20:20Z');
+  assert.equal(result.nowFlagError, undefined);
+});
+
+test('runAdvisoryConvergence: a malformed --now returns a one-line usage error instead of throwing, without collecting any evidence', () => {
+  let called = false;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      called = true;
+      return { inputs: baseInputs(), options: baseOptions() };
+    },
+  };
+  const result = runAdvisoryConvergence(
+    ['--pr', '1234', '--now', 'Sep 27 2026'],
+    deps,
+  );
+  assert.doesNotThrow(() =>
+    runAdvisoryConvergence(['--pr', '1234', '--now', 'Sep 27 2026'], deps),
+  );
+  assert.equal(called, false);
+  assert.equal(result.verdict, null);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.nowFlagError, NOW_FLAG_USAGE_MESSAGE);
 });
 
 // --- isSoleCopilotNotReviewedYetReason / runAdvisoryConvergenceWithPoll ----

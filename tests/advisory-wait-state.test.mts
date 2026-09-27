@@ -5,7 +5,9 @@ import {
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
   parseArgs,
+  resolveNowFlag,
 } from '../src/scripts/advisory-wait-state.mts';
+import { NOW_FLAG_USAGE_MESSAGE } from '../src/scripts/marker-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
   renderAdvisoryWaitRecoveryMarker,
@@ -843,4 +845,31 @@ test('advisoryMarkerComment: still recognizes advisory-wait: and advisory-wait-r
 test('advisoryMarkerComment: rejects unrelated comment bodies', () => {
   assert.equal(advisoryMarkerComment('just a regular comment'), false);
   assert.equal(advisoryMarkerComment(''), false);
+});
+
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test('resolveNowFlag: an empty value falls back to the real current time (unchanged pre-existing behavior)', () => {
+  const { now, error } = resolveNowFlag('');
+  assert.equal(error, null);
+  assert.match(now, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/);
+});
+
+test('resolveNowFlag: an offset value normalizes to canonical UTC', () => {
+  const { now, error } = resolveNowFlag('2026-09-27T02:20:20+09:00');
+  assert.equal(error, null);
+  assert.equal(now, '2026-09-26T17:20:20Z');
+});
+
+test("parseArgs + resolveNowFlag: the CLI's own argument handling normalizes an offset --now to canonical UTC", () => {
+  const args = parseArgs(['--pr', '42', '--now', '2026-09-27T02:20:20+09:00']);
+  const { now, error } = resolveNowFlag(args.now);
+  assert.equal(error, null);
+  assert.equal(now, '2026-09-26T17:20:20Z');
+});
+
+test('resolveNowFlag: a malformed value returns a one-line usage error instead of a value', () => {
+  const { now, error } = resolveNowFlag('Sep 27 2026');
+  assert.equal(now, '');
+  assert.equal(error, NOW_FLAG_USAGE_MESSAGE);
 });

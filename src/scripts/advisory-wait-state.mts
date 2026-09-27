@@ -41,6 +41,8 @@ import {
   findLastCopilotReviewCommit,
   isCopilotPending,
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
   normalizeTrustedMarkerLogins,
   parseAdvisoryRecoveryComment,
   resolveTrustedMarkerActors,
@@ -762,6 +764,33 @@ if (import.meta.main) {
   }
 }
 
+/**
+ * Resolve the CLI's own `--now` flag at the argument-handling boundary
+ * (#3541), before it ever reaches {@link buildAdvisoryWaitSummary}'s
+ * `isValidIsoTimestamp` gate (that gate, and its existing test fixtures,
+ * stay unchanged). An empty `rawNow` (the flag omitted) keeps this file's
+ * pre-existing behavior of defaulting to the real current time. A
+ * non-empty value normalizes through {@link normalizeNowFlag}, returning
+ * `now: ''` plus a one-line `error` naming `--now` and its accepted shapes
+ * instead of forwarding a malformed value into the pure summary builder.
+ */
+export function resolveNowFlag(rawNow: string): {
+  now: string;
+  error: string | null;
+} {
+  if (!rawNow) {
+    return {
+      now: new Date().toISOString().replace('.000Z', 'Z'),
+      error: null,
+    };
+  }
+  const normalized = normalizeNowFlag(rawNow);
+  if (normalized === null) {
+    return { now: '', error: NOW_FLAG_USAGE_MESSAGE };
+  }
+  return { now: normalized, error: null };
+}
+
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call. Returns 0 or throws -- `runHelperCli` (#3344) classifies a
@@ -776,6 +805,14 @@ function main(): HelperCliResult {
     throw markCliUsageError(
       new Error('missing required --pr <number> argument'),
     );
+  }
+  // #3541: validated before any `gh`/GraphQL call below -- a malformed
+  // --now must exit cleanly (one line, no stack trace) without spending
+  // any network round-trip first.
+  const { now: resolvedNow, error: nowFlagError } = resolveNowFlag(args.now);
+  if (nowFlagError) {
+    process.stderr.write(`${nowFlagError}\n`);
+    return 1;
   }
 
   const currentRepo =
@@ -858,7 +895,7 @@ function main(): HelperCliResult {
       graphqlRequestedReviewerLogins,
     },
     {
-      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      now: resolvedNow,
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,

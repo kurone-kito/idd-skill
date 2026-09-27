@@ -132,6 +132,8 @@ import { loadIddConfig } from './idd-config.mjs';
 import {
   digestExternalCheckWaiverMarkerBody,
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
+  normalizeNowFlag,
   parseClaimComment,
   parseExternalCheckWaiverComment,
 } from './marker-helpers.mjs';
@@ -2089,6 +2091,23 @@ export function runAdvisoryConvergence(argv, deps = defaultDeps) {
       new Error('missing required --pr <number> argument'),
     );
   }
+  // #3541: normalize BEFORE any collection or pure verdict computation --
+  // `computeAdvisoryConvergenceVerdict`'s own `isValidIsoTimestamp` gate
+  // stays unchanged and must never see a malformed value, and an
+  // otherwise-valid numeric-offset value must reach it already converted
+  // to the canonical UTC shape that gate accepts.
+  if (args.now) {
+    const normalizedNow = normalizeNowFlag(args.now);
+    if (normalizedNow === null) {
+      return {
+        verdict: null,
+        exitCode: 1,
+        help: false,
+        nowFlagError: NOW_FLAG_USAGE_MESSAGE,
+      };
+    }
+    args.now = normalizedNow;
+  }
   const { inputs, options } = deps.collect(args);
   const verdict = computeAdvisoryConvergenceVerdict(inputs, options);
   const exitCode = args.assert ? (verdict.ready ? 0 : 1) : 0;
@@ -3802,12 +3821,16 @@ if (import.meta.main) {
 }
 function main() {
   const { pollIntervalMs, maxWaitMs } = readCopilotReviewPollPolicy();
-  const { verdict, exitCode, help } = runAdvisoryConvergenceWithPoll(
-    process.argv.slice(2),
-    defaultDeps,
-    { pollIntervalMs, maxWaitMs },
-  );
-  if (help) {
+  const { verdict, exitCode, help, nowFlagError } =
+    runAdvisoryConvergenceWithPoll(process.argv.slice(2), defaultDeps, {
+      pollIntervalMs,
+      maxWaitMs,
+    });
+  if (nowFlagError) {
+    // #3541: a clean one-line usage error, never an uncaught throw --
+    // deliberately printed instead of the (null) verdict.
+    process.stderr.write(`${nowFlagError}\n`);
+  } else if (help) {
     printHelp();
   } else if (verdict) {
     writeAdvisoryConvergenceCliOutput(verdict, {

@@ -1108,6 +1108,69 @@ test('--now=value is also rejected together with --apply', () => {
   );
 });
 
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test('an offset --now reaches the collector already normalized to canonical UTC', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const { verdict, nowFlagError } = runMergeExecute(
+    [...BASE_ARGS, '--now', '2026-09-27T02:20:20+09:00'],
+    capturingDeps,
+  );
+  assert.equal(nowFlagError, undefined);
+  assert.equal(verdict.ready, true);
+  const nowIndex = receivedPassthrough.indexOf('--now');
+  assert.ok(nowIndex !== -1);
+  assert.equal(receivedPassthrough[nowIndex + 1], '2026-09-26T17:20:20Z');
+});
+
+test('an offset --now=value reaches the collector already normalized to canonical UTC', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  runMergeExecute(
+    [...BASE_ARGS, '--now=2026-09-27T02:20:20+09:00'],
+    capturingDeps,
+  );
+  assert.ok(
+    receivedPassthrough.includes('--now=2026-09-26T17:20:20Z'),
+    `expected a normalized --now=... token, got ${JSON.stringify(receivedPassthrough)}`,
+  );
+});
+
+test('a malformed --now returns a one-line usage error instead of throwing, without collecting any evidence', () => {
+  const { deps } = depsFor(readyReport());
+  let collectCalls = 0;
+  const countingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      collectCalls += 1;
+      return deps.collect(passthrough);
+    },
+  };
+  const run = () =>
+    runMergeExecute([...BASE_ARGS, '--now', 'Sep 27 2026'], countingDeps);
+  assert.doesNotThrow(run);
+  const result = run();
+  assert.equal(collectCalls, 0);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.verdict.ready, false);
+  assert.match(result.nowFlagError ?? '', /--now/);
+});
+
 test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
   // A fully ready report → no blockers, and both entry points agree.
   assert.deepEqual(evaluateMergeGates(readyReport()), []);

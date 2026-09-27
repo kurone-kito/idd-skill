@@ -9319,6 +9319,60 @@ test('renderCliUsageError: a non-Error thrown value still renders a string error
   assert.equal(result.hint, undefined);
 });
 
+// --- #3541: --now CLI-boundary normalization --------------------------------
+
+test('collectPreMergeReadiness: an offset --now is normalized to canonical UTC before buildPreMergeReadinessSummary sees it', () => {
+  const port = closingSetSmokeFakePort();
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-09-27T02:20:20+09:00',
+    ],
+    () => port,
+    () => ({}),
+  );
+  assert.equal(report.now, '2026-09-26T17:20:20Z');
+});
+
+test("collectPreMergeReadiness: a malformed --now throws a one-line error naming --now, caught cleanly by main()'s existing try/catch (#2707 pattern)", () => {
+  const port = closingSetSmokeFakePort();
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        ['--pr', '1', '--claim-issue', '7', '--now', 'Sep 27 2026'],
+        () => port,
+        () => ({}),
+      ),
+    /--now/,
+  );
+});
+
+test('renderCliUsageError: a malformed --now renders as a clean one-line error naming --now, with no --claimless hint', () => {
+  const port = closingSetSmokeFakePort();
+  let caught: unknown;
+  try {
+    collectPreMergeReadiness(
+      ['--pr', '1', '--claim-issue', '7', '--now', 'Sep 27 2026'],
+      () => port,
+      () => ({}),
+    );
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught, 'expected collectPreMergeReadiness to throw');
+  const result = renderCliUsageError(caught);
+  assert.match(result.error, /--now/);
+  assert.equal(result.hint, undefined);
+});
+
 test('buildPreMergeReadinessSummary: claimless emits not-applicable ownership (#2017)', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, {

@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import {
   isValidIsoTimestamp,
+  NOW_FLAG_USAGE_MESSAGE,
   normalizeApplyNow,
+  normalizeNowFlag,
   normalizeSecondPrecisionIsoTimestamp,
   toSecondPrecisionIso,
 } from '../src/scripts/marker-helpers.mts';
@@ -107,4 +109,61 @@ test('normalizeSecondPrecisionIsoTimestamp still rejects a genuinely malformed v
   assert.equal(normalizeSecondPrecisionIsoTimestamp(''), '');
   assert.equal(normalizeSecondPrecisionIsoTimestamp(undefined), '');
   assert.equal(normalizeSecondPrecisionIsoTimestamp(123), '');
+});
+
+// ---------------------------------------------------------------------------
+// normalizeNowFlag (#3541) -- the CLI-boundary `--now` normalizer for
+// advisory-convergence.mts, advisory-wait-state.mts,
+// rerun-advisory-convergence.mts, idd-merge-execute.mts, and
+// pre-merge-readiness.mts. Unlike normalizeApplyNow, this keeps millisecond
+// precision and strictly requires a `Z` or numeric-offset ISO 8601
+// date-time -- it must reject a date-only value or a non-ISO string that
+// `new Date()` would otherwise parse leniently.
+// ---------------------------------------------------------------------------
+
+test('normalizeNowFlag converts an offset value to canonical UTC', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20+09:00'),
+    '2026-09-26T17:20:20Z',
+  );
+});
+
+test('normalizeNowFlag keeps milliseconds on a Z value that carries them', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.123Z'),
+    '2026-09-27T02:20:20.123Z',
+  );
+});
+
+test('normalizeNowFlag shortens a trailing .000Z fraction to Z', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.000Z'),
+    '2026-09-27T02:20:20Z',
+  );
+});
+
+test('normalizeNowFlag normalizes a single-digit fractional second instead of rejecting it', () => {
+  assert.equal(
+    normalizeNowFlag('2026-09-27T02:20:20.5Z'),
+    '2026-09-27T02:20:20.500Z',
+  );
+});
+
+test('normalizeNowFlag fails closed (null) on a date-only value, a non-ISO string, and an empty string', () => {
+  assert.equal(normalizeNowFlag('2026-09-27'), null);
+  assert.equal(normalizeNowFlag('Sep 27 2026'), null);
+  assert.equal(normalizeNowFlag(''), null);
+});
+
+test('normalizeNowFlag never throws for non-string input', () => {
+  for (const value of [123, null, undefined, {}, []]) {
+    assert.doesNotThrow(() => normalizeNowFlag(value as unknown as string));
+    assert.equal(normalizeNowFlag(value as unknown as string), null);
+  }
+});
+
+test('NOW_FLAG_USAGE_MESSAGE names --now and shows an accepted example', () => {
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /--now/);
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20Z/);
+  assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20\+09:00/);
 });
