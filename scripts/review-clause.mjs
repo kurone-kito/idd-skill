@@ -83,6 +83,24 @@ export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
   }
   return typename === undefined || typename === null || typename === 'Bot';
 }
+/** Return the absolute-latest eligible primary review's provider-order index.
+ * Keep this selector shared with {@link resolveLatestCopilotReviewClause} so
+ * callers that need to compare an older finding against the selected review
+ * cannot accidentally choose the latest on-head review instead. */
+export function findLatestCopilotReviewIndex(reviews, primaryBotLogin) {
+  let latestIndex = -1;
+  for (let index = 0; index < reviews.length; index += 1) {
+    const review = reviews[index];
+    if (
+      isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
+      !isCopilotErrorReviewBody(review.body) &&
+      review.replyOnly !== true
+    ) {
+      latestIndex = index;
+    }
+  }
+  return latestIndex;
+}
 /** Evaluate Clause 1 against the single, absolute-latest Copilot review --
  * per the issue's literal wording ("the latest Copilot review's commit_id
  * equals current HEAD"), not "the latest review among those that happen to
@@ -120,14 +138,8 @@ export function resolveLatestCopilotReviewClause(
   prHeadSha,
   primaryBotLogin,
 ) {
-  const latest = reviews
-    .filter(
-      (review) =>
-        isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
-        !isCopilotErrorReviewBody(review.body) &&
-        review.replyOnly !== true,
-    )
-    .at(-1);
+  const latestIndex = findLatestCopilotReviewIndex(reviews, primaryBotLogin);
+  const latest = latestIndex < 0 ? undefined : reviews[latestIndex];
   if (!latest) {
     return {
       found: false,

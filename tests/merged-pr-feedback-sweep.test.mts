@@ -852,6 +852,8 @@ test('a COMMENTED review with an outside-diff-range count of 0 is not feedback',
 // `V2_PREVIOUSLY_MISSED_1_BODY` uses.
 const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
 const COPILOT_REVIEW_COMMIT = 'a5a56e57267540dc046659c600bcb7c62bdc3949';
+const COPILOT_FINAL_HEAD = '8721e9fcb3cc7b33cd5dc9f3c616def626f81c9a';
+const COPILOT_OTHER_COMMIT = '05a56e57267540dc046659c600bcb7c62bdc3949';
 const COPILOT_REVIEW_SUBMITTED_AT = '2026-09-23T07:21:02Z';
 const V2_PREVIOUSLY_MISSED_1_BODY = [
   '<!-- ccr-overview-v2 -->',
@@ -893,6 +895,26 @@ function copilotReviewInput(
     url: 'https://example/pr3196review',
     ...overrides,
   };
+}
+
+const CLEAN_COPILOT_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '**Review effort:** Lite',
+  '**Findings:** None',
+].join('\n');
+
+function cleanCopilotReviewInput(
+  overrides: Partial<SweepReviewInput> = {},
+): SweepReviewInput {
+  return copilotReviewInput({
+    body: CLEAN_COPILOT_BODY,
+    commitOid: COPILOT_FINAL_HEAD,
+    itemCount: 0,
+    ...overrides,
+  });
 }
 
 test('#3259: a thread-less Copilot "Previously missed" finding is surfaced with no review-ack', () => {
@@ -984,19 +1006,176 @@ test('#3259: a missing commitOid fails closed toward reporting, even with an oth
 });
 
 test('#3259: a healthy Copilot review with no thread-less findings is not surfaced', () => {
-  const healthyBody = [
-    '<!-- ccr-overview-v2 -->',
-    '',
-    '## Copilot review overview',
-    '',
-    '**Review effort:** Lite',
-    '**Findings:** None',
-  ].join('\n');
   const prs: MergedPrInput[] = [
-    { number: 35, reviews: [copilotReviewInput({ body: healthyBody })] },
+    { number: 35, reviews: [cleanCopilotReviewInput()] },
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+test('#3564: an older thread-less finding is superseded by a later clean review on the verified effective head', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3507,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({
+          commitOid: COPILOT_REVIEW_COMMIT,
+          itemCount: 0,
+        }),
+        cleanCopilotReviewInput({
+          submittedAt: '2026-09-27T05:30:00Z',
+          url: 'https://example/pr3507/clean',
+        }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3564: a later clean review on the same head supersedes an earlier thread-less finding', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3508,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_FINAL_HEAD }),
+        cleanCopilotReviewInput({ submittedAt: '2026-09-27T05:31:00Z' }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('#3564: a mixed CHANGES_REQUESTED primary review is not superseded', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3514,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({
+          commitOid: COPILOT_REVIEW_COMMIT,
+          state: 'CHANGES_REQUESTED',
+        }),
+        cleanCopilotReviewInput({ submittedAt: '2026-09-27T05:31:00Z' }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: a mixed outside-diff primary review is not superseded', () => {
+  const options = {
+    ...OPTIONS,
+    advisoryBotLogins: [COPILOT_LOGIN],
+  };
+  const prs: MergedPrInput[] = [
+    {
+      number: 3515,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({
+          commitOid: COPILOT_REVIEW_COMMIT,
+          body: `${V2_PREVIOUSLY_MISSED_1_BODY}\n\n<details><summary>⚠️ Outside diff range comments (1)</summary>\n\nsome finding\n\n</details>`,
+        }),
+        cleanCopilotReviewInput({ submittedAt: '2026-09-27T05:32:00Z' }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, options);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: an off-head latest review does not supersede an older finding', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3509,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_REVIEW_COMMIT }),
+        cleanCopilotReviewInput({ commitOid: COPILOT_OTHER_COMMIT }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: a missing effective head fails closed toward reporting', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3510,
+      headRefOid: null,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_REVIEW_COMMIT }),
+        cleanCopilotReviewInput(),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: an incomplete latest review count fails closed toward reporting', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3511,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_REVIEW_COMMIT }),
+        cleanCopilotReviewInput({ itemCount: null }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#3564: a non-clean latest review leaves every historical finding visible', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3512,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_REVIEW_COMMIT }),
+        copilotReviewInput({
+          commitOid: COPILOT_FINAL_HEAD,
+          submittedAt: '2026-09-27T05:32:00Z',
+          url: 'https://example/pr3512/dirty',
+        }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 2);
+});
+
+test('#3564: an unrecognized latest Copilot body remains fail-closed', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 3513,
+      headRefOid: COPILOT_FINAL_HEAD,
+      reviews: [
+        copilotReviewInput({ commitOid: COPILOT_REVIEW_COMMIT }),
+        cleanCopilotReviewInput({
+          body: 'Reviewed the changes, no actionable comments posted.',
+          submittedAt: '2026-09-27T05:33:00Z',
+        }),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 2);
 });
 
 test('#3259: an unrecognized-shape Copilot review is reported under the Copilot default', () => {

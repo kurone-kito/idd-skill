@@ -2212,6 +2212,7 @@ test('getMergedChangeRequestMeta returns null when the PR is not merged, and the
                 number: 9,
                 merged: true,
                 mergedAt: '2026-01-01T00:00:00Z',
+                headRefOid: 'head-sha',
                 mergeCommit: { oid: 'deadbeef' },
               },
             },
@@ -2223,6 +2224,7 @@ test('getMergedChangeRequestMeta returns null when the PR is not merged, and the
     number: 9,
     merged: true,
     mergedAt: '2026-01-01T00:00:00Z',
+    headRefOid: 'head-sha',
     mergeCommitOid: 'deadbeef',
   });
 });
@@ -3938,6 +3940,7 @@ test('listChangeRequestGraphqlReviews selects the commit oid and maps it to comm
                       commit: {
                         oid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
                       },
+                      comments: { totalCount: 0, nodes: [] },
                     },
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -3957,9 +3960,13 @@ test('listChangeRequestGraphqlReviews selects the commit oid and maps it to comm
       submittedAt: '2026-01-01T00:00:00Z',
       authorLogin: 'octocat',
       commitOid: 'a5a56e57267540dc046659c600bcb7c62bdc3949',
+      commentCount: 0,
+      replyOnly: false,
     },
   ]);
   assert.match(capturedQuery ?? '', /commit \{ oid \}/);
+  assert.match(capturedQuery ?? '', /comments\(first:100\)/);
+  assert.match(capturedQuery ?? '', /replyTo \{ id \}/);
 });
 
 test('listChangeRequestGraphqlReviews maps a missing commit oid to null', () => {
@@ -3991,6 +3998,115 @@ test('listChangeRequestGraphqlReviews maps a missing commit oid to null', () => 
     }),
   );
   assert.equal(port.listChangeRequestGraphqlReviews(7)[0].commitOid, null);
+  assert.equal(port.listChangeRequestGraphqlReviews(7)[0].commentCount, null);
+  assert.equal(port.listChangeRequestGraphqlReviews(7)[0].replyOnly, false);
+});
+
+test('listChangeRequestGraphqlReviews proves reply-only only for a complete non-empty comment connection', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'reply',
+                      url: 'https://example.invalid',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:00:00Z',
+                      author: { login: 'octocat' },
+                      commit: { oid: 'head-sha' },
+                      comments: {
+                        totalCount: 1,
+                        nodes: [{ replyTo: { id: 'thread-1' } }],
+                      },
+                    },
+                    {
+                      body: 'truncated',
+                      url: 'https://example.invalid/2',
+                      state: 'COMMENTED',
+                      submittedAt: '2026-01-01T00:01:00Z',
+                      author: { login: 'octocat' },
+                      commit: { oid: 'head-sha' },
+                      comments: {
+                        totalCount: 2,
+                        nodes: [{ replyTo: { id: 'thread-2' } }],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const reviews = port.listChangeRequestGraphqlReviews(7);
+  assert.equal(reviews[0].commentCount, 1);
+  assert.equal(reviews[0].replyOnly, true);
+  assert.equal(reviews[1].commentCount, null);
+  assert.equal(reviews[1].replyOnly, false);
+});
+
+test('#3564: listChangeRequestGraphqlReviews fails closed when comment nodes are missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      body: 'incomplete',
+                      comments: { totalCount: 0 },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const review = port.listChangeRequestGraphqlReviews(7)[0];
+  assert.equal(review.commentCount, null);
+  assert.equal(review.replyOnly, false);
+});
+
+test('listChangeRequestGraphqlReviews throws when review nodes are missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /reviews connection is malformed \(missing nodes\)/,
+  );
 });
 
 test('listChangeRequestGraphqlReviews throws on a missing pullRequest node', () => {
@@ -4021,6 +4137,29 @@ test('listChangeRequestGraphqlReviews throws on a null reviews connection', () =
   assert.throws(
     () => port.listChangeRequestGraphqlReviews(7),
     /null reviews connection/,
+  );
+});
+
+test('listChangeRequestGraphqlReviews throws when review pageInfo is missing', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviews: { nodes: [] },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestGraphqlReviews(7),
+    /malformed \(missing pageInfo\/hasNextPage\)/,
   );
 });
 

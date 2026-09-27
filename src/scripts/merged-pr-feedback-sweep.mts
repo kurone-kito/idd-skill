@@ -48,6 +48,11 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
+import {
+  findLatestCopilotReviewIndex,
+  type ReviewPayload,
+  resolveLatestCopilotReviewClause,
+} from './review-clause.mts';
 
 // ---------------------------------------------------------------------------
 // Types (the pure function's input/output — exported for tests)
@@ -85,6 +90,10 @@ export interface SweepReviewInput {
    * `idd-advisory-convergence`'s own Clause 1 already recognizes a
    * trusted ack. */
   commitOid?: string | null;
+  /** GraphQL `comments.totalCount`; absent/null is incomplete evidence. */
+  itemCount?: number | null;
+  /** True only when the provider proved this review contains replies only. */
+  replyOnly?: boolean;
 }
 
 export interface SweepThreadCommentInput {
@@ -108,6 +117,8 @@ export interface MergedPrInput {
   number: number;
   mergedAt?: string | null;
   mergeCommit?: string | null;
+  /** The reviewed feature-branch head, distinct from `mergeCommit`. */
+  headRefOid?: string | null;
   threads?: SweepThreadInput[] | null;
   comments?: SweepCommentInput[] | null;
   reviews?: SweepReviewInput[] | null;
@@ -222,6 +233,14 @@ function maxTimestamp(values: (string | null)[]): string | null {
 }
 
 const GITHUB_ACTIONS_BOT_LOGIN = 'github-actions[bot]';
+const COMMIT_OID_PATTERN = /^[0-9a-f]{40}$/i;
+
+function normalizedVerifiedCommitOid(value: string | null | undefined): string {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  return COMMIT_OID_PATTERN.test(normalized) ? normalized : '';
+}
 
 // #3267 (Copilot review, PR #3437): this account must not receive the
 // blanket IDD-author exclusion. Callers may list it in iddAgentLogins
@@ -342,6 +361,7 @@ export function buildMergedPrFeedbackSweep(
       pr.comments ?? [],
       pr.reviews ?? [],
       pr.threads ?? [],
+      pr.headRefOid,
       isIdd,
       isAdvisoryBot,
       isConfiguredAdvisoryBotIdentity,
@@ -453,6 +473,7 @@ function collectUnaddressedComments(
   comments: SweepCommentInput[],
   reviews: SweepReviewInput[],
   threads: SweepThreadInput[],
+  headRefOid: string | null | undefined,
   isIdd: (login: string) => boolean,
   isAdvisoryBot: (login: string) => boolean,
   isConfiguredAdvisoryBotIdentity: (login: string) => boolean,
@@ -488,6 +509,35 @@ function collectUnaddressedComments(
   ]);
 
   const out: SweepCommentFinding[] = [];
+
+  // #3564: keep the merged-PR sweep on the same absolute-latest selector as
+  // advisory convergence. A valid effective head and complete review count
+  // are required before a clean primary review may supersede history; every
+  // missing or malformed field therefore leaves historical findings visible.
+  const reviewPayloads: ReviewPayload[] = reviews.map((review) => ({
+    author: { login: authorLogin(review) },
+    submittedAt: review.submittedAt,
+    commitId: review.commitOid,
+    itemCount: review.itemCount,
+    body: review.body,
+    replyOnly: review.replyOnly,
+  }));
+  const latestPrimaryReviewIndex = findLatestCopilotReviewIndex(
+    reviewPayloads,
+    primaryBotLogin,
+  );
+  const effectiveHead = normalizedVerifiedCommitOid(headRefOid);
+  const latestPrimaryClause = effectiveHead
+    ? resolveLatestCopilotReviewClause(
+        reviewPayloads,
+        effectiveHead,
+        primaryBotLogin,
+      )
+    : null;
+  const canSupersedeHistoricalPrimaryFindings =
+    latestPrimaryClause?.satisfied === true &&
+    latestPrimaryClause.bodyShape !== null &&
+    latestPrimaryClause.bodyShape !== 'unrecognized';
 
   for (const comment of comments) {
     const author = authorLogin(comment);
@@ -555,7 +605,8 @@ function collectUnaddressedComments(
     });
   }
 
-  for (const review of reviews) {
+  for (let reviewIndex = 0; reviewIndex < reviews.length; reviewIndex += 1) {
+    const review = reviews[reviewIndex];
     const author = authorLogin(review);
     // Same author rule as comments: exclude only explicit IDD agents; a
     // missing/unknown author is surfaced with `author: null`.
@@ -587,6 +638,19 @@ function collectUnaddressedComments(
         (primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
           bodyClassification.shape === 'unrecognized'));
     if (!isChangesRequested && !hasOutsideDiffRange && !isPrimaryBotFinding) {
+      continue;
+    }
+    // A clean absolute-latest review only supersedes an earlier thread-less
+    // primary-bot finding. CHANGES_REQUESTED and outside-diff findings keep
+    // their existing disposition semantics, and a later dirty/unknown
+    // primary review keeps every historical finding fail-closed.
+    if (
+      isPrimaryBotFinding &&
+      !isChangesRequested &&
+      !hasOutsideDiffRange &&
+      canSupersedeHistoricalPrimaryFindings &&
+      reviewIndex < latestPrimaryReviewIndex
+    ) {
       continue;
     }
     // The pre-existing whole-PR disposition gate covers the two
@@ -822,6 +886,7 @@ function fetchMergedPr(
     number: meta.number,
     mergedAt: meta.mergedAt,
     mergeCommit: meta.mergeCommitOid,
+    headRefOid: meta.headRefOid,
     comments: port.listChangeRequestGraphqlComments(number).map((comment) => ({
       body: comment.body,
       url: comment.url,
@@ -840,6 +905,8 @@ function fetchMergedPr(
       submittedAt: review.submittedAt,
       author: { login: review.authorLogin },
       commitOid: review.commitOid,
+      itemCount: review.commentCount,
+      replyOnly: review.replyOnly,
     })),
     threads: port
       .listChangeRequestReviewThreadsExtended(number)
