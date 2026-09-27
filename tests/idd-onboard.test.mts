@@ -3904,6 +3904,22 @@ test('checkHeldSchemaDrift detects recursive scans of a parent directory', () =>
   ]);
 });
 
+test('checkHeldSchemaDrift ignores recursive option text inside strings', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync('fixtures', { note: 'recursive: true' });\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift preserves recursive options after nested path calls', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

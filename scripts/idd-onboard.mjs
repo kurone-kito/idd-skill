@@ -2323,6 +2323,37 @@ function stripJavaScriptComments(text) {
   };
   return scanCode(0, false).text;
 }
+function maskJavaScriptStringContents(text) {
+  let result = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character !== "'" && character !== '"' && character !== '`') {
+      result += character;
+      continue;
+    }
+    result += character;
+    index += 1;
+    let escaped = false;
+    while (index < text.length) {
+      const quotedCharacter = text[index] ?? '';
+      if (!escaped && quotedCharacter === character) {
+        result += quotedCharacter;
+        break;
+      }
+      result +=
+        quotedCharacter === '\n' || quotedCharacter === '\r'
+          ? quotedCharacter
+          : ' ';
+      if (escaped) {
+        escaped = false;
+      } else if (quotedCharacter === '\\') {
+        escaped = true;
+      }
+      index += 1;
+    }
+  }
+  return result;
+}
 function firstCallArgument(text) {
   let quote = null;
   let escaped = false;
@@ -2598,8 +2629,9 @@ function moduleScansManifestDirectory(text, targetPath) {
   const directory = targetPath.slice(0, slash);
   for (const match of findDirectoryScanCalls(stripJavaScriptComments(text))) {
     const { apiName, argumentsText } = match;
+    const optionText = maskJavaScriptStringContents(argumentsText);
     const recursive =
-      /\brecursive\s*:\s*true\b/u.test(argumentsText) ||
+      /\brecursive\s*:\s*true\b/u.test(optionText) ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument);
