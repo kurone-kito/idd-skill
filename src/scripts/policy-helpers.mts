@@ -28,6 +28,7 @@ interface CritiqueLoopPolicy {
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium';
+  subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
 
@@ -409,6 +410,7 @@ interface RawConfig {
     e10NoProgressHoldAfter?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
+    subagentWaitCeiling?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
     telemetryHook?: { command?: unknown };
   };
@@ -598,6 +600,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    subagentWaitCeiling: 'PT20M',
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -797,6 +800,10 @@ export function normalizePolicyConfig(config: unknown) {
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
     ) as CritiqueLoopPolicy['deferByUrgency'],
+    subagentWaitCeiling: parsePositiveDuration(
+      c?.critiqueLoop?.subagentWaitCeiling,
+      POLICY_DEFAULTS.critiqueLoop.subagentWaitCeiling,
+    ),
   };
   // Own-property omitted (not set to `undefined`) when no delegate is
   // configured, matching POLICY_DEFAULTS -- see the clone() doc comment on

@@ -276,6 +276,28 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
   );
 });
 
+test('critiqueLoop.subagentWaitCeiling defaults to PT20M and accepts positive durations', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.subagentWaitCeiling, 'PT20M');
+  assert.equal(
+    normalizePolicyConfig({}).critiqueLoop.subagentWaitCeiling,
+    'PT20M',
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { subagentWaitCeiling: 'P1DT2H' },
+    }).critiqueLoop.subagentWaitCeiling,
+    'P1DT2H',
+  );
+  for (const invalid of ['PT0S', 'invalid', 0, null]) {
+    assert.equal(
+      normalizePolicyConfig({ critiqueLoop: { subagentWaitCeiling: invalid } })
+        .critiqueLoop.subagentWaitCeiling,
+      'PT20M',
+      `expected ${JSON.stringify(invalid)} to fall back to PT20M`,
+    );
+  }
+});
+
 test('discover.selectionDesync defaults to off and accepts session-offset', () => {
   assert.equal(POLICY_DEFAULTS.discover.selectionDesync, 'off');
   assert.equal(normalizePolicyConfig({}).discover.selectionDesync, 'off');

@@ -293,6 +293,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    subagentWaitCeiling: 'PT20M',
   }),
   reviewEscalation: Object.freeze({
     changesRequestedFirstEscalation: 'PT24H',
@@ -471,6 +472,10 @@ export function normalizePolicyConfig(config) {
       c?.critiqueLoop?.deferByUrgency,
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
+    ),
+    subagentWaitCeiling: parsePositiveDuration(
+      c?.critiqueLoop?.subagentWaitCeiling,
+      POLICY_DEFAULTS.critiqueLoop.subagentWaitCeiling,
     ),
   };
   // Own-property omitted (not set to `undefined`) when no delegate is
