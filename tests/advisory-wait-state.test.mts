@@ -850,10 +850,15 @@ test('advisoryMarkerComment: rejects unrelated comment bodies', () => {
 
 // --- #3541: --now CLI-boundary normalization --------------------------------
 
-test('resolveNowFlag: an empty value falls back to the real current time (unchanged pre-existing behavior)', () => {
+test("resolveNowFlag: an empty value returns an empty now with no error -- late sampling is the caller's job (#3551 Codex review)", () => {
+  // Deliberately does NOT sample new Date() here: the CLI's own call site
+  // samples the real current time immediately before buildAdvisoryWaitSummary
+  // (after evidence collection), not inside resolveNowFlag (before it) --
+  // see resolveNowFlag's own doc comment for why an early sample would be
+  // stale by the time collection finishes.
   const { now, error } = resolveNowFlag('');
   assert.equal(error, null);
-  assert.match(now, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/);
+  assert.equal(now, '');
 });
 
 test('resolveNowFlag: an offset value normalizes to canonical UTC', () => {

@@ -682,6 +682,20 @@ function parseArgs(argv) {
   // forwarding them — the collector still scopes its own gh/API calls).
   let owner = '';
   let repo = '';
+  // #3551 (Copilot + Codex review, round 3): the last VALID, normalized
+  // `--now` value across every occurrence in argv (last-occurrence-wins),
+  // tracked independently of `parsed.passthrough` and pushed there exactly
+  // ONCE, after the whole loop below, rather than incrementally per
+  // occurrence. `passthrough` is append-only, so an earlier fix that
+  // pushed per-occurrence let a LATER not-provided/invalid occurrence
+  // correctly clear `nowProvided`/`nowFlagError` while an EARLIER valid
+  // occurrence's entry silently remained already-pushed in `passthrough`
+  // -- reaching the collector (and, under `--apply`, the actual merge
+  // gate) with a stale clock the `--now`/`--apply` mutual-exclusion gate
+  // believed had never been provided at all. Tracking one resolved token
+  // and pushing it once after the loop makes `passthrough`,
+  // `nowProvided`, and `nowFlagError` structurally unable to diverge.
+  let resolvedNowToken = null;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--apply') {
@@ -756,40 +770,42 @@ function parseArgs(argv) {
       continue;
     }
     // #3252: same detect-without-changing purpose as `--claim-id` above,
-    // for the `--now`/`--apply` mutual-exclusion gate.
+    // for the `--now`/`--apply` mutual-exclusion gate. Never pushes to
+    // `passthrough` directly (#3551) -- see `resolvedNowToken`'s own doc
+    // comment above for why the final value is pushed once, after the
+    // whole loop, instead.
     if (token === '--now' || token.startsWith('--now=')) {
-      const isEqualsForm = token.includes('=');
       let value;
-      if (isEqualsForm) {
+      if (token.includes('=')) {
         value = token.slice(token.indexOf('=') + 1);
-        parsed.passthrough.push(token);
       } else {
         value = argv[index + 1];
         if (value !== undefined && !value.startsWith('--')) {
-          parsed.passthrough.push(token, value);
           index += 1;
         } else {
-          parsed.passthrough.push(token);
           value = undefined;
         }
       }
-      parsed.nowProvided = value !== undefined && value.trim() !== '';
+      const provided = value !== undefined && value.trim() !== '';
+      parsed.nowProvided = provided;
+      if (!provided) {
+        parsed.nowFlagError = null;
+        resolvedNowToken = null;
+        continue;
+      }
       // #3541: normalize HERE, before the collector (collectPreMergeReadiness)
-      // ever sees it -- replacing the passthrough token's raw value with the
-      // normalized one so a valid numeric-offset value reaches the
-      // collector's own isValidIsoTimestamp gate already converted, and a
-      // malformed value fails closed with a one-line message instead of an
-      // uncaught throw deep inside the shared collector.
-      if (parsed.nowProvided) {
-        const normalizedNow = normalizeNowFlag(value);
-        if (normalizedNow === null) {
-          parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
-        } else if (isEqualsForm) {
-          parsed.passthrough[parsed.passthrough.length - 1] =
-            `--now=${normalizedNow}`;
-        } else {
-          parsed.passthrough[parsed.passthrough.length - 1] = normalizedNow;
-        }
+      // ever sees it -- forwarding the normalized value so a valid
+      // numeric-offset value reaches the collector's own
+      // isValidIsoTimestamp gate already converted, and a malformed value
+      // fails closed with a one-line message instead of an uncaught throw
+      // deep inside the shared collector.
+      const normalizedNow = normalizeNowFlag(value);
+      if (normalizedNow === null) {
+        parsed.nowFlagError = NOW_FLAG_USAGE_MESSAGE;
+        resolvedNowToken = null;
+      } else {
+        parsed.nowFlagError = null;
+        resolvedNowToken = normalizedNow;
       }
       continue;
     }
@@ -825,6 +841,15 @@ function parseArgs(argv) {
   // collector, the head re-fetch, and the merge all default to the
   // current-directory repo (consistent).
   parsed.repoRef = owner && repo ? `${owner}/${repo}` : null;
+  // #3551: push the single resolved --now token (if any) exactly once,
+  // after every occurrence in argv has been walked -- see
+  // `resolvedNowToken`'s own doc comment above. `--now`'s relative
+  // position among other forwarded flags in `passthrough` does not
+  // matter to the collector's own flag-name-keyed parser, so appending
+  // it here (rather than at its original argv position) is safe.
+  if (resolvedNowToken !== null) {
+    parsed.passthrough.push('--now', resolvedNowToken);
+  }
   return parsed;
 }
 function printHelp() {

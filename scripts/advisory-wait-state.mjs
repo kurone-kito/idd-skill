@@ -488,18 +488,26 @@ if (import.meta.main) {
  * Resolve the CLI's own `--now` flag at the argument-handling boundary
  * (#3541), before it ever reaches {@link buildAdvisoryWaitSummary}'s
  * `isValidIsoTimestamp` gate (that gate, and its existing test fixtures,
- * stay unchanged). An empty `rawNow` (the flag omitted) keeps this file's
- * pre-existing behavior of defaulting to the real current time. A
- * non-empty value normalizes through {@link normalizeNowFlag}, returning
- * `now: ''` plus a one-line `error` naming `--now` and its accepted shapes
- * instead of forwarding a malformed value into the pure summary builder.
+ * stay unchanged). A non-empty value normalizes through
+ * {@link normalizeNowFlag}, returning `now: ''` plus a one-line `error`
+ * naming `--now` and its accepted shapes instead of forwarding a malformed
+ * value into the pure summary builder.
+ *
+ * An empty `rawNow` (the flag omitted) returns `now: ''` too, WITHOUT
+ * sampling the real current time here (Codex review, PR #3551): this
+ * file's pre-existing behavior samples `new Date()` immediately before
+ * `buildAdvisoryWaitSummary` -- AFTER every `gh`/GraphQL evidence-collection
+ * call below has already completed -- so the summary evaluates against a
+ * clock as fresh as possible relative to that evidence. Sampling it here
+ * instead, before collection even starts, would let a slow collection
+ * evaluate against a stale start time and could incorrectly keep the
+ * advisory wait blocked until another invocation. Callers must apply the
+ * same late-sampling fallback this file's own call site does:
+ * `resolvedNow || new Date().toISOString().replace('.000Z', 'Z')`.
  */
 export function resolveNowFlag(rawNow) {
   if (!rawNow) {
-    return {
-      now: new Date().toISOString().replace('.000Z', 'Z'),
-      error: null,
-    };
+    return { now: '', error: null };
   }
   const normalized = normalizeNowFlag(rawNow);
   if (normalized === null) {
@@ -612,7 +620,11 @@ function main() {
       graphqlRequestedReviewerLogins,
     },
     {
-      now: resolvedNow,
+      // #3551 Codex review: sampled here (immediately before this call),
+      // AFTER every evidence-collection call above has completed -- not
+      // inside resolveNowFlag, which would sample it before collection
+      // even starts. See resolveNowFlag's own doc comment for why.
+      now: resolvedNow || new Date().toISOString().replace('.000Z', 'Z'),
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,

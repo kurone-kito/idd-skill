@@ -1146,10 +1146,19 @@ test('an offset --now=value reaches the collector already normalized to canonica
     [...BASE_ARGS, '--now=2026-09-27T02:20:20+09:00'],
     capturingDeps,
   );
+  // #3551 round 3: the resolved value is now always pushed once, after
+  // the whole parse loop, as the space-separated two-token form --
+  // regardless of whether the original occurrence used `--now=value` or
+  // `--now value` -- so passthrough construction can't diverge from
+  // nowProvided/nowFlagError (see resolvedNowToken's own doc comment in
+  // idd-merge-execute.mts). The collector accepts both spellings
+  // equally, so this is not a behavior change for it.
+  const nowIndex = receivedPassthrough.indexOf('--now');
   assert.ok(
-    receivedPassthrough.includes('--now=2026-09-26T17:20:20Z'),
-    `expected a normalized --now=... token, got ${JSON.stringify(receivedPassthrough)}`,
+    nowIndex !== -1,
+    `expected a --now token, got ${JSON.stringify(receivedPassthrough)}`,
   );
+  assert.equal(receivedPassthrough[nowIndex + 1], '2026-09-26T17:20:20Z');
 });
 
 test('a malformed --now returns a one-line usage error instead of throwing, without collecting any evidence', () => {
@@ -1190,6 +1199,114 @@ test('bin/idd-merge-execute.mjs: a malformed --now classifies as a usage error u
   assert.ok(result.envelope, JSON.stringify(result));
   assert.equal(result.envelope?.kind, 'usage');
   assert.equal(result.envelope?.exitCode, 1);
+});
+
+// #3551 Codex review: a repeated --now must follow the same
+// last-occurrence-wins contract as --claim-id above -- a later valid
+// value must clear an earlier occurrence's error, and a later invalid
+// value must still reject even after an earlier valid one.
+test("a later valid --now clears an earlier occurrence's error (repeated flag: last occurrence wins)", () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const result = runMergeExecute(
+    [
+      ...BASE_ARGS,
+      '--now',
+      'Sep 27 2026',
+      '--now',
+      '2026-09-27T02:20:20+09:00',
+    ],
+    capturingDeps,
+  );
+  assert.equal(result.nowFlagError, undefined);
+  assert.equal(result.verdict.ready, true);
+  const nowIndex = receivedPassthrough.indexOf('--now');
+  assert.ok(nowIndex !== -1);
+  assert.equal(receivedPassthrough[nowIndex + 1], '2026-09-26T17:20:20Z');
+});
+
+test('a later invalid --now still rejects even after an earlier valid occurrence', () => {
+  const { deps } = depsFor(readyReport());
+  const result = runMergeExecute(
+    [...BASE_ARGS, '--now', '2026-09-27T02:20:20Z', '--now', 'Sep 27 2026'],
+    deps,
+  );
+  assert.equal(result.exitCode, 1);
+  assert.match(result.nowFlagError ?? '', /--now/);
+});
+
+// #3551 Copilot review: a whitespace-only --now must be treated exactly
+// like an omitted one -- never forwarded to the collector as a truthy
+// raw value that would throw uncaught past this file's own
+// nowFlagError gate.
+test('a whitespace-only --now is treated as not provided, not forwarded, and never leaks a stack trace', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const run = () =>
+    runMergeExecute([...BASE_ARGS, '--now', '  '], capturingDeps);
+  assert.doesNotThrow(run);
+  const result = run();
+  assert.equal(result.nowFlagError, undefined);
+  assert.equal(result.verdict.ready, true);
+  assert.equal(receivedPassthrough.includes('--now'), false);
+});
+
+// #3551 E10 critique (round 3 review-fix): a valid --now followed by a
+// LATER not-provided (blank/whitespace) occurrence must fully revert to
+// "no --now at all" -- passthrough must not retain the earlier valid
+// occurrence's already-pushed entry (an append-only-passthrough bug that
+// let a stale clock silently reach the collector, and under --apply the
+// actual merge gate, while nowProvided/the mutual-exclusion check
+// believed --now had never been given).
+test('a valid --now followed by a later blank occurrence forwards nothing at all (no stale passthrough entry)', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const result = runMergeExecute(
+    [...BASE_ARGS, '--now', '2026-01-01T00:00:00Z', '--now', '  '],
+    capturingDeps,
+  );
+  assert.equal(result.nowFlagError, undefined);
+  assert.equal(result.verdict.ready, true);
+  assert.equal(
+    receivedPassthrough.includes('--now'),
+    false,
+    `stale --now entry leaked into passthrough: ${JSON.stringify(receivedPassthrough)}`,
+  );
+});
+
+test('a valid --now followed by a later blank occurrence, together with --apply, does not throw the mutual-exclusion error (the final state has no --now) and does not merge with a stale clock', () => {
+  const { deps, calls } = depsFor(readyReport());
+  const result = runMergeExecute(
+    [...BASE_ARGS, '--now', '2026-01-01T00:00:00Z', '--now', '  ', '--apply'],
+    deps,
+  );
+  assert.equal(result.nowFlagError, undefined);
+  // The final effective state is "no --now provided", so --apply is safe
+  // (matches an ordinary --apply run with no --now at all) -- the merge
+  // gate never saw the stale 2026-01-01 clock.
+  assert.equal(result.verdict.merged, true);
+  assert.deepEqual(calls.merged, [`994:${HEAD}`]);
 });
 
 test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
