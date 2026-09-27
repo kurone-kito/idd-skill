@@ -202,7 +202,7 @@ const CREDENTIAL_REQUIREMENT_SHAPE_PATTERN = new RegExp(
 );
 const CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN = String.raw`(?:(?:the|a|an)\s+)?${CREDENTIAL_COORDINATION_ACTOR_PATTERN}`;
 const INDEPENDENT_EXTERNAL_COORDINATION_PATTERN = new RegExp(
-  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|wait(?:s|ing)?\s+on|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
+  String.raw`(?:\b(?:requires?|needs?|await(?:s|ing)?|wait(?:s|ing)?\s+on|blocked\s+by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+from\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b|\b(?:approval|access|permission|authorization)\s+(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\s+(?:from|by)\s+${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}\b|\b(?:cannot|can't)\b[^.;:!?]{0,120}\b(?:without|unless|until)\b[^.;:!?]{0,120}(?:${CREDENTIAL_COORDINATION_ACTOR_WITH_ARTICLE_PATTERN}(?:'s|')?\s+(?:approval|access|permission|authorization)|production\s+access)\b)`,
   'gi',
 );
 const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
@@ -383,6 +383,8 @@ const CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN = new RegExp(
   String.raw`(?:\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created|obtained|acquired|fetched|retrieved|generated)\b(?:\s+(?:by|from)\s+[^.;:!?\n]{1,40})?\s+(?:before|until)\b|\b(?:require[sd]?|needs?)\b[^.;:!?\n]{0,80}\b(?:from|by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b)`,
   'i',
 );
+const CREDENTIAL_BLOCKED_PENDING_REQUIREMENT_PATTERN =
+  /\bblocked\b[^.;:!?\n]{0,80}\bpending\b[^.;:!?\n]{0,40}\b(?:an?\s+|the\s+)?credentials?\b/i;
 const CREDENTIAL_WAITING_EXTERNAL_REQUIREMENT_PATTERN = new RegExp(
   String.raw`\bwait(?:s|ing)?\s+for\s+(?:(?:a|an|the)\s+)?(?:${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+)?credentials?\b`,
   'i',
@@ -1175,6 +1177,9 @@ function isDescribedSecurityVocabulary(
   if (
     CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN.test(requirementContextBefore) ||
     CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext) ||
+    CREDENTIAL_BLOCKED_PENDING_REQUIREMENT_PATTERN.test(
+      directRequirementContext,
+    ) ||
     CREDENTIAL_WAITING_EXTERNAL_REQUIREMENT_PATTERN.test(
       directRequirementContext,
     )

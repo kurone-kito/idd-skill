@@ -3262,3 +3262,31 @@ test('keeps documentation of approval-gated behavior autonomous (#3522)', () => 
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let an until-based approval blocker hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 193,
+    title: 'document credential storage',
+    body:
+      'Implementation cannot start until maintainer approval is granted. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let blocked pending credentials hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 194,
+    title: 'document credential storage',
+    body:
+      'Implementation is blocked pending a credential from the vendor. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
