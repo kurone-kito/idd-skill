@@ -1098,10 +1098,10 @@ future inventory reviews do not need to re-infer their role from code.
   filesystem rather than a Git tree, so native Windows cannot establish the
   imported executable bit reliably; use Linux, macOS, or WSL when hook mode
   equivalence must also be verified. Ensure
-  `core.fileMode` is not `false` and
-  `git ls-tree <upstream-commit> -- idd-template/.githooks/pre-commit` reports
-  `100755` before comparing modes. If modes differ, use a mode-preserving
-  checkout or omit `.githooks`. See
+  `git -C <idd-skill> config --get core.fileMode` is not `false` and
+  `git -C <idd-skill> ls-tree <upstream-commit> --
+  idd-template/.githooks/pre-commit` reports `100755` before comparing modes.
+  If modes differ, use a mode-preserving checkout or omit `.githooks`. See
   [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
 
   Do not add a directory prefix merely because it exists upstream: use only

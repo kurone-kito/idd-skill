@@ -488,7 +488,7 @@ function writeJsonKey(
   return true;
 }
 
-const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
+const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}(?![\s\S])/;
 
 function isRestorableJsonPlaceholder(value: unknown): value is string {
   return (

@@ -224,7 +224,7 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
 ]);
 
 const NODE_SCRIPTS_RE =
-  /\bnode\s+((?:<idd-skill>\/)?scripts\/[a-z0-9-]+\.mjs)\b/g;
+  /\bnode\s+((?:\.\/|<idd-skill>\/)?scripts\/[a-z0-9-]+\.mjs)\b/g;
 const PACKAGE_MANAGER_ENTRY_RE =
   /\bnode\s+(?:\.\/)?(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
@@ -328,10 +328,13 @@ function collectHelperInvocationViolations(
     } = scanInvocations(file.content);
 
     for (const invokedPath of nodeScripts) {
-      const hasSourceCheckoutPrefix = invokedPath.startsWith('<idd-skill>/');
-      const entryPath = hasSourceCheckoutPrefix
-        ? invokedPath.slice('<idd-skill>/'.length)
+      const normalizedPath = invokedPath.startsWith('./')
+        ? invokedPath.slice(2)
         : invokedPath;
+      const hasSourceCheckoutPrefix = normalizedPath.startsWith('<idd-skill>/');
+      const entryPath = hasSourceCheckoutPrefix
+        ? normalizedPath.slice('<idd-skill>/'.length)
+        : normalizedPath;
       const isSourceCheckoutOnly =
         entryPath === 'scripts/verify-import-mirror.mjs';
       if (
@@ -584,6 +587,25 @@ test('fails on a helper invocation naming no HELPER_COMMANDS entry and no allowl
   assert.equal(violations.length, 1);
   assert.equal(violations[0]?.rule, 'unbacked-helper');
   assert.equal(violations[0]?.name, 'scripts/totally-fake-helper.mjs');
+});
+
+test('rejects an adopter-root invocation of a source-repository helper', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content: 'Run `node ./scripts/verify-import-mirror.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/verify-import-mirror.mjs');
 });
 
 test('does not fail on a backed or allowlisted helper invocation (rule 2 negative case)', () => {

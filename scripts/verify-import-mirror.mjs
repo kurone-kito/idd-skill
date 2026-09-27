@@ -412,7 +412,7 @@ function writeJsonKey(root, keyPath, value) {
   current[lastKey] = value;
   return true;
 }
-const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}$/;
+const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}(?![\s\S])/;
 function isRestorableJsonPlaceholder(value) {
   return (
     typeof value === 'string' && RESTORABLE_JSON_PLACEHOLDER_RE.test(value)

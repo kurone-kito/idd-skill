@@ -322,10 +322,10 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
 On native Windows, omit `.githooks` unless the command runs under WSL: the
 nested path is read from the filesystem, so mode equivalence requires Linux,
 macOS, or WSL. Ensure
-`core.fileMode` is not `false` and
-`git ls-tree <upstream-commit> -- idd-template/.githooks/pre-commit` reports
-`100755` before comparing modes. If modes differ, use a mode-preserving
-checkout or omit `.githooks`. See
+`git -C <idd-skill> config --get core.fileMode` is not `false` and
+`git -C <idd-skill> ls-tree <upstream-commit> --
+idd-template/.githooks/pre-commit` reports `100755` before comparing modes.
+If modes differ, use a mode-preserving checkout or omit `.githooks`. See
 [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
 
 For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
