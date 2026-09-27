@@ -254,7 +254,8 @@ below instead.
    ```
 
    `--target-ref` must name it until verification and reruns finish; do not
-   squash it.
+   squash it. For verification, pass the pre-import ref (normally `HEAD^`)
+   as `--target-base-ref`; `HEAD` is now the post-import checkpoint.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
