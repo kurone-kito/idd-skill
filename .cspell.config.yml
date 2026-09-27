@@ -68,6 +68,7 @@ words:
   - rethrew
   - resumability
   - vrchat
+  - blockedby
   - unfetched
   # #3269: fragments of real GraphQL review-thread/comment node ids
   # (PullRequestReviewThread/-Comment, base64-like opaque suffixes),
