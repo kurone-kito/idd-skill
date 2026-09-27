@@ -2423,28 +2423,37 @@ function firstCallArgument(text) {
   }
   return text;
 }
+function normalizeComputedDirectoryScanMembers(text) {
+  return text.replace(
+    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.)?\s*\()/gu,
+    (_match, _quote, apiName) => `.${apiName}`,
+  );
+}
 function findDirectoryScanCalls(text) {
   const calls = [];
-  for (const match of text.matchAll(DIRECTORY_SCAN_API_PATTERN)) {
+  const normalizedText = stripJavaScriptComments(
+    normalizeComputedDirectoryScanMembers(text),
+  );
+  for (const match of normalizedText.matchAll(DIRECTORY_SCAN_API_PATTERN)) {
     const apiName = match[0] ?? '';
     let openIndex = (match.index ?? 0) + apiName.length;
-    while (/\s/u.test(text[openIndex] ?? '')) {
+    while (/\s/u.test(normalizedText[openIndex] ?? '')) {
       openIndex += 1;
     }
-    if (text.slice(openIndex, openIndex + 2) === '?.') {
+    if (normalizedText.slice(openIndex, openIndex + 2) === '?.') {
       openIndex += 2;
-      while (/\s/u.test(text[openIndex] ?? '')) {
+      while (/\s/u.test(normalizedText[openIndex] ?? '')) {
         openIndex += 1;
       }
     }
-    if (text[openIndex] !== '(') {
+    if (normalizedText[openIndex] !== '(') {
       continue;
     }
     let depth = 1;
     let quote = null;
     let escaped = false;
-    for (let index = openIndex + 1; index < text.length; index += 1) {
-      const character = text[index] ?? '';
+    for (let index = openIndex + 1; index < normalizedText.length; index += 1) {
+      const character = normalizedText[index] ?? '';
       if (quote !== null) {
         if (escaped) {
           escaped = false;
@@ -2463,23 +2472,23 @@ function findDirectoryScanCalls(text) {
         depth -= 1;
         if (depth === 0) {
           let afterCall = index + 1;
-          while (/\s/u.test(text[afterCall] ?? '')) {
+          while (/\s/u.test(normalizedText[afterCall] ?? '')) {
             afterCall += 1;
           }
           const matchIndex = match.index ?? 0;
-          const declarationPrefix = text.slice(
+          const declarationPrefix = normalizedText.slice(
             Math.max(0, matchIndex - 64),
             matchIndex,
           );
           const isDeclaration =
-            text[afterCall] === '{' ||
-            (text[afterCall] === ':' &&
-              isTypedMethodDeclarationPrefix(text, matchIndex)) ||
+            normalizedText[afterCall] === '{' ||
+            (normalizedText[afterCall] === ':' &&
+              isTypedMethodDeclarationPrefix(normalizedText, matchIndex)) ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
           if (!isDeclaration) {
             calls.push({
               apiName,
-              argumentsText: text.slice(openIndex + 1, index),
+              argumentsText: normalizedText.slice(openIndex + 1, index),
             });
           }
           break;
@@ -2721,6 +2730,9 @@ function globPatternToRegex(
       );
       const translatedGroups = innerExpressions.map((inner) => {
         if (character === '!') {
+          if (/[+@!?*]\(/u.test(pattern.slice(index + 2, closing))) {
+            return `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+          }
           const slash = trailingPattern.indexOf('/');
           const suffix = trailingPattern.slice(
             0,
@@ -2786,19 +2798,19 @@ function globPatternToRegex(
           characterClass = `^${characterClass.slice(1)}`;
         }
         const posixClassReplacements = {
-          alnum: 'A-Za-z0-9',
-          alpha: 'A-Za-z',
+          alnum: '\\p{L}\\p{N}',
+          alpha: '\\p{L}',
           ascii: '\\x00-\\x7F',
           blank: ' \\t',
           cntrl: '\\x00-\\x1F\\x7F',
           digit: '0-9',
           graph: '\\x21-\\x7E',
-          lower: 'a-z',
+          lower: '\\p{Ll}',
           print: '\\x20-\\x7E',
           punct: '!-/:-@[-`{-~',
           space: '\\s',
-          upper: 'A-Z',
-          word: 'A-Za-z0-9_',
+          upper: '\\p{Lu}',
+          word: '\\p{L}\\p{N}_',
           xdigit: 'A-Fa-f0-9',
         };
         characterClass = characterClass.replace(
@@ -2864,7 +2876,7 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
     return false;
   }
   const directory = targetPath.slice(0, slash);
-  for (const match of findDirectoryScanCalls(stripJavaScriptComments(text))) {
+  for (const match of findDirectoryScanCalls(text)) {
     const { apiName, argumentsText } = match;
     const optionText = maskJavaScriptStringContents(argumentsText);
     const recursive =

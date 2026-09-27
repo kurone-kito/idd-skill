@@ -4031,6 +4031,30 @@ test('checkHeldSchemaDrift ignores directory-scan API-shaped identifiers', () =>
   }
 });
 
+test('checkHeldSchemaDrift detects computed directory-scan members', () => {
+  for (const moduleText of [
+    "fs['readdirSync']('schemas');\n",
+    'fs["readdirSync"]?.(\'schemas\');\n',
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
 test('checkHeldSchemaDrift detects scans after postfix updates', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4673,6 +4697,26 @@ test('checkHeldSchemaDrift preserves POSIX regex escapes', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves Unicode POSIX alpha matches', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[[:alpha:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/é.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/é.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/é.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift excludes dotfiles from wildcard glob matches', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5047,6 +5091,28 @@ test('checkHeldSchemaDrift excludes dotfiles from negative extglobs with dot alt
     hold: [DRIFT_MODULE],
   });
   assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift matches nested negative extglobs like Node glob', () => {
+  for (const relativePath of ['schemas/a.json', 'schemas/b.json']) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = "globSync('schemas/!(@(a|b)).json');\n";
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift preserves suffixes in nested negative extglobs', () => {
