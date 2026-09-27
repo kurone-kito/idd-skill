@@ -14,6 +14,7 @@ import {
   countTaggedStashEntries,
   detectInProgressOperation,
   evaluatePrunableShortcut,
+  extractDirtyEntries,
   extractDirtyPaths,
   extractIgnoredPaths,
   extractRecoveredClaim,
@@ -307,6 +308,17 @@ test('extractDirtyPaths reads tracked/untracked paths, follows a rename arrow, a
     'new.txt',
     'conflict -> target',
   ]);
+});
+
+test('extractDirtyEntries preserves staged and unstaged status columns', () => {
+  assert.deepEqual(
+    extractDirtyEntries('M  staged-gitlink\n M dirty-submodule\n?? new.txt\n'),
+    [
+      { path: 'staged-gitlink', indexStatus: 'M', worktreeStatus: ' ' },
+      { path: 'dirty-submodule', indexStatus: ' ', worktreeStatus: 'M' },
+      { path: 'new.txt', indexStatus: '?', worktreeStatus: '?' },
+    ],
+  );
 });
 
 test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
@@ -1269,6 +1281,74 @@ test('a changed superproject gitlink is not excluded as a submodule-only change'
     true,
     'a `+` submodule status denotes a superproject gitlink change that the parent scope must preserve',
   );
+});
+
+test('a staged superproject gitlink is not excluded as a submodule-only change', () => {
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? 'M  submodule\n' : '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(
+    verdict.plan.stashes[0]?.hasChanges,
+    true,
+    'a staged gitlink must remain in the parent preservation scope',
+  );
+});
+
+test('captures ignored files before stash can change the ignore rules', () => {
+  const events: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! secret.env\0 M .gitignore\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: ' M .gitignore\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        events.push('stash');
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: () => events.push('copy'),
+  });
+  runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(events.slice(0, 2), ['copy', 'stash']);
 });
 
 test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {

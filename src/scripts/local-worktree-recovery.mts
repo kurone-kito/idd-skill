@@ -76,6 +76,7 @@ import {
   type LocalWorktreeRecord,
   parseLocalWorktreeList,
 } from './local-worktree-occupancy.mts';
+import { inspectDevelopmentBranch } from './policy-helpers.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
 
 // ---------------------------------------------------------------------------
@@ -674,8 +675,14 @@ function decodeGitQuotedPath(path: string): string {
  * (`R  old -> new`) reports only the new path -- the working tree copy at
  * the old path no longer exists to back up.
  */
-export function extractDirtyPaths(statusPorcelain: string): string[] {
-  const paths: string[] = [];
+export interface DirtyPathEntry {
+  path: string;
+  indexStatus: string;
+  worktreeStatus: string;
+}
+
+export function extractDirtyEntries(statusPorcelain: string): DirtyPathEntry[] {
+  const entries: DirtyPathEntry[] = [];
   for (const line of statusPorcelain.split('\n')) {
     if (line.length < 3 || line.startsWith('!!')) continue;
     let rest = line.slice(3).trim();
@@ -687,10 +694,18 @@ export function extractDirtyPaths(statusPorcelain: string): string[] {
       }
     }
     if (rest.length > 0) {
-      paths.push(decodeGitQuotedPath(rest));
+      entries.push({
+        path: decodeGitQuotedPath(rest),
+        indexStatus: status[0] ?? ' ',
+        worktreeStatus: status[1] ?? ' ',
+      });
     }
   }
-  return paths;
+  return entries;
+}
+
+export function extractDirtyPaths(statusPorcelain: string): string[] {
+  return extractDirtyEntries(statusPorcelain).map((entry) => entry.path);
 }
 
 /** Find the porcelain rename separator without mistaking an arrow inside a
@@ -940,8 +955,10 @@ function planAndMaybeStashScope(
     status.ok &&
     (excludedDirtyPaths.length === 0
       ? hasWorkingTreeChanges(status.stdout)
-      : extractDirtyPaths(status.stdout).some(
-          (dirtyPath) => !excludedDirtyPaths.includes(dirtyPath),
+      : extractDirtyEntries(status.stdout).some(
+          (entry) =>
+            !excludedDirtyPaths.includes(entry.path) ||
+            entry.indexStatus !== ' ',
         ));
   const baselineList = deps.runGit(['stash', 'list'], scopePath);
   const baselineCount = countTaggedStashEntries(baselineList.stdout, tag);
@@ -1233,6 +1250,37 @@ function planAndMaybePreserve(
     .filter((submodule) => submodule.status === ' ')
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
+
+  // Capture ignored files before any stash changes the ignore rules. In
+  // particular, an untracked or modified `.gitignore` can make files that
+  // were initially ignored appear untracked after `stash push --include-
+  // untracked`; scanning only afterward would lose those files before a
+  // forced worktree removal (Codex review #4114227141).
+  let ignoredFilesCopied: IgnoredFileEntry[] = [];
+  let ignoredFilesScanFailed = false;
+  const topLevelIgnored = scanAndMaybeCopyIgnoredFiles(
+    path,
+    '.',
+    apply,
+    path,
+    deps,
+  );
+  ignoredFilesCopied = ignoredFilesCopied.concat(topLevelIgnored.copied);
+  ignoredFilesScanFailed = ignoredFilesScanFailed || topLevelIgnored.scanFailed;
+  for (const submodule of submodules) {
+    if (!submodule.path || submodule.status === '-') continue;
+    const submoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+      join(path, submodule.path),
+      submodule.path,
+      apply,
+      path,
+      deps,
+    );
+    ignoredFilesCopied = ignoredFilesCopied.concat(submoduleIgnored.copied);
+    ignoredFilesScanFailed =
+      ignoredFilesScanFailed || submoduleIgnored.scanFailed;
+  }
+
   const stashes: StashPlanEntry[] = [
     planAndMaybeStashScope(path, '.', tag, apply, path, deps, submodulePaths),
   ];
@@ -1314,31 +1362,6 @@ function planAndMaybePreserve(
         deps.runGit,
       ),
     );
-  }
-
-  let ignoredFilesCopied: IgnoredFileEntry[] = [];
-  let ignoredFilesScanFailed = false;
-  const topLevelIgnored = scanAndMaybeCopyIgnoredFiles(
-    path,
-    '.',
-    apply,
-    path,
-    deps,
-  );
-  ignoredFilesCopied = ignoredFilesCopied.concat(topLevelIgnored.copied);
-  ignoredFilesScanFailed = ignoredFilesScanFailed || topLevelIgnored.scanFailed;
-  for (const submodule of submodules) {
-    if (!submodule.path || submodule.status === '-') continue;
-    const submoduleIgnored = scanAndMaybeCopyIgnoredFiles(
-      join(path, submodule.path),
-      submodule.path,
-      apply,
-      path,
-      deps,
-    );
-    ignoredFilesCopied = ignoredFilesCopied.concat(submoduleIgnored.copied);
-    ignoredFilesScanFailed =
-      ignoredFilesScanFailed || submoduleIgnored.scanFailed;
   }
 
   const submoduleAdminCopies: SubmoduleAdminCopyEntry[] = [];
@@ -2130,6 +2153,36 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      // The checkout and final identity/lock checks above are themselves a
+      // concurrency window. Re-read every preservation artifact once more
+      // after those checks and immediately before deleting the primary lock;
+      // an artifact disappearing in that interval must still stop cleanup
+      // (Copilot review #4114224357).
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+          },
+          targetPath,
+          deps.runGit,
+          deps.pathExists,
+        )
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'a preservation artifact disappeared after the final primary identity checks; stopping before lock deletion',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const lockPath = deps.runGit(
         ['rev-parse', '--absolute-git-dir'],
         targetPath,
@@ -2227,6 +2280,37 @@ export function runLocalWorktreeRecovery(
       }
     }
 
+    // The final linked routing/lock checks above are themselves a
+    // concurrency window. Re-read every preservation artifact immediately
+    // before the remove call, rather than relying on the earlier recheck
+    // that preceded those identity checks (Copilot review #4114224357).
+    if (
+      !shortcut.eligible &&
+      !reverifyPreservationArtifactsFresh(
+        {
+          stashes: verdict.plan.stashes,
+          backupRefs: verdict.plan.backupRefs,
+          uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+          ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+          submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+        },
+        targetPath,
+        deps.runGit,
+        deps.pathExists,
+      )
+    ) {
+      verdict.plan.removal = {
+        kind: 'linked',
+        developmentBranch: null,
+        wouldRun: true,
+        ran: false,
+        detail:
+          'a preservation artifact disappeared after the final linked identity checks; stopping before removal',
+      };
+      verdict.result = verdict.plan.removal.detail;
+      return verdict;
+    }
+
     let remove = deps.runGit(
       shortcut.eligible
         ? ['worktree', 'remove', '--force', targetPath]
@@ -2274,23 +2358,33 @@ export function runLocalWorktreeRecovery(
 // Production dependency wiring (real git / gh)
 // ---------------------------------------------------------------------------
 
-const VALID_BRANCH_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/;
-
 /**
  * Resolve `{development-branch}` (§LWR step 4's primary-worktree branch):
- * `developmentBranch` from `.github/idd/config.json` when valid, else the
- * live GitHub default branch -- routed through `gh-exec.mts`'s
- * `readGithubRepoDefaultBranch` / `resolveCurrentGithubRepository` (never a
- * direct `gh` spawn; `tests/gh-spawn-guard.test.mts` enforces this
- * repository-wide).
+ * `developmentBranch` from `.github/idd/config.json` when configured, or
+ * the live GitHub default branch when the policy value is absent. A present
+ * but invalid policy value fails closed rather than silently falling back to
+ * a different branch (Copilot review #4114224382). The live lookup is routed
+ * through `gh-exec.mts`'s `readGithubRepoDefaultBranch` /
+ * `resolveCurrentGithubRepository` (never a direct `gh` spawn;
+ * `tests/gh-spawn-guard.test.mts` enforces this repository-wide).
  */
 function resolveDevelopmentBranchProduction(
   args: Pick<LocalWorktreeRecoveryArgs, 'owner' | 'repo'>,
 ): string {
   const config = loadIddConfig();
-  const configured = config?.developmentBranch;
-  if (typeof configured === 'string' && VALID_BRANCH_PATTERN.test(configured)) {
-    return configured;
+  const inspection = inspectDevelopmentBranch(config);
+  if (inspection.status === 'invalid') {
+    throw new Error(
+      `local-worktree-recovery: invalid developmentBranch in .github/idd/config.json: ${inspection.reason ?? 'invalid value'}`,
+    );
+  }
+  if (inspection.status === 'configured' && inspection.branch) {
+    return inspection.branch;
+  }
+  if (inspection.status === 'configured') {
+    throw new Error(
+      'local-worktree-recovery: configured developmentBranch did not include a branch name',
+    );
   }
   let fromGh: string | null;
   try {
@@ -2304,12 +2398,20 @@ function resolveDevelopmentBranchProduction(
       `local-worktree-recovery: could not resolve {development-branch} (no valid developmentBranch in .github/idd/config.json, and the live default-branch lookup failed: ${(error as Error).message})`,
     );
   }
-  if (!fromGh || !VALID_BRANCH_PATTERN.test(fromGh)) {
+  const liveInspection = inspectDevelopmentBranch({
+    developmentBranch: fromGh,
+  });
+  if (liveInspection.status !== 'configured') {
     throw new Error(
       `local-worktree-recovery: could not resolve a valid default branch name (got: ${fromGh ?? 'none'})`,
     );
   }
-  return fromGh;
+  if (!liveInspection.branch) {
+    throw new Error(
+      'local-worktree-recovery: validated default branch did not include a branch name',
+    );
+  }
+  return liveInspection.branch;
 }
 
 function copyPathProduction(from: string, to: string): void {
