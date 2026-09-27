@@ -441,17 +441,18 @@ could ever observe it as 'alive'".
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
    unpushed work is otherwise invisible here
-   (`idd-merge.instructions.md`); detached tag-only history is ignored:
+   (`idd-merge.instructions.md`); detached tag-reachable history is not
+   counted:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> log @{u}..HEAD` (or all commits when there is no
      upstream) for this worktree's own unpushed commits
    - `git -C <path> submodule status --recursive`
-   - Recursive submodule probe:
+   - Probe:
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git symbolic-ref -q HEAD >/dev/null && git rev-list --branches --not --remotes --count || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --branches --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
