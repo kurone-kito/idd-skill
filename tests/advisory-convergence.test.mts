@@ -7192,6 +7192,14 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.match(fallback, /registration_attempt aw3-s/);
   assert.match(fallback, /registration_check\(\)[\s\S]*?max_attempts=3/);
   assert.match(fallback, /AW3S_ENTRY.*pending|non-pending/);
+  assert.match(
+    fallback,
+    /if \[ "\$AW3S_ENTRY" = "pending" \][\s\S]*?--remove-reviewer/,
+  );
+  assert.match(
+    fallback,
+    /AW3S_ENTRY.*pending|non-pending[\s\S]*?if \[ "\$AW3S_ENTRY" = "pending" \]/,
+  );
   assert.match(fallback, /command -v registration_attempt/);
   assert.match(fallback, /AW3-S registration returned an unexpected status/);
   assert.match(
@@ -7205,6 +7213,22 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.doesNotMatch(
     fallback,
     /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?then\s+\[ "\$EVENT_NEW" = true \]\s+\|\|/,
+  );
+  assert.match(
+    fallback,
+    /NODES_BEFORE=\n\s*if \[ "\$evidence_mode" != "aw3-s" \]/,
+  );
+  assert.match(
+    fallback,
+    /NODES_AFTER=\n\s*if \[ "\$evidence_mode" != "aw3-s" \]/,
+  );
+  assert.match(
+    fallback,
+    /<profile-selected-post-idd-marker-command> --type advisory/,
+  );
+  assert.doesNotMatch(
+    fallback,
+    /REGISTRATION_STATUS[\s\S]*?node scripts\/post-idd-marker\.mjs --type advisory --target pr/,
   );
   assert.match(fallback, /claim_revalidate \|\| return 3[\s\S]*?return 0/);
   assert.doesNotMatch(fallback, /IFS=\$'\\t'/);

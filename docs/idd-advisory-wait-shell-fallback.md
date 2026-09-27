@@ -328,10 +328,16 @@ registration_attempt() {
     HEAD_TIMELINE_INDEX=$(head_timeline_index) || HEAD_TIMELINE_INDEX=
   fi
   EVENT_BEFORE=$(request_event) || { echo "event snapshot unreadable" >&2; return 2; }
-  NODES_BEFORE=$(request_nodes) || { echo "request-node snapshot unreadable" >&2; return 2; }
+  NODES_BEFORE=
+  if [ "$evidence_mode" != "aw3-s" ]; then
+    NODES_BEFORE=$(request_nodes) || { echo "request-node snapshot unreadable" >&2; return 2; }
+  fi
   registration_ok() {
     EVENT_AFTER=$(request_event) || return 2
-    NODES_AFTER=$(request_nodes) || return 2
+    NODES_AFTER=
+    if [ "$evidence_mode" != "aw3-s" ]; then
+      NODES_AFTER=$(request_nodes) || return 2
+    fi
     EVENT_ID=$(printf '%s\n' "$EVENT_AFTER" | cut -f1)
     EVENT_INDEX=$(printf '%s\n' "$EVENT_AFTER" | cut -f3)
     EVENT_NEW=false
@@ -346,15 +352,15 @@ registration_attempt() {
         fi
         ;;
     esac
-    NODE_FRESH=false
-    while IFS= read -r node; do
-      [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
-    done <<EOF
-$NODES_AFTER
-EOF
     if [ "$evidence_mode" = "aw3-s" ]; then
       [ "$EVENT_NEW" = true ]
     else
+      NODE_FRESH=false
+      while IFS= read -r node; do
+        [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
+      done <<EOF
+$NODES_AFTER
+EOF
       [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
     fi
   }
@@ -437,8 +443,10 @@ case "$REGISTRATION_STATUS" in
     # The marker is a separate GitHub mutation. Revalidate after registration
     # evidence is proven and immediately before posting it.
     claim_revalidate || exit 2
-    node scripts/post-idd-marker.mjs --type advisory --target pr <pr-number> \
+    <profile-selected-post-idd-marker-command> --type advisory --target pr <pr-number> \
       --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply
+    # instructions-only profile: post the same advisory-wait body manually
+    # through the GitHub issue-comments API, preserving the marker grammar.
     ;;
   1 | 2 | 3)
     echo "E14 registration did not prove a safe marker step; stop and ask" >&2
@@ -478,26 +486,9 @@ revalidate_head() {
   }
 }
 
-# Step 1 — remove the stale request. PENDING entry only (COPILOT_PENDING
-# was "true"). Skip this step entirely for the non-pending entry (#2327 --
-# COPILOT_PENDING was already "false", nothing is pending to remove) and
-# start at Step 3 instead.
-revalidate_head || exit 2
-gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
-# on a GraphQL login-resolution failure, this DELETE is an attempt only:
-# a 422 "Could not resolve to a User node" for the default bot (PR #3471)
-# is not a removal result -- retry gh pr edit --remove-reviewer alone
-# (3 attempts) before any AW4 hold; never conclude from this call or an
-# empty requested_reviewers read (#2167, #3503).
-revalidate_head || exit 2
-gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-  -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
-
-# Step 3 — request again (non-pending entry: the first mutating step;
-# pending entry: after step 2 verifies the removal). Run the
-# registration-proven review request above in AW3-S mode. Its
-# event/node snapshots precede both mutations, but step 4 accepts only
-# a fresh review_requested event after HEAD's committed event.
+# Resolve and validate the entry before any destructive mutation. A
+# non-pending entry starts at Step 3 and must not remove a request that may
+# have become visible during propagation (#2327, #3507).
 if [ -z "${AW3S_ENTRY:-}" ]; then
   case "${COPILOT_PENDING:-}" in
     true) AW3S_ENTRY=pending ;;
@@ -515,6 +506,29 @@ case "$AW3S_ENTRY" in
     exit 2
     ;;
 esac
+
+# Step 1 — remove the stale request. PENDING entry only (COPILOT_PENDING
+# was "true"). Skip this step entirely for the non-pending entry (#2327 --
+# COPILOT_PENDING was already "false", nothing is pending to remove) and
+# start at Step 3 instead.
+if [ "$AW3S_ENTRY" = "pending" ]; then
+  revalidate_head || exit 2
+  gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
+  # on a GraphQL login-resolution failure, this DELETE is an attempt only:
+  # a 422 "Could not resolve to a User node" for the default bot (PR #3471)
+  # is not a removal result -- retry gh pr edit --remove-reviewer alone
+  # (3 attempts) before any AW4 hold; never conclude from this call or an
+  # empty requested_reviewers read (#2167, #3503).
+  revalidate_head || exit 2
+  gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+    -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
+fi
+
+# Step 3 — request again (non-pending entry: the first mutating step;
+# pending entry: after step 2 verifies the removal). Run the
+# registration-proven review request above in AW3-S mode. Its
+# event snapshots precede both mutations, but step 4 accepts only
+# a fresh review_requested event after HEAD's committed event.
 if ! command -v registration_attempt >/dev/null 2>&1; then
   echo "AW3-S requires the shared registration procedure" >&2
   exit 2
