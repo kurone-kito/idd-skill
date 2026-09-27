@@ -796,6 +796,7 @@ test('#3572 keeps a notice visible when its rejection was edited', () => {
         number: 3572,
         comments: [
           {
+            id: 100,
             body: RATE_LIMIT_NOTICE,
             createdAt: '2026-09-27T06:45:28Z',
             updatedAt: '2026-09-27T07:42:07Z',
