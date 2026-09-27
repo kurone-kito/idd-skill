@@ -3772,6 +3772,7 @@ for (const operationCase of [
     let operationActive = true;
     let confirmCalls = 0;
     const events: string[] = [];
+    let rebaseResetArgv: string[] | null = null;
     try {
       if (operationCase.kind === 'rebase') {
         mkdirSync(rebaseDir, { recursive: true });
@@ -3936,6 +3937,7 @@ for (const operationCase of [
           }
           if (operationCase.kind === 'rebase' && argv[0] === 'reset') {
             events.push('index-reset');
+            rebaseResetArgv = argv;
             return { ok: true, status: 0, stdout: '', stderr: '' };
           }
           if (argv[0] === 'checkout') {
@@ -3974,6 +3976,7 @@ for (const operationCase of [
       if (operationCase.kind === 'rebase') {
         assert.ok(events.indexOf('index-reset') >= 0);
         assert.ok(events.indexOf('index-reset') < events.indexOf('checkout'));
+        assert.deepEqual(rebaseResetArgv, ['reset', '--hard']);
       }
       assert.ok(events.indexOf('checkout') >= 0);
       assert.ok(events.indexOf('cleanup') < events.indexOf('checkout'));

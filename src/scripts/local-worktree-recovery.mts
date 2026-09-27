@@ -850,9 +850,9 @@ function clearInProgressOperation(
     // operation metadata without rewinding the recovered worktree. A
     // conflicted rebase can still leave unmerged index entries behind,
     // though, and Git refuses the primary-worktree checkout until that
-    // index is released. The conflict files were already copied by the
-    // unmerged-stash fallback before this point, so reset only the index and
-    // retain the working-tree files for the subsequent checkout.
+    // index and its conflict files are released. The conflict files were
+    // already copied by the unmerged-stash fallback before this point, so a
+    // hard reset can safely clear the recovered worktree before checkout.
     const unmerged = runGit(
       ['diff', '--name-only', '--diff-filter=U', '--'],
       path,
@@ -861,7 +861,7 @@ function clearInProgressOperation(
       return `could not inspect the rebase index after cleanup: ${unmerged.stderr}`;
     }
     if (unmerged.stdout.trim().length > 0) {
-      const reset = runGit(['reset', '--mixed'], path);
+      const reset = runGit(['reset', '--hard'], path);
       if (!reset.ok) {
         return `could not clear unmerged rebase index entries: ${reset.stderr}`;
       }
