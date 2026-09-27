@@ -23,6 +23,7 @@ import {
   isSafeRelativePath,
   type LocalGitCommandResult,
   type LocalWorktreeRecoveryDeps,
+  normalizeGitWorktreePathForComparison,
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
   submoduleStatusEntries,
@@ -215,6 +216,21 @@ test('evaluatePrunableShortcut fails closed when the requested branch is unknown
   assert.equal(
     evaluatePrunableShortcut([record], '/gone', null, () => false).eligible,
     false,
+  );
+});
+
+test('normalizes Git forward-slash worktree paths only for Windows comparisons', () => {
+  assert.equal(
+    normalizeGitWorktreePathForComparison('C:/repo/linked', '\\'),
+    'C:/repo/linked',
+  );
+  assert.equal(
+    normalizeGitWorktreePathForComparison('C:\\repo\\linked', '\\'),
+    'C:/repo/linked',
+  );
+  assert.equal(
+    normalizeGitWorktreePathForComparison('/repo/with\\backslash', '/'),
+    '/repo/with\\backslash',
   );
 });
 
@@ -1219,6 +1235,40 @@ test('a submodule-only parent status does not create a pointless parent stash', 
   assert.equal(verdict.plan.stashes[0]?.hasChanges, false);
   assert.equal(verdict.plan.stashes[0]?.stashed, false);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('a changed superproject gitlink is not excluded as a submodule-only change', () => {
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            '+abc123def456abc123def456abc123def456abcd submodule (heads/main)\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(
+    verdict.plan.stashes[0]?.hasChanges,
+    true,
+    'a `+` submodule status denotes a superproject gitlink change that the parent scope must preserve',
+  );
 });
 
 test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {

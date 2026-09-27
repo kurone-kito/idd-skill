@@ -412,6 +412,20 @@ export function extractRecoveredClaim(routing: ConfirmBlockRouting): {
   return { claimId: null, branch: null };
 }
 
+/** Normalize a `git worktree list --porcelain -z` path for comparisons with
+ * Node's native `resolve` output. Git emits forward slashes on Windows even
+ * though `resolve` and the filesystem APIs use backslashes there. Keep the
+ * POSIX case byte-for-byte: a backslash is a valid filename character on
+ * POSIX and must not be rewritten there. */
+export function normalizeGitWorktreePathForComparison(
+  worktreePath: string,
+  pathSeparator = sep,
+): string {
+  return pathSeparator === '\\'
+    ? worktreePath.replaceAll('\\', '/')
+    : worktreePath;
+}
+
 /**
  * Mirrors `inspectLocalWorktreeBranch`'s (local-worktree-occupancy.mts) own
  * fail-closed conditions for exactly the record naming `targetPath`: a
@@ -435,8 +449,14 @@ export function evaluatePrunableShortcut(
   requestedBranch: string | null,
   pathExists: (path: string) => boolean,
 ): { eligible: boolean; record: LocalWorktreeRecord | null; reason: string } {
+  const targetComparisonPath =
+    normalizeGitWorktreePathForComparison(targetPath);
   const record =
-    records.find((candidate) => candidate.path === targetPath) ?? null;
+    records.find(
+      (candidate) =>
+        normalizeGitWorktreePathForComparison(candidate.path) ===
+        targetComparisonPath,
+    ) ?? null;
   if (!record) {
     return {
       eligible: false,
@@ -1204,7 +1224,13 @@ function planAndMaybePreserve(
   const submodules = submoduleStatus.ok
     ? submoduleStatusEntries(submoduleStatus.stdout)
     : [];
+  // A clean initialized submodule's own stash scope handles the ` M path`
+  // that the parent status probe reports for its dirty files. Do not exclude
+  // a `+`/`U`/`-` entry, though: those statuses mean the superproject's
+  // gitlink itself differs from the index or cannot be checked out, so the
+  // parent stash must retain that gitlink change (Copilot review #4114207705).
   const submodulePaths = submodules
+    .filter((submodule) => submodule.status === ' ')
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
   const stashes: StashPlanEntry[] = [
@@ -1615,8 +1641,13 @@ export function runLocalWorktreeRecovery(
   }
   const primary = records[0] ?? null;
   verdict.primaryWorktree = primary?.path ?? null;
+  const targetComparisonPath =
+    normalizeGitWorktreePathForComparison(targetPath);
   verdict.primaryOrLinked =
-    primary && primary.path === targetPath ? 'primary' : 'linked';
+    primary &&
+    normalizeGitWorktreePathForComparison(primary.path) === targetComparisonPath
+      ? 'primary'
+      : 'linked';
 
   if (verdict.primaryOrLinked === 'linked') {
     const insideLexical = isPathContainedIn(cwd, targetPath);
@@ -1694,7 +1725,13 @@ export function runLocalWorktreeRecovery(
     return verdict;
   }
   const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
-  if (!reportedPaths.includes(targetPath)) {
+  if (
+    !reportedPaths.some(
+      (reportedPath) =>
+        normalizeGitWorktreePathForComparison(reportedPath) ===
+        targetComparisonPath,
+    )
+  ) {
     verdict.step1.outcome = 'path-mismatch';
     verdict.step1.reason = `--worktree ${targetPath} is not among the occupied paths reported (${reportedPaths.join(', ') || 'none'})`;
     verdict.result = verdict.step1.reason;
@@ -1869,8 +1906,10 @@ export function runLocalWorktreeRecovery(
     const ordinaryStillOccupied =
       recheck.routing.state === 'local_worktree_occupied' &&
       isAcceptedBlockReason(recheck.routing.reason) &&
-      (recheck.routing.evidence?.local_worktree?.paths ?? []).includes(
-        targetPath,
+      (recheck.routing.evidence?.local_worktree?.paths ?? []).some(
+        (reportedPath) =>
+          normalizeGitWorktreePathForComparison(reportedPath) ===
+          targetComparisonPath,
       );
     let stillEligible: boolean;
     let staleReason: string;
