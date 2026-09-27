@@ -95,6 +95,20 @@ test('extractIgnoredPaths reads only `!! `-prefixed lines', () => {
   assert.deepEqual(extractIgnoredPaths(''), []);
 });
 
+test('extractIgnoredPaths decodes quoted and NUL-delimited porcelain paths', () => {
+  assert.deepEqual(
+    extractIgnoredPaths('!! "caf\\303\\251.tmp"\n!! plain.tmp\n'),
+    ['café.tmp', 'plain.tmp'],
+  );
+  assert.deepEqual(
+    extractIgnoredPaths('!! unicode-\u00e9.tmp\0!! "tab\\tname.tmp"\0'),
+    ['unicode-é.tmp', '"tab\\tname.tmp"'],
+  );
+  assert.deepEqual(extractIgnoredPaths('!! "tab\\tname.tmp"\n'), [
+    'tab\tname.tmp',
+  ]);
+});
+
 test('countTaggedStashEntries counts only entries whose subject contains the tag', () => {
   const stashList = [
     'stash@{0}: On issue/1-task: idd-lwr claim-x',
@@ -189,6 +203,21 @@ test('evaluatePrunableShortcut fails closed on a detached record, even prunable+
   );
 });
 
+test('evaluatePrunableShortcut fails closed when the requested branch is unknown', () => {
+  const record = {
+    path: '/gone',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  assert.equal(
+    evaluatePrunableShortcut([record], '/gone', null, () => false).eligible,
+    false,
+  );
+});
+
 test('detectInProgressOperation reads orig-head for an in-progress rebase, not HEAD', () => {
   const runGit = (argv: string[]): LocalGitCommandResult => {
     if (argv[0] === 'rev-parse' && argv.includes('MERGE_HEAD')) {
@@ -253,12 +282,14 @@ test('extractDirtyPaths reads tracked/untracked paths, follows a rename arrow, a
     ' M tracked.txt',
     '?? untracked.txt',
     'R  old.txt -> new.txt',
+    ' M conflict -> target',
     '!! ignored.txt',
   ].join('\n');
   assert.deepEqual(extractDirtyPaths(status), [
     'tracked.txt',
     'untracked.txt',
     'new.txt',
+    'conflict -> target',
   ]);
 });
 
@@ -278,6 +309,8 @@ test('isPathContainedIn is platform-portable, not a hardcoded `/`-prefix check (
   // "contained" -- the exact bug a bare `startsWith` check produces.
   assert.equal(isPathContainedIn('/target-sibling', '/target'), false);
   assert.equal(isPathContainedIn('/target', '/target/sub'), false);
+  assert.equal(isPathContainedIn('/target/..backup', '/target'), true);
+  assert.equal(isPathContainedIn('/target/../other', '/target'), false);
 });
 
 test('resolveEffectiveRealpath walks up to the nearest existing ancestor and re-appends the missing suffix', () => {
@@ -484,11 +517,17 @@ function fakeDeps(
     confirmBlock: () => ({ ok: true, routing: okRouting, error: null }),
     checkLock: () => ({
       path: '/repo/linked/.git/idd-claim.lock',
-      present: false,
+      present: true,
+      holder: {
+        agentId: 'agent-x',
+        claimId: 'claim-x',
+        acquiredAt: '2026-09-24T00:00:00Z',
+      },
     }),
     runGit: cleanRepoRunGit,
     pathExists: () => true,
     realpathOrNull: (p: string) => p,
+    readlinkOrNull: () => null,
     acquireCloneLock: () => ({ path: '/repo/.idd-clone.lock', token: 'tok' }),
     releaseCloneLock: () => {},
     resolveDevelopmentBranch: () => 'main',
@@ -714,8 +753,47 @@ test('step 4 stops removal when the worktree-local lock no longer matches the re
   assert.match(verdict.result, /no longer matches the recovered claim-id/);
 });
 
+test('step 1 refuses an active or stale claim whose local lock is absent', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    checkLock: () => ({
+      path: '/repo/linked/.git/idd-claim.lock',
+      present: false,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') removeCalled = true;
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'lock-mismatch');
+  assert.equal(removeCalled, false);
+});
+
 test('step 4 proceeds when the worktree-local lock is absent at recheck time (legacy release)', () => {
-  const deps = fakeDeps({ checkLock: () => ({ path: '/x', present: false }) });
+  const deps = fakeDeps({
+    checkLock: () => ({ path: '/x', present: false }),
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'released-claim-local-worktree-occupied',
+        active_claim: null,
+        evidence: {
+          released_claim: { claim_id: null, branch: 'issue/1-task' },
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/linked'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+  });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
@@ -823,6 +901,46 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
   assert.match(verdict.result, /no longer matches at recheck time/);
 });
 
+test('prunable shortcut removes the worktree with `--force`', () => {
+  const removeArgv: string[][] = [];
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: () => false,
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeArgv.push(argv);
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(removeArgv, [
+    ['worktree', 'remove', '--force', '/repo/linked'],
+  ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('dry-run never creates the preserve directory for an uninitialized submodule', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
@@ -868,6 +986,24 @@ test('refuses --preserve-dir inside the target worktree before any mutation (Cop
       apply: true,
       operatorConfirmedNoLiveSession: true,
       preserveDir: '/repo/linked/backup',
+    }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'preserve-dir-inside-target');
+  assert.equal(verdict.mutated, false);
+});
+
+test('refuses a dangling preserve-dir symlink into the target worktree', () => {
+  const deps = fakeDeps({
+    realpathOrNull: (p) => (p === '/repo/linked' ? p : null),
+    readlinkOrNull: (p) =>
+      p === '/tmp/preserve-link' ? '/repo/linked/not-created' : null,
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: '/tmp/preserve-link',
     }),
     deps,
   );
@@ -922,6 +1058,66 @@ test('a failed status probe blocks removal even with no other changes detected (
   assert.equal(verdict.plan.stashes[0]?.statusReadFailed, true);
   assert.equal(removeCalled, false);
   assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
+test('a submodule-only parent status does not create a pointless parent stash', () => {
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.hasChanges, false);
+  assert.equal(verdict.plan.stashes[0]?.stashed, false);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {
+  let stashListCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return stashListCalls === 1
+          ? { ok: true, status: 0, stdout: '', stderr: '' }
+          : { ok: false, status: 128, stdout: '', stderr: 'stash unavailable' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.stashListReadFailed, true);
+  assert.equal(verdict.plan.removal?.ran, undefined);
   assert.match(verdict.result, /could not be fully verified/);
 });
 
@@ -1054,8 +1250,9 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
           routing: {
             state: 'local_worktree_occupied',
             reason: 'stale-claim-local-worktree-occupied',
-            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            active_claim: null,
             evidence: {
+              released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
                 status: call <= 2 ? 'occupied' : 'absent',
                 paths: call <= 2 ? ['/repo/primary'] : [],
@@ -1124,20 +1321,17 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     checkLock: () => {
       checkLockCalls += 1;
       // Call 1 = step 1's own check; call 2 = step 4's pre-checkout
-      // recheck (both absent, so both gates pass); call 3 = the FINAL,
-      // post-checkout check, which must see a lock created during the
-      // checkout window.
-      return checkLockCalls <= 2
-        ? { path: '/repo/primary/.git/idd-claim.lock', present: false }
-        : {
-            path: '/repo/primary/.git/idd-claim.lock',
-            present: true,
-            holder: {
-              agentId: 'claude-a0b633a6',
-              claimId: 'claim-x',
-              acquiredAt: '2026-09-27T00:00:00Z',
-            },
-          };
+      // recheck; call 3 = the FINAL, post-checkout check. All three must
+      // observe the recovered claim's lock before deletion is authorized.
+      return {
+        path: '/repo/primary/.git/idd-claim.lock',
+        present: true,
+        holder: {
+          agentId: 'claude-a0b633a6',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      };
     },
     confirmBlock: () => {
       confirmCalls += 1;
@@ -1148,6 +1342,7 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
           reason: 'stale-claim-local-worktree-occupied',
           active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
           evidence: {
+            released_claim: { claim_id: null, branch: 'issue/1-task' },
             local_worktree: {
               status: confirmCalls <= 2 ? 'occupied' : 'absent',
               paths: confirmCalls <= 2 ? ['/repo/primary'] : [],
@@ -1186,6 +1381,158 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     'the post-checkout lock, not the earlier absent pre-checkout read, must drive the deletion attempt',
   );
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('primary-worktree release does not delete a lock replaced by another claim', () => {
+  let checkLockCalls = 0;
+  let unlinkAttempted = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    checkLock: () => {
+      checkLockCalls += 1;
+      return {
+        path: '/repo/primary/.git/idd-claim.lock',
+        present: true,
+        holder: {
+          agentId: 'someone-else',
+          claimId: checkLockCalls === 3 ? 'claim-y' : 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      };
+    },
+    confirmBlock: (() => {
+      let call = 0;
+      return () => {
+        call += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: call <= 2 ? 'occupied' : 'absent',
+                paths: call <= 2 ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        unlinkAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(checkLockCalls, 3);
+  assert.equal(unlinkAttempted, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /different claim-id/);
+});
+
+test('primary-worktree release stops when the recovered claim lock disappears at final check', () => {
+  let checkLockCalls = 0;
+  let unlinkAttempted = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    checkLock: () => {
+      checkLockCalls += 1;
+      return checkLockCalls < 3
+        ? {
+            path: '/repo/primary/.git/idd-claim.lock',
+            present: true,
+            holder: {
+              agentId: 'agent-x',
+              claimId: 'claim-x',
+              acquiredAt: '2026-09-27T00:00:00Z',
+            },
+          }
+        : {
+            path: '/repo/primary/.git/idd-claim.lock',
+            present: false,
+          };
+    },
+    confirmBlock: (() => {
+      let call = 0;
+      return () => {
+        call += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              released_claim: { claim_id: null, branch: 'issue/1-task' },
+              local_worktree: {
+                status: call <= 2 ? 'occupied' : 'absent',
+                paths: call <= 2 ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        unlinkAttempted = true;
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(checkLockCalls, 3);
+  assert.equal(unlinkAttempted, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /lock disappeared before the final check/);
 });
 
 test('hard stash-push failure (not the verified unmerged-path case) blocks removal (Copilot review finding)', () => {
@@ -1282,6 +1629,16 @@ test('a failed `git log @{u}..HEAD` (or HEAD) probe blocks removal instead of re
 
 test('a failed `git worktree list` stops before any mutation instead of reading as an empty list (Copilot review finding)', () => {
   const deps = fakeDeps({ listWorktreeRecords: () => null });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'worktree-list-failed');
+  assert.equal(verdict.mutated, false);
+});
+
+test('an empty `git worktree list` stops before any mutation', () => {
+  const deps = fakeDeps({ listWorktreeRecords: () => [] });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
@@ -1428,6 +1785,20 @@ function runCli(
   issueNumber: number,
   extraArgs: string[],
 ): SpawnSyncReturns<string> {
+  execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/claim-lock.mjs'),
+      '--acquire',
+      '--worktree',
+      sandbox.linked,
+      '--agent-id',
+      'agent-x',
+      '--claim-id',
+      `claim-${issueNumber}`,
+    ],
+    { cwd: sandbox.primary, encoding: 'utf8' },
+  );
   return spawnSync(
     process.execPath,
     [

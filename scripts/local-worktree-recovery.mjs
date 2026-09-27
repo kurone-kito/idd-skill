@@ -38,6 +38,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   unlinkSync,
 } from 'node:fs';
@@ -124,6 +125,13 @@ function realpathOrNull(path) {
     return null;
   }
 }
+function readlinkOrNull(path) {
+  try {
+    return readlinkSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
 // ---------------------------------------------------------------------------
 // Pure decision logic
 // ---------------------------------------------------------------------------
@@ -192,33 +200,38 @@ export function evaluatePrunableShortcut(
   if (record.locked) {
     return { eligible: false, record, reason: 'record is locked' };
   }
-  if (requestedBranch !== null) {
-    if (record.branchRef === null) {
-      // Detached + prunable + absent: `inspectLocalWorktreeBranch` can never
-      // resolve which branch a detached, on-disk-absent record held (its
-      // own resolveDetachedBranch needs to read files at a path that no
-      // longer exists), so it fails closed and treats the record as
-      // unreadable/blocking regardless of relevance. Mirror that here --
-      // never shortcut a detached record just because its branch happens to
-      // be unresolvable; an ambiguous match must never authorize a
-      // force-remove.
-      return {
-        eligible: false,
-        record,
-        reason:
-          'record is detached; its branch cannot be confirmed (fail closed, mirrors inspectLocalWorktreeBranch)',
-      };
-    }
-    if (
-      record.branchRef !== `refs/heads/${requestedBranch}` &&
-      record.branchRef !== requestedBranch
-    ) {
-      return {
-        eligible: false,
-        record,
-        reason: 'record names a different, unrelated branch',
-      };
-    }
+  if (requestedBranch === null) {
+    return {
+      eligible: false,
+      record,
+      reason: 'requested branch is unknown; cannot confirm the record',
+    };
+  }
+  if (record.branchRef === null) {
+    // Detached + prunable + absent: `inspectLocalWorktreeBranch` can never
+    // resolve which branch a detached, on-disk-absent record held (its
+    // own resolveDetachedBranch needs to read files at a path that no
+    // longer exists), so it fails closed and treats the record as
+    // unreadable/blocking regardless of relevance. Mirror that here --
+    // never shortcut a detached record just because its branch happens to
+    // be unresolvable; an ambiguous match must never authorize a
+    // force-remove.
+    return {
+      eligible: false,
+      record,
+      reason:
+        'record is detached; its branch cannot be confirmed (fail closed, mirrors inspectLocalWorktreeBranch)',
+    };
+  }
+  if (
+    record.branchRef !== `refs/heads/${requestedBranch}` &&
+    record.branchRef !== requestedBranch
+  ) {
+    return {
+      eligible: false,
+      record,
+      reason: 'record names a different, unrelated branch',
+    };
   }
   return {
     eligible: true,
@@ -310,11 +323,63 @@ export function hasWorkingTreeChanges(statusPorcelain) {
 /** The ignored-file paths (`!!`-prefixed lines) reported by the same status
  * scan, relative to the scanned path. */
 export function extractIgnoredPaths(statusPorcelain) {
-  return statusPorcelain
-    .split('\n')
-    .filter((line) => line.startsWith('!! '))
-    .map((line) => line.slice(3).trim())
+  const nulDelimited = statusPorcelain.includes('\0');
+  const records = nulDelimited
+    ? statusPorcelain.split('\0')
+    : statusPorcelain.split('\n');
+  return records
+    .filter((record) => record.startsWith('!! '))
+    .map((record) => {
+      const path = record.slice(3);
+      // `git status --porcelain -z` emits raw paths, including literal quote
+      // characters. Only ordinary porcelain output uses C quoting.
+      return nulDelimited ? path : decodeGitQuotedPath(path);
+    })
     .filter((path) => path.length > 0);
+}
+/** Decode a Git porcelain C-quoted path. `-z` output normally avoids this
+ * format, but accepting it keeps this parser safe for ordinary porcelain
+ * output with core.quotePath enabled. */
+function decodeGitQuotedPath(path) {
+  if (!(path.startsWith('"') && path.endsWith('"') && path.length >= 2)) {
+    return path;
+  }
+  const input = path.slice(1, -1);
+  const bytes = [];
+  const simpleEscapes = {
+    a: 0x07,
+    b: 0x08,
+    t: 0x09,
+    n: 0x0a,
+    v: 0x0b,
+    f: 0x0c,
+    r: 0x0d,
+    '\\': 0x5c,
+    '"': 0x22,
+  };
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (character !== '\\') {
+      bytes.push(...Buffer.from(character));
+      continue;
+    }
+    const next = input[index + 1];
+    const octal = input.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
+    if (octal) {
+      bytes.push(Number.parseInt(octal, 8));
+      index += octal.length;
+      continue;
+    }
+    const escaped = next === undefined ? undefined : simpleEscapes[next];
+    if (escaped !== undefined) {
+      bytes.push(escaped);
+      index += 1;
+      continue;
+    }
+    bytes.push(...Buffer.from(next ?? '\\'));
+    if (next !== undefined) index += 1;
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 /**
  * Every tracked/untracked dirty path (any line not `!!`-prefixed) reported
@@ -331,19 +396,45 @@ export function extractDirtyPaths(statusPorcelain) {
   for (const line of statusPorcelain.split('\n')) {
     if (line.length < 3 || line.startsWith('!!')) continue;
     let rest = line.slice(3).trim();
-    const arrow = rest.indexOf(' -> ');
-    if (arrow !== -1) {
-      rest = rest.slice(arrow + 4);
+    const status = line.slice(0, 2);
+    if (status.includes('R')) {
+      const arrow = findPorcelainRenameSeparator(rest);
+      if (arrow !== -1) {
+        rest = rest.slice(arrow + 4);
+      }
     }
-    const unquoted =
-      rest.startsWith('"') && rest.endsWith('"') && rest.length >= 2
-        ? rest.slice(1, -1)
-        : rest;
-    if (unquoted.length > 0) {
-      paths.push(unquoted);
+    if (rest.length > 0) {
+      paths.push(decodeGitQuotedPath(rest));
     }
   }
   return paths;
+}
+/** Find the porcelain rename separator without mistaking an arrow inside a
+ * C-quoted filename for the status record's delimiter. */
+function findPorcelainRenameSeparator(record) {
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= record.length - 4; index += 1) {
+    const character = record[index];
+    if (quoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      continue;
+    }
+    if (record.slice(index, index + 4) === ' -> ') {
+      return index;
+    }
+  }
+  return -1;
 }
 /**
  * True when `relativePath` is safe to join under a preserve-directory
@@ -376,7 +467,11 @@ export function isPathContainedIn(child, parent) {
   // separator) whenever `child` is NOT underneath `parent` -- including the
   // Windows cross-drive case, where it instead returns an absolute path
   // (caught by `isAbsolute` below).
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  return (
+    rel !== '' &&
+    !isAbsolute(rel) &&
+    !rel.split(/[\\/]+/).some((segment) => segment === '..')
+  );
 }
 /**
  * Resolve the effective realpath of `path`, even when it (or some suffix of
@@ -391,16 +486,49 @@ export function isPathContainedIn(child, parent) {
  * /tmp/link/run` -- could redirect the eventual directory back inside the
  * target worktree without tripping it).
  */
-export function resolveEffectiveRealpath(path, realpathOrNull) {
+export function resolveEffectiveRealpath(
+  path,
+  realpathOrNull,
+  readlinkOrNull = () => null,
+) {
+  return resolveEffectiveRealpathInternal(
+    path,
+    realpathOrNull,
+    readlinkOrNull,
+    new Set(),
+  );
+}
+function resolveEffectiveRealpathInternal(
+  path,
+  realpathOrNull,
+  readlinkOrNull,
+  seen,
+) {
+  if (seen.has(path)) return null;
+  seen.add(path);
   const real = realpathOrNull(path);
   if (real !== null) {
     return real;
+  }
+  const linkTarget = readlinkOrNull(path);
+  if (linkTarget !== null) {
+    return resolveEffectiveRealpathInternal(
+      isAbsolute(linkTarget) ? linkTarget : resolve(dirname(path), linkTarget),
+      realpathOrNull,
+      readlinkOrNull,
+      seen,
+    );
   }
   const parent = dirname(path);
   if (parent === path) {
     return null;
   }
-  const parentReal = resolveEffectiveRealpath(parent, realpathOrNull);
+  const parentReal = resolveEffectiveRealpathInternal(
+    parent,
+    realpathOrNull,
+    readlinkOrNull,
+    seen,
+  );
   if (parentReal === null) {
     return null;
   }
@@ -449,7 +577,14 @@ export function submoduleStatusEntries(raw) {
  * copying conflicted files out on an unmerged-path stash failure. Returns
  * the plan entry; `--apply` semantics (actually stashing) are gated by the
  * caller passing `apply: false` for a dry-run report only. */
-function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
+function planAndMaybeStashScope(
+  scopePath,
+  scopeLabel,
+  tag,
+  apply,
+  deps,
+  excludedDirtyPaths = [],
+) {
   const status = deps.runGit(
     ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
     scopePath,
@@ -458,7 +593,13 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
   // `preservationVerified` fails closed on `statusReadFailed` regardless of
   // `hasChanges` below.
   const statusReadFailed = !status.ok;
-  const hasChanges = status.ok && hasWorkingTreeChanges(status.stdout);
+  const hasChanges =
+    status.ok &&
+    (excludedDirtyPaths.length === 0
+      ? hasWorkingTreeChanges(status.stdout)
+      : extractDirtyPaths(status.stdout).some(
+          (dirtyPath) => !excludedDirtyPaths.includes(dirtyPath),
+        ));
   const baselineList = deps.runGit(['stash', 'list'], scopePath);
   const baselineCount = countTaggedStashEntries(baselineList.stdout, tag);
   const entry = {
@@ -466,6 +607,7 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     tag,
     hasChanges,
     statusReadFailed,
+    stashListReadFailed: !baselineList.ok,
     baselineCount,
     stashed: false,
     verifiedCount: null,
@@ -473,7 +615,7 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     unmergedFallbackAllPreserved: null,
     hardStashFailure: false,
   };
-  if (statusReadFailed || !hasChanges || !apply) {
+  if (statusReadFailed || entry.stashListReadFailed || !hasChanges || !apply) {
     return entry;
   }
   const stash = deps.runGit(
@@ -529,7 +671,10 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
   }
   entry.stashed = true;
   const afterList = deps.runGit(['stash', 'list'], scopePath);
-  entry.verifiedCount = countTaggedStashEntries(afterList.stdout, tag);
+  entry.stashListReadFailed = entry.stashListReadFailed || !afterList.ok;
+  entry.verifiedCount = afterList.ok
+    ? countTaggedStashEntries(afterList.stdout, tag)
+    : null;
   return entry;
 }
 /** Preserve unpushed commits for one scope on `refs/idd-lwr/<branch>`. */
@@ -618,7 +763,7 @@ function planAndMaybeBackupRef(
  */
 function scanAndMaybeCopyIgnoredFiles(scopePath, scopeLabel, apply, deps) {
   const status = deps.runGit(
-    ['status', '--porcelain', '--ignored', '--untracked-files=normal'],
+    ['status', '--porcelain=v1', '-z', '--ignored', '--untracked-files=normal'],
     scopePath,
   );
   if (!status.ok) {
@@ -659,8 +804,6 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
     deps.pathExists,
     readFile,
   );
-  const stashes = [planAndMaybeStashScope(path, '.', tag, apply, deps)];
-  const uninitializedSubmodules = [];
   const submoduleStatus = deps.runGit(
     ['submodule', 'status', '--recursive'],
     path,
@@ -668,6 +811,13 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
   const submodules = submoduleStatus.ok
     ? submoduleStatusEntries(submoduleStatus.stdout)
     : [];
+  const submodulePaths = submodules
+    .map((submodule) => submodule.path)
+    .filter((submodulePath) => submodulePath.length > 0);
+  const stashes = [
+    planAndMaybeStashScope(path, '.', tag, apply, deps, submodulePaths),
+  ];
+  const uninitializedSubmodules = [];
   for (const submodule of submodules) {
     if (!submodule.path) continue;
     if (submodule.status === '-') {
@@ -766,7 +916,7 @@ function preservationVerified(preserve, pathExists) {
     // Codex/Copilot review: a failed status probe must block removal
     // regardless of what `hasChanges` reads as -- it was never a genuine
     // "clean" observation.
-    if (stash.statusReadFailed) return false;
+    if (stash.statusReadFailed || stash.stashListReadFailed) return false;
     if (!stash.hasChanges) continue;
     if (stash.hardStashFailure) return false;
     if (stash.unmergedFallbackCopiedTo !== null) {
@@ -826,8 +976,10 @@ function reverifyPreservationArtifactsFresh(
   const scopePath = (scope) =>
     scope === '.' ? targetPath : join(targetPath, scope);
   for (const stash of preserve.stashes) {
+    if (stash.stashListReadFailed) return false;
     if (stash.stashed) {
       const list = runGit(['stash', 'list'], scopePath(stash.scope));
+      if (!list.ok) return false;
       // A lower bound, not exact equality: the fresh recheck's only
       // question is "is THIS attempt's stash still there" -- a stale or
       // concurrent same-tag entry appearing during the lock wait is MORE
@@ -929,7 +1081,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     result: '',
   };
   const records = deps.listWorktreeRecords(cwd);
-  if (records === null) {
+  if (records === null || records.length === 0) {
     // Copilot review: `git worktree list` failing (or producing
     // unparseable output) must stop here -- a repository always has at
     // least the primary worktree, so an empty result is never genuinely
@@ -983,6 +1135,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     const preserveDirEffectiveReal = resolveEffectiveRealpath(
       preserveDirResolved,
       deps.realpathOrNull,
+      deps.readlinkOrNull,
     );
     const insideLexical = isPathContainedIn(preserveDirResolved, targetPath);
     const insideReal =
@@ -1068,7 +1221,10 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.step1.reason;
       return verdict;
     }
-    if (lock.present && lock.holder?.claimId !== recoveredClaimId) {
+    if (
+      (recoveredClaimId !== null && !lock.present) ||
+      (lock.present && lock.holder?.claimId !== recoveredClaimId)
+    ) {
       verdict.step1.outcome = 'lock-mismatch';
       verdict.step1.reason = `lock holder claim-id (${lock.holder?.claimId ?? 'unknown'}) does not match the recovered claim-id (${recoveredClaimId ?? 'legacy'})`;
       verdict.result = verdict.step1.reason;
@@ -1258,13 +1414,15 @@ export function runLocalWorktreeRecovery(args, deps) {
     if (!shortcut.eligible) {
       const lockRecheck = deps.checkLock(targetPath);
       // Mirrors step 1's own lock-check pass condition exactly: malformed
-      // always fails; otherwise an absent lock passes unconditionally (a
-      // legacy pre-claim-id release may never have acquired one), and a
-      // present lock passes only when its holder still matches.
+      // always fails; an active/recovered claim must still have its matching
+      // lock, while a legacy release may have no lock or a legacy null-holder
+      // lock; a present lock otherwise passes only when its holder matches.
       const lockStillMatches =
         !lockRecheck.malformed &&
-        (!lockRecheck.present ||
-          lockRecheck.holder?.claimId === recoveredClaimId);
+        (recoveredClaimId === null
+          ? !lockRecheck.present || lockRecheck.holder?.claimId === null
+          : lockRecheck.present &&
+            lockRecheck.holder?.claimId === recoveredClaimId);
       if (!lockStillMatches) {
         verdict.plan.removal = {
           kind: verdict.primaryOrLinked ?? 'linked',
@@ -1359,13 +1517,25 @@ export function runLocalWorktreeRecovery(args, deps) {
       // `checkLock` positively observed -- never a bare "does a file
       // happen to exist now" check, which could delete a DIFFERENT lock
       // (re)created by another session after the recheck. When the final
-      // check finds no lock (a legacy release with nothing to delete),
-      // there is nothing further to do here; report success only once
-      // confirmed. Any failure to resolve the git directory or delete the
-      // positively-observed lock is a failed release, not a silent
-      // best-effort no-op -- the CLI must not exit successfully while a
-      // stale lock may still block recovery.
+      // check finds no lock, only a legacy release with no claim-id may
+      // treat that as nothing further to do; an active/recovered claim that
+      // lost its lock must stop. Any failure to resolve the git directory
+      // or delete the positively-observed lock is a failed release, not a
+      // silent best-effort no-op -- the CLI must not exit successfully
+      // while a stale lock may still block recovery.
       if (!finalLockCheck.present) {
+        if (recoveredClaimId !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail:
+              'checked out the development branch, but the recovered claim lock disappeared before the final check; stopping before removal',
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
         verdict.plan.removal = {
           kind: 'primary',
           developmentBranch,
@@ -1375,6 +1545,21 @@ export function runLocalWorktreeRecovery(args, deps) {
         };
         verdict.mutated = true;
         verdict.result = 'primary worktree released';
+        return verdict;
+      }
+      if (
+        recoveredClaimId !== null &&
+        finalLockCheck.holder?.claimId !== recoveredClaimId
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'the final primary-worktree lock belongs to a different claim-id; stopping before deletion',
+        };
+        verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
       const lockPath = deps.runGit(
@@ -1424,8 +1609,14 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = 'primary worktree released';
       return verdict;
     }
-    let remove = deps.runGit(['worktree', 'remove', targetPath], repoPath);
+    let remove = deps.runGit(
+      shortcut.eligible
+        ? ['worktree', 'remove', '--force', targetPath]
+        : ['worktree', 'remove', targetPath],
+      repoPath,
+    );
     if (
+      !shortcut.eligible &&
       !remove.ok &&
       /submodules cannot be moved or removed/i.test(remove.stderr)
     ) {
@@ -1586,6 +1777,7 @@ function createProductionDeps(args) {
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
     realpathOrNull,
+    readlinkOrNull,
     acquireCloneLock: (repoPath, agentId) =>
       acquireCloneLock(repoPath, agentId),
     releaseCloneLock: (handle) => releaseCloneLock(handle),
