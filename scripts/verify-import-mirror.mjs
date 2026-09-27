@@ -1177,11 +1177,12 @@ export function runVerification(options) {
         `internal: ${entry.path} reported as ${entry.changeType} but is absent from ${options.targetRef}`,
       );
     }
-    const targetBaseEntry = readTargetEntry(
-      options.targetRoot,
-      options.targetBaseRef,
-      entry.path,
+    const hasJsonKeyNormalization = (options.jsonKeyNormalizations ?? []).some(
+      (normalization) => normalization.path === entry.path,
     );
+    const targetBaseEntry = hasJsonKeyNormalization
+      ? readTargetEntry(options.targetRoot, options.targetBaseRef, entry.path)
+      : null;
     const classification = classifyComparedFile({
       path: entry.path,
       upstreamContent: upstreamEntry?.content ?? null,
