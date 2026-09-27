@@ -292,9 +292,10 @@ falsely pass matching local edits.
 During a re-import, `idd-onboard --import` may restore three validate-command
 rows in `.github/idd/config.json`. Keep the file in scope and repeat
 `--normalize-json-key` for only `commands.fix-validate`,
-`commands.pre-push-validate`, and `commands.post-fix-validate`; this replaces
-only those target values, so every other config field stays checked. Never omit
-the whole file. This preservation behavior is tracked by
+`commands.pre-push-validate`, and `commands.post-fix-validate`; each is
+normalized only when the target still matches its pre-import value, so every
+other config field stays checked. Never omit it. This preservation
+behavior is tracked by
 [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
 
 The helper is not an `idd-*` bin. Invoke it directly from a source checkout

@@ -232,6 +232,12 @@ below instead.
    running steps 3-5 below, which write the template with a direct,
    unreviewed commit (the `direct-import` default only).
 
+   Before Step 3, require a clean target:
+
+   ```sh
+   test -z "$(git -C <target-repo> status --short)" || exit 1
+   ```
+
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).
 
@@ -240,8 +246,7 @@ below instead.
      --source <idd-skill-clone> --target <target-repo>
    ```
 
-   **Checkpoint before substitution.** Ensure the target is clean; inspect and
-   commit the mirror-only tree before running `--substitute`:
+   **Checkpoint.** Commit the imported tree before `--substitute`:
 
    ```sh
    git -C <target-repo> status --short
@@ -249,9 +254,8 @@ below instead.
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   If unrelated changes appear, stage only imported paths. Keep it reachable
-   through verification; `--target-ref` must name it. Squash later only if
-   policy permits; exact reruns require its SHA.
+   If unrelated paths appear, stage only imported paths. `--target-ref` must
+   name it; squash later only if policy permits, retaining its SHA for reruns.
 
 4. Replace the seven placeholders from the confirmed transcript.
 

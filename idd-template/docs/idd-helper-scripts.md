@@ -1065,9 +1065,11 @@ future inventory reviews do not need to re-infer their role from code.
   validate-command rows in `.github/idd/config.json` after the template copy.
   Keep that file in scope with `--path-prefix .github/idd/config.json`, and
   repeat `--normalize-json-key` for only `commands.fix-validate`,
-  `commands.pre-push-validate`, and `commands.post-fix-validate`. This replaces
-  only those target values during comparison, so every other config field stays
-  checked; never omit the whole file. This preservation behavior is tracked by
+  `commands.pre-push-validate`, and `commands.post-fix-validate`. For each key,
+  the verifier first proves that the target still matches its value at
+  `--target-base-ref` (the pre-import commit), then normalizes the upstream
+  value to that preserved baseline. Other config fields stay checked; never
+  omit the whole file. This preservation behavior is tracked by
   [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
   The template core file set also includes the root-level
   `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
@@ -1125,8 +1127,9 @@ future inventory reviews do not need to re-infer their role from code.
   directly when the source checkout is unavailable:
 
   `--normalize-json-key <path>:<key.path>` replaces only the upstream JSON key
-  with the target value before structural comparison; repeat it for the three
-  validate-command keys above and add the config path prefix to this command.
+  with the pre-import target-base value after proving the target still matches
+  it; repeat it for the three validate-command keys above and add the config
+  path prefix to this command.
 
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \

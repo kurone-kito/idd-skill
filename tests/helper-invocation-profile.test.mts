@@ -74,6 +74,10 @@ const SOURCE_REPO_INTERNAL_ENTRY_PATHS = new Set([
   'scripts/verify-install-deps.mjs',
   'scripts/audit-docs.mjs',
   'scripts/audit-code-span-wrap.mjs',
+  // verify-import-mirror.mjs is deliberately source-checkout-only: the
+  // distributed recipes invoke it from an idd-skill clone, while the
+  // separate package-manager path is registered above.
+  'scripts/verify-import-mirror.mjs',
   // check-pnpm-boundary.mjs: a `docs/customization.md` example row only
   // (no profile-selected claim anywhere) -- a CI/lint-authoring tool for
   // this repo's own Project commands table, not an adopter helper.
@@ -218,7 +222,8 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
   'idd-template/docs/permissions.md',
 ]);
 
-const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
+const NODE_SCRIPTS_RE =
+  /\bnode\s+(?:<idd-skill>\/)?(scripts\/[a-z0-9-]+\.mjs)\b/g;
 const PACKAGE_MANAGER_ENTRY_RE =
   /\bnode\s+(?:\.\/)?(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
@@ -634,6 +639,43 @@ test('rejects an unregistered package-manager-only helper path', () => {
     violations[0]?.name,
     'node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs',
   );
+});
+
+test('accepts the registered source-checkout helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/onboarding/agent-entry-and-verification.md',
+        content:
+          'Run `node <idd-skill>/scripts/verify-import-mirror.mjs` from a source checkout.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.deepEqual(violations, []);
+});
+
+test('rejects an unregistered source-checkout helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content: 'Run `node <idd-skill>/scripts/not-a-helper.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'node-scripts');
+  assert.equal(violations[0]?.name, 'scripts/not-a-helper.mjs');
 });
 
 test('fails on a bin/idd-* path prescribed in a distributed file, and not in a source-repo-only file (rule 3)', () => {

@@ -301,10 +301,12 @@ test('rule 2 pass: deliberate command restores normalize only configured JSON ke
       issueScope: 'roadmap-first',
     }),
   );
+  const targetBase = target;
   const result = classifyFileContent({
     path: '.github/idd/config.json',
     upstreamContent: upstream,
     targetContent: target,
+    targetBaseContent: targetBase,
     generatedDirs: [],
     jsonKeyNormalizations: [
       {
@@ -331,10 +333,37 @@ test('rule 2 fail: JSON normalization does not hide unrelated policy changes', (
   const target = Buffer.from(
     '{"commands":{"fix-validate":"pnpm run fix"},"issueScope":"orphan-first"}',
   );
+  const targetBase = Buffer.from(
+    '{"commands":{"fix-validate":"pnpm run fix"},"issueScope":"roadmap-first"}',
+  );
   const result = classifyFileContent({
     path: '.github/idd/config.json',
     upstreamContent: upstream,
     targetContent: target,
+    targetBaseContent: targetBase,
+    generatedDirs: [],
+    jsonKeyNormalizations: [
+      {
+        path: '.github/idd/config.json',
+        keyPath: ['commands', 'fix-validate'],
+      },
+    ],
+  });
+  assert.equal(result.contentClass, 'content-mismatch');
+});
+
+test('rule 2 fail: JSON normalization rejects a changed restored value', () => {
+  const result = classifyFileContent({
+    path: '.github/idd/config.json',
+    upstreamContent: Buffer.from(
+      '{"commands":{"fix-validate":"{{FIX_VALIDATE_COMMANDS}}"}}',
+    ),
+    targetContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run wrong"}}',
+    ),
+    targetBaseContent: Buffer.from(
+      '{"commands":{"fix-validate":"pnpm run fix"}}',
+    ),
     generatedDirs: [],
     jsonKeyNormalizations: [
       {
@@ -1144,7 +1173,6 @@ test('CLI end-to-end: --normalize-json-key preserves non-command config comparis
   try {
     initTargetRepo(targetRoot);
     writeFileSync(join(targetRoot, 'baseline.txt'), 'baseline\n');
-    commitAll(targetRoot, 'chore: baseline');
 
     const upstreamConfig = {
       commands: {
@@ -1168,6 +1196,12 @@ test('CLI end-to-end: --normalize-json-key preserves non-command config comparis
       join(upstreamRoot, '.github', 'idd', 'config.json'),
       JSON.stringify(upstreamConfig),
     );
+    writeFileSync(
+      join(targetRoot, '.github', 'idd', 'config.json'),
+      `${JSON.stringify(targetConfig, null, 2)}\n`,
+    );
+    commitAll(targetRoot, 'chore: baseline');
+
     writeFileSync(
       join(targetRoot, '.github', 'idd', 'config.json'),
       JSON.stringify(targetConfig),
@@ -1204,7 +1238,7 @@ test('CLI end-to-end: --normalize-json-key preserves non-command config comparis
     assert.deepEqual(report.results, [
       {
         path: '.github/idd/config.json',
-        changeType: 'A',
+        changeType: 'M',
         status: 'structural-json-match',
       },
     ]);

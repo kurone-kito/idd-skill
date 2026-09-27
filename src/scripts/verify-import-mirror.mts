@@ -487,22 +487,31 @@ function canonicalizeJsonWithTargetKeys(
   path: string,
   upstreamContent: string,
   targetContent: string,
+  targetBaseContent: string | null,
   normalizations: readonly JsonKeyNormalization[],
 ): string | null {
   const applicable = normalizations.filter((entry) => entry.path === path);
   if (applicable.length === 0) {
     return canonicalizeJson(upstreamContent);
   }
+  if (targetBaseContent === null) {
+    return null;
+  }
   const upstream = parseJsonForComparison(upstreamContent);
   const target = parseJsonForComparison(targetContent);
-  if (upstream === null || target === null) {
+  const targetBase = parseJsonForComparison(targetBaseContent);
+  if (upstream === null || target === null || targetBase === null) {
     return null;
   }
   for (const entry of applicable) {
     const targetValue = readJsonKey(target.value, entry.keyPath);
+    const targetBaseValue = readJsonKey(targetBase.value, entry.keyPath);
     if (
       !targetValue.found ||
-      !writeJsonKey(upstream.value, entry.keyPath, targetValue.value)
+      !targetBaseValue.found ||
+      JSON.stringify(targetValue.value) !==
+        JSON.stringify(targetBaseValue.value) ||
+      !writeJsonKey(upstream.value, entry.keyPath, targetBaseValue.value)
     ) {
       return null;
     }
@@ -815,6 +824,7 @@ export function classifyFileContent(params: {
   path: string;
   upstreamContent: Buffer;
   targetContent: Buffer;
+  targetBaseContent?: Buffer | null;
   generatedDirs: readonly string[];
   jsonKeyNormalizations?: readonly JsonKeyNormalization[];
 }): { contentClass: ContentClass } {
@@ -822,6 +832,7 @@ export function classifyFileContent(params: {
     path,
     upstreamContent,
     targetContent,
+    targetBaseContent = null,
     generatedDirs,
     jsonKeyNormalizations = [],
   } = params;
@@ -845,6 +856,7 @@ export function classifyFileContent(params: {
       path,
       upstreamContent.toString('utf8'),
       targetContent.toString('utf8'),
+      targetBaseContent?.toString('utf8') ?? null,
       jsonKeyNormalizations,
     );
     const targetCanonical = canonicalizeJson(targetContent.toString('utf8'));
@@ -882,6 +894,7 @@ export function classifyComparedFile(params: {
   path: string;
   upstreamContent: Buffer | null;
   targetContent: Buffer;
+  targetBaseContent?: Buffer | null;
   upstreamMode: string | null;
   targetMode: string | null;
   generatedDirs: readonly string[];
@@ -891,6 +904,7 @@ export function classifyComparedFile(params: {
     path,
     upstreamContent,
     targetContent,
+    targetBaseContent = null,
     upstreamMode,
     targetMode,
     generatedDirs,
@@ -906,6 +920,7 @@ export function classifyComparedFile(params: {
     path,
     upstreamContent,
     targetContent,
+    targetBaseContent,
     generatedDirs,
     jsonKeyNormalizations,
   });
@@ -1450,10 +1465,16 @@ export function runVerification(options: VerifyOptions): Report {
         `internal: ${entry.path} reported as ${entry.changeType} but is absent from ${options.targetRef}`,
       );
     }
+    const targetBaseEntry = readTargetEntry(
+      options.targetRoot,
+      options.targetBaseRef,
+      entry.path,
+    );
     const classification = classifyComparedFile({
       path: entry.path,
       upstreamContent: upstreamEntry?.content ?? null,
       targetContent: targetEntry.content,
+      targetBaseContent: targetBaseEntry?.content ?? null,
       upstreamMode: upstreamEntry?.mode ?? null,
       targetMode: targetEntry.mode,
       generatedDirs: options.generatedDirs,
@@ -1668,8 +1689,9 @@ Scoping:
                              never applies to any file when omitted)
   --normalize-json-key <p>:<k.path>
                              replace only the upstream JSON key with the
-                             target value before structural comparison
-                             (repeatable; use only for deliberate restores)
+                             pre-import target-base value after proving the
+                             target value was deliberately preserved
+                             (repeatable; deliberate restores only)
 
 Output:
   --format json|table        output format (default: table)
