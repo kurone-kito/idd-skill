@@ -2694,6 +2694,16 @@ test('buildRerunPlanTextSections: combined case prints BOTH sections, recovery-r
   assert.match(sections[1] ?? '', /gh run rerun 7004/);
 });
 
+test('buildRerunPlanTextSections: renders passed-sibling recovery with its caveat', () => {
+  const plan = passedSiblingRecoveryPlan();
+  const sections = buildRerunPlanTextSections(plan);
+  assert.equal(sections.length, 1);
+  assert.match(sections[0] ?? '', /^Passed-sibling recovery available/);
+  assert.match(sections[0] ?? '', /gh run rerun 8001/);
+  assert.match(sections[0] ?? '', /originally held: .*rerun-budget-exhausted/);
+  assert.match(sections[0] ?? '', /#3539/);
+});
+
 test('buildRerunPlanTextSections: returns no sections when both plan and recoveryRefreshPlan are empty', () => {
   const plan = computeRerunPlan(
     baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
