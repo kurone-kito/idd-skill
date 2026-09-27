@@ -3136,7 +3136,8 @@ test('preserves slash-containing deinitialized submodule admin data', () => {
     copied.some(
       ({ from, to }) =>
         from === '/repo/primary/.git/worktrees/linked/modules/libs/parent' &&
-        to === '/tmp/preserve/submodule-gitdir/bGlicy9wYXJlbnQ',
+        to ===
+          `/tmp/preserve/submodule-gitdir/${Buffer.from('libs/parent').toString('base64url')}`,
     ),
   );
   assert.equal(verdict.plan.removal?.ran, true);
