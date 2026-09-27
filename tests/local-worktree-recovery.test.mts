@@ -684,6 +684,10 @@ function fakeDeps(
     removeLockIfMatches: () => true,
     runGit: cleanRepoRunGit,
     pathExists: () => true,
+    readDirectoryIdentity: (path) => ({
+      dev: `dev:${path}`,
+      ino: `ino:${path}`,
+    }),
     realpathOrNull: (p: string) => p,
     readlinkOrNull: () => null,
     acquireCloneLock: () => ({ path: '/repo/.idd-clone.lock', token: 'tok' }),
@@ -807,6 +811,37 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
     'remove',
     'release',
   ]);
+});
+
+test('step 4 stops when the target worktree is replaced while waiting for the clone lock', () => {
+  let phase: 'before' | 'after' = 'before';
+  let removeCalls = 0;
+  const deps = fakeDeps({
+    acquireCloneLock: () => {
+      phase = 'after';
+      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+    },
+    readDirectoryIdentity: (path) => ({
+      dev: 'dev',
+      ino: `${phase}:${path}`,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalls += 1;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removeCalls, 0);
+  assert.match(
+    verdict.result,
+    /identity changed while waiting for the clone lock/,
+  );
+  assert.equal(verdict.plan.removal?.ran, false);
 });
 
 test('step 4 still releases the clone lock when removal fails', () => {

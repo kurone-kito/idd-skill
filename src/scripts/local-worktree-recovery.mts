@@ -44,6 +44,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  statSync,
   symlinkSync,
   unlinkSync,
 } from 'node:fs';
@@ -200,6 +201,64 @@ export interface ConfirmBlockOutcome {
   routing: ConfirmBlockRouting | null;
   /** Diagnostic text when `!ok` (spawn/parse failure). */
   error: string | null;
+}
+
+/** Filesystem identity for a directory whose path may be reused by a
+ * concurrent worktree replacement. String values keep the verdict and test
+ * seams serializable across POSIX and Windows bigint stat implementations. */
+export interface DirectoryIdentity {
+  dev: string;
+  ino: string;
+}
+
+interface TargetWorktreeIdentity {
+  worktreePath: string;
+  worktree: DirectoryIdentity;
+  adminPath: string;
+  admin: DirectoryIdentity;
+}
+
+function readDirectoryIdentity(path: string): DirectoryIdentity {
+  const stat = statSync(path, { bigint: true });
+  if (!stat.isDirectory()) {
+    throw new Error(`not a directory: ${path}`);
+  }
+  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+}
+
+function sameDirectoryIdentity(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function resolveTargetWorktreeIdentity(
+  targetPath: string,
+  deps: Pick<LocalWorktreeRecoveryDeps, 'runGit' | 'readDirectoryIdentity'>,
+): TargetWorktreeIdentity | null {
+  const gitDir = deps.runGit(['rev-parse', '--absolute-git-dir'], targetPath);
+  if (!gitDir.ok || gitDir.stdout.trim().length === 0) return null;
+  const adminPath = resolve(gitDir.stdout.trim());
+  return {
+    worktreePath: targetPath,
+    worktree: deps.readDirectoryIdentity(targetPath),
+    adminPath,
+    admin: deps.readDirectoryIdentity(adminPath),
+  };
+}
+
+function sameTargetWorktreeIdentity(
+  before: TargetWorktreeIdentity,
+  after: TargetWorktreeIdentity | null,
+): boolean {
+  return (
+    after !== null &&
+    before.worktreePath === after.worktreePath &&
+    before.adminPath === after.adminPath &&
+    sameDirectoryIdentity(before.worktree, after.worktree) &&
+    sameDirectoryIdentity(before.admin, after.admin)
+  );
 }
 
 /** In-progress-operation kinds §LWR step 3 must detect and back up rather
@@ -412,6 +471,11 @@ export interface LocalWorktreeRecoveryDeps {
   /** Non-throwing `git <argv>` in `cwd`. */
   runGit: (argv: string[], cwd: string) => LocalGitCommandResult;
   pathExists: (path: string) => boolean;
+  /** Read the filesystem identity of a directory before and after the
+   * clone-lock wait. Device/inode identity distinguishes a worktree or its
+   * private git-admin directory being removed and recreated at the same
+   * path while preservation is in progress. */
+  readDirectoryIdentity: (path: string) => DirectoryIdentity;
   realpathOrNull: (path: string) => string | null;
   readlinkOrNull: (path: string) => string | null;
   acquireCloneLock: (repoPath: string, agentId: string) => CloneLockHandle;
@@ -2322,6 +2386,34 @@ export function runLocalWorktreeRecovery(
     return verdict;
   }
 
+  // Capture the target checkout and its private git-admin directory before
+  // step 3 waits for the clone-scoped lock. A concurrent recovery can remove
+  // and recreate the same worktree path while this invocation is preserving
+  // the original checkout; matching routing/claim state after the wait is
+  // not enough to prove that the cached preservation plan belongs to the
+  // checkout that will be removed. Device/inode identity closes that
+  // replacement-worktree window, mirroring claim-lock's acquisition guard.
+  let initialTargetIdentity: TargetWorktreeIdentity | null = null;
+  if (
+    args.apply &&
+    verdict.primaryOrLinked === 'linked' &&
+    !shortcut.eligible &&
+    deps.pathExists(targetPath)
+  ) {
+    try {
+      initialTargetIdentity = resolveTargetWorktreeIdentity(targetPath, deps);
+    } catch (error) {
+      return recordRemovalFailure(
+        `could not establish the target worktree identity before preservation: ${errorMessage(error)}`,
+      );
+    }
+    if (initialTargetIdentity === null) {
+      return recordRemovalFailure(
+        'could not resolve the target worktree private git-admin directory before preservation; stopping before removal',
+      );
+    }
+  }
+
   // --apply: steps 3 and 4.
   const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
   if (!shortcut.eligible) {
@@ -2367,6 +2459,25 @@ export function runLocalWorktreeRecovery(
     );
   }
   try {
+    let postWaitTargetIdentity: TargetWorktreeIdentity | null = null;
+    if (initialTargetIdentity !== null) {
+      try {
+        postWaitTargetIdentity = resolveTargetWorktreeIdentity(
+          targetPath,
+          deps,
+        );
+      } catch {
+        postWaitTargetIdentity = null;
+      }
+    }
+    if (
+      initialTargetIdentity !== null &&
+      !sameTargetWorktreeIdentity(initialTargetIdentity, postWaitTargetIdentity)
+    ) {
+      return recordRemovalFailure(
+        'the target worktree or private git-admin identity changed while waiting for the clone lock; stopping before removal',
+      );
+    }
     const recheck = deps.confirmBlock(cwd);
     if (!recheck.ok || !recheck.routing) {
       verdict.plan.removal = {
@@ -3533,6 +3644,7 @@ function createProductionDeps(
     findWorktreeAdminDir: findWorktreeAdminDirProduction,
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
+    readDirectoryIdentity,
     realpathOrNull,
     readlinkOrNull,
     acquireCloneLock: (repoPath: string, agentId: string) =>

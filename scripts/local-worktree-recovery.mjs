@@ -42,6 +42,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  statSync,
   symlinkSync,
   unlinkSync,
 } from 'node:fs';
@@ -142,6 +143,36 @@ function readlinkOrNull(path) {
   } catch {
     return null;
   }
+}
+function readDirectoryIdentity(path) {
+  const stat = statSync(path, { bigint: true });
+  if (!stat.isDirectory()) {
+    throw new Error(`not a directory: ${path}`);
+  }
+  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+}
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function resolveTargetWorktreeIdentity(targetPath, deps) {
+  const gitDir = deps.runGit(['rev-parse', '--absolute-git-dir'], targetPath);
+  if (!gitDir.ok || gitDir.stdout.trim().length === 0) return null;
+  const adminPath = resolve(gitDir.stdout.trim());
+  return {
+    worktreePath: targetPath,
+    worktree: deps.readDirectoryIdentity(targetPath),
+    adminPath,
+    admin: deps.readDirectoryIdentity(adminPath),
+  };
+}
+function sameTargetWorktreeIdentity(before, after) {
+  return (
+    after !== null &&
+    before.worktreePath === after.worktreePath &&
+    before.adminPath === after.adminPath &&
+    sameDirectoryIdentity(before.worktree, after.worktree) &&
+    sameDirectoryIdentity(before.admin, after.admin)
+  );
 }
 // ---------------------------------------------------------------------------
 // Pure decision logic
@@ -1871,6 +1902,33 @@ export function runLocalWorktreeRecovery(args, deps) {
       'refusing: --operator-confirmed-no-live-session was not given (step 2 is never checked mechanically); no mutation';
     return verdict;
   }
+  // Capture the target checkout and its private git-admin directory before
+  // step 3 waits for the clone-scoped lock. A concurrent recovery can remove
+  // and recreate the same worktree path while this invocation is preserving
+  // the original checkout; matching routing/claim state after the wait is
+  // not enough to prove that the cached preservation plan belongs to the
+  // checkout that will be removed. Device/inode identity closes that
+  // replacement-worktree window, mirroring claim-lock's acquisition guard.
+  let initialTargetIdentity = null;
+  if (
+    args.apply &&
+    verdict.primaryOrLinked === 'linked' &&
+    !shortcut.eligible &&
+    deps.pathExists(targetPath)
+  ) {
+    try {
+      initialTargetIdentity = resolveTargetWorktreeIdentity(targetPath, deps);
+    } catch (error) {
+      return recordRemovalFailure(
+        `could not establish the target worktree identity before preservation: ${errorMessage(error)}`,
+      );
+    }
+    if (initialTargetIdentity === null) {
+      return recordRemovalFailure(
+        'could not resolve the target worktree private git-admin directory before preservation; stopping before removal',
+      );
+    }
+  }
   // --apply: steps 3 and 4.
   const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
   if (!shortcut.eligible) {
@@ -1915,6 +1973,25 @@ export function runLocalWorktreeRecovery(args, deps) {
     );
   }
   try {
+    let postWaitTargetIdentity = null;
+    if (initialTargetIdentity !== null) {
+      try {
+        postWaitTargetIdentity = resolveTargetWorktreeIdentity(
+          targetPath,
+          deps,
+        );
+      } catch {
+        postWaitTargetIdentity = null;
+      }
+    }
+    if (
+      initialTargetIdentity !== null &&
+      !sameTargetWorktreeIdentity(initialTargetIdentity, postWaitTargetIdentity)
+    ) {
+      return recordRemovalFailure(
+        'the target worktree or private git-admin identity changed while waiting for the clone lock; stopping before removal',
+      );
+    }
     const recheck = deps.confirmBlock(cwd);
     if (!recheck.ok || !recheck.routing) {
       verdict.plan.removal = {
@@ -3022,6 +3099,7 @@ function createProductionDeps(args) {
     findWorktreeAdminDir: findWorktreeAdminDirProduction,
     runGit: runLocalGitCommand,
     pathExists: pathExistsOnDisk,
+    readDirectoryIdentity,
     realpathOrNull,
     readlinkOrNull,
     acquireCloneLock: (repoPath, agentId) =>
