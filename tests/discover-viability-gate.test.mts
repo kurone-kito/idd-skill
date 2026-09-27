@@ -3304,3 +3304,44 @@ test('does not let approval-gated local credential features hide in the feature 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
+
+test('does not let a paragraph-separated maintainer approval dependency pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 196,
+    title: 'document credential storage',
+    body:
+      'Implementation depends on maintainer approval before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let actor-subject approval prerequisites pass (#3522)', () => {
+  for (const actor of ['customer', 'maintainer']) {
+    const result = evaluateA4Viability({
+      number: 197,
+      title: 'document credential storage',
+      body:
+        `The ${actor} must approve before implementation. ` +
+        'Verification: add unit tests.',
+      state: 'OPEN',
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('does not let a vendor access prerequisite pass in actor-subject form (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 198,
+    title: 'document credential storage',
+    body:
+      'The vendor must grant access before implementation. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
