@@ -1533,6 +1533,20 @@ test('dependency-line-grammar resolves a multiline collapsed reference link', ()
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar leaves reference labels with multiple line endings unresolved', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref\nextra\nlabel]\n\n' +
+      '[ref extra label]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar resolves a definition whose label wraps across a nonblank line', () => {
   const body = childBody({
     extraMarkers:
@@ -1621,6 +1635,48 @@ test('dependency-line-grammar decodes named character references in destinations
     extraMarkers:
       'Blocked by [Issue 12][ref]\n\n' +
       '[ref]: https://github.com/kurone-kito/idd-skill&sol;issues&sol;12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar decodes backslash escapes in destinations', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n' +
+      '[ref]: https\\://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar leaves reference labels with unescaped brackets unresolved', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref[x]\n\n' +
+      '[ref[x]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar decodes character references and escapes in reference labels', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref&x]\n\n' +
+      '[ref\\&amp;x]: https://github.com/kurone-kito/idd-skill/issues/12',
   });
   const report = auditAuthoredIssue(body, { shape: 'child' });
   const finding = report.findings.find(
@@ -2920,6 +2976,23 @@ test('prose-dependency still warns on a cross-repo reference-style Markdown link
   );
   assert.equal(finding?.severity, 'warning');
   assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo collapsed reference link when currentRepo is known', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][] must land.\n\n' +
+      '[PR #1391]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency does not warn on a reference-style Markdown link when the number already has a Blocked by encoding', () => {

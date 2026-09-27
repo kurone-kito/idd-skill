@@ -43,7 +43,6 @@
 // the drafted body from a file or stdin rather than fetching a live issue.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { decodeNamedCharacterReference } from 'decode-named-character-reference';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -475,9 +474,11 @@ const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
 // per-line near-miss scan cannot see this shape, so checkDependencyLineGrammar
 // handles it with a whole-body pass after masking opaque regions.
 const MULTILINE_REFERENCE_LINK_USAGE_PATTERN =
-  /\[([^\]\n]*(?:\n[^\]\n]+)*)\]\[([^\]\n]*(?:\n[^\]\n]+)*)\]/g;
+  /\[((?:\\.|[^\u005B\u005D\\\n])*(?:\n(?:\\.|[^\u005B\u005D\\\n])*)?)\]\[((?:\\.|[^\u005B\u005D\\\n])*(?:\n(?:\\.|[^\u005B\u005D\\\n])*)?)\]/g;
 const MULTILINE_SHORTCUT_LINK_USAGE_PATTERN =
-  /\[([^\]\n]*(?:\n[^\]\n]+)+)\](?![[(:])/g;
+  /\[((?:\\.|[^\u005B\u005D\\\n])*\n(?:\\.|[^\u005B\u005D\\\n])*)\](?![[(:])/g;
+const COLLAPSED_REFERENCE_LINK_USAGE_PATTERN =
+  /\[((?:\\.|[^\u005B\u005D\\\n])+)\]\[\]/g;
 // Matches a CommonMark shortcut reference link at the start of a string:
 // `[text]` whose next character is not `[` (full/collapsed reference), `(`
 // (inline link), or `:` (reference-definition declaration). Its visible
@@ -2515,7 +2516,12 @@ function checkProseOnlyDependency(text, rawText, currentRepo) {
 // collapsing internal whitespace and trimming, so `[Upstream PR]` and
 // `[upstream  pr]` refer to the same definition.
 function normalizeLinkReferenceLabel(label) {
-  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+  return decodeMarkdownCharacterReferences(
+    decodeMarkdownBackslashEscapes(label),
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 // CommonMark §6.6 allows a reference definition's destination to be
 // wrapped in angle brackets (`[ref]: <https://...>`). Without unwrapping,
@@ -2530,6 +2536,67 @@ function unwrapAngleBracketDestination(target) {
   return target.startsWith('<') && target.endsWith('>')
     ? target.slice(1, -1)
     : target;
+}
+function decodeMarkdownBackslashEscapes(value) {
+  return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/gu, '$1');
+}
+function decodeNamedMarkdownCharacterReference(value) {
+  switch (value.toLowerCase()) {
+    case 'amp':
+      return '&';
+    case 'apos':
+      return "'";
+    case 'ast':
+      return '*';
+    case 'bsol':
+      return '\\';
+    case 'colon':
+      return ':';
+    case 'comma':
+      return ',';
+    case 'commat':
+      return '@';
+    case 'equals':
+      return '=';
+    case 'excl':
+      return '!';
+    case 'gt':
+      return '>';
+    case 'hyphen':
+      return '-';
+    case 'lbrack':
+    case 'lsqb':
+      return '[';
+    case 'lpar':
+      return '(';
+    case 'lt':
+      return '<';
+    case 'lowbar':
+      return '_';
+    case 'num':
+      return '#';
+    case 'period':
+      return '.';
+    case 'plus':
+      return '+';
+    case 'quest':
+      return '?';
+    case 'quot':
+      return '"';
+    case 'rbrack':
+    case 'rsqb':
+      return ']';
+    case 'rpar':
+      return ')';
+    case 'semi':
+      return ';';
+    case 'sol':
+      return '/';
+    case 'vert':
+      return '|';
+    default:
+      return false;
+  }
 }
 function decodeMarkdownCharacterReferences(value) {
   return value.replace(
@@ -2549,7 +2616,9 @@ function decodeMarkdownCharacterReferences(value) {
         return String.fromCodePoint(codePoint);
       }
       const decoded =
-        named === undefined ? false : decodeNamedCharacterReference(named);
+        named === undefined
+          ? false
+          : decodeNamedMarkdownCharacterReference(named);
       return decoded === false ? whole : decoded;
     },
   );
@@ -2601,7 +2670,21 @@ function readReferenceDefinitionDestination(suffix) {
     return undefined;
   }
   if (suffix.startsWith('<')) {
-    const closingBracket = suffix.indexOf('>');
+    let closingBracket = -1;
+    for (let index = 1; index < suffix.length; index += 1) {
+      const character = suffix[index];
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '<') {
+        return null;
+      }
+      if (character === '>') {
+        closingBracket = index;
+        break;
+      }
+    }
     if (closingBracket <= 1) {
       return null;
     }
@@ -2664,7 +2747,9 @@ function referenceDefinitionHasTitle(suffix) {
 function parseReferenceDefinitionCandidate(line) {
   const { content, containerKinds, canListContainerInterruptParagraph } =
     stripReferenceDefinitionContainers(line);
-  const match = content.match(/^\[([^\]\n]+)\]:[ \t]*(.*)$/u);
+  const match = content.match(
+    /^\[((?:\\.|[^\u005B\u005D\\\n])+)\]:[ \t]*(.*)$/u,
+  );
   if (!match) {
     return undefined;
   }
@@ -2689,8 +2774,8 @@ function mergeMultilineReferenceDefinitionLabels(text) {
     if (nextLine !== undefined) {
       const next = stripReferenceDefinitionContainers(nextLine);
       if (
-        /^\[[^\]\n]*$/u.test(current.content) &&
-        /^[^\u005B\u005D\n]+\u005D:[ \t]*/u.test(next.content) &&
+        /^\[((?:\\.|[^\u005B\u005D\\\n])*)$/u.test(current.content) &&
+        /^(?:\\.|[^\u005B\u005D\\\n])+\u005D:[ \t]*/u.test(next.content) &&
         current.containerKinds.join('/') === next.containerKinds.join('/') &&
         !(
           current.containerKinds.includes('list') &&
@@ -2811,7 +2896,9 @@ function collectReferenceStyleLinkDefinitions(text) {
           definitions.set(
             key,
             decodeMarkdownCharacterReferences(
-              unwrapAngleBracketDestination(destination),
+              decodeMarkdownBackslashEscapes(
+                unwrapAngleBracketDestination(destination),
+              ),
             ),
           );
         }
@@ -2850,7 +2937,9 @@ function collectReferenceStyleLinkDefinitions(text) {
             definitions.set(
               key,
               decodeMarkdownCharacterReferences(
-                unwrapAngleBracketDestination(candidate.destination),
+                decodeMarkdownBackslashEscapes(
+                  unwrapAngleBracketDestination(candidate.destination),
+                ),
               ),
             );
           }
@@ -2913,6 +3002,10 @@ function resolveReferenceStyleLinks(text) {
     })
     .replace(REFERENCE_STYLE_LINK_USAGE_PATTERN, (whole, label, ref) => {
       const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      return target === undefined ? whole : `[${label}](${target})`;
+    })
+    .replace(COLLAPSED_REFERENCE_LINK_USAGE_PATTERN, (whole, label) => {
+      const target = definitions.get(normalizeLinkReferenceLabel(label));
       return target === undefined ? whole : `[${label}](${target})`;
     })
     .replace(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN, (whole, label) => {
