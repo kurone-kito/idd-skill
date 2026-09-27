@@ -4538,6 +4538,63 @@ test('checkHeldSchemaDrift keeps glob array patterns separate from path joins', 
   ]);
 });
 
+test('checkHeldSchemaDrift keeps extglob separators inside character classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/@(a[|]b|c).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/a|b.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/a|b.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/a|b.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift detects generic scan calls', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "scanDirectory<Entry>('schemas');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift decodes JavaScript path escapes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/\\x77*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/widget.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift recognizes quoted cwd option keys', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

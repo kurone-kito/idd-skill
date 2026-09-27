@@ -2099,7 +2099,7 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*\()/gu;
+  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\()/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2427,7 +2427,7 @@ function firstCallArgument(text) {
 }
 function normalizeComputedDirectoryScanMembers(text) {
   return text.replace(
-    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*\()/gu,
+    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\()/gu,
     (_match, _quote, apiName) => `.${apiName}`,
   );
 }
@@ -2449,6 +2449,27 @@ function findDirectoryScanCalls(text) {
       }
       if (normalizedText[openIndex] === '!') {
         openIndex += 1;
+        continue;
+      }
+      if (normalizedText[openIndex] === '<') {
+        let angleDepth = 0;
+        let closed = false;
+        for (; openIndex < normalizedText.length; openIndex += 1) {
+          const character = normalizedText[openIndex] ?? '';
+          if (character === '<') {
+            angleDepth += 1;
+          } else if (character === '>') {
+            angleDepth -= 1;
+            if (angleDepth === 0) {
+              openIndex += 1;
+              closed = true;
+              break;
+            }
+          }
+        }
+        if (!closed) {
+          break;
+        }
         continue;
       }
       break;
@@ -2505,9 +2526,72 @@ function findDirectoryScanCalls(text) {
   }
   return calls;
 }
+function decodeJavaScriptStringLiteral(text) {
+  const simpleEscapes = {
+    b: '\b',
+    f: '\f',
+    n: '\n',
+    r: '\r',
+    t: '\t',
+    v: '\v',
+    0: '\0',
+  };
+  let result = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character !== '\\') {
+      result += character;
+      continue;
+    }
+    const escaped = text[index + 1] ?? '';
+    if (escaped === '\n') {
+      index += 1;
+      continue;
+    }
+    if (escaped === '\r') {
+      index += text[index + 2] === '\n' ? 2 : 1;
+      continue;
+    }
+    if (escaped === 'x') {
+      const hex = text.slice(index + 2, index + 4);
+      if (/^[0-9A-Fa-f]{2}$/u.test(hex)) {
+        result += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 3;
+        continue;
+      }
+    }
+    if (escaped === 'u') {
+      if (text[index + 2] === '{') {
+        const close = text.indexOf('}', index + 3);
+        const hex = text.slice(index + 3, close);
+        const value = Number.parseInt(hex, 16);
+        if (
+          close !== -1 &&
+          /^[0-9A-Fa-f]{1,6}$/u.test(hex) &&
+          Number.isInteger(value) &&
+          value <= 0x10ffff
+        ) {
+          result += String.fromCodePoint(value);
+          index = close;
+          continue;
+        }
+      } else {
+        const hex = text.slice(index + 2, index + 6);
+        if (/^[0-9A-Fa-f]{4}$/u.test(hex)) {
+          result += String.fromCharCode(Number.parseInt(hex, 16));
+          index += 5;
+          continue;
+        }
+      }
+    }
+    result += simpleEscapes[escaped] ?? escaped;
+    index += 1;
+  }
+  return result;
+}
 function scanStringLiterals(text) {
-  return [...text.matchAll(DIRECTORY_SCAN_STRING_PATTERN)].map(
-    (literal) => literal[2] ?? '',
+  return [...text.matchAll(DIRECTORY_SCAN_STRING_PATTERN)].map((literal) =>
+    decodeJavaScriptStringLiteral(literal[2] ?? ''),
   );
 }
 function pathExpressionCandidates(text) {
@@ -2597,9 +2681,26 @@ function findGlobGroupEnd(pattern, start, opening, closing) {
 function splitGlobAlternatives(text, separator) {
   const alternatives = [];
   let depth = 0;
+  let inCharacterClass = false;
+  let characterClassStart = false;
   let start = 0;
   for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '(' || text[index] === '{') {
+    if (text[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (text[index] === '[' && !inCharacterClass) {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (
+      text[index] === ']' &&
+      inCharacterClass &&
+      !characterClassStart
+    ) {
+      inCharacterClass = false;
+    } else if (inCharacterClass) {
+      characterClassStart = false;
+    } else if (text[index] === '(' || text[index] === '{') {
       depth += 1;
     } else if (text[index] === ')' || text[index] === '}') {
       depth = Math.max(0, depth - 1);
