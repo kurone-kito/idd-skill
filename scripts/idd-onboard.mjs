@@ -3075,7 +3075,7 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
           '--full-tree',
           baselineCommit,
           '--',
-          treePath,
+          `:(literal)${treePath}`,
         ],
         {
           encoding: 'utf8',
