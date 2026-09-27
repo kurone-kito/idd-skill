@@ -220,7 +220,7 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
 
 const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
 const PACKAGE_MANAGER_ENTRY_RE =
-  /\bnode\s+(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
+  /\bnode\s+(?:\.\/)?(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
 const PACKAGE_SCRIPT_RE =
   /(?:npm run|pnpm(?: run)?|yarn(?: run)?)\s+(idd:[a-zA-Z0-9-]+)/g;
@@ -619,7 +619,7 @@ test('rejects an unregistered package-manager-only helper path', () => {
       {
         path: 'idd-template/docs/example.md',
         content:
-          'Run `node node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs`.',
+          'Run `node ./node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs`.',
       },
     ],
     {

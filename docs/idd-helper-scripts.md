@@ -1063,10 +1063,13 @@ future inventory reviews do not need to re-infer their role from code.
   upstream files and before `--substitute` rewrites placeholders.
   During a re-import, `idd-onboard --import` may intentionally restore the
   target's existing commands table in `.github/idd/config.json` after the
-  template copy; that restoration is part of the re-import result, not a
-  reason to verify the later substituted commit as a pure mirror (the
-  preservation behavior is tracked by
-  [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222)).
+  template copy. Because that restoration happens in the same operation,
+  there is no later pure-mirror commit to verify for that path. Replace a
+  broad `.github` prefix with the specific imported `.github` roots you want
+  to check, omit `.github/idd/config.json`, and verify the restored commands
+  separately with the onboarding/doctor checks. This preservation behavior
+  is tracked by
+  [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
   The template core file set also includes the root-level
   `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
   Because an untouched prefix produces no comparison, retain each prefix
@@ -1131,10 +1134,11 @@ future inventory reviews do not need to re-infer their role from code.
   helper is not an adopter command. It is supported only when a
   `node_modules` linker exposes the path. It is not available under Yarn
   Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree; use a
-  source checkout or the `vendored-node` profile for package-manager adopters
-  using PnP. The `ephemeral-npx` profile does not install a supported copy of
-  this source-repository helper, so use a source checkout or the
-  `vendored-node` profile instead.
+  source checkout for PnP adopters. The `vendored-node` profile also does not
+  include this source-repository helper because it is intentionally absent
+  from the adopter command catalog. The `ephemeral-npx` profile does not
+  install a supported copy either, so use a source checkout for that profile
+  as well.
 
 ### Discover Roadmap Graph Contract
 

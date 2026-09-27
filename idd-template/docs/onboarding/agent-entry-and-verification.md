@@ -291,9 +291,11 @@ falsely pass matching local edits.
 
 During a re-import, `idd-onboard --import` may intentionally restore the
 target's existing commands table in `.github/idd/config.json` after the
-template copy. Treat that restoration as part of the re-import result, and
-verify the earlier mirror-only commit rather than the later substituted
-commit as a pure mirror. This preservation behavior is tracked by
+template copy. Because that restoration happens in the same operation, there
+is no pure-mirror commit for that path. Replace a broad `.github` prefix with
+the specific imported `.github` roots you want to check, omit
+`.github/idd/config.json`, and verify the restored commands separately with
+the onboarding/doctor checks. This preservation behavior is tracked by
 [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
 
 The helper is not an `idd-*` bin. For a source checkout, invoke it directly
@@ -342,10 +344,10 @@ exception recorded under `packageManagerOnlyHelpers`; it is not a
 source-repository verification helper is not an adopter command. It applies
 only when the `node_modules` linker exposes the path. It does not apply to
 Yarn Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
-Use a source checkout or the `vendored-node` profile for package-manager
-adopters using PnP. The `ephemeral-npx` profile also does not install a
-supported copy of this source-repository helper, so use a source checkout or
-`vendored-node`.
+Use a source checkout for PnP adopters. The `vendored-node` profile also does
+not include this source-repository helper because it is intentionally absent
+from the adopter command catalog. The `ephemeral-npx` profile also does not
+install a supported copy, so use a source checkout for that profile as well.
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes
