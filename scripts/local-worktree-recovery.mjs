@@ -192,6 +192,11 @@ function sameTargetWorktreeIdentity(before, after) {
     sameDirectoryIdentity(before.admin, after.admin)
   );
 }
+function pathPresenceForDeps(deps, path) {
+  return (
+    deps.pathPresence?.(path) ?? (deps.pathExists(path) ? 'present' : 'absent')
+  );
+}
 // ---------------------------------------------------------------------------
 // Pure decision logic
 // ---------------------------------------------------------------------------
@@ -1109,22 +1114,22 @@ function planAndMaybeBackupRef(
   const ref = `refs/idd-lwr/${branch}`;
   let tipSha = null;
   let hasUnpushed = false;
+  const refNamespaces =
+    scopeLabel === '.'
+      ? ['refs/worktree']
+      : ['refs/heads', 'refs/tags', 'refs/notes', 'refs/replace'];
   const localRefs = runGit(
-    [
-      'for-each-ref',
-      '--format=%(refname)',
-      'refs/heads',
-      'refs/tags',
-      'refs/notes',
-      'refs/replace',
-    ],
+    ['for-each-ref', '--format=%(refname)', ...refNamespaces],
     scopePath,
   );
   const localRefsQueryFailed = !localRefs.ok;
-  // A commit-reachability scan is insufficient here: a local tag or branch
-  // can point at an object already reachable from a remote while its ref name
-  // remains private to this worktree's disposable admin directory. Enumerate
-  // preservation-relevant local ref namespaces directly instead.
+  // A commit-reachability scan is insufficient for disposable submodule
+  // repositories: a local tag or branch can point at an object already
+  // reachable from a remote while its ref name remains private to the
+  // worktree's disposable admin directory. Top-level linked worktrees use
+  // only Git's worktree-specific ref namespace because ordinary top-level
+  // branches and tags are shared by the clone and must not trigger a full
+  // admin-directory copy.
   const hasLocalOnlyRefs = localRefs.ok && localRefs.stdout.trim().length > 0;
   // Copilot/Codex review: a failed `git log @{u}..HEAD` (or `git rev-parse
   // HEAD`) probe must never read as "no unpushed commits" -- unlike the
@@ -1466,7 +1471,13 @@ function planAndMaybePreserve(
       // Uninitialized: not a git repository at all -- copy files out
       // directly rather than attempting any `git -C` command there.
       const submodulePath = join(path, submodule.path);
-      if (deps.pathExists(submodulePath)) {
+      const submodulePresence = pathPresenceForDeps(deps, submodulePath);
+      if (submodulePresence === 'unknown') {
+        uninitializedSubmodules.push({
+          path: submodule.path,
+          copiedTo: null,
+        });
+      } else if (submodulePresence === 'present') {
         // Dry-run must have zero side effects: report the planned destination
         // when an explicit preserve directory makes it deterministic, but
         // create the directory and copy into it only when applying.
@@ -1615,9 +1626,11 @@ function planAndMaybePreserve(
             ? result.stdout.trim()
             : null;
         })();
-    const hasAdminData = gitDir !== null && deps.pathExists(gitDir);
+    const adminPresence =
+      gitDir === null ? 'absent' : pathPresenceForDeps(deps, gitDir);
+    const hasAdminData = adminPresence === 'present';
     const shouldCopy = deinitialized
-      ? hasAdminData
+      ? gitDir !== null && adminPresence !== 'absent'
       : apply
         ? submodule.status === '+' ||
           Boolean(
@@ -1937,7 +1950,16 @@ function refreshUninitializedSubmoduleCopies(
   if (targetGitDir === null && entries.length === 0) {
     return { error: null, added, preserveDir };
   }
-  if (!deps.pathExists(targetPath)) {
+  const targetPresence = pathPresenceForDeps(deps, targetPath);
+  if (targetPresence === 'unknown') {
+    return {
+      error:
+        'could not establish the target worktree path before rescanning uninitialized submodules; stopping before removal',
+      added,
+      preserveDir,
+    };
+  }
+  if (targetPresence === 'absent') {
     return { error: null, added, preserveDir };
   }
   const status = deps.runGit(
@@ -1963,7 +1985,15 @@ function refreshUninitializedSubmoduleCopies(
   for (const submodule of lateSubmodules) {
     let entry = knownEntries.get(submodule.path);
     const submodulePath = join(targetPath, submodule.path);
-    if (entry === undefined && deps.pathExists(submodulePath)) {
+    const submodulePresence = pathPresenceForDeps(deps, submodulePath);
+    if (submodulePresence === 'unknown') {
+      return {
+        error: `could not establish the uninitialized submodule ${submodule.path} path before removal; stopping before removal`,
+        added,
+        preserveDir,
+      };
+    }
+    if (entry === undefined && submodulePresence === 'present') {
       const destination = join(
         ensurePreserveDir(),
         `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
@@ -1980,7 +2010,7 @@ function refreshUninitializedSubmoduleCopies(
         preserveDir,
       };
     }
-    if (!deps.pathExists(submodulePath)) continue;
+    if (submodulePresence === 'absent') continue;
     if (!isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)) {
       return {
         error: `late preservation for uninitialized submodule ${entry.path} has an unsafe destination; stopping before removal`,
@@ -2863,6 +2893,23 @@ export function runLocalWorktreeRecovery(args, deps) {
           }
         }
       }
+      const ignoredCleanupError =
+        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+          verdict.plan.ignoredFilesCopied,
+          targetPath,
+          deps,
+        );
+      if (ignoredCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${ignoredCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
       if (!checkout.ok) {
         verdict.plan.removal = {
@@ -2886,23 +2933,6 @@ export function runLocalWorktreeRecovery(args, deps) {
           wouldRun: true,
           ran: false,
           detail: `submodule update after checkout ${developmentBranch} failed: ${submoduleUpdate.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const ignoredCleanupError =
-        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
-          verdict.plan.ignoredFilesCopied,
-          targetPath,
-          deps,
-        );
-      if (ignoredCleanupError !== null) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `checked out ${developmentBranch}, but ${ignoredCleanupError}; stopping`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
@@ -3638,10 +3668,16 @@ export function runLocalWorktreeRecovery(args, deps) {
       }
       remove = guardedRemove;
     }
+    const verifiedUnmergedFallback = verdict.plan.stashes.some(
+      (stash) =>
+        stash.unmergedFallbackCopiedTo !== null &&
+        stash.unmergedFallbackAllPreserved === true,
+    );
     if (
       !shortcut.eligible &&
       !remove.ok &&
-      /submodules cannot be moved or removed/i.test(remove.stderr)
+      (verifiedUnmergedFallback ||
+        /submodules cannot be moved or removed/i.test(remove.stderr))
     ) {
       // `git worktree remove --force` can delete content that appeared after
       // step 3. Re-run the complete preservation scan while the clone lock is

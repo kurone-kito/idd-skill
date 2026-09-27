@@ -2345,6 +2345,44 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('forced retry covers a verified unmerged fallback after a generic removal failure', () => {
+  let guardCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'UU conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
+      guardCalls += 1;
+      return force
+        ? { ok: true, status: 0, stdout: '', stderr: '' }
+        : {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'fatal: cannot remove dirty worktree',
+          };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(guardCalls, 2);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, true);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('legacy lockless claims may complete the forced retry through the guard', () => {
   let guardCalls = 0;
   const deps = fakeDeps({
@@ -2477,6 +2515,48 @@ test('dry-run never creates the preserve directory for an uninitialized submodul
   );
   assert.equal(ensureCalls, 0, 'dry-run must have zero side effects');
   assert.equal(verdict.plan.uninitializedSubmodules[0]?.copiedTo, null);
+});
+
+test('unknown uninitialized-submodule paths block removal before preservation is trusted', () => {
+  let removeCalled = false;
+  const copied: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 uninitialized\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    pathPresence: (path) =>
+      path === '/repo/linked/uninitialized' ? 'unknown' : 'present',
+    copyPath: (_from, to) => copied.push(to),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.uninitializedSubmodules[0]?.copiedTo, null);
+  assert.equal(
+    copied.some((path) => path.includes('uninitialized-')),
+    false,
+  );
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal, null);
+  assert.match(verdict.result, /stopping before removal/);
 });
 
 test('excludes uninitialized submodule contents from the parent stash', () => {
@@ -4485,9 +4565,9 @@ test('primary recovery removes preserved ignored files before reporting release'
       deps,
     );
     assert.deepEqual(events.slice(-3), [
+      `clean:${root}:stale.env`,
       'checkout',
       'submodule-update',
-      `clean:${root}:stale.env`,
     ]);
     assert.equal(ignoredPresent, false);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
@@ -5182,7 +5262,7 @@ test('copies linked worktree admin data for top-level local refs', () => {
         return {
           ok: true,
           status: 0,
-          stdout: 'refs/tags/private-tag\n',
+          stdout: 'refs/worktree/private-ref\n',
           stderr: '',
         };
       }
@@ -5211,6 +5291,36 @@ test('copies linked worktree admin data for top-level local refs', () => {
       to: '/tmp/preserve/worktree-gitdir',
     },
   ]);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('does not copy linked worktree admin data for shared refs alone', () => {
+  let copied = false;
+  let queriedWorktreeRefs = false;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+        queriedWorktreeRefs = argv.includes('refs/worktree');
+        return {
+          ok: true,
+          status: 0,
+          stdout: '',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: () => {
+      copied = true;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(queriedWorktreeRefs, true);
+  assert.equal(verdict.plan.worktreeAdminCopy, null);
+  assert.equal(copied, false);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
