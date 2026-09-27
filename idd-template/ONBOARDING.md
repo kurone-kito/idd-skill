@@ -217,20 +217,27 @@ below instead.
    node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
    ```
 
-2. Validate the operator's answers against the catalog and print the
-   confirmed transcript. Save that transcript to a file.
+2. Validate the answers, print the confirmed transcript, and save it.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --apply \
      --answers <answers-file> --target <target-repo>
    ```
 
-   **Check the transcript's `bootstrap-execution-mode` answer before
-   continuing.** If it is `issue-mediated`, stop here — switch to
+   **Check `bootstrap-execution-mode`.** If `issue-mediated`, stop and use
    [Onboarding Reference — Issue-Mediated
-   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
-   running steps 3-5 below, which write the template with a direct,
-   unreviewed commit (the `direct-import` default only).
+   Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
+   3-5; they write the template directly without review (`direct-import`
+   default).
+
+   Require a clean target:
+
+   ```sh
+   root=$(git -C <target-repo> rev-parse --show-toplevel) &&
+   test "$root" = "$(cd <target-repo> && pwd -P)" &&
+   status=$(git -C <target-repo> status --short --untracked-files=all) &&
+   test -z "$status" || exit 1
+   ```
 
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).
@@ -239,6 +246,17 @@ below instead.
    node scripts/idd-onboard.mjs --import \
      --source <idd-skill-clone> --target <target-repo>
    ```
+
+   **Checkpoint.** Commit before `--substitute`:
+
+   ```sh
+   git -C <target-repo> status --short
+   git -C <target-repo> add -A
+   git -C <target-repo> commit -m "chore: record idd template mirror"
+   ```
+
+   `--target-ref` must name it; keep it reachable through a ref until
+   verification and reruns finish. Do not squash it.
 
 4. Replace the seven placeholders from the confirmed transcript.
 

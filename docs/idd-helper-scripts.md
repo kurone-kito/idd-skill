@@ -1049,8 +1049,136 @@ future inventory reviews do not need to re-infer their role from code.
   comparison, and deletion-matches-upstream recognition. Exits non-zero on
   any genuine mismatch (referenced in
   [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
-  Source-repo internal helper; not distributed via the package-manager /
-  ephemeral-npx profiles.
+  Source-repo internal helper; not exposed through the profile command
+  catalog or an `idd-*` bin.
+
+  For an adopter's template import, point `--upstream-path` at the
+  checkout's `idd-template/` directory, not at the checkout root. The
+  checkout must be clean and pinned to the exact upstream commit that supplied
+  the mirror-only import. `verify-import-mirror` reads the current files under
+  `--upstream-path`; checking an older import against a later working tree can
+  therefore report false mismatches or falsely pass matching local edits
+  (observed in [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
+  The target commit must be the mirror-only commit made after copying the
+  upstream files and before `--substitute` rewrites placeholders.
+  Set `--target-base-ref` to the pre-import commit. For a root
+  mirror-only commit, use `git -C <target-repo> hash-object -t tree /dev/null`
+  as the base so the first commit is diffable too. Without that base, a root
+  mirror-only commit is not diffable (observed 2026-09-27 during
+  [kurone-kito/idd-skill#3576](https://github.com/kurone-kito/idd-skill/pull/3576)
+  review).
+  During a re-import, `idd-onboard --import` may restore the target's three
+  validate-command rows in `.github/idd/config.json` after the template copy.
+  Keep that file in scope with `--path-prefix .github/idd/config.json`, and
+  repeat `--normalize-json-key` for only `commands.fix-validate`,
+  `commands.pre-push-validate`, and `commands.post-fix-validate`. For each key,
+  the verifier first proves that the target still matches its value at
+  `--target-base-ref` (the pre-import commit), then normalizes the upstream
+  value to that preserved baseline. Other config fields stay checked; never
+  omit the whole file. This preservation behavior is tracked by
+  [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
+  The template core file set also includes the root-level
+  `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
+  Because an untouched prefix produces no comparison, retain each prefix
+  only when that file or root was touched by the mirror-only commit. Restrict
+  the comparison to those imported paths with repeated `--path-prefix`
+  options, for example:
+
+  ```sh
+  node <idd-skill>/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
+    --upstream-path <idd-skill>/idd-template \
+    --path-prefix .github/instructions --path-prefix .github/workflows \
+    --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.fix-validate \
+    --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+    --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
+    --path-prefix docs --path-prefix profiles \
+    --path-prefix .githooks \
+    --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+    --path-prefix .markdownlint-cli2.yaml
+  ```
+
+  On native Windows, omit `.githooks` from this content check unless the
+  command runs under WSL. The nested `idd-template/` path is read from the
+  filesystem rather than a Git tree, so native Windows cannot establish the
+  imported executable bit reliably; use Linux, macOS, or WSL when hook mode
+  equivalence must also be verified. Ensure
+  `git -C <idd-skill> config --get core.fileMode` is not `false` and
+  `git -C <idd-skill> ls-tree <upstream-commit>` with
+  `-- idd-template/.githooks/pre-commit` reports `100755` before comparing
+  modes.
+  If modes differ, use a mode-preserving checkout or omit `.githooks`. See
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
+
+  Do not add a directory prefix merely because it exists upstream: use only
+  roots and root-level files touched by the mirror-only commit. A later
+  substituted commit is expected to differ in rewritten placeholders, pinned
+  workflow references, GHES-generated
+  `.github/workflows/strip-untrusted-labels.yml`, and other adopter output, so
+  it is not a pure-mirror target.
+
+  For the `vendored-node` profile, compare helper and schema paths against
+  the checkout root instead. The helper's source-root mapping uses the
+  following repeatable prefixes when they are present in the target commit:
+
+  ```sh
+  node <idd-skill>/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
+    --upstream-path <idd-skill> \
+    --path-prefix scripts \
+    --path-prefix schemas --path-prefix fixtures
+  ```
+
+  For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
+  or Yarn configured for `node_modules`), run the installed package's copy
+  directly when the source checkout is unavailable:
+
+  `--normalize-json-key <path>:<key.path>` replaces only the upstream JSON key
+  with the pre-import target-base value after proving the target still matches
+  it and upstream still has its restoration placeholder; repeat it for the
+  three validate-command keys above and add the config path prefix to this
+  command.
+
+  ```sh
+  node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
+    --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
+    --path-prefix .github/instructions --path-prefix .github/workflows \
+    --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.fix-validate \
+    --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
+    --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
+    --path-prefix docs --path-prefix profiles \
+    --path-prefix .githooks \
+    --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
+    --path-prefix .markdownlint-cli2.yaml
+  ```
+
+  `verify-import-mirror` is not an `idd-*` bin in the `package-manager` or
+  `ephemeral-npx` profiles. This profile-mismatch failure mode has been
+  observed across adopters and tracked in
+  [kurone-kito/idd-skill#1674](https://github.com/kurone-kito/idd-skill/issues/1674).
+  The installed-package path above is a deliberate
+  package-manager-only runtime-manifest exception: it is recorded under
+  `packageManagerOnlyHelpers` rather than `commandCatalog` or
+  `managedPackageJsonScripts` because this source-repository verification
+  helper is not an adopter command. It is supported only when a
+  `node_modules` linker exposes the path. It is not available under Yarn
+  Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree; use a
+  source checkout for PnP adopters. The `vendored-node` profile also does not
+  include this source-repository helper because it is intentionally absent
+  from the adopter command catalog. The `ephemeral-npx` profile does not
+  install a supported copy either, so use a source checkout for that profile
+  as well. Pin the installed package to the exact upstream revision that
+  supplied the mirror-only import, using an immutable commit archive, tarball,
+  or equivalent `helperRuntime.packageSpec`; do not resolve it from a mutable
+  default such as `main`. If that revision cannot be established, use the
+  source-checkout recipe instead, because a newer installed template can
+  produce false mismatches or false passes.
 
 ### Discover Roadmap Graph Contract
 
@@ -1539,7 +1667,11 @@ copy of it — see `resolveDistributedFiles()` in
 source repository's own `bin/<name>.mjs` build-artifact path, which no
 adopter profile vends; a source-repo-only page (no `idd-template/`
 counterpart) may still discuss that path when its subject genuinely is
-this repository's own tooling.
+this repository's own tooling. The sole direct installed-package exception
+is a `packageManagerOnlyHelpers` entry in the runtime manifest, currently
+limited to `verify-import-mirror` under the `package-manager` profile; it is
+not a general `node_modules` invocation form and must not be used by
+`ephemeral-npx` or Yarn Plug'n'Play.
 `tests/helper-invocation-profile.test.mts` enforces both rules
 mechanically.
 

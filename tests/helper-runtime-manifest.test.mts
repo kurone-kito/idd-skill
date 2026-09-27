@@ -27,6 +27,29 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DEFAULT_PACKAGE_SPEC =
   'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main';
 
+test('manifest records the package-manager-only verify-import-mirror exception', () => {
+  const manifest = buildHelperRuntimeManifest({
+    profile: 'package-manager',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  });
+
+  assert.deepEqual(manifest.packageManagerOnlyHelpers, [
+    {
+      id: 'verify-import-mirror',
+      sourceEntryPath: 'scripts/verify-import-mirror.mjs',
+      installedEntryPath:
+        'node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs',
+      invocation:
+        'node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs',
+    },
+  ]);
+  assert.equal(
+    manifest.profiles['package-manager'].commands['idd:verify-import-mirror'],
+    undefined,
+  );
+});
+
 test('package-manager profile emits manager-specific install commands without hard-coded pnpm', () => {
   const expectedInstall: Record<string, string> = {
     npm: `npm install --save-dev ${DEFAULT_PACKAGE_SPEC}`,

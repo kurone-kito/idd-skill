@@ -71,7 +71,12 @@
 //    (`JSON.stringify(JSON.parse(x))`) on each side, then compared as
 //    strings -- deliberately stricter than a deep-equal, so a real value
 //    change still fails; only incidental formatting (indentation,
-//    trailing newline, spacing) is tolerated. A parsed value containing a
+//    trailing newline, spacing) is tolerated by default. With
+//    `--normalize-json-key`, a selected key may additionally differ when
+//    the target already equals upstream or exactly preserves its
+//    `--target-base-ref` value while upstream still carries the raw
+//    restoration placeholder; the baseline is required only for that
+//    differing-key case. A parsed value containing a
 //    non-finite number (`JSON.parse` silently converts an overflowing
 //    number like `1e400` to `Infinity`, which `JSON.stringify`
 //    re-serializes as the bare token `null`) is treated the same as a
@@ -236,6 +241,11 @@ export interface Report {
   counts: Partial<Record<CompareStatus, number>>;
 }
 
+export interface JsonKeyNormalization {
+  path: string;
+  keyPath: readonly string[];
+}
+
 export interface VerifyOptions {
   targetRoot: string;
   targetRef: string;
@@ -245,6 +255,7 @@ export interface VerifyOptions {
   upstreamRemote: string | null;
   pathPrefixes: readonly string[];
   generatedDirs: readonly string[];
+  jsonKeyNormalizations?: readonly JsonKeyNormalization[];
 }
 
 // ---------------------------------------------------------------------------
@@ -408,16 +419,134 @@ function hasUnsafeIntegerLiteral(content: string): boolean {
  * above. Deliberately literal, not a deep-equal -- see the module
  * header's disclosed integer-like-key limitation.
  */
-export function canonicalizeJson(content: string): string | null {
+function parseJsonForComparison(content: string): { value: unknown } | null {
   if (hasUnsafeIntegerLiteral(content)) {
     return null;
   }
   try {
     const parsed = JSON.parse(content);
-    return hasNonFiniteNumber(parsed) ? null : JSON.stringify(parsed);
+    return hasNonFiniteNumber(parsed) ? null : { value: parsed };
   } catch {
     return null;
   }
+}
+
+export function canonicalizeJson(content: string): string | null {
+  const parsed = parseJsonForComparison(content);
+  return parsed === null ? null : JSON.stringify(parsed.value);
+}
+
+function readJsonKey(
+  root: unknown,
+  keyPath: readonly string[],
+): { found: boolean; value?: unknown } {
+  let current = root;
+  for (const key of keyPath) {
+    if (
+      current === null ||
+      typeof current !== 'object' ||
+      !Object.hasOwn(current, key)
+    ) {
+      return { found: false };
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return { found: true, value: current };
+}
+
+function writeJsonKey(
+  root: unknown,
+  keyPath: readonly string[],
+  value: unknown,
+): boolean {
+  if (keyPath.length === 0) {
+    return false;
+  }
+  const lastKey = keyPath[keyPath.length - 1];
+  if (lastKey === undefined || lastKey.length === 0) {
+    return false;
+  }
+  let current = root;
+  for (const key of keyPath.slice(0, -1)) {
+    if (
+      current === null ||
+      typeof current !== 'object' ||
+      !Object.hasOwn(current, key)
+    ) {
+      return false;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  if (
+    current === null ||
+    typeof current !== 'object' ||
+    !Object.hasOwn(current, lastKey)
+  ) {
+    return false;
+  }
+  (current as Record<string, unknown>)[lastKey] = value;
+  return true;
+}
+
+const RESTORABLE_JSON_PLACEHOLDER_RE = /^\{\{[A-Z][A-Z0-9_]*\}\}(?![\s\S])/;
+
+function isRestorableJsonPlaceholder(value: unknown): value is string {
+  return (
+    typeof value === 'string' && RESTORABLE_JSON_PLACEHOLDER_RE.test(value)
+  );
+}
+
+function canonicalizeJsonWithTargetKeys(
+  path: string,
+  upstreamContent: string,
+  targetContent: string,
+  targetBaseContent: string | null,
+  normalizations: readonly JsonKeyNormalization[],
+): string | null {
+  const applicable = normalizations.filter((entry) => entry.path === path);
+  if (applicable.length === 0) {
+    return canonicalizeJson(upstreamContent);
+  }
+  const upstream = parseJsonForComparison(upstreamContent);
+  const target = parseJsonForComparison(targetContent);
+  let targetBase: { value: unknown } | null | undefined;
+  if (upstream === null || target === null) {
+    return null;
+  }
+  for (const entry of applicable) {
+    const targetValue = readJsonKey(target.value, entry.keyPath);
+    const upstreamValue = readJsonKey(upstream.value, entry.keyPath);
+    if (!targetValue.found || !upstreamValue.found) {
+      return null;
+    }
+    if (
+      JSON.stringify(targetValue.value) === JSON.stringify(upstreamValue.value)
+    ) {
+      continue;
+    }
+    if (!isRestorableJsonPlaceholder(upstreamValue.value)) {
+      return null;
+    }
+    if (targetBase === undefined) {
+      targetBase =
+        targetBaseContent === null
+          ? null
+          : parseJsonForComparison(targetBaseContent);
+    }
+    if (targetBase === null) {
+      return null;
+    }
+    const targetBaseValue = readJsonKey(targetBase.value, entry.keyPath);
+    if (
+      !targetBaseValue.found ||
+      JSON.stringify(targetValue.value) !==
+        JSON.stringify(targetBaseValue.value) ||
+      !writeJsonKey(upstream.value, entry.keyPath, targetBaseValue.value)
+    ) {
+      return null;
+    }
+  }
+  return JSON.stringify(upstream.value);
 }
 
 /** Rule 3 eligibility gate: case-insensitive `.md` suffix match. */
@@ -725,9 +854,18 @@ export function classifyFileContent(params: {
   path: string;
   upstreamContent: Buffer;
   targetContent: Buffer;
+  targetBaseContent?: Buffer | null;
   generatedDirs: readonly string[];
+  jsonKeyNormalizations?: readonly JsonKeyNormalization[];
 }): { contentClass: ContentClass } {
-  const { path, upstreamContent, targetContent, generatedDirs } = params;
+  const {
+    path,
+    upstreamContent,
+    targetContent,
+    targetBaseContent = null,
+    generatedDirs,
+    jsonKeyNormalizations = [],
+  } = params;
   if (upstreamContent.equals(targetContent)) {
     return { contentClass: 'exact-bytes' };
   }
@@ -744,8 +882,12 @@ export function classifyFileContent(params: {
     }
   }
   if (path.toLowerCase().endsWith('.json')) {
-    const upstreamCanonical = canonicalizeJson(
+    const upstreamCanonical = canonicalizeJsonWithTargetKeys(
+      path,
       upstreamContent.toString('utf8'),
+      targetContent.toString('utf8'),
+      targetBaseContent?.toString('utf8') ?? null,
+      jsonKeyNormalizations,
     );
     const targetCanonical = canonicalizeJson(targetContent.toString('utf8'));
     if (
@@ -782,17 +924,21 @@ export function classifyComparedFile(params: {
   path: string;
   upstreamContent: Buffer | null;
   targetContent: Buffer;
+  targetBaseContent?: Buffer | null;
   upstreamMode: string | null;
   targetMode: string | null;
   generatedDirs: readonly string[];
+  jsonKeyNormalizations?: readonly JsonKeyNormalization[];
 }): { status: CompareStatus; detail?: string } {
   const {
     path,
     upstreamContent,
     targetContent,
+    targetBaseContent = null,
     upstreamMode,
     targetMode,
     generatedDirs,
+    jsonKeyNormalizations = [],
   } = params;
   if (upstreamContent === null) {
     return {
@@ -804,7 +950,9 @@ export function classifyComparedFile(params: {
     path,
     upstreamContent,
     targetContent,
+    targetBaseContent,
     generatedDirs,
+    jsonKeyNormalizations,
   });
   const modesEqual =
     upstreamMode !== null && targetMode !== null && upstreamMode === targetMode;
@@ -1347,13 +1495,21 @@ export function runVerification(options: VerifyOptions): Report {
         `internal: ${entry.path} reported as ${entry.changeType} but is absent from ${options.targetRef}`,
       );
     }
+    const hasJsonKeyNormalization = (options.jsonKeyNormalizations ?? []).some(
+      (normalization) => normalization.path === entry.path,
+    );
+    const targetBaseEntry = hasJsonKeyNormalization
+      ? readTargetEntry(options.targetRoot, options.targetBaseRef, entry.path)
+      : null;
     const classification = classifyComparedFile({
       path: entry.path,
       upstreamContent: upstreamEntry?.content ?? null,
       targetContent: targetEntry.content,
+      targetBaseContent: targetBaseEntry?.content ?? null,
       upstreamMode: upstreamEntry?.mode ?? null,
       targetMode: targetEntry.mode,
       generatedDirs: options.generatedDirs,
+      jsonKeyNormalizations: options.jsonKeyNormalizations,
     });
     results.push(buildFileResult(entry.path, entry.changeType, classification));
   }
@@ -1387,6 +1543,7 @@ const VERIFY_IMPORT_MIRROR_FLAG_SPEC = {
   '--upstream-remote': { type: 'string' },
   '--path-prefix': { type: 'string', multiple: true },
   '--generated-dir': { type: 'string', multiple: true },
+  '--normalize-json-key': { type: 'string', multiple: true },
   '--format': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -1416,6 +1573,7 @@ if (import.meta.main) {
       upstreamRemote: args.upstreamRemote,
       pathPrefixes: args.pathPrefixes,
       generatedDirs: args.generatedDirs,
+      jsonKeyNormalizations: args.jsonKeyNormalizations,
     });
   } catch (error) {
     console.error(`error: ${(error as Error).message}`);
@@ -1439,8 +1597,26 @@ interface VerifyImportMirrorArgs {
   upstreamRemote: string | null;
   pathPrefixes: string[];
   generatedDirs: string[];
+  jsonKeyNormalizations: JsonKeyNormalization[];
   format: 'json' | 'table';
   help: boolean;
+}
+
+function parseJsonKeyNormalization(spec: string): JsonKeyNormalization {
+  const separator = spec.indexOf(':');
+  const path = separator < 1 ? '' : spec.slice(0, separator);
+  const keyPathText = separator < 1 ? '' : spec.slice(separator + 1);
+  const keyPath = keyPathText.split('.');
+  if (
+    path.length === 0 ||
+    keyPathText.length === 0 ||
+    keyPath.some((key) => key.length === 0)
+  ) {
+    throw new Error(
+      `--normalize-json-key must be <path>:<key.path> (got "${spec}")`,
+    );
+  }
+  return { path, keyPath };
 }
 
 function parseArgs(argv: string[]): VerifyImportMirrorArgs {
@@ -1457,6 +1633,9 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
     (values['upstream-remote'] as string | undefined) ?? null;
   const pathPrefixes = (values['path-prefix'] as string[] | undefined) ?? [];
   const generatedDirs = (values['generated-dir'] as string[] | undefined) ?? [];
+  const jsonKeyNormalizations = (
+    (values['normalize-json-key'] as string[] | undefined) ?? []
+  ).map(parseJsonKeyNormalization);
   const format = (values.format as string | undefined) ?? 'table';
 
   // help-only invocations (e.g. `--help` alone) must not trip the
@@ -1489,6 +1668,7 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
     upstreamRemote,
     pathPrefixes,
     generatedDirs,
+    jsonKeyNormalizations,
     format,
     help,
   };
@@ -1538,6 +1718,11 @@ Scoping:
                              idd-generated-from banner line is tolerated
                              as the sole difference (repeatable; rule 1
                              never applies to any file when omitted)
+  --normalize-json-key <p>:<k.path>
+                             replace only the upstream JSON key with the
+                             pre-import target-base value after proving the
+                             target value was deliberately preserved
+                             (repeatable; deliberate restores only)
 
 Output:
   --format json|table        output format (default: table)

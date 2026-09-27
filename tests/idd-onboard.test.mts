@@ -706,6 +706,11 @@ test('planUntrustedLabelerGuardWorkflow generates the guard workflow for non-emp
     plan.content ?? '',
     /github\.event\.label\.name == 'status:needs-decision'/,
   );
+  assert.match(
+    plan.content ?? '',
+    /export GH_HOST="\$\{GITHUB_SERVER_URL#https:\/\/\}"/,
+  );
+  assert.match(plan.content ?? '', /export GH_HOST="\$\{GH_HOST#http:\/\/\}"/);
 
   assert.equal(applyUntrustedLabelerGuardPlan(root, plan), true);
   const written = readFileSync(
