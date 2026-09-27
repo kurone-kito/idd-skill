@@ -472,13 +472,28 @@ The confirmed substitutions are:
   when that distinction matters. Carry the original `--state` through
   as `state=open`, `state=closed`, or `state=all`; carry `--search`
   through the search endpoint below with its `repo:` and `is:issue`
-  qualifiers; and carry `--limit` through pagination, because REST
-  returns at most 100 records per page. With `--paginate --slurp`,
-  combine the page arrays, discard objects with a `pull_request` field,
-  and apply the requested limit after filtering.
+  qualifiers; and carry `--limit` through bounded pagination, because
+  REST returns at most 100 records per page. For a bounded list, fetch
+  one page at a time, discard objects with a `pull_request` field, stop
+  as soon as the requested number of issue objects has been collected
+  (or a page is empty), and apply the requested limit to the collected
+  objects. For an intentionally unbounded snapshot, `--paginate
+  --slurp` can combine all page arrays before filtering.
 
   ```sh
-  gh api --paginate --slurp "repos/<owner>/<repo>/issues?state=all&per_page=100"
+  state=all
+  limit=100
+  page=1
+  issues_file="$(mktemp)"
+  trap 'rm -f "$issues_file"' EXIT
+  while :; do
+    page_json="$(gh api "repos/<owner>/<repo>/issues?state=${state}&per_page=100&page=${page}")"
+    [ "$(jq 'length' <<<"$page_json")" -eq 0 ] && break
+    jq -c '[.[] | select(has("pull_request") | not)][]' <<<"$page_json" >>"$issues_file"
+    [ "$(wc -l <"$issues_file")" -ge "$limit" ] && break
+    page=$((page + 1))
+  done
+  jq -s --argjson limit "$limit" '.[0:$limit]' "$issues_file"
   ```
 
 - For `gh issue view <number>`, use the individual issue endpoint.
@@ -530,13 +545,16 @@ the raw JSON response. Parse the complete `gh api` response and read its
 variable, because the added newline can change the digest. This is a
 one-time read-back confidence check for a new issue, not a REST fallback
 for verification of an existing generation and not a change to the
-helper's GraphQL dependency. Pass only when the fetched comment is the
-just-posted trusted marker (expected author and canonical marker fields)
-and its recorded `body-sha256` equals the digest recomputed from the
-fetched issue body. Also fetch the complete, paginated owner-marker log
-and reconcile it before passing: a later trusted marker must not
-supersede the fetched comment. A single known comment ID is not enough
-to establish current ownership. The read-back requests are:
+helper's GraphQL dependency. Pass only when the fetched issue still
+carries the configured authoring hold label (normally
+`status:authoring`), the fetched comment is the just-posted trusted
+marker (expected author and canonical marker fields), and its recorded
+`body-sha256` equals the digest recomputed from the fetched issue body.
+If the hold label is absent, enter the same recovery path as any other
+incomplete post-create verification. Also fetch the complete, paginated
+owner-marker log and reconcile it before passing: a later trusted marker
+must not supersede the fetched comment. A single known comment ID is not
+enough to establish current ownership. The read-back requests are:
 
 ```sh
 gh api "repos/<owner>/<repo>/issues/comments/<comment-id>"
