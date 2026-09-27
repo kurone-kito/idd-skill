@@ -4379,6 +4379,124 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
   }
 });
 
+test('primary recovery removes preserved ignored files before reporting release', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-ignored-'));
+  const preserveDir = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-ignored-preserve-'),
+  );
+  const ignoredPath = join(root, 'stale.env');
+  let ignoredPresent = true;
+  let confirmCalls = 0;
+  const events: string[] = [];
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) =>
+        path === root ||
+        path === join(root, '.git') ||
+        path.startsWith(preserveDir) ||
+        (ignoredPresent && path === ignoredPath) ||
+        existsSync(path),
+      ensurePreserveDir: () => preserveDir,
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 3;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      copyPath: (_from, to) => {
+        events.push(`copy:${to}`);
+        mkdirSync(to, { recursive: true });
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+          return {
+            ok: true,
+            status: 0,
+            stdout: ignoredPresent ? '!! stale.env\0' : '',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'clean') {
+          events.push(`clean:${cwd}:${argv.at(-1)}`);
+          ignoredPresent = false;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `${root}/.git\n`,
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'checkout') {
+          events.push('checkout');
+        }
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          events.push('submodule-update');
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.deepEqual(events.slice(-3), [
+      'checkout',
+      'submodule-update',
+      `clean:${root}:stale.env`,
+    ]);
+    assert.equal(ignoredPresent, false);
+    assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(preserveDir, { recursive: true, force: true });
+  }
+});
+
 test('primary-worktree release only deletes a lock the fresh recheck positively observed', () => {
   let unlinkAttempted = false;
   const deps = fakeDeps({
@@ -4998,6 +5116,14 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
           stderr: '',
         };
       }
+      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/tags/private-tag\n',
+          stderr: '',
+        };
+      }
       if (
         cwd === '/repo/linked/submodule' &&
         argv[0] === 'stash' &&
@@ -5048,10 +5174,18 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
-test('copies linked worktree admin data for top-level local-only refs', () => {
+test('copies linked worktree admin data for top-level local refs', () => {
   const copied: Array<{ from: string; to: string }> = [];
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
+      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/tags/private-tag\n',
+          stderr: '',
+        };
+      }
       if (
         cwd === '/repo/linked' &&
         argv[0] === 'rev-list' &&
@@ -5078,6 +5212,41 @@ test('copies linked worktree admin data for top-level local-only refs', () => {
     },
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('copies linked worktree admin data for an interrupted operation without local-only commits', () => {
+  const copied: Array<{ from: string; to: string }> = [];
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (
+        cwd === '/repo/linked' &&
+        argv[0] === 'rev-parse' &&
+        argv.includes('-q') &&
+        argv.includes('MERGE_HEAD')
+      ) {
+        return { ok: true, status: 0, stdout: 'merge-head\n', stderr: '' };
+      }
+      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: (from, to) => copied.push({ from, to }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(verdict.plan.worktreeAdminCopy, {
+    copiedTo: '/tmp/preserve/worktree-gitdir',
+    plannedTo: '/tmp/preserve/worktree-gitdir',
+  });
+  assert.deepEqual(copied, [
+    {
+      from: '/repo/primary/.git/worktrees/linked',
+      to: '/tmp/preserve/worktree-gitdir',
+    },
+  ]);
 });
 
 test('dry-run plans an initialized submodule admin export without copying it', () => {

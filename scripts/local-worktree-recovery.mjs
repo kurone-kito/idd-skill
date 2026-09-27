@@ -36,6 +36,7 @@ import { execFileSync } from 'node:child_process';
 import {
   closeSync,
   constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -1109,10 +1110,21 @@ function planAndMaybeBackupRef(
   let tipSha = null;
   let hasUnpushed = false;
   const localRefs = runGit(
-    ['rev-list', '--all', '--not', '--remotes'],
+    [
+      'for-each-ref',
+      '--format=%(refname)',
+      'refs/heads',
+      'refs/tags',
+      'refs/notes',
+      'refs/replace',
+    ],
     scopePath,
   );
   const localRefsQueryFailed = !localRefs.ok;
+  // A commit-reachability scan is insufficient here: a local tag or branch
+  // can point at an object already reachable from a remote while its ref name
+  // remains private to this worktree's disposable admin directory. Enumerate
+  // preservation-relevant local ref namespaces directly instead.
   const hasLocalOnlyRefs = localRefs.ok && localRefs.stdout.trim().length > 0;
   // Copilot/Codex review: a failed `git log @{u}..HEAD` (or `git rev-parse
   // HEAD`) probe must never read as "no unpushed commits" -- unlike the
@@ -1235,7 +1247,7 @@ function scanAndMaybeCopyIgnoredFiles(
   for (const ignoredPath of extractIgnoredPaths(status.stdout)) {
     if (!isSafeRelativePath(ignoredPath)) {
       scanFailed = true;
-      copied.push({ path: ignoredPath, copiedTo: null });
+      copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
       continue;
     }
     const preserveDir = apply ? deps.ensurePreserveDir() : plannedPreserveDir;
@@ -1256,7 +1268,7 @@ function scanAndMaybeCopyIgnoredFiles(
         // into the target, do not remove the worktree without a verified
         // artifact.
         scanFailed = true;
-        copied.push({ path: ignoredPath, copiedTo: null });
+        copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
         continue;
       }
       try {
@@ -1272,13 +1284,58 @@ function scanAndMaybeCopyIgnoredFiles(
         // this scan failed, and let the caller report the partial mutation
         // while still stopping before removal (Codex review).
         scanFailed = true;
-        copied.push({ path: ignoredPath, copiedTo: null });
+        copied.push({ scope: scopeLabel, path: ignoredPath, copiedTo: null });
         continue;
       }
     }
-    copied.push({ path: ignoredPath, copiedTo: destination });
+    copied.push({
+      scope: scopeLabel,
+      path: ignoredPath,
+      copiedTo: destination,
+    });
   }
   return { copied, scanFailed };
+}
+/** Remove ignored paths that were copied out before a primary-worktree
+ * checkout. Unlike linked-worktree removal, a checkout leaves ignored files
+ * in place; reporting success with those recovered issue files still present
+ * would leak stale configuration or generated data into the development
+ * branch. The caller has already verified the backup, so remove only the
+ * exact relative paths recorded by the preservation scan and fail closed if
+ * any path remains. */
+function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+  entries,
+  targetPath,
+  deps,
+) {
+  const pathsByScope = new Map();
+  for (const entry of entries) {
+    if (entry.copiedTo === null) {
+      return `ignored path ${entry.scope}/${entry.path} was not preserved`;
+    }
+    if (!isSafeRelativePath(entry.path)) {
+      return `ignored path ${entry.scope}/${entry.path} is unsafe`;
+    }
+    const paths = pathsByScope.get(entry.scope) ?? new Set();
+    paths.add(entry.path);
+    pathsByScope.set(entry.scope, paths);
+  }
+  for (const [scope, paths] of pathsByScope) {
+    const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
+    const cleaned = deps.runGit(
+      ['clean', '-fdX', '--', ...Array.from(paths)],
+      scopePath,
+    );
+    if (!cleaned.ok) {
+      return `git clean failed for preserved ignored paths in ${scope}: ${cleaned.stderr}`;
+    }
+    for (const path of paths) {
+      if (deps.pathExists(join(scopePath, path))) {
+        return `preserved ignored path ${scope}/${path} remained after cleanup`;
+      }
+    }
+  }
+  return null;
 }
 function planAndMaybePreserve(
   path,
@@ -1496,7 +1553,10 @@ function planAndMaybePreserve(
   let worktreeAdminCopy = null;
   let worktreeAdminCopyFailed = false;
   const topLevelRefs = backupRefs.find((entry) => entry.scope === '.');
-  if (targetGitDirForScope !== null && topLevelRefs?.hasLocalOnlyRefs) {
+  if (
+    targetGitDirForScope !== null &&
+    (topLevelRefs?.hasLocalOnlyRefs || inProgressOperation !== null)
+  ) {
     const plannedDestination = plannedPreserveDir
       ? join(plannedPreserveDir, 'worktree-gitdir')
       : null;
@@ -2830,6 +2890,23 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      const ignoredCleanupError =
+        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+          verdict.plan.ignoredFilesCopied,
+          targetPath,
+          deps,
+        );
+      if (ignoredCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checked out ${developmentBranch}, but ${ignoredCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const postCheckoutStatus = deps.runGit(
         [
           'status',
@@ -3960,12 +4037,22 @@ export function copyPathWithSafeSymlinks(
       let temporaryFd = null;
       try {
         const noFollow = constants.O_NOFOLLOW;
-        if (noFollow === undefined) {
+        const nonBlocking = constants.O_NONBLOCK;
+        if (noFollow === undefined || nonBlocking === undefined) {
           throw new Error(
-            'recovery source copy requires a platform-supported no-follow open',
+            'recovery source copy requires platform-supported no-follow and nonblocking opens',
           );
         }
-        sourceFd = openSync(source, constants.O_RDONLY | noFollow);
+        sourceFd = openSync(
+          source,
+          constants.O_RDONLY | noFollow | nonBlocking,
+        );
+        const openedSourceStat = fstatSync(sourceFd);
+        if (!openedSourceStat.isFile()) {
+          throw new Error(
+            `recovery source changed to a special file during copy: ${source}`,
+          );
+        }
         temporaryFd = openSync(
           temporaryPath,
           constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
