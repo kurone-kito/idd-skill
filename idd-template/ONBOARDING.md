@@ -229,15 +229,14 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
-   For an unborn target, inspect untracked files and create the baseline
-   before the clean-target check:
+   For an unborn target, inspect and record the baseline before the clean
+   check:
 
    ```sh
-   if ! git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1; then
-     git -C <target-repo> status --short
-     git -C <target-repo> add -A && \
-     git -C <target-repo> commit --allow-empty -m "chore: record baseline"
-   fi
+   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
+     (git -C <target-repo> status --short && \
+      git -C <target-repo> add -A && \
+      git -C <target-repo> commit --allow-empty -m "chore: record baseline")
    ```
 
    Require a clean target:
@@ -257,17 +256,15 @@ below instead.
      --source <idd-skill-clone> --target <target-repo>
    ```
 
-   **Checkpoint.** Before `--substitute`, commit the mirror and keep its ref
-   reachable:
+   **Checkpoint.** Before `--substitute`, commit the mirror:
 
    ```sh
    git -C <target-repo> add -A && \
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   `--target-ref` must name it until verification and reruns finish; do not
-   squash it. For verification, pass the pre-import ref (normally `HEAD^`)
-   as `--target-base-ref`; `HEAD` is now the post-import checkpoint.
+   Keep `--target-ref` reachable; pass its pre-import ref (normally `HEAD^`)
+   as `--target-base-ref`.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
@@ -702,26 +699,17 @@ error), so an agent can gate on the exit code without parsing prose.
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
   replacing a manual walkthrough of the checklist below with six check
-  groups: manifest completeness (reusing `--import`'s own file-set
-  resolution; held targets are exempt), placeholder residue
-  (reusing `--substitute`'s scanner), a helper-load check
-  (`vendored-node` only: spawns each cataloged helper under `--target`
-  with `--help`), an informational stale-import signal, a non-blocking
-  package-pin advisory (flags an `ephemeral-npx`/`package-manager`
-  helper runtime profile with no configured `helperRuntime.packageSpec`
-  — see
-  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
-  and a non-blocking held-schema drift advisory (a schema or fixture
-  `--import` would update, while a held `src/scripts` module or a held
-  vendored `scripts` module still names it). A missing manifest file,
-  leftover placeholder, or helper-load failure is blocking; the
-  stale-import signal, package-pin
-  advisory, and held-schema drift advisory are never blocking. Repeat
-  `--hold` with a manifest target path to name content left unchanged;
-  an unknown path is a usage error.
-  Git targets require pre-import `--target-base-ref`; checkpoint `HEAD` is
-  post-import. Unborn targets use the current-target fallback. Git failures
-  are errors; non-Git targets use the source-vs-current fallback.
+  groups: manifest completeness (held targets are exempt), placeholder
+  residue, helper loads (`vendored-node` only), stale-import signal,
+  package-pin advisory (for an `ephemeral-npx`/`package-manager` profile
+  without `helperRuntime.packageSpec`; see the
+  [helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
+  and held-schema drift (a changed schema or fixture is still named by a
+  held module). Missing manifests, placeholders, or helper-load failures
+  block; the three advisories do not. Repeat `--hold` for unchanged
+  manifest paths; unknown paths are usage errors. Git targets require
+  pre-import `--target-base-ref`; unborn targets use the fallback; other Git
+  failures are errors.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
