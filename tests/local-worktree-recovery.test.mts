@@ -2744,6 +2744,64 @@ test('late preservation refreshes uninitialized submodule copies before removal'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('late preservation rejects an unreadable ownership suffix after refresh', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason:
+            confirmCalls >= 4
+              ? 'stale-claim-local-worktree-unreadable'
+              : 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: confirmCalls >= 4 ? 'unreadable' : 'occupied',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? '-0000000000000000000000000000000000000000 uninitialized\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: () => {},
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 4);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /changed during late preservation/);
+});
+
 test('late preservation refuses a claim change before removal', () => {
   let confirmCalls = 0;
   let removeCalled = false;
@@ -3783,6 +3841,36 @@ test('a genuinely unmerged-path stash failure still takes the copy-out fallback'
     verdict.plan.stashes[0]?.unmergedFallbackCopiedTo !== null,
     true,
   );
+});
+
+test('an unmerged index entry preserves its working-tree conflict file', () => {
+  let copied: string | null = null;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'UU conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: (_from, to) => {
+      copied = to;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.notEqual(copied, null);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, true);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackCopiedFiles.length, 1);
 });
 
 test('unmerged initialized-submodule fallback uses the parent worktree as symlink root', () => {

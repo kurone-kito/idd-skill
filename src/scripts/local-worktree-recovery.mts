@@ -903,6 +903,16 @@ export interface DirtyPathEntry {
   worktreeStatus: string;
 }
 
+/** Git porcelain's seven unmerged XY pairs. */
+function isUnmergedStatus(
+  indexStatus: string,
+  worktreeStatus: string,
+): boolean {
+  return new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']).has(
+    `${indexStatus}${worktreeStatus}`,
+  );
+}
+
 export function extractDirtyEntries(statusPorcelain: string): DirtyPathEntry[] {
   const entries: DirtyPathEntry[] = [];
   for (const line of statusPorcelain.split('\n')) {
@@ -1318,13 +1328,17 @@ function planAndMaybeStashScope(
         (entry) =>
           entry.indexStatus !== ' ' &&
           entry.indexStatus !== '?' &&
-          entry.indexStatus !== '!',
+          entry.indexStatus !== '!' &&
+          !isUnmergedStatus(entry.indexStatus, entry.worktreeStatus),
       )
     ) {
-      // A worktree copy cannot preserve the staged/index side of an `MM`,
-      // `UU`, or similar entry. Fail closed instead of removing the private
-      // index while claiming that the working-tree version was sufficient
-      // (Codex review #4114324399).
+      // A worktree copy cannot preserve the staged/index side of an ordinary
+      // staged change such as `MM`. Fail closed for those entries instead of
+      // removing the private index while claiming that the working-tree
+      // version was sufficient. Genuine unmerged entries (`UU`, `AU`, `UA`,
+      // and the other porcelain unmerged pairs) are different: the documented
+      // fallback exists specifically to copy their working-tree conflict
+      // files out when `stash push` refuses them (Copilot review).
       entry.unmergedFallbackAllPreserved = false;
       return entry;
     }
@@ -3259,6 +3273,7 @@ export function runLocalWorktreeRecovery(
             uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
             ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
             submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
           },
           targetPath,
           deps,
@@ -3398,6 +3413,7 @@ export function runLocalWorktreeRecovery(
         postRefreshRouting !== null &&
         postRefreshRouting.state === 'local_worktree_occupied' &&
         isAcceptedBlockReason(postRefreshRouting.reason) &&
+        !postRefreshRouting.reason.endsWith('-local-worktree-unreadable') &&
         (postRefreshRouting.evidence?.local_worktree?.paths ?? []).some(
           (reportedPath) =>
             normalizeGitWorktreePathForComparison(reportedPath) ===
