@@ -149,12 +149,15 @@ precondition for an expected advisory-bot
 re-review: when the primary bot already reviewed an earlier head,
 check the AW1 fast-path signal in `idd-advisory-wait.instructions.md`
 (`LAST_COPILOT_COMMIT == PR_HEAD_SHA`) and post after that review
-lands, bounded by the advisory-wait windows when it never does. If CI
-or that re-review is incomplete, skip Step 2 and proceed with Steps 3
-and E4-E8/E9-E15; post the deferred watermark at the next full E1
-entry after they resolve. Do not defer Steps 1/3. A CI run after
-a watermark forces a wasted E1↔F2 round-trip because F2's latest-CI
-`completedAt` mismatches `{latest-ci-completed-at}`.
+lands or its bounded wait reaches a terminal outcome. If CI or that
+re-review is incomplete, skip Step 2 and continue through Step 3, E2,
+and E3; do not enter F1/F2 without watermark. When
+E3 is empty (or E8 later has zero Accepted PATH A items), use the
+existing E15 CI-wait and/or E14 advisory-wait route for the incomplete
+precondition, then return to E1. At that E1, post the watermark even
+if no new review landed. Do not defer Steps 1/3, E2, or E3. A CI run
+after a watermark forces a wasted E1↔F2 round-trip because F2's
+latest-CI `completedAt` mismatches `{latest-ci-completed-at}`.
 
 Note: the post-idd-marker helper above performs this JSON `POST`
 under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`
@@ -268,8 +271,11 @@ after the note" rule applies here too.
 
 ## E3 — Empty list check
 
-If ReviewItems_snapshot is empty → proceed to the E-phase branch-sync
-check in `idd-review-triage.instructions.md`.
+If ReviewItems_snapshot is empty and Step 2 was not deferred → proceed
+to the E-phase branch-sync check in `idd-review-triage.instructions.md`.
+
+If Step 2 was deferred → use the E15/E14 wait route above, then return
+to E1 before branch-sync.
 
 Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
 

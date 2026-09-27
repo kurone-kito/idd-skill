@@ -472,27 +472,23 @@ evidence required by its path:
 If any check fails, do not continue. Return to E4-E6 as needed until the
 missing evidence is recorded.
 
-After E7 succeeds, update the PR live status digest only when it will
-not invalidate a merge-bound E1 snapshot — when triage posts a hold and
-stops, when Accepted PATH A items remain and the next route is E9, or
-when a fresh E1 snapshot follows before F2. Set `Phase` to `E triage`,
-summarize remaining Accepted PATH A work or `none` in `Open blockers`,
-`Next action` to E9 or F2 as appropriate, and cite the disposition
-replies plus the trusted review-watermark in `Authoritative by`. If
-Step 2 was skipped for incomplete CI or expected advisory review, cite
-the E1 Step 1 SHA plus `watermark deferred, CI incomplete` instead. If
-ReviewItems_snapshot is empty and the next step is F2, defer the digest
-update unless you intentionally return to E1 afterward.
+After E7, update live digest only when safe for merge-bound E1: on hold,
+Accepted PATH A → E9, or fresh E1 before F2. Set `Phase` to
+`E triage`, put Accepted PATH A/`none` in blockers, set Next to E9/F2,
+cite dispositions/watermark. For skipped Step 2 due to incomplete
+CI/advisory, cite E1 Step 1 SHA plus
+`watermark deferred, CI/advisory incomplete`. If snapshot empty and
+next F2, defer digest unless returning E1.
 
 ## E8 — Accepted PATH A count check
 
-Zero Accepted PATH A → **E-phase branch-sync check** below (per the
-Skip condition note above); otherwise →
+Zero Accepted PATH A + deferred Step 2 → E15/E14 wait route in
+`idd-review-snapshot.instructions.md`; otherwise branch-sync. Non-zero →
 `idd-review-fix.instructions.md`.
 
 ## E-phase branch-sync check
 
-After the review loop confirms no PATH A items remain (from E3 or E8),
+After review confirms no PATH A items remain (E3 or E8),
 check the current branch state before routing to F-phase. This gate uses
 merge-from-`{development-branch}` (never rebase) when synchronization is
 required, preserving review history on the already-published PR branch.

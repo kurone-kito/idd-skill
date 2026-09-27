@@ -53,16 +53,12 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Before posting the Step 2 watermark, confirm every CI run counting
-toward the merge gate has completed, including any opt-in/label-triggered
-job enabled here. If the primary advisory bot already reviewed an earlier
-head, expect an automatic same-head re-review — run the
-advisory-wait-state helper and check its `lastCopilotCommit ==
-prHeadSha` fast-path fields (from
-`idd-advisory-wait-lite.instructions.md`; read fresh from the helper),
-and wait, bounded by that file's advisory-wait windows if it never lands.
-Step 2 waits: take Steps 1 and 3 regardless of CI/advisory-review
-state, and defer the watermark to the next full E1 entry if needed.
+Before Step 2, confirm all merge-gate CI runs, including opt-in jobs,
+have completed. If the primary advisory bot reviewed an earlier head,
+run `advisory-wait-state`, check its `lastCopilotCommit == prHeadSha`
+fast-path, and wait within its bounded windows if needed. Take Steps 1
+and 3 regardless; if incomplete, skip Step 2, use E15/E14 before
+branch-sync/F2, and return to E1 to post the watermark.
 
 ### Step 1 — Snapshot the activity universe
 
@@ -117,7 +113,8 @@ state, and defer the watermark to the next full E1 entry if needed.
 
 ### Step 2 — Record the watermark
 
-Post one marker per E1 pass. Prefer the one-command path: `node
+When the precondition above is satisfied, post one marker per E1 pass.
+Prefer the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
@@ -130,7 +127,8 @@ The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run.
+--apply` — stays available when `--from-pr` cannot run. Otherwise skip
+Step 2 and use the E15/E14 wait route after Step 3.
 
 The rendered body is exactly:
 
