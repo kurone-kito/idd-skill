@@ -50,7 +50,7 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 test('copyPathWithSafeSymlinks materializes in-tree links and preserves external links', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-'));
   const source = join(root, 'source');
-  const destination = join(root, 'destination');
+  const destination = join(root, 'preserve', 'destination');
   const external = join(root, 'external.txt');
   try {
     mkdirSync(source);
@@ -58,6 +58,7 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
     writeFileSync(external, 'external\n');
     symlinkSync(join(source, 'inside.txt'), join(source, 'inside-link'));
     symlinkSync(external, join(source, 'external-link'));
+    symlinkSync('../external.txt', join(source, 'external-relative-link'));
 
     copyPathWithSafeSymlinks(source, destination, source);
     rmSync(source, { recursive: true, force: true });
@@ -75,6 +76,14 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
       true,
     );
     assert.equal(readlinkSync(join(destination, 'external-link')), external);
+    assert.equal(
+      lstatSync(join(destination, 'external-relative-link')).isSymbolicLink(),
+      true,
+    );
+    assert.equal(
+      readFileSync(join(destination, 'external-relative-link'), 'utf8'),
+      'external\n',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2118,6 +2127,41 @@ test('step 4 stops removal when a preservation artifact no longer verifies fresh
     deps,
   );
   assert.equal(verdict.plan.stashes[0]?.stashed, true);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /no longer verifies fresh under the clone lock/);
+});
+
+test('fresh stash verification rejects a stale duplicate tag after the new stash disappears', () => {
+  let stashListCalls = 0;
+  const tag = 'idd-lwr claim-x';
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        const one = `stash@{0}: On issue/1-task: ${tag}`;
+        const two = `${one}\nstash@{1}: On issue/1-task: ${tag}`;
+        return {
+          ok: true,
+          status: 0,
+          stdout: stashListCalls === 2 ? `${two}\n` : `${one}\n`,
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.baselineCount, 1);
+  assert.equal(verdict.plan.stashes[0]?.verifiedCount, 2);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /no longer verifies fresh under the clone lock/);
 });

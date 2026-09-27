@@ -515,13 +515,13 @@ function resolveAcquireWorktreeFacts(worktree: string): {
  * replacement without treating ordinary child-file changes as a mismatch.
  */
 interface DirectoryIdentity {
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 }
 
 function readDirectoryIdentity(path: string): DirectoryIdentity {
   try {
-    const stat = statSync(path);
+    const stat = statSync(path, { bigint: true });
     if (!stat.isDirectory()) {
       throw new Error('not a directory');
     }

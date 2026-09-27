@@ -946,8 +946,21 @@ function planAndMaybeBackupRef(
   ) {
     return entry;
   }
-  const write = runGit(['update-ref', ref, tipSha], scopePath);
-  if (write.ok) {
+  // Use compare-and-swap semantics so an earlier recovery ref is never
+  // overwritten by a later recovery of the same branch. If another process
+  // already preserved this exact tip, reusing it is safe; any other existing
+  // tip fails closed and blocks removal.
+  const write = runGit(
+    ['update-ref', ref, tipSha, '0'.repeat(tipSha.length)],
+    scopePath,
+  );
+  const alreadyPreserved = !write.ok
+    ? runGit(['rev-parse', '--verify', ref], scopePath)
+    : null;
+  if (
+    write.ok ||
+    (alreadyPreserved?.ok && alreadyPreserved.stdout.trim() === tipSha)
+  ) {
     entry.written = true;
     const verify = runGit(['rev-parse', '--verify', ref], scopePath);
     entry.verifiedOid = verify.ok ? verify.stdout.trim() : null;
@@ -1382,8 +1395,10 @@ function reverifyPreservationArtifactsFresh(
     if (stash.stashed) {
       const list = runGit(['stash', 'list'], scopePath(stash.scope));
       if (!list.ok) return false;
+      const taggedCount = countTaggedStashEntries(list.stdout, stash.tag);
       if (
         stash.createdStashEntry === null ||
+        taggedCount !== stash.baselineCount + 1 ||
         !list.stdout
           .split(/\r?\n/)
           .some((line) => line === stash.createdStashEntry)
@@ -2711,7 +2726,11 @@ export function copyPathWithSafeSymlinks(from, to, sourceRoot = from) {
         copyEntry(resolvedTarget, destination);
         return;
       }
-      symlinkSync(linkText, destination);
+      const externalTarget = resolvedTarget ?? lexicalTarget;
+      const destinationLink = isAbsolute(linkText)
+        ? linkText
+        : relative(dirname(destination), externalTarget) || '.';
+      symlinkSync(destinationLink, destination);
       return;
     }
     if (sourceStat.isDirectory()) {
@@ -2753,10 +2772,16 @@ function ensurePreserveDirProduction(explicit, targetPath) {
     }
     if (explicit) {
       const explicitDir = resolve(process.cwd(), explicit);
-      if (pathExistsOnDisk(explicitDir)) {
-        throw new Error(
-          `local-worktree-recovery: --preserve-dir must name a new directory; refusing to overwrite existing recovery data at ${explicitDir}`,
-        );
+      try {
+        mkdirSync(dirname(explicitDir), { recursive: true });
+        mkdirSync(explicitDir);
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          throw new Error(
+            `local-worktree-recovery: --preserve-dir must name a new directory; refusing to overwrite existing recovery data at ${explicitDir}`,
+          );
+        }
+        throw error;
       }
       preserveDirMemo = explicitDir;
       return preserveDirMemo;

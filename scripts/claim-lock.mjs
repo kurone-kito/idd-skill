@@ -477,7 +477,7 @@ function resolveAcquireWorktreeFacts(worktree) {
 }
 function readDirectoryIdentity(path) {
   try {
-    const stat = statSync(path);
+    const stat = statSync(path, { bigint: true });
     if (!stat.isDirectory()) {
       throw new Error('not a directory');
     }
