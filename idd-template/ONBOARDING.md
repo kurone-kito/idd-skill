@@ -235,7 +235,8 @@ below instead.
    ```sh
    root=$(git -C <target-repo> rev-parse --show-toplevel) &&
    test "$root" = "$(cd <target-repo> && pwd -P)" &&
-   test -z "$(git -C <target-repo> status --short --untracked-files=all)" || exit 1
+   status=$(git -C <target-repo> status --short --untracked-files=all) &&
+   test -z "$status" || exit 1
    ```
 
 3. Import the core template file set (add `--profile vendored-node`
