@@ -3532,6 +3532,67 @@ test('checkHeldSchemaDrift flags a held module that references a changed schema'
   assert.equal(verify.heldSchemaDrift.findings.length, 1);
 });
 
+test('checkHeldSchemaDrift compares a post-import target with its Git baseline', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  execFileSync('git', ['init', '--initial-branch=main', targetRoot], {
+    stdio: 'ignore',
+  });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'config', 'user.email', 'fixture@example.com'],
+    { stdio: 'ignore' },
+  );
+  execFileSync('git', ['-C', targetRoot, 'config', 'user.name', 'Fixture'], {
+    stdio: 'ignore',
+  });
+  execFileSync('git', ['-C', targetRoot, 'add', '.'], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', targetRoot, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+    { stdio: 'ignore' },
+  );
+  // Simulate --import copying the non-held schema after the baseline commit.
+  writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+    targetBaseRef: 'HEAD',
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+  const verify = runVerify(
+    sourceRoot,
+    targetRoot,
+    undefined,
+    [DRIFT_MODULE],
+    'HEAD',
+  );
+  assert.equal(verify.heldSchemaDrift.findings.length, 1);
+});
+
+test('checkHeldSchemaDrift flags a directory-scanning held module', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = [
+    "import { readdirSync } from 'node:fs';",
+    "const schemaFiles = readdirSync('schemas');",
+    'export { schemaFiles };',
+    '',
+  ].join('\n');
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -4194,6 +4255,7 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
   assert.match(help, /staleImportSignal/);
   assert.match(help, /packagePinWarning/);
   assert.match(help, /heldSchemaDrift/);
+  assert.match(help, /--target-base-ref/);
 });
 
 // ---------------------------------------------------------------------------
@@ -4833,6 +4895,7 @@ test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead
         force: false,
         profile: undefined,
         hold: [],
+        targetBaseRef: undefined,
         overrides: {},
         help: false,
         allowRoots: [tmpdir()],

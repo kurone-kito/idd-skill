@@ -1976,7 +1976,7 @@ function isSchemaOrFixtureManifestPath(targetPath) {
  * completeness already reports it). A target path that exists but is
  * not a regular file is a non-file collision, not a content change.
  */
-function manifestContentDiffers(sourceRoot, targetRoot, file) {
+function manifestContentDiffers(sourceRoot, targetRoot, file, baseline) {
   if (!fileExists(sourceRoot, file.sourcePath)) {
     return false;
   }
@@ -1989,6 +1989,13 @@ function manifestContentDiffers(sourceRoot, targetRoot, file) {
     hasNonDirectoryAncestor(targetRoot, file.targetPath)
   ) {
     return false;
+  }
+  if (baseline !== undefined) {
+    const baselineContent = baseline.read(file.targetPath);
+    return (
+      baselineContent === null ||
+      !readFileSync(join(sourceRoot, file.sourcePath)).equals(baselineContent)
+    );
   }
   if (!fileExists(targetRoot, file.targetPath)) {
     return !pathExists(targetRoot, file.targetPath);
@@ -2074,9 +2081,84 @@ function readHeldModule(targetRoot, targetPath) {
     text: readFileSync(join(targetRoot, targetPath), 'utf8'),
   };
 }
+/**
+ * Directory enumeration APIs that can discover every schema/fixture entry
+ * without naming each basename. This is deliberately narrow: a directory
+ * string alone is not enough to infer a dependency, because modules often
+ * mention a directory in comments or diagnostics without reading it.
+ */
+const DIRECTORY_SCAN_PATTERN =
+  /\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)?|scan(?:Dir|Directory)?|list(?:Files|Entries|Directory)?|collect(?:Files|Entries)?)\b/iu;
+function moduleScansManifestDirectory(text, targetPath) {
+  const slash = targetPath.lastIndexOf('/');
+  if (slash <= 0) {
+    return false;
+  }
+  const directory = targetPath.slice(0, slash);
+  return DIRECTORY_SCAN_PATTERN.test(text) && text.includes(directory);
+}
 function moduleReferencesManifestPath(text, targetPath) {
   const basename = targetPath.slice(targetPath.lastIndexOf('/') + 1);
-  return text.includes(targetPath) || text.includes(basename);
+  return (
+    text.includes(targetPath) ||
+    text.includes(basename) ||
+    moduleScansManifestDirectory(text, targetPath)
+  );
+}
+const SAFE_GIT_REF = /^[A-Za-z0-9._/-]+$/u;
+/**
+ * Resolve a target repository's pre-import Git tree. Non-Git target trees
+ * keep the historical source-vs-current-target comparison so the exported
+ * helper remains useful for directory fixtures and non-Git adopters. A Git
+ * target with an invalid baseline ref fails closed instead of silently
+ * suppressing an advisory.
+ */
+function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
+  let isWorkTree = false;
+  try {
+    isWorkTree =
+      execFileSync(
+        'git',
+        ['-C', targetRoot, 'rev-parse', '--is-inside-work-tree'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim() === 'true';
+  } catch {
+    return undefined;
+  }
+  if (!isWorkTree) {
+    return undefined;
+  }
+  if (!SAFE_GIT_REF.test(targetBaseRef)) {
+    throw new Error(
+      `invalid --target-base-ref (expected a simple Git ref): ${targetBaseRef}`,
+    );
+  }
+  try {
+    execFileSync(
+      'git',
+      ['-C', targetRoot, 'rev-parse', '--verify', `${targetBaseRef}^{commit}`],
+      { stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+  } catch {
+    throw new Error(
+      `--target-base-ref does not resolve to a commit in --target: ${targetBaseRef}`,
+    );
+  }
+  return {
+    read: (targetPath) => {
+      try {
+        return execFileSync(
+          'git',
+          ['-C', targetRoot, 'show', `${targetBaseRef}:${targetPath}`],
+          { encoding: null, stdio: ['ignore', 'pipe', 'ignore'] },
+        );
+      } catch {
+        // A path absent from the baseline is meaningful drift: --import
+        // would add the source entry while the held module remains old.
+        return null;
+      }
+    },
+  };
 }
 function formatHeldSchemaDriftWarning(findings) {
   if (findings.length === 0) {
@@ -2108,11 +2190,15 @@ function formatHeldSchemaDriftWarning(findings) {
 export function checkHeldSchemaDrift(
   sourceRoot,
   targetRoot,
-  { profile, hold = [] } = {},
+  { profile, hold = [], targetBaseRef } = {},
 ) {
   if (hold.length === 0) {
     return { findings: [], warning: null };
   }
+  const baseline =
+    targetBaseRef === undefined
+      ? undefined
+      : resolveGitTargetBaseline(targetRoot, targetBaseRef);
   const resolved = resolveImportFiles(sourceRoot, profile);
   const holdSet = new Set(hold);
   if (resolved.missingSource.length === 0) {
@@ -2128,7 +2214,7 @@ export function checkHeldSchemaDrift(
     (file) =>
       !holdSet.has(file.targetPath) &&
       isSchemaOrFixtureManifestPath(file.targetPath) &&
-      manifestContentDiffers(sourceRoot, targetRoot, file),
+      manifestContentDiffers(sourceRoot, targetRoot, file, baseline),
   );
   if (changed.length === 0) {
     return { findings: [], warning: null };
@@ -2182,7 +2268,13 @@ export function checkHeldSchemaDrift(
  * list `--import` accepts; an empty list leaves the drift advisory
  * with no findings.
  */
-export function runVerify(sourceRoot, targetRoot, profile, hold = []) {
+export function runVerify(
+  sourceRoot,
+  targetRoot,
+  profile,
+  hold = [],
+  targetBaseRef,
+) {
   const manifestCompleteness = checkManifestCompleteness(
     sourceRoot,
     targetRoot,
@@ -2208,6 +2300,7 @@ export function runVerify(sourceRoot, targetRoot, profile, hold = []) {
   const heldSchemaDrift = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     profile,
     hold,
+    targetBaseRef,
   });
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
@@ -3489,6 +3582,7 @@ function parseArgs(rawArgv) {
     force: false,
     profile: undefined,
     hold: [],
+    targetBaseRef: undefined,
     overrides: {},
     help: false,
     allowRoots: [],
@@ -3587,6 +3681,11 @@ function parseArgs(rawArgv) {
       index += 1;
       continue;
     }
+    if (token === '--target-base-ref') {
+      parsed.targetBaseRef = requireValue();
+      index += 1;
+      continue;
+    }
     if (token === '--allow-root') {
       parsed.allowRoots.push(requireValue());
       index += 1;
@@ -3667,6 +3766,10 @@ function verifyForeignFlagsPresent(args) {
   }
   return present;
 }
+/** The target-baseline selector is meaningful only to `--verify`. */
+function verifyOnlyFlagsPresent(args) {
+  return args.targetBaseRef === undefined ? [] : ['--target-base-ref'];
+}
 /**
  * --hear-only flags the user explicitly passed (present regardless of
  * mode). Bare `--apply` is shared with `--record-policy` and reported
@@ -3698,6 +3801,7 @@ function hearOnlyFlagsPresent(args) {
 function hearForeignFlagsPresent(args) {
   return [
     ...importOnlyFlagsPresent(args),
+    ...verifyOnlyFlagsPresent(args),
     ...substituteOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
   ];
@@ -3743,6 +3847,7 @@ async function runCli() {
     // --substitute below still reject it via the unfiltered helper.
     const foreign = [
       ...importOnlyFlagsPresent(args).filter((flag) => flag !== '--force'),
+      ...verifyOnlyFlagsPresent(args),
       ...substituteOnlyFlagsPresent(args),
       ...(args.propose ? ['--propose'] : []),
       ...(args.answers !== undefined ? ['--answers'] : []),
@@ -3770,12 +3875,13 @@ async function runCli() {
     const foreign = [
       ...substituteOnlyFlagsPresent(args),
       ...hearOnlyFlagsPresent(args),
+      ...verifyOnlyFlagsPresent(args),
       ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
       throw markCliUsageError(
         new Error(
-          `--import does not accept substitute-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+          `--import does not accept substitute-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
         ),
       );
     }
@@ -3805,13 +3911,14 @@ async function runCli() {
   }
   const foreign = [
     ...importOnlyFlagsPresent(args),
+    ...verifyOnlyFlagsPresent(args),
     ...hearOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
   ];
   if (foreign.length > 0) {
     throw markCliUsageError(
       new Error(
-        `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+        `--substitute does not accept import-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
       ),
     );
   }
@@ -4014,7 +4121,13 @@ function runVerifyCli(args) {
     '--target',
     args.allowRoots,
   );
-  const result = runVerify(sourceDir, targetDir, args.profile, args.hold);
+  const result = runVerify(
+    sourceDir,
+    targetDir,
+    args.profile,
+    args.hold,
+    args.targetBaseRef ?? 'HEAD',
+  );
   const verdict = {
     protocolVersion: '1',
     mode: 'verify',
@@ -4156,9 +4269,12 @@ mutable default archive URL instead of an audited pin), and
 heldSchemaDrift (advisory only, never blocking: for each schema
 (schemas/*.json) or fixture (fixtures/**/*.json) manifest entry that
 --hold does not exclude and whose content differs between --source and
---target, reports each held src/scripts .mts module, and each held
-scripts/*.mjs module a vendored import copies, that textually
-references that entry's path or basename).
+the target's pre-import Git tree, reports each held src/scripts .mts
+module, and each held scripts/*.mjs module a vendored import copies,
+that textually references that entry's path or basename or scans its
+containing directory. \`--target-base-ref\` selects that Git ref (default
+\`HEAD\` for a Git target); non-Git targets retain the
+source-vs-current-target fallback).
 
 Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest
 gap, placeholder residue, or a helper-load failure); 2 usage or
@@ -4183,6 +4299,10 @@ configuration error.
                                       the list. A value that matches no
                                       resolved manifest path is a usage
                                       error (exit 2).
+  --target-base-ref <ref>            Git ref containing the target's
+                                      pre-import tree (default: HEAD for a
+                                      Git target; non-Git targets use the
+                                      current target tree)
   --help, -h                         show this help
 
 --hear (#2281): the operator-facing hearing CLI over the catalog and

@@ -682,7 +682,11 @@ error), so an agent can gate on the exit code without parsing prose.
   [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
   and a non-blocking held-schema drift advisory (a schema or fixture
   `--import` would update, while a held `src/scripts` module or a held
-  vendored `scripts` module still names it). A missing manifest file,
+  vendored `scripts` module still names it or scans its containing
+  directory). For Git targets, the advisory compares against the
+  pre-import target tree at `HEAD`; pass `--target-base-ref <ref>` when
+  the import was based on another commit. Non-Git targets retain the
+  source-vs-current-target fallback. A missing manifest file,
   leftover placeholder, or helper-load failure is blocking; the
   stale-import signal, package-pin
   advisory, and held-schema drift advisory are never blocking. Repeat
@@ -691,7 +695,8 @@ error), so an agent can gate on the exit code without parsing prose.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>] [--hold <target-path>]
+    --target <target-repo> [--profile <name>] [--hold <target-path>] \
+    [--target-base-ref <ref>]
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
