@@ -3814,6 +3814,29 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      // Remove initialized submodule checkouts that the development branch
+      // deletes before the final claim/lock confirmation below. The final
+      // confirmation must remain immediately before `checkout`; otherwise a
+      // new claim can arrive while this cleanup mutates the primary tree and
+      // the later checkout can switch that new claim's worktree.
+      const initializedSubmoduleCleanupError =
+        cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
+          verdict.plan.stashes,
+          developmentBranch,
+          targetPath,
+          deps,
+        );
+      if (initializedSubmoduleCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       // The preservation and in-progress-operation cleanup above can take
       // long enough for the remote claim or worktree-local lock to change.
       // Re-run the complete identity gate while the clone lock is still held
@@ -3866,24 +3889,6 @@ export function runLocalWorktreeRecovery(
           ran: false,
           detail:
             'the primary-worktree claim/branch/lock identity changed immediately before checkout; stopping before checkout',
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const initializedSubmoduleCleanupError =
-        cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
-          verdict.plan.stashes,
-          developmentBranch,
-          targetPath,
-          deps,
-        );
-      if (initializedSubmoduleCleanupError !== null) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
