@@ -564,10 +564,11 @@ Ask these checks:
    changes the `bundleBudgets` or `contextCeiling` policy: evaluate the
    proposed post-change bundle memberships and limits in addition to current
    manifest entries. For a proposed `bundleBudgets.limitBytes` increase,
-   compare the base-reference bundle's measured utilization with
-   `noticeUtilizationPct`; if the base bundle was already at or above that
-   threshold, the near-ceiling ratchet fails the proposed headroom claim even
-   when the new limit passes the other ceiling checks. Also check the context
+   compare the base-reference bundle's measured utilization with the stricter
+   (lower) of the base and proposed `noticeUtilizationPct` values; if the base
+   bundle was already at or above that threshold, the near-ceiling ratchet
+   fails the proposed headroom claim even when the new limit passes the other
+   ceiling checks. Also check the context
    ceiling's absolute
    `maxBundleLimitBytes` and honor its `exemptBundles` rules where they are
    defined; utilization alone is not sufficient. These checks preserve the
