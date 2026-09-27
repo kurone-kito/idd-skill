@@ -523,12 +523,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Off-default `{development-branch}`: `git switch <default-branch>`
    once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, not one being removed.
-   Removal discards ignored submodule files. Scope
+   Removal discards ignored submodule data. Scope
    to `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
    still hide a stash or unpushed commit; tag-only detached history is
-   not counted; other local refs are:
+   not counted; local refs are:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
@@ -536,13 +536,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --all --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
    Discard only reproducible configured-command output; preserve all else.
    Copy secrets (`.env`) outside `<path>` — never commit or push them.
-   Preserve work in a backup ref or external path. Before removal, `cd`
-   to primary; stay and revalidate:
+   Preserve work in backup ref or external path. Before removal, `cd`
+   to primary; stay; revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
