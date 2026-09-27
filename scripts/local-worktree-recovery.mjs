@@ -1249,13 +1249,13 @@ function planAndMaybePreserve(
       ? submoduleStatusEntries(submoduleStatus.stdout)
       : [];
   // A clean initialized submodule's own stash scope handles the ` M path`
-  // that the parent status probe reports for its dirty files. A `+` entry is
-  // the same case with an unstaged submodule HEAD difference, so exclude it
-  // too; retain `U`/`-` entries because those statuses mean the
-  // superproject's gitlink itself differs from the index or cannot be
-  // checked out (Copilot review #4114207705).
+  // that the parent status probe reports for its dirty files. A `+` entry
+  // means the submodule HEAD differs from the superproject's recorded
+  // gitlink, so retain it as a parent-level change: the submodule scope alone
+  // cannot preserve the superproject index state. Retain `U`/`-` entries for
+  // the same reason (Copilot review #4114207705).
   const submodulePaths = submodules
-    .filter((submodule) => submodule.status === ' ' || submodule.status === '+')
+    .filter((submodule) => submodule.status === ' ')
     .map((submodule) => submodule.path)
     .filter((submodulePath) => submodulePath.length > 0);
   // Capture ignored files before any stash changes the ignore rules. In
@@ -2297,6 +2297,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     const ordinaryStillOccupied =
       recheck.routing.state === 'local_worktree_occupied' &&
       isAcceptedBlockReason(recheck.routing.reason) &&
+      !recheck.routing.reason.endsWith('-local-worktree-unreadable') &&
       (recheck.routing.evidence?.local_worktree?.paths ?? []).some(
         (reportedPath) =>
           normalizeGitWorktreePathForComparison(reportedPath) ===

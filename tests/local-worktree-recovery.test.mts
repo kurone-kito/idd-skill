@@ -2245,6 +2245,7 @@ test('legacy lockless claims may complete the forced retry through the guard', (
 
 test('verified prunable shortcuts may keep unreadable routing at final check', () => {
   let removeCalled = false;
+  let confirmCalls = 0;
   const record = {
     path: '/repo/linked',
     branchRef: 'refs/heads/issue/1-task',
@@ -2266,22 +2267,30 @@ test('verified prunable shortcuts may keep unreadable routing at final check', (
       record,
     ],
     pathExists: (p) => p !== '/repo/linked',
-    confirmBlock: () => ({
-      ok: true,
-      routing: {
-        state: 'local_worktree_occupied',
-        reason: 'stale-claim-local-worktree-unreadable',
-        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
-        evidence: {
-          local_worktree: {
-            status: 'unreadable',
-            paths: ['/repo/linked'],
-            reason: 'prunable path is absent',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      const finalCheck = confirmCalls >= 3;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied' as const,
+          reason: finalCheck
+            ? 'stale-claim-local-worktree-unreadable'
+            : 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: finalCheck
+                ? ('unreadable' as const)
+                : ('occupied' as const),
+              paths: ['/repo/linked'],
+              reason: finalCheck ? 'prunable path is absent' : null,
+            },
           },
         },
-      },
-      error: null,
-    }),
+        error: null,
+      };
+    },
     runGit: (argv) => {
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         removeCalled = true;
@@ -2554,6 +2563,70 @@ test('refuses a fresh routing state of `-local-worktree-unreadable` outside the 
   assert.equal(verdict.mutated, false);
 });
 
+test('does not shortcut a prunable worktree that becomes unreadable at recheck', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      const unreadable = confirmCalls >= 2;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied' as const,
+          reason: unreadable
+            ? 'stale-claim-local-worktree-unreadable'
+            : 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: unreadable
+                ? ('unreadable' as const)
+                : ('occupied' as const),
+              paths: ['/repo/linked'],
+              reason: unreadable ? 'prunable path is absent' : null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /no longer matches at recheck time/);
+});
+
 test('a failed status probe blocks removal even with no other changes detected (Codex/Copilot review finding)', () => {
   let removeCalled = false;
   const deps = fakeDeps({
@@ -2609,7 +2682,7 @@ test('a submodule-only parent status does not create a pointless parent stash', 
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
-test('an unstaged submodule HEAD difference is handled by the submodule scope', () => {
+test('an unstaged submodule HEAD difference stays in the parent scope', () => {
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -2638,15 +2711,32 @@ test('an unstaged submodule HEAD difference is handled by the submodule scope', 
   );
   assert.equal(
     verdict.plan.stashes[0]?.hasChanges,
-    false,
-    'a `+` submodule status is an unstaged submodule-only change for the parent scope',
+    true,
+    'a `+` submodule status changes the parent gitlink and must be preserved there',
   );
 });
 
 test('a `+` submodule preserves its private admin data even when no ref is unpushed', () => {
   const copied: string[] = [];
+  const stashCounts = new Map<string, number>();
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        stashCounts.set(cwd, (stashCounts.get(cwd) ?? 0) + 1);
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        const count = stashCounts.get(cwd) ?? 0;
+        return {
+          ok: true,
+          status: 0,
+          stdout: Array.from(
+            { length: count },
+            (_, index) => `stash@{${index}}: idd-lwr claim-x`,
+          ).join('\n'),
+          stderr: '',
+        };
+      }
       if (argv[0] === 'submodule' && argv[1] === 'status') {
         return {
           ok: true,
