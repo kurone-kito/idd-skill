@@ -140,10 +140,11 @@ Use server-reported timestamps, not the local wall clock.
 opt-in or label-triggered jobs enabled before pre-merge. If the primary
 advisory bot reviewed an earlier head, post after
 `LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED` from the advisory-wait state. If CI or
+phase-specific `CAP_EXHAUSTED`. If CI or
 the re-review is incomplete, run Steps 1/3, E2, and E3 but not F1/F2.
-For empty E3 (or E8 with zero Accepted PATH A items), use E15/E14,
-then return to E1 and post the watermark even without a new review.
+Use E15 for CI, E14 for advisory; with both pending, run E14 first.
+For empty E3 (or E8 with zero Accepted PATH A items), run the required
+waits, then E1 posts the watermark even without a new review.
 Do not defer Steps 1/3, E2, or E3. CI after a watermark forces an E1↔F2
 round-trip because F2's latest-CI `completedAt` changes.
 

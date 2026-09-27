@@ -20,7 +20,7 @@ Only fetch/routes ReviewItems_snapshot; never classify or decide
 Accept/Reject. Non-empty E3 hands off to
 `idd-review-triage.instructions.md` (E4-E8). A deferred Step 2 handoff
 carries E1 Step 1 SHA, `watermark deferred`, and reason; the receiver
-restores or reruns E1 before E8 without same-claim watermark. Never
+restores or reruns E1 before E8 without that watermark. Never
 branch-sync/F1/F2 from an unverified handoff.
 
 ## Stop-and-ask conditions
@@ -62,9 +62,10 @@ GitHub side effect, confirm all of the following:
 Before Step 2, confirm merge-gate CI completion. If the primary
 advisory bot reviewed an earlier head, run `advisory-wait-state`; Step 2
 is eligible at `lastCopilotCommit == prHeadSha`, `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED`. Do not wait here: take Steps 1 and 3
-regardless. If incomplete, skip Step 2, use E15/E14 before
-branch-sync/F2, and return to E1 to post the watermark.
+phase-specific `CAP_EXHAUSTED`. Take Steps 1 and 3 regardless. Use E15
+for CI, E14 for advisory; with both pending, run E14 first. If
+incomplete, skip Step 2, run waits before branch-sync/F2, then E1 posts
+the watermark.
 
 ### Step 1 — Snapshot the activity universe
 
@@ -253,8 +254,9 @@ follow the note here either.
 - **ReviewItems_snapshot is empty and Step 2 was not deferred** → proceed
   to `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
   Never route this to the excluded `idd-review-triage.instructions.md`.
-- **ReviewItems_snapshot is empty and Step 2 was deferred** → use the
-  bounded E15/E14 wait route and return to E1 before F1/F2.
+- **ReviewItems_snapshot is empty and Step 2 was deferred** → run E15
+  for CI or E14 for advisory; both pending: E14 first, then E1 before
+  F1/F2
 - **ReviewItems_snapshot is non-empty** → this session's job ends here
   (see Triage hand-off boundary); hand off to
   `idd-review-triage.instructions.md` (E4) for a stronger session or a
