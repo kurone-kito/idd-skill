@@ -572,7 +572,10 @@ The confirmed substitutions are:
 - For `gh repo view`, use the repository endpoint directly. Helpers that
   otherwise resolve the current repository through `gh repo view` can
   avoid that GraphQL-backed lookup by receiving explicit `--owner` and
-  `--repo` values.
+  `--repo` values. Map requested fields from the REST schema before
+  substituting: for example, REST `.default_branch` is the equivalent of
+  GraphQL `defaultBranchRef.name`; do not reuse a GraphQL jq path against
+  the REST response.
 
   ```sh
   gh api "repos/<owner>/<repo>"
