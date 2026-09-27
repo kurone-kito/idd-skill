@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -28,6 +28,11 @@ import {
   resolveClaimLockPath,
   resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
+import {
+  acquireCloneLock,
+  type CloneLockHandle,
+  releaseCloneLock,
+} from '../src/scripts/clone-lock.mts';
 
 // Used only by the token-verified-release test below, to reach the CJS
 // side of the `node:fs` builtin for the same `syncBuiltinESMExports`
@@ -360,6 +365,52 @@ test('acquire: same claim-id re-acquires purely locally (fast path), confirming 
     const check = checkClaimLock(fixture.worktree);
     assert.equal(check.holder?.claimId, 'claim-a');
   } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: normal acquisition waits for the clone lock held by recovery', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_PATH,
+      '--acquire',
+      '--worktree',
+      fixture.worktree,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+    ],
+    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(
+      child.exitCode,
+      null,
+      'normal claim-lock acquisition must wait while recovery holds the clone mutex',
+    );
+    releaseCloneLock(cloneLock);
+    cloneLock = null;
+    assert.equal(await exited, 0);
+    assert.equal(JSON.parse(stdout).mode, 'acquired');
+  } finally {
+    if (cloneLock !== null) releaseCloneLock(cloneLock);
+    if (child.exitCode === null) child.kill();
     teardown(fixture);
   }
 });

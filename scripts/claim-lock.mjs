@@ -54,10 +54,11 @@
 // needs no Windows-specific recovery branch -- `CreateHardLinkW` fails
 // cleanly with `EEXIST` there too when the destination already exists.
 //
-// Authorized takeovers also acquire the clone-scoped mutex from
-// `clone-lock.mts` before replacing this file. Local-worktree recovery holds
-// that same mutex across its final ownership check and `git worktree remove`,
-// so a takeover cannot replace the lock after recovery checks it but before
+// Every acquisition also acquires the clone-scoped mutex from
+// `clone-lock.mts` before reading or replacing this file. Local-worktree
+// recovery holds that same mutex across its final ownership check and `git
+// worktree remove`, so neither a normal acquire/reacquire nor an authorized
+// takeover can create or replace the lock after recovery checks it but before
 // Git removes the private admin directory. The GitHub claim revalidation gate
 // remains the authority for whether a takeover is authorized; the clone lock
 // only serializes this same-machine filesystem operation.
@@ -732,21 +733,20 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
       }
     : undefined;
-  let takeoverCloneLock = null;
-  if (takeover) {
-    // Resolve before waiting: local-worktree recovery may remove the linked
-    // worktree while this authorized takeover waits for the clone mutex.
-    takeoverCloneLock = acquireCloneLockAtPath(
-      resolveCloneLockPath(worktree),
-      `claim-lock-takeover:${agentId}`,
-    );
-  }
+  // Resolve before waiting: local-worktree recovery may remove the linked
+  // worktree while this acquisition waits for the clone mutex. All paths,
+  // including a matching-claim reacquire, must join this mutex because
+  // recovery holds it across its final lock check and worktree removal.
+  const claimCloneLock = acquireCloneLockAtPath(
+    resolveCloneLockPath(worktree),
+    `claim-lock:${agentId}`,
+  );
   try {
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt += 1) {
       const read = readLock(path);
       // Never recreate a lock in an admin directory that disappeared while
-      // this takeover waited for a recovery operation to finish.
-      if (read.status === 'absent' && takeoverCloneLock !== null) {
+      // this acquisition waited for a recovery operation to finish.
+      if (read.status === 'absent') {
         if (!existsSync(adminDir)) {
           throw new Error(
             `worktree private admin directory disappeared while waiting for clone lock: ${adminDir}`,
@@ -793,7 +793,7 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
       return { mode: 'acquired', path, reacquired: true, racedCreate: true };
     }
     if (finalRead.status === 'absent') {
-      if (takeoverCloneLock !== null && !existsSync(adminDir)) {
+      if (!existsSync(adminDir)) {
         throw new Error(
           `worktree private admin directory disappeared while waiting for clone lock: ${adminDir}`,
         );
@@ -823,9 +823,7 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
       holder: finalRead.status === 'present' ? finalRead.lock : undefined,
     };
   } finally {
-    if (takeoverCloneLock !== null) {
-      releaseCloneLock(takeoverCloneLock);
-    }
+    releaseCloneLock(claimCloneLock);
   }
 }
 /** Read-only lock inspection: never creates, mutates, or deletes the lock. */
