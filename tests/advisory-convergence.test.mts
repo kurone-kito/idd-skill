@@ -7208,10 +7208,10 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
     fallback,
     /NODES_BEFORE=\n\s*if \[ "\$evidence_mode" != "aw3-s" \]/,
   );
-  assert.match(
-    fallback,
-    /NODES_AFTER=\n\s*if \[ "\$evidence_mode" != "aw3-s" \]/,
-  );
+  assert.match(fallback, /NODES_AFTER=\$\(request_nodes\) \|\| return 2/);
+  const eventProofAt = fallback.indexOf('[ "$EVENT_NEW" = true ] && return 0');
+  const nodeRereadAt = fallback.indexOf('NODES_AFTER=$(request_nodes)');
+  assert.ok(eventProofAt > 0 && nodeRereadAt > eventProofAt);
   assert.match(
     fallback,
     /<profile-selected-post-idd-marker-command> --type advisory/,

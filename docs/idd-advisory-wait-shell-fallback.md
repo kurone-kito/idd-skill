@@ -334,10 +334,6 @@ registration_attempt() {
   fi
   registration_ok() {
     EVENT_AFTER=$(request_event) || return 2
-    NODES_AFTER=
-    if [ "$evidence_mode" != "aw3-s" ]; then
-      NODES_AFTER=$(request_nodes) || return 2
-    fi
     EVENT_ID=$(printf '%s\n' "$EVENT_AFTER" | cut -f1)
     EVENT_INDEX=$(printf '%s\n' "$EVENT_AFTER" | cut -f3)
     EVENT_NEW=false
@@ -352,17 +348,16 @@ registration_attempt() {
         fi
         ;;
     esac
-    if [ "$evidence_mode" = "aw3-s" ]; then
-      [ "$EVENT_NEW" = true ]
-    else
-      NODE_FRESH=false
-      while IFS= read -r node; do
-        [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
-      done <<EOF
+    [ "$EVENT_NEW" = true ] && return 0
+    [ "$evidence_mode" = "aw3-s" ] && return 1
+    NODES_AFTER=$(request_nodes) || return 2
+    NODE_FRESH=false
+    while IFS= read -r node; do
+      [ -n "$node" ] && ! printf '%s\n' "$NODES_BEFORE" | grep -Fxq "$node" && NODE_FRESH=true
+    done <<EOF
 $NODES_AFTER
 EOF
-      [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
-    fi
+    [ "$NODE_FRESH" = true ]
   }
   registration_check() {
     local max_attempts=1 attempt=1 status=1
