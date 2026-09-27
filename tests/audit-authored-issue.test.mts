@@ -1523,6 +1523,38 @@ test('dependency-line-grammar ignores reference definitions inside HTML comments
   assert.equal(finding.result, 'pass');
 });
 
+test('dependency-line-grammar resolves definitions inside Markdown containers', () => {
+  for (const definition of [
+    '> [ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+    '- [ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+    '1. [ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+  ]) {
+    const body = childBody({
+      extraMarkers: `Blocked by [Issue 12][ref]\n\n${definition}`,
+    });
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    const finding = report.findings.find(
+      (entry) => entry.id === 'dependency-line-grammar',
+    );
+    assert.ok(finding, definition);
+    assert.equal(finding.result, 'fail', definition);
+  }
+});
+
+test('dependency-line-grammar does not resolve a definition across a blank paragraph', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref]\n\n[ref]:\n\n' +
+      'https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar fails on an angle-bracket autolink mention (final review round, CodeRabbit: "Blocked by <https://...#12>")', () => {
   const { report, finding, lineNumber } = dependencyLineGrammarFinding(
     'Blocked by <https://github.com/kurone-kito/idd-skill/issues/12>',

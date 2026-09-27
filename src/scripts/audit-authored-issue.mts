@@ -607,13 +607,13 @@ const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // TDZ-avoidance placement rationale as LIST_ITEM_MARKER_PATTERN above.
 const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
 
-// Matches a Markdown link reference definition line: optionally indented
-// (up to 3 spaces, per CommonMark), `[label]: target`, with the target
-// read up to the first whitespace. An optional title on the same
-// definition line (e.g. `[ref]: <url> "title"`) is intentionally not
-// captured — only the destination matters for resolving a reference-style
-// link to a GitHub issue/PR URL.
-const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[([^\]\n]+)\]:\s*(\S+)/gm;
+// Matches the content of a Markdown link reference definition after its
+// block-container markers have been removed. A definition may be nested in
+// block quotes or list items, but its destination must remain on the same
+// physical line; `\s*` would incorrectly consume a blank paragraph and
+// borrow a later URL as the definition's target (Copilot review, PR #3554).
+const LINK_REFERENCE_DEFINITION_PATTERN =
+  /^(?: {0,3}(?:>[ \t]?|(?:[*+-]|\d{1,9}[.)])[ \t]+))* {0,3}\[([^\]\n]+)\]:[ \t]*(\S+)/gm;
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `shape:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
