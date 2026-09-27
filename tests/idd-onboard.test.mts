@@ -3860,6 +3860,18 @@ test('checkHeldSchemaDrift detects glob scans that set cwd', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift honors selective glob filters', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/policy*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift detects directory scans inside template interpolations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

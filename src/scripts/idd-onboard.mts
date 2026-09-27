@@ -2905,8 +2905,12 @@ function pathExpressionCandidates(text: string): string[] {
   return literals;
 }
 
+function isGlobPattern(text: string): boolean {
+  return /[?*[\]]/u.test(text);
+}
+
 function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
-  if (!/[?*[\]]/u.test(pattern)) {
+  if (!isGlobPattern(pattern)) {
     return false;
   }
   let expression = '^';
@@ -2946,22 +2950,28 @@ function moduleScansManifestDirectory(
   )) {
     const argumentsText = match[1] ?? '';
     const firstArgument = firstCallArgument(argumentsText);
+    const firstCandidates = pathExpressionCandidates(firstArgument);
+    const cwdCandidates = (() => {
+      const cwd = /\bcwd\s*:\s*/u.exec(argumentsText);
+      return cwd === null
+        ? []
+        : pathExpressionCandidates(
+            firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
+          );
+    })();
     const candidates = [
-      pathExpressionCandidates(firstArgument),
-      (() => {
-        const cwd = /\bcwd\s*:\s*/u.exec(argumentsText);
-        return cwd === null
-          ? []
-          : pathExpressionCandidates(
-              firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
-            );
-      })(),
+      ...firstCandidates,
+      ...firstCandidates.flatMap((candidate) =>
+        cwdCandidates
+          .filter((cwd) => !isGlobPattern(cwd))
+          .map((cwd) => `${cwd}/${candidate}`),
+      ),
     ].flat();
     if (
       candidates.some(
         (candidate) =>
-          directoryPrefix.test(candidate) ||
-          globPatternMatchesPath(candidate, targetPath),
+          globPatternMatchesPath(candidate, targetPath) ||
+          (!isGlobPattern(candidate) && directoryPrefix.test(candidate)),
       )
     ) {
       return true;
