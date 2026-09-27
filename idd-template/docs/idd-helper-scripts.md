@@ -1623,7 +1623,11 @@ copy of it — see `resolveDistributedFiles()` in
 source repository's own `bin/<name>.mjs` build-artifact path, which no
 adopter profile vends; a source-repo-only page (no `idd-template/`
 counterpart) may still discuss that path when its subject genuinely is
-this repository's own tooling.
+this repository's own tooling. The sole direct installed-package exception
+is a `packageManagerOnlyHelpers` entry in the runtime manifest, currently
+limited to `verify-import-mirror` under the `package-manager` profile; it is
+not a general `node_modules` invocation form and must not be used by
+`ephemeral-npx` or Yarn Plug'n'Play.
 `tests/helper-invocation-profile.test.mts` enforces both rules
 mechanically.
 

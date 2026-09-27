@@ -595,6 +595,47 @@ test('does not fail on a backed or allowlisted helper invocation (rule 2 negativ
   assert.deepEqual(violations, []);
 });
 
+test('accepts a registered package-manager-only helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/idd-helper-scripts.md',
+        content:
+          'Run `node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs` for the package-manager exception.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.deepEqual(violations, []);
+});
+
+test('rejects an unregistered package-manager-only helper path', () => {
+  const violations = collectHelperInvocationViolations(
+    [
+      {
+        path: 'idd-template/docs/example.md',
+        content:
+          'Run `node node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs`.',
+      },
+    ],
+    {
+      commandCatalog: [],
+      distributedFiles: new Set(),
+    },
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.form, 'package-manager-entry');
+  assert.equal(
+    violations[0]?.name,
+    'node_modules/@kurone-kito/idd-skill/scripts/not-a-helper.mjs',
+  );
+});
+
 test('fails on a bin/idd-* path prescribed in a distributed file, and not in a source-repo-only file (rule 3)', () => {
   const commandCatalog: ManifestCommand[] = [
     {
