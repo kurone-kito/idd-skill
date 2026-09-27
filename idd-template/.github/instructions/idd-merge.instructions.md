@@ -522,8 +522,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    commands to `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
-   still hide a stash or unpushed commit; detached tag-only history is
-   not counted:
+   still hide a stash or unpushed commit; tag-only detached history is
+   not counted; other local refs are:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
@@ -531,14 +531,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
      ```sh
      git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --branches --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/* --all --not --remotes --count; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
      ```
 
-   Only output reproducible by a configured command is disposable;
-   preserve all else.
+   Only configured command output is disposable; preserve all else.
    Copy secrets (e.g. `.env`) outside `<path>` — never commit or push
-   them. Move other work. Before each removal, `cd` to and
-   stay in the primary worktree. While it exists, revalidate:
+   them. Move other work. Before removal, `cd` to primary and stay.
+   While it exists, revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
