@@ -3242,15 +3242,23 @@ type StepOneOwnClaimFlag = (typeof STEP_ONE_OWN_CLAIM_FLAGS)[number];
  * passing, because the end-to-end case injects hard-coded values
  * regardless of what the parsed flags say. Each own-claim flag now also
  * requires a well-formed `{value}`/`<value>` placeholder immediately
- * after it on the same line. Second, `isInvocationLine` matched
+ * after it on the same line, itself followed by a delimiter (whitespace,
+ * the `]` that closes this file's `[--flag {value}]` bracket
+ * convention, or end of line) so a corrupted `{claim-id}.bak`-style
+ * suffix on an otherwise-valid placeholder cannot slip through either
+ * (Codex review, PR #3537, round 2). Second, `isInvocationLine` matched
  * `resume-claim-routing.mjs` as a plain substring, so a corrupted
  * executable name such as `resume-claim-routing.mjs.bak` or
  * `legacy-resume-claim-routing.mjs` still counted as the target
  * invocation and reported every flag present; the helper filename is
- * now matched as a complete, word-boundary-aware token the same way
- * the option tokens already are, with `.` folded into the boundary
- * class on both sides so a `.bak`-style suffix cannot slip through the
- * plain `[\w-]` boundary the option-token check uses.
+ * now matched as a complete token the same way the option tokens
+ * already are: a `.`-folded exclusion-class lookbehind (unchanged --
+ * every real invocation is still preceded by a bare `/`) paired with a
+ * positive whitespace-or-end-of-line delimiter lookahead, since no
+ * negative exclusion class can enumerate every shell-word-continuing
+ * character -- a plain `[\w.-]`-only lookahead still let a
+ * `/backup`- or `~`-suffixed corruption through the same way `.bak` did
+ * before this file's first #3533 fix (Codex review, PR #3537, round 2).
  */
 function parseStepOneOwnClaimFlags(
   instructionsText: string,
