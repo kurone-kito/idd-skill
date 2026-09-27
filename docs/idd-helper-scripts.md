@@ -3373,28 +3373,46 @@ still fails closed:
     implementation's own added margin over the written procedure's own
     shortcut text, not a literal transcription of it. Otherwise
     `checkClaimLock` confirms the lock's holder matches the claim-id
-    being recovered. `--preserve-dir`, when given, is rejected up front if
-    it resolves inside the target worktree — a backup destination there
-    would be deleted by the very removal it exists to survive.
+    being recovered. A failed or unparseable `git worktree list` stops
+    here too (never silently read as an empty worktree list, which would
+    misclassify the target's primary-vs-linked kind). `--preserve-dir`,
+    when given, is rejected up front if it resolves inside the target
+    worktree — checked both lexically and via realpath, including the
+    nearest-existing-ancestor realpath for a destination that does not
+    exist yet (so a symlinked ancestor cannot redirect it back inside the
+    target), through the same platform-portable containment check
+    (`path.relative`-based, correct on both `/`- and `\`-separated paths)
+    the cwd guard above uses — a backup destination there would be
+    deleted by the very removal it exists to survive.
   - **Step 2** (rule out a live session) is never checked mechanically —
     `claim-lock.mts`'s own header documents why no local process-liveness
     signal is recorded. `--operator-confirmed-no-live-session` is your own
     explicit attestation for this step; every mutation refuses without it,
     regardless of `--apply` or what step 1 finds.
   - **Step 3** detects an in-progress merge/rebase/cherry-pick/bisect
-    (backing up the pre-operation tip — `orig-head` for rebase, else
-    `HEAD`), then tag-stashes tracked/untracked changes
-    (`idd-lwr <claim-id-or-legacy>`) for the worktree and every dirty
-    submodule, copies out an uninitialized (`-`) submodule's files, and
-    writes `refs/idd-lwr/<branch>` for unpushed commits (worktree- and
-    submodule-scoped). A failed `git status` or `git submodule status`
-    probe fails closed (blocks removal) rather than reading as "clean" or
-    "no submodules". An unmerged-path `stash push` failure copies out
-    every dirty path in that scope, not only the conflicted subset, and
-    verifies each one landed. Ignored files are scanned and copied per
-    scope (the worktree and every initialized submodule, not only the
-    top level, since a submodule's own ignored contents never show up in
-    the top-level scan). Ignored-file, uninitialized-submodule, and
+    (backing up the pre-operation tip — `orig-head` for rebase, the
+    `BISECT_START` ref's own tip for bisect (never the mid-bisect `HEAD`,
+    which is the commit currently under test), else `HEAD`; an
+    unresolvable tip fails closed rather than falling back to the
+    ordinary unpushed-commit check), then tag-stashes tracked/untracked
+    changes (`idd-lwr <claim-id-or-legacy>`) for the worktree and every
+    dirty submodule, copies out an uninitialized (`-`) submodule's files,
+    and writes `refs/idd-lwr/<branch>` for unpushed commits (worktree- and
+    submodule-scoped). A failed `git status`, `git submodule status`, or
+    unpushed-commit (`git log`/`rev-parse HEAD`) probe fails closed
+    (blocks removal) rather than reading as "clean", "no submodules", or
+    "no unpushed commits". An unmerged-path `stash push` failure (verified
+    by its own error text, not any `stash push` failure) copies out every
+    dirty path in that scope, not only the conflicted subset, and
+    verifies each one landed; any OTHER `stash push` failure (permission,
+    repository-lock contention, etc.) fails closed instead of silently
+    "succeeding" via that copy-out fallback. Ignored files are scanned and
+    copied per scope (the worktree and every initialized submodule, not
+    only the top level, since a submodule's own ignored contents never
+    show up in the top-level scan). A submodule path ending in a
+    parenthesized component (e.g. `lib (foo)`) is never mistaken for one
+    carrying git's own `(describe)` suffix, which only initialized
+    submodules ever emit. Ignored-file, uninitialized-submodule, and
     unmerged-path copies land under `--preserve-dir` (default: a temp
     directory, created only when something needs copying).
   - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
@@ -3404,15 +3422,18 @@ still fails closed:
     checks, including the prunable shortcut's own eligibility), a
     comparison of the rechecked claim identity (claim-id and branch)
     against the one step 1 actually recovered, and a fresh re-verification
-    of every step-3 stash/backup-ref artifact against the live repository
-    state (not the earlier, now possibly stale, in-memory snapshot) — all
-    while the lock is held, immediately before mutating. Then
-    `git worktree remove` (retrying `--force` only after a
-    submodule-removal failure), or, for the primary-worktree branch,
-    `checkout {development-branch}` followed by a confirmed-absent
-    re-check and a hand-removed lock file — deleting only the lock the
-    fresh re-check positively observed, and reporting failure (never a
-    silent best-effort no-op) if resolving or deleting it fails.
+    of every step-3 preservation artifact (stash entries, backup refs,
+    and every ignored-file/uninitialized-submodule/unmerged-fallback copy
+    destination) against the live repository state (not the earlier, now
+    possibly stale, in-memory snapshot) — all while the lock is held,
+    immediately before mutating. Then `git worktree remove` (retrying
+    `--force` only after a submodule-removal failure), or, for the
+    primary-worktree branch, `checkout {development-branch}` followed by
+    a confirmed-absent re-check and a SECOND, final lock re-check run
+    after that checkout (not only the earlier, now possibly stale,
+    pre-checkout one) — deleting only the lock this final check
+    positively observed, and reporting failure (never a silent
+    best-effort no-op) if resolving or deleting it fails.
 - Default mode is dry-run (no mutation): prints exactly what step 1 found
   and what step 3/4 would do (the full stash/backup-ref/removal plan),
   without mutating anything. `--apply` performs the mutation, still gated

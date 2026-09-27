@@ -19,9 +19,11 @@ import {
   extractRecoveredClaim,
   hasWorkingTreeChanges,
   isAcceptedBlockReason,
+  isPathContainedIn,
   isSafeRelativePath,
   type LocalGitCommandResult,
   type LocalWorktreeRecoveryDeps,
+  resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
   submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
@@ -268,6 +270,135 @@ test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
   assert.equal(isSafeRelativePath(''), false);
 });
 
+test('isPathContainedIn is platform-portable, not a hardcoded `/`-prefix check (Copilot review finding)', () => {
+  assert.equal(isPathContainedIn('/target', '/target'), true);
+  assert.equal(isPathContainedIn('/target/sub', '/target'), true);
+  assert.equal(isPathContainedIn('/other', '/target'), false);
+  // A sibling directory sharing a string prefix must never read as
+  // "contained" -- the exact bug a bare `startsWith` check produces.
+  assert.equal(isPathContainedIn('/target-sibling', '/target'), false);
+  assert.equal(isPathContainedIn('/target', '/target/sub'), false);
+});
+
+test('resolveEffectiveRealpath walks up to the nearest existing ancestor and re-appends the missing suffix', () => {
+  const fakeFs: Record<string, string> = { '/real/base': '/real/base' };
+  const realpathOrNull = (p: string) => fakeFs[p] ?? null;
+  // '/link' is a symlink resolving to '/real/base'; '/link/new/dir' does
+  // not exist yet, so a plain realpath call on it returns null and would
+  // previously skip the containment check entirely.
+  fakeFs['/link'] = '/real/base';
+  assert.equal(
+    resolveEffectiveRealpath('/link/new/dir', realpathOrNull),
+    '/real/base/new/dir',
+  );
+  assert.equal(resolveEffectiveRealpath('/link', realpathOrNull), '/real/base');
+  assert.equal(
+    resolveEffectiveRealpath('/nowhere/at/all', realpathOrNull),
+    null,
+  );
+});
+
+test('submoduleStatusEntries keeps a parenthesized uninitialized submodule path intact (Codex review finding)', () => {
+  // An uninitialized (`-`) entry never carries a trailing "(describe)"
+  // suffix (there is nothing checked out to describe), so a path that
+  // itself ends in a parenthesized component must not be stripped.
+  const raw = '-0000000000000000000000000000000000000000 lib (foo)';
+  assert.deepEqual(submoduleStatusEntries(raw), [
+    { status: '-', path: 'lib (foo)' },
+  ]);
+  // An initialized entry's real describe suffix is still stripped.
+  const initialized =
+    ' abc123def456abc123def456abc123def456abcd lib (heads/main)';
+  assert.deepEqual(submoduleStatusEntries(initialized), [
+    { status: ' ', path: 'lib' },
+  ]);
+});
+
+test('detectInProgressOperation preserves the BISECT_START ref tip, not the mid-bisect HEAD (Codex review finding)', () => {
+  const runGit = (argv: string[]): LocalGitCommandResult => {
+    if (argv[0] === 'rev-parse' && argv.includes('MERGE_HEAD')) {
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    if (argv[0] === 'rev-parse' && argv.includes('CHERRY_PICK_HEAD')) {
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    if (argv[0] === 'rev-parse' && argv.includes('--git-path')) {
+      if (argv.includes('BISECT_LOG')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/.git/BISECT_LOG\n',
+          stderr: '',
+        };
+      }
+      if (argv.includes('BISECT_START')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/.git/BISECT_START\n',
+          stderr: '',
+        };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    }
+    if (argv[0] === 'rev-parse' && argv[1] === 'issue/1-task') {
+      return {
+        ok: true,
+        status: 0,
+        stdout: 'pre-bisect-tip-sha\n',
+        stderr: '',
+      };
+    }
+    return {
+      ok: true,
+      status: 0,
+      stdout: 'mid-bisect-tested-sha\n',
+      stderr: '',
+    };
+  };
+  const pathExists = (p: string) => p === '/repo/.git/BISECT_LOG';
+  const readFile = (p: string) =>
+    p === '/repo/.git/BISECT_START' ? 'issue/1-task\n' : null;
+  const result = detectInProgressOperation(
+    '/repo',
+    runGit,
+    pathExists,
+    readFile,
+  );
+  assert.deepEqual(result, { kind: 'bisect', tipSha: 'pre-bisect-tip-sha' });
+});
+
+test('detectInProgressOperation reports a bisect with a null tip when BISECT_START cannot be resolved', () => {
+  const runGit = (argv: string[]): LocalGitCommandResult => {
+    if (
+      argv[0] === 'rev-parse' &&
+      (argv.includes('MERGE_HEAD') || argv.includes('CHERRY_PICK_HEAD'))
+    ) {
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    if (argv[0] === 'rev-parse' && argv.includes('--git-path')) {
+      if (argv.includes('BISECT_LOG')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/.git/BISECT_LOG\n',
+          stderr: '',
+        };
+      }
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    return { ok: true, status: 0, stdout: '', stderr: '' };
+  };
+  const pathExists = (p: string) => p === '/repo/.git/BISECT_LOG';
+  const result = detectInProgressOperation(
+    '/repo',
+    runGit,
+    pathExists,
+    () => null,
+  );
+  assert.deepEqual(result, { kind: 'bisect', tipSha: null });
+});
+
 // ---------------------------------------------------------------------------
 // Orchestration unit tests (fully injected deps -- no real git, no gh)
 // ---------------------------------------------------------------------------
@@ -289,6 +420,30 @@ function baseArgs(
     help: false,
     ...overrides,
   };
+}
+
+/**
+ * A clean repo's `git` fallback: reports no in-progress
+ * merge/rebase/cherry-pick/bisect, and a generic `ok: true` empty result
+ * for anything else. Tests that supply their own `runGit` override should
+ * delegate to this for any argv they do not specifically handle, instead
+ * of a bare `{ ok: true, ... }` literal, which would otherwise make
+ * `detectInProgressOperation` spuriously report a `merge` in progress (a
+ * real repo only ever resolves `MERGE_HEAD` etc. when that operation is
+ * genuinely active).
+ */
+function cleanRepoRunGit(argv: string[]): LocalGitCommandResult {
+  if (
+    (argv[0] === 'rev-parse' &&
+      argv.includes('-q') &&
+      (argv.includes('MERGE_HEAD') || argv.includes('CHERRY_PICK_HEAD'))) ||
+    (argv[0] === 'rev-parse' &&
+      argv.includes('--git-path') &&
+      argv.includes('BISECT_LOG'))
+  ) {
+    return { ok: false, status: 1, stdout: '', stderr: '' };
+  }
+  return { ok: true, status: 0, stdout: '', stderr: '' };
 }
 
 function fakeDeps(
@@ -331,7 +486,7 @@ function fakeDeps(
       path: '/repo/linked/.git/idd-claim.lock',
       present: false,
     }),
-    runGit: () => ({ ok: true, status: 0, stdout: '', stderr: '' }),
+    runGit: cleanRepoRunGit,
     pathExists: () => true,
     realpathOrNull: (p: string) => p,
     acquireCloneLock: () => ({ path: '/repo/.idd-clone.lock', token: 'tok' }),
@@ -429,7 +584,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
         callOrder.push('remove');
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -461,7 +616,7 @@ test('step 4 still releases the clone lock when removal fails', () => {
         callOrder.push('remove-failed');
         return { ok: false, status: 1, stdout: '', stderr: 'boom' };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -501,7 +656,7 @@ test('regression: a successful step-3 stash before a failed step-4 removal must 
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         return { ok: false, status: 1, stdout: '', stderr: 'boom' };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -860,7 +1015,7 @@ test('step 4 stops removal when a preservation artifact no longer verifies fresh
           stderr: '',
         };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -922,7 +1077,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
           stderr: '',
         };
       }
-      return { ok: true, status: 0, stdout: '', stderr: '' };
+      return cleanRepoRunGit(argv);
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -940,6 +1095,199 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
     false,
     'must never attempt to resolve/delete a lock file the recheck found absent',
   );
+});
+
+test('primary-worktree release re-checks the lock AFTER checkout, not only the pre-checkout recheck (Copilot review finding)', () => {
+  // confirmBlock call sequence: 1 = step 1 (occupied, path included);
+  // 2 = step 4's pre-checkout recheck (still occupied, path included);
+  // 3 = the post-checkout confirmAbsent check (now absent). checkLock
+  // call sequence: 1 = pre-checkout recheck (no lock, so the shared
+  // lock-match gate passes); 2 = the FINAL, post-checkout check, which
+  // must see a lock created DURING the checkout window (simulating
+  // another session racing in) and delete THAT one, not skip deletion
+  // based on the stale pre-checkout observation.
+  let confirmCalls = 0;
+  let checkLockCalls = 0;
+  let unlinkAttempted = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    checkLock: () => {
+      checkLockCalls += 1;
+      // Call 1 = step 1's own check; call 2 = step 4's pre-checkout
+      // recheck (both absent, so both gates pass); call 3 = the FINAL,
+      // post-checkout check, which must see a lock created during the
+      // checkout window.
+      return checkLockCalls <= 2
+        ? { path: '/repo/primary/.git/idd-claim.lock', present: false }
+        : {
+            path: '/repo/primary/.git/idd-claim.lock',
+            present: true,
+            holder: {
+              agentId: 'claude-a0b633a6',
+              claimId: 'claim-x',
+              acquiredAt: '2026-09-27T00:00:00Z',
+            },
+          };
+    },
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: confirmCalls <= 2 ? 'occupied' : 'absent',
+              paths: confirmCalls <= 2 ? ['/repo/primary'] : [],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+        unlinkAttempted = true;
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(checkLockCalls, 3);
+  assert.equal(
+    unlinkAttempted,
+    true,
+    'the post-checkout lock, not the earlier absent pre-checkout read, must drive the deletion attempt',
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('hard stash-push failure (not the verified unmerged-path case) blocks removal (Copilot review finding)', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'fatal: Unable to create temp file: Permission denied',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.hardStashFailure, true);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackCopiedTo, null);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+});
+
+test('a genuinely unmerged-path stash failure still takes the copy-out fallback', () => {
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '?? conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'error: You have unmerged paths.',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.stashes[0]?.hardStashFailure, false);
+  assert.equal(
+    verdict.plan.stashes[0]?.unmergedFallbackCopiedTo !== null,
+    true,
+  );
+});
+
+test('a failed `git log @{u}..HEAD` (or HEAD) probe blocks removal instead of reading as no unpushed commits (Copilot/Codex review finding)', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'rev-parse' && argv[1] === '--abbrev-ref') {
+        return { ok: true, status: 0, stdout: 'origin/main\n', stderr: '' };
+      }
+      if (argv[0] === 'rev-parse' && argv[1] === 'HEAD') {
+        return { ok: true, status: 0, stdout: 'headsha\n', stderr: '' };
+      }
+      if (argv[0] === 'log') {
+        return {
+          ok: false,
+          status: 128,
+          stdout: '',
+          stderr: 'fatal: bad object',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.backupRefs[0]?.unpushedQueryFailed, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+});
+
+test('a failed `git worktree list` stops before any mutation instead of reading as an empty list (Copilot review finding)', () => {
+  const deps = fakeDeps({ listWorktreeRecords: () => null });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'worktree-list-failed');
+  assert.equal(verdict.mutated, false);
 });
 
 // ---------------------------------------------------------------------------

@@ -42,7 +42,14 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { checkClaimLock } from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -225,7 +232,10 @@ export function detectInProgressOperation(path, runGit, pathExists, readFile) {
   const merge = runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], path);
   if (merge.ok) {
     const head = runGit(['rev-parse', 'HEAD'], path);
-    return { kind: 'merge', tipSha: head.stdout.trim() };
+    // A failed `rev-parse HEAD` here must never silently resolve to an
+    // empty-string "tip" -- fail closed (null) the same way the bisect
+    // branch below does, rather than let a blank tipSha slip through.
+    return { kind: 'merge', tipSha: head.ok ? head.stdout.trim() : null };
   }
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const gitPath = runGit(['rev-parse', '--git-path', name], path);
@@ -234,10 +244,12 @@ export function detectInProgressOperation(path, runGit, pathExists, readFile) {
     if (!resolved) continue;
     const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
     if (!pathExists(absolute)) continue;
+    // The sequencer directory exists, so a rebase IS in progress -- an
+    // unreadable `orig-head` must report the operation with an
+    // unresolved tip (fail closed downstream), never silently `continue`
+    // as if no rebase were detected at all.
     const origHead = readFile(join(absolute, 'orig-head'));
-    if (origHead) {
-      return { kind: 'rebase', tipSha: origHead.trim() };
-    }
+    return { kind: 'rebase', tipSha: origHead ? origHead.trim() : null };
   }
   const cherryPick = runGit(
     ['rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD'],
@@ -245,15 +257,44 @@ export function detectInProgressOperation(path, runGit, pathExists, readFile) {
   );
   if (cherryPick.ok) {
     const head = runGit(['rev-parse', 'HEAD'], path);
-    return { kind: 'cherry-pick', tipSha: head.stdout.trim() };
+    return {
+      kind: 'cherry-pick',
+      tipSha: head.ok ? head.stdout.trim() : null,
+    };
   }
   const bisectLogPath = runGit(['rev-parse', '--git-path', 'BISECT_LOG'], path);
   if (bisectLogPath.ok) {
     const resolved = bisectLogPath.stdout.trim();
     const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
     if (resolved && pathExists(absolute)) {
-      const head = runGit(['rev-parse', 'HEAD'], path);
-      return { kind: 'bisect', tipSha: head.stdout.trim() };
+      // Codex review: during an active bisect, `HEAD` is the commit
+      // currently being tested, not the tip the bisect started from --
+      // `git bisect reset` returns to THAT original state, per Git's own
+      // bisect documentation. `BISECT_START` (a plain file containing the
+      // ref name bisect started from, not a SHA) is git's own record of
+      // it; resolve that ref to a SHA instead of recording `HEAD`. `null`
+      // when it cannot be read/resolved, so the caller fails closed
+      // rather than silently falling back to the ordinary unpushed-commit
+      // check.
+      const bisectStartPath = runGit(
+        ['rev-parse', '--git-path', 'BISECT_START'],
+        path,
+      );
+      let tipSha = null;
+      if (bisectStartPath.ok) {
+        const startResolved = bisectStartPath.stdout.trim();
+        const startAbsolute = isAbsolute(startResolved)
+          ? startResolved
+          : join(path, startResolved);
+        const startRef = readFile(startAbsolute)?.trim();
+        if (startRef) {
+          const startTip = runGit(['rev-parse', startRef], path);
+          if (startTip.ok) {
+            tipSha = startTip.stdout.trim();
+          }
+        }
+      }
+      return { kind: 'bisect', tipSha };
     }
   }
   return null;
@@ -318,6 +359,53 @@ export function isSafeRelativePath(relativePath) {
   }
   return relativePath.split(/[\\/]+/).every((segment) => segment !== '..');
 }
+/**
+ * True when `child` is `parent` itself or a path underneath it, using
+ * `path.relative` rather than a hardcoded `/` prefix check (Copilot review:
+ * the earlier `startsWith('/')`-based checks were POSIX-only and passed a
+ * `--preserve-dir` below the target on Windows, where `resolve`/
+ * `realpathSync` produce `\`-separated paths). `path.relative` resolves
+ * separators per-platform, so this is correct on both.
+ */
+export function isPathContainedIn(child, parent) {
+  if (child === parent) {
+    return true;
+  }
+  const rel = relative(parent, child);
+  // `path.relative` returns a path starting with `..` (platform-appropriate
+  // separator) whenever `child` is NOT underneath `parent` -- including the
+  // Windows cross-drive case, where it instead returns an absolute path
+  // (caught by `isAbsolute` below).
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+/**
+ * Resolve the effective realpath of `path`, even when it (or some suffix of
+ * it) does not exist yet -- by walking up to the nearest ancestor
+ * `realpathOrNull` CAN resolve, then re-appending the non-existent suffix.
+ * Read-only (never creates anything), so this is safe to call from a
+ * dry-run guard, unlike creating the directory first to force realpath to
+ * resolve it (Copilot/Codex review: a `--preserve-dir` that does not exist
+ * yet previously returned `null` from a plain `realpathOrNull` call and
+ * skipped the containment check entirely, so an existing symlinked
+ * ancestor -- e.g. `/tmp/link -> <target>/.cache` with `--preserve-dir
+ * /tmp/link/run` -- could redirect the eventual directory back inside the
+ * target worktree without tripping it).
+ */
+export function resolveEffectiveRealpath(path, realpathOrNull) {
+  const real = realpathOrNull(path);
+  if (real !== null) {
+    return real;
+  }
+  const parent = dirname(path);
+  if (parent === path) {
+    return null;
+  }
+  const parentReal = resolveEffectiveRealpath(parent, realpathOrNull);
+  if (parentReal === null) {
+    return null;
+  }
+  return join(parentReal, basename(path));
+}
 /** Count of stash entries whose subject contains `tag` verbatim. */
 export function countTaggedStashEntries(stashList, tag) {
   if (stashList.trim().length === 0) {
@@ -333,20 +421,26 @@ export function countTaggedStashEntries(stashList, tag) {
 // `git submodule status` lines: "<status><sha> <path>[ (<describe>)]". Git
 // permits spaces in a submodule path, so splitting on whitespace (Copilot
 // review finding) truncates a path like "libs/my module" to "libs/my" --
-// the real submodule is then never inspected or backed up. The optional
-// trailing "(<describe>)" suffix is the only other whitespace-delimited
-// token this format ever appends, so anchoring on it (when present) and
-// otherwise taking the rest of the line as the path handles a spaced path
-// correctly either way.
-const SUBMODULE_STATUS_LINE_PATTERN =
-  /^([ +\-U])([0-9a-f]{4,40}) (.+?)(?: \(.+\))?$/;
+// the real submodule is then never inspected or backed up. The trailing
+// "(<describe>)" suffix is only ever emitted for an INITIALIZED submodule
+// (a `-`/uninitialized entry has nothing checked out to describe), so
+// stripping it unconditionally (Codex review finding) mis-parses a valid
+// uninitialized path that itself ends in a parenthesized component, e.g.
+// `lib (foo)`, down to `lib`.
+const SUBMODULE_STATUS_LINE_PATTERN = /^([ +\-U])([0-9a-f]{4,40}) (.+)$/;
+const SUBMODULE_DESCRIBE_SUFFIX_PATTERN = / \([^()]*\)$/;
 export function submoduleStatusEntries(raw) {
   const entries = [];
   for (const line of raw.split('\n')) {
     if (line.length === 0) continue;
     const match = SUBMODULE_STATUS_LINE_PATTERN.exec(line);
     if (!match) continue;
-    entries.push({ status: match[1], path: match[3] });
+    const status = match[1];
+    let path = match[3];
+    if (status !== '-') {
+      path = path.replace(SUBMODULE_DESCRIBE_SUFFIX_PATTERN, '');
+    }
+    entries.push({ status, path });
   }
   return entries;
 }
@@ -377,6 +471,7 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     verifiedCount: null,
     unmergedFallbackCopiedTo: null,
     unmergedFallbackAllPreserved: null,
+    hardStashFailure: false,
   };
   if (statusReadFailed || !hasChanges || !apply) {
     return entry;
@@ -386,6 +481,19 @@ function planAndMaybeStashScope(scopePath, scopeLabel, tag, apply, deps) {
     scopePath,
   );
   if (!stash.ok) {
+    // Copilot review: only a `stash push` failure actually CAUSED by
+    // unmerged paths (the documented §LWR case: a backed-up interrupted
+    // merge/rebase/cherry-pick left conflict markers behind) is safe to
+    // treat via the copy-out fallback below. A permission error,
+    // repository-lock contention, or any other `stash push` failure is a
+    // genuine hard failure -- copying working-tree files without the
+    // index state stash would have captured is not equivalent
+    // preservation, so this must fail closed instead of silently
+    // "succeeding" via the fallback.
+    if (!/unmerged/i.test(stash.stderr)) {
+      entry.hardStashFailure = true;
+      return entry;
+    }
     // Unmerged-path fallback: `stash push` itself refused (unmerged paths
     // from a backed-up interrupted operation) -- copy out EVERY dirty path
     // in this scope, not only the `--diff-filter=U` conflicted subset
@@ -429,16 +537,29 @@ function planAndMaybeBackupRef(
   scopePath,
   scopeLabel,
   branch,
-  inProgressTip,
+  inProgressOperation,
   apply,
   runGit,
 ) {
   const ref = `refs/idd-lwr/${branch}`;
   let tipSha = null;
   let hasUnpushed = false;
-  if (inProgressTip) {
-    tipSha = inProgressTip;
-    hasUnpushed = true;
+  // Copilot/Codex review: a failed `git log @{u}..HEAD` (or `git rev-parse
+  // HEAD`) probe must never read as "no unpushed commits" -- unlike the
+  // other preservation probes, this one previously failed OPEN. Recorded
+  // separately from `hasUnpushed` so `preservationVerified` can block on it
+  // even when the (unreliable) `hasUnpushed` reads false. An in-progress
+  // operation whose own tip could not be resolved (e.g. an unreadable
+  // `BISECT_START` ref) fails closed the same way, rather than silently
+  // falling through to the ordinary upstream-based check below.
+  let unpushedQueryFailed = false;
+  if (inProgressOperation) {
+    if (inProgressOperation.tipSha === null) {
+      unpushedQueryFailed = true;
+    } else {
+      tipSha = inProgressOperation.tipSha;
+      hasUnpushed = true;
+    }
   } else {
     const upstream = runGit(
       ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
@@ -446,23 +567,30 @@ function planAndMaybeBackupRef(
     );
     const head = runGit(['rev-parse', 'HEAD'], scopePath);
     tipSha = head.ok ? head.stdout.trim() : null;
-    if (!upstream.ok) {
+    if (!head.ok) {
+      unpushedQueryFailed = true;
+    } else if (!upstream.ok) {
       // No upstream: every commit counts as unpushed (§LWR step 3).
       hasUnpushed = tipSha !== null;
     } else {
       const unpushed = runGit(['log', '@{u}..HEAD', '--oneline'], scopePath);
-      hasUnpushed = unpushed.ok && unpushed.stdout.trim().length > 0;
+      if (!unpushed.ok) {
+        unpushedQueryFailed = true;
+      } else {
+        hasUnpushed = unpushed.stdout.trim().length > 0;
+      }
     }
   }
   const entry = {
     scope: scopeLabel,
     ref,
     hasUnpushed,
+    unpushedQueryFailed,
     tipSha,
     written: false,
     verifiedOid: null,
   };
-  if (!hasUnpushed || !tipSha || !apply) {
+  if (unpushedQueryFailed || !hasUnpushed || !tipSha || !apply) {
     return entry;
   }
   const write = runGit(['update-ref', ref, tipSha], scopePath);
@@ -580,7 +708,7 @@ function planAndMaybePreserve(path, branch, tag, apply, deps) {
       path,
       '.',
       branch,
-      inProgressOperation?.tipSha ?? null,
+      inProgressOperation,
       apply,
       deps.runGit,
     ),
@@ -640,6 +768,7 @@ function preservationVerified(preserve, pathExists) {
     // "clean" observation.
     if (stash.statusReadFailed) return false;
     if (!stash.hasChanges) continue;
+    if (stash.hardStashFailure) return false;
     if (stash.unmergedFallbackCopiedTo !== null) {
       // Copilot review: a non-null destination alone is not proof every
       // dirty path actually landed there.
@@ -655,6 +784,7 @@ function preservationVerified(preserve, pathExists) {
     }
   }
   for (const ref of preserve.backupRefs) {
+    if (ref.unpushedQueryFailed) return false;
     if (!ref.hasUnpushed) continue;
     if (
       !ref.written ||
@@ -687,15 +817,38 @@ function preservationVerified(preserve, pathExists) {
  * and OIDs from a fresh `git stash list` / `git rev-parse --verify` against
  * each scope's own path, rather than trusting the earlier snapshot.
  */
-function reverifyPreservationArtifactsFresh(preserve, targetPath, runGit) {
+function reverifyPreservationArtifactsFresh(
+  preserve,
+  targetPath,
+  runGit,
+  pathExists,
+) {
   const scopePath = (scope) =>
     scope === '.' ? targetPath : join(targetPath, scope);
   for (const stash of preserve.stashes) {
-    if (!stash.stashed) continue;
-    const list = runGit(['stash', 'list'], scopePath(stash.scope));
+    if (stash.stashed) {
+      const list = runGit(['stash', 'list'], scopePath(stash.scope));
+      // A lower bound, not exact equality: the fresh recheck's only
+      // question is "is THIS attempt's stash still there" -- a stale or
+      // concurrent same-tag entry appearing during the lock wait is MORE
+      // preservation than required, never less, so it must not fail this
+      // check (the step-3 verify immediately after the push already
+      // enforced exactly-one against its own baseline).
+      if (
+        countTaggedStashEntries(list.stdout, stash.tag) <
+        stash.baselineCount + 1
+      ) {
+        return false;
+      }
+    }
+    // Copilot review: the fresh re-verification previously only covered
+    // stash entries and backup refs -- an ignored-file, uninitialized-
+    // submodule, or unmerged-fallback copy could be silently deleted
+    // during the lock wait and removal would still proceed. Re-confirm
+    // every copy destination this scope recorded still exists.
     if (
-      countTaggedStashEntries(list.stdout, stash.tag) <
-      stash.baselineCount + 1
+      stash.unmergedFallbackCopiedTo !== null &&
+      !pathExists(stash.unmergedFallbackCopiedTo)
     ) {
       return false;
     }
@@ -707,6 +860,16 @@ function reverifyPreservationArtifactsFresh(preserve, targetPath, runGit) {
       scopePath(ref.scope),
     );
     if (!verify.ok || verify.stdout.trim() !== ref.tipSha) {
+      return false;
+    }
+  }
+  for (const submodule of preserve.uninitializedSubmodules) {
+    if (submodule.copiedTo !== null && !pathExists(submodule.copiedTo)) {
+      return false;
+    }
+  }
+  for (const ignored of preserve.ignoredFilesCopied) {
+    if (ignored.copiedTo !== null && !pathExists(ignored.copiedTo)) {
       return false;
     }
   }
@@ -766,18 +929,33 @@ export function runLocalWorktreeRecovery(args, deps) {
     result: '',
   };
   const records = deps.listWorktreeRecords(cwd);
+  if (records === null) {
+    // Copilot review: `git worktree list` failing (or producing
+    // unparseable output) must stop here -- a repository always has at
+    // least the primary worktree, so an empty result is never genuinely
+    // "no worktrees", only an inspection failure. Continuing would
+    // misclassify the target as `linked` without ever establishing which
+    // record is actually primary, or whether the target record itself is
+    // valid.
+    verdict.step1.outcome = 'worktree-list-failed';
+    verdict.step1.reason =
+      'git worktree list failed or produced unparseable output; cannot determine which worktree is primary or confirm the target record';
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   const primary = records[0] ?? null;
   verdict.primaryWorktree = primary?.path ?? null;
   verdict.primaryOrLinked =
     primary && primary.path === targetPath ? 'primary' : 'linked';
   if (verdict.primaryOrLinked === 'linked') {
+    const insideLexical = isPathContainedIn(cwd, targetPath);
     const cwdReal = deps.realpathOrNull(cwd);
     const targetReal = deps.realpathOrNull(targetPath);
-    const cwdInsideTarget =
-      cwdReal !== null &&
-      targetReal !== null &&
-      (cwdReal === targetReal || cwdReal.startsWith(`${targetReal}/`));
-    if (cwdInsideTarget) {
+    const insideReal =
+      cwdReal !== null && targetReal !== null
+        ? isPathContainedIn(cwdReal, targetReal)
+        : false;
+    if (insideLexical || insideReal) {
       verdict.step1.outcome = 'cwd-inside-target';
       verdict.step1.reason =
         'must be invoked from the primary worktree, never from the linked worktree being recovered';
@@ -785,26 +963,32 @@ export function runLocalWorktreeRecovery(args, deps) {
       return verdict;
     }
   }
-  // Copilot review: `--preserve-dir` was passed through with no check that
-  // it names a location OUTSIDE the target worktree. An operator pointing
-  // it inside the target would have every ignored/unmerged/uninitialized
-  // backup copied into the very directory `git worktree remove` (or the
-  // primary-worktree checkout) is about to delete -- silently defeating
-  // this helper's entire recovery guarantee. Reject that up front, using
-  // both the lexical and (when resolvable) realpath forms, mirroring the
-  // cwd-inside-target guard above.
+  // Copilot/Codex review: `--preserve-dir` was passed through with no
+  // check that it names a location OUTSIDE the target worktree, and no
+  // platform-portable containment logic at all (a hardcoded `/` prefix
+  // check passes a destination below the target on Windows; a
+  // not-yet-existing destination reached through a symlinked ancestor
+  // could also redirect back inside the target without tripping a plain
+  // realpath check). An operator pointing it inside the target would have
+  // every ignored/unmerged/uninitialized backup copied into the very
+  // directory `git worktree remove` (or the primary-worktree checkout) is
+  // about to delete -- silently defeating this helper's entire recovery
+  // guarantee. Reject that up front: lexically, via realpath when the
+  // destination already exists, and via the nearest-existing-ancestor
+  // realpath otherwise -- all through the same platform-aware
+  // `isPathContainedIn` the cwd guard above uses.
   if (args.preserveDir) {
     const preserveDirResolved = resolve(cwd, args.preserveDir);
-    const preserveDirReal = deps.realpathOrNull(preserveDirResolved);
     const targetReal = deps.realpathOrNull(targetPath);
-    const insideLexical =
-      preserveDirResolved === targetPath ||
-      preserveDirResolved.startsWith(`${targetPath}/`);
+    const preserveDirEffectiveReal = resolveEffectiveRealpath(
+      preserveDirResolved,
+      deps.realpathOrNull,
+    );
+    const insideLexical = isPathContainedIn(preserveDirResolved, targetPath);
     const insideReal =
-      preserveDirReal !== null &&
-      targetReal !== null &&
-      (preserveDirReal === targetReal ||
-        preserveDirReal.startsWith(`${targetReal}/`));
+      preserveDirEffectiveReal !== null && targetReal !== null
+        ? isPathContainedIn(preserveDirEffectiveReal, targetReal)
+        : false;
     if (insideLexical || insideReal) {
       verdict.step1.outcome = 'preserve-dir-inside-target';
       verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must be outside the target worktree (${targetPath}) -- a backup destination inside it would be deleted by the removal it is meant to survive`;
@@ -1006,19 +1190,30 @@ export function runLocalWorktreeRecovery(args, deps) {
     let staleReason;
     if (shortcut.eligible) {
       const freshRecords = deps.listWorktreeRecords(cwd);
-      const freshShortcut = evaluatePrunableShortcut(
-        freshRecords,
-        targetPath,
-        recoveredBranch,
-        deps.pathExists,
-      );
-      stillEligible = freshShortcut.eligible && ordinaryStillOccupied;
+      stillEligible =
+        freshRecords !== null &&
+        evaluatePrunableShortcut(
+          freshRecords,
+          targetPath,
+          recoveredBranch,
+          deps.pathExists,
+        ).eligible &&
+        ordinaryStillOccupied;
       staleReason =
         'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, no longer names the recovered branch, or the issue claim state itself changed); stopping';
     } else {
-      stillEligible = ordinaryStillOccupied;
+      // Copilot review: the ordinary (non-shortcut) path must reject an
+      // `-unreadable` reason here exactly as step 1 does -- unlike the
+      // shortcut's own prunable-and-absent case (inherently unreadable by
+      // construction, and independently gated by its own fail-closed
+      // conditions), an ordinary worktree becoming unreadable AFTER step 1
+      // means its true state is unknown, and proceeding to preserve/remove
+      // it is unsafe.
+      stillEligible =
+        ordinaryStillOccupied &&
+        !recheck.routing.reason.endsWith('-local-worktree-unreadable');
       staleReason =
-        'the situation changed since step 1 (a live session resumed the claim, a different claim-id now holds the lock, or the branch no longer reports local_worktree_occupied); stopping';
+        'the situation changed since step 1 (a live session resumed the claim, a different claim-id now holds the lock, the worktree became unreadable, or the branch no longer reports local_worktree_occupied); stopping';
     }
     if (!stillEligible) {
       verdict.plan.removal = {
@@ -1060,10 +1255,8 @@ export function runLocalWorktreeRecovery(args, deps) {
     // wait to acquire the clone-scoped lock (mirrors step 1's own skip:
     // never re-checked for the prunable-and-absent shortcut, which never
     // checked it in the first place).
-    let lockRecheckPresent = false;
     if (!shortcut.eligible) {
       const lockRecheck = deps.checkLock(targetPath);
-      lockRecheckPresent = lockRecheck.present;
       // Mirrors step 1's own lock-check pass condition exactly: malformed
       // always fails; otherwise an absent lock passes unconditionally (a
       // legacy pre-claim-id release may never have acquired one), and a
@@ -1093,9 +1286,12 @@ export function runLocalWorktreeRecovery(args, deps) {
           {
             stashes: verdict.plan.stashes,
             backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
           },
           targetPath,
           deps.runGit,
+          deps.pathExists,
         )
       ) {
         verdict.plan.removal = {
@@ -1140,17 +1336,36 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
-      // Codex/Copilot review: only delete the lock file the fresh
-      // `lockRecheck` positively observed -- never a bare "does a file
+      // Copilot review: the documented primary flow requires the final
+      // lock check to run immediately before deletion, on the primary
+      // worktree NOW (after checkout) -- not the earlier `lockRecheck`
+      // captured before the checkout even ran. A lock created or replaced
+      // during the checkout window must not be silently deleted (or a
+      // newly-created lock silently left behind while still reporting
+      // success).
+      const finalLockCheck = deps.checkLock(targetPath);
+      if (finalLockCheck.malformed) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `checked out ${developmentBranch}, but the worktree-local lock is malformed on final check; stopping before removing anything`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      // Codex/Copilot review: only delete the lock file the fresh, final
+      // `checkLock` positively observed -- never a bare "does a file
       // happen to exist now" check, which could delete a DIFFERENT lock
-      // (re)created by another session after the recheck. When the
-      // recheck found no lock (a legacy release with nothing to delete),
+      // (re)created by another session after the recheck. When the final
+      // check finds no lock (a legacy release with nothing to delete),
       // there is nothing further to do here; report success only once
       // confirmed. Any failure to resolve the git directory or delete the
       // positively-observed lock is a failed release, not a silent
       // best-effort no-op -- the CLI must not exit successfully while a
       // stale lock may still block recovery.
-      if (!lockRecheckPresent) {
+      if (!finalLockCheck.present) {
         verdict.plan.removal = {
           kind: 'primary',
           developmentBranch,
@@ -1354,12 +1569,12 @@ function listWorktreeRecordsProduction(cwd) {
     cwd,
   );
   if (!result.ok) {
-    return [];
+    return null;
   }
   try {
     return parseLocalWorktreeList(result.stdout);
   } catch {
-    return [];
+    return null;
   }
 }
 function createProductionDeps(args) {
