@@ -4,13 +4,23 @@ import {
   type SpawnSyncReturns,
   spawnSync,
 } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  copyPathWithSafeSymlinks,
   countTaggedStashEntries,
   detectInProgressOperation,
   evaluatePrunableShortcut,
@@ -36,6 +46,39 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 // ---------------------------------------------------------------------------
 // Pure-function unit tests
 // ---------------------------------------------------------------------------
+
+test('copyPathWithSafeSymlinks materializes in-tree links and preserves external links', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-'));
+  const source = join(root, 'source');
+  const destination = join(root, 'destination');
+  const external = join(root, 'external.txt');
+  try {
+    mkdirSync(source);
+    writeFileSync(join(source, 'inside.txt'), 'inside\n');
+    writeFileSync(external, 'external\n');
+    symlinkSync(join(source, 'inside.txt'), join(source, 'inside-link'));
+    symlinkSync(external, join(source, 'external-link'));
+
+    copyPathWithSafeSymlinks(source, destination, source);
+    rmSync(source, { recursive: true, force: true });
+
+    assert.equal(
+      lstatSync(join(destination, 'inside-link')).isSymbolicLink(),
+      false,
+    );
+    assert.equal(
+      readFileSync(join(destination, 'inside-link'), 'utf8'),
+      'inside\n',
+    );
+    assert.equal(
+      lstatSync(join(destination, 'external-link')).isSymbolicLink(),
+      true,
+    );
+    assert.equal(readlinkSync(join(destination, 'external-link')), external);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('isAcceptedBlockReason accepts only the two §LWR step 1 prefixes', () => {
   assert.equal(

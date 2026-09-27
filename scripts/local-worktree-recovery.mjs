@@ -34,13 +34,15 @@
 // Default mode is dry-run (no mutation); `--apply` performs steps 3 and 4.
 import { execFileSync } from 'node:child_process';
 import {
-  cpSync,
+  copyFileSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  symlinkSync,
   unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -843,7 +845,7 @@ function planAndMaybeStashScope(
           allLanded = false;
           continue;
         }
-        deps.copyPath(from, to);
+        deps.copyPath(from, to, scopePath);
         if (!deps.pathExists(to)) {
           allLanded = false;
         }
@@ -1017,7 +1019,7 @@ function scanAndMaybeCopyIgnoredFiles(
         copied.push({ path: ignoredPath, copiedTo: null });
         continue;
       }
-      deps.copyPath(join(scopePath, ignoredPath), destination);
+      deps.copyPath(join(scopePath, ignoredPath), destination, scopePath);
     }
     copied.push({ path: ignoredPath, copiedTo: destination });
   }
@@ -1133,7 +1135,7 @@ function planAndMaybePreserve(
           );
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
             try {
-              deps.copyPath(submodulePath, destination);
+              deps.copyPath(submodulePath, destination, path);
             } catch {
               destination = null;
             }
@@ -1261,7 +1263,7 @@ function planAndMaybePreserve(
       continue;
     }
     try {
-      deps.copyPath(gitDir.stdout.trim(), destination);
+      deps.copyPath(gitDir.stdout.trim(), destination, gitDir.stdout.trim());
     } catch {
       submoduleAdminCopyFailed = true;
       submoduleAdminCopies.push({
@@ -2431,7 +2433,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           );
         }
         try {
-          deps.copyPath(adminLookup.path, destination);
+          deps.copyPath(adminLookup.path, destination, adminLookup.path);
           entry.copiedTo = destination;
         } catch {
           verdict.plan.prunableAdminCopy = entry;
@@ -2661,13 +2663,87 @@ function resolveDevelopmentBranchProduction(args, repositoryRoot) {
   }
   return liveInspection.branch;
 }
-function copyPathProduction(from, to) {
-  cpSync(from, to, {
-    recursive: true,
-    errorOnExist: false,
-    force: true,
-    verbatimSymlinks: true,
-  });
+/**
+ * Copy recovery data without leaving links into the removed worktree dangling.
+ * Symlinks whose resolved target is inside `sourceRoot` are materialized;
+ * links to external targets retain their original link text. A dangling link
+ * that lexically points into the source root fails closed rather than being
+ * recorded as preserved merely because its directory entry exists.
+ */
+export function copyPathWithSafeSymlinks(from, to, sourceRoot = from) {
+  const sourceRootAbsolute = resolve(sourceRoot);
+  const sourceRootReal = realpathSync(sourceRootAbsolute);
+  const activeDirectories = new Set();
+  const ensureDestinationParent = (destination) => {
+    mkdirSync(dirname(destination), { recursive: true });
+  };
+  const ensureDestinationDirectory = (destination) => {
+    try {
+      const existing = lstatSync(destination);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) {
+        throw new Error(`destination is not a real directory: ${destination}`);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      mkdirSync(destination, { recursive: true });
+    }
+  };
+  const copyEntry = (source, destination) => {
+    const sourceStat = lstatSync(source);
+    ensureDestinationParent(destination);
+    if (sourceStat.isSymbolicLink()) {
+      const linkText = readlinkSync(source, 'utf8');
+      const lexicalTarget = resolve(dirname(source), linkText);
+      let resolvedTarget = null;
+      try {
+        resolvedTarget = realpathSync(source);
+      } catch {
+        if (isPathContainedIn(lexicalTarget, sourceRootAbsolute)) {
+          throw new Error(
+            `source symlink points to an unreadable path inside the worktree: ${source}`,
+          );
+        }
+      }
+      if (
+        resolvedTarget !== null &&
+        isPathContainedIn(resolvedTarget, sourceRootReal)
+      ) {
+        copyEntry(resolvedTarget, destination);
+        return;
+      }
+      symlinkSync(linkText, destination);
+      return;
+    }
+    if (sourceStat.isDirectory()) {
+      const sourceReal = realpathSync(source);
+      if (activeDirectories.has(sourceReal)) {
+        throw new Error(`source directory cycle detected: ${source}`);
+      }
+      activeDirectories.add(sourceReal);
+      try {
+        ensureDestinationDirectory(destination);
+        for (const entry of readdirSync(source)) {
+          copyEntry(join(source, entry), join(destination, entry));
+        }
+      } finally {
+        activeDirectories.delete(sourceReal);
+      }
+      return;
+    }
+    try {
+      const existing = lstatSync(destination);
+      if (existing.isDirectory() || existing.isSymbolicLink()) {
+        throw new Error(`destination is not a regular file: ${destination}`);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    copyFileSync(source, destination);
+  };
+  copyEntry(from, to);
+}
+function copyPathProduction(from, to, sourceRoot = from) {
+  copyPathWithSafeSymlinks(from, to, sourceRoot);
 }
 let preserveDirMemo = null;
 function ensurePreserveDirProduction(explicit, targetPath) {

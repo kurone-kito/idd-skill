@@ -36,13 +36,15 @@
 
 import { execFileSync } from 'node:child_process';
 import {
-  cpSync,
+  copyFileSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  symlinkSync,
   unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -415,7 +417,7 @@ export interface LocalWorktreeRecoveryDeps {
   acquireCloneLock: (repoPath: string, agentId: string) => CloneLockHandle;
   releaseCloneLock: (handle: CloneLockHandle) => void;
   resolveDevelopmentBranch: () => string;
-  copyPath: (from: string, to: string) => void;
+  copyPath: (from: string, to: string, sourceRoot?: string) => void;
   ensurePreserveDir: () => string;
   now: () => string;
 }
@@ -1205,7 +1207,7 @@ function planAndMaybeStashScope(
           allLanded = false;
           continue;
         }
-        deps.copyPath(from, to);
+        deps.copyPath(from, to, scopePath);
         if (!deps.pathExists(to)) {
           allLanded = false;
         }
@@ -1389,7 +1391,7 @@ function scanAndMaybeCopyIgnoredFiles(
         copied.push({ path: ignoredPath, copiedTo: null });
         continue;
       }
-      deps.copyPath(join(scopePath, ignoredPath), destination);
+      deps.copyPath(join(scopePath, ignoredPath), destination, scopePath);
     }
     copied.push({ path: ignoredPath, copiedTo: destination });
   }
@@ -1534,7 +1536,7 @@ function planAndMaybePreserve(
           );
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
             try {
-              deps.copyPath(submodulePath, destination);
+              deps.copyPath(submodulePath, destination, path);
             } catch {
               destination = null;
             }
@@ -1664,7 +1666,7 @@ function planAndMaybePreserve(
       continue;
     }
     try {
-      deps.copyPath(gitDir.stdout.trim(), destination);
+      deps.copyPath(gitDir.stdout.trim(), destination, gitDir.stdout.trim());
     } catch {
       submoduleAdminCopyFailed = true;
       submoduleAdminCopies.push({
@@ -2883,7 +2885,7 @@ export function runLocalWorktreeRecovery(
           );
         }
         try {
-          deps.copyPath(adminLookup.path, destination);
+          deps.copyPath(adminLookup.path, destination, adminLookup.path);
           entry.copiedTo = destination;
         } catch {
           verdict.plan.prunableAdminCopy = entry;
@@ -3120,13 +3122,105 @@ function resolveDevelopmentBranchProduction(
   return liveInspection.branch;
 }
 
-function copyPathProduction(from: string, to: string): void {
-  cpSync(from, to, {
-    recursive: true,
-    errorOnExist: false,
-    force: true,
-    verbatimSymlinks: true,
-  });
+/**
+ * Copy recovery data without leaving links into the removed worktree dangling.
+ * Symlinks whose resolved target is inside `sourceRoot` are materialized;
+ * links to external targets retain their original link text. A dangling link
+ * that lexically points into the source root fails closed rather than being
+ * recorded as preserved merely because its directory entry exists.
+ */
+export function copyPathWithSafeSymlinks(
+  from: string,
+  to: string,
+  sourceRoot: string = from,
+): void {
+  const sourceRootAbsolute = resolve(sourceRoot);
+  const sourceRootReal = realpathSync(sourceRootAbsolute);
+  const activeDirectories = new Set<string>();
+
+  const ensureDestinationParent = (destination: string): void => {
+    mkdirSync(dirname(destination), { recursive: true });
+  };
+
+  const ensureDestinationDirectory = (destination: string): void => {
+    try {
+      const existing = lstatSync(destination);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) {
+        throw new Error(`destination is not a real directory: ${destination}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      mkdirSync(destination, { recursive: true });
+    }
+  };
+
+  const copyEntry = (source: string, destination: string): void => {
+    const sourceStat = lstatSync(source);
+    ensureDestinationParent(destination);
+
+    if (sourceStat.isSymbolicLink()) {
+      const linkText = readlinkSync(source, 'utf8');
+      const lexicalTarget = resolve(dirname(source), linkText);
+      let resolvedTarget: string | null = null;
+      try {
+        resolvedTarget = realpathSync(source);
+      } catch {
+        if (isPathContainedIn(lexicalTarget, sourceRootAbsolute)) {
+          throw new Error(
+            `source symlink points to an unreadable path inside the worktree: ${source}`,
+          );
+        }
+      }
+
+      if (
+        resolvedTarget !== null &&
+        isPathContainedIn(resolvedTarget, sourceRootReal)
+      ) {
+        copyEntry(resolvedTarget, destination);
+        return;
+      }
+
+      symlinkSync(linkText, destination);
+      return;
+    }
+
+    if (sourceStat.isDirectory()) {
+      const sourceReal = realpathSync(source);
+      if (activeDirectories.has(sourceReal)) {
+        throw new Error(`source directory cycle detected: ${source}`);
+      }
+      activeDirectories.add(sourceReal);
+      try {
+        ensureDestinationDirectory(destination);
+        for (const entry of readdirSync(source)) {
+          copyEntry(join(source, entry), join(destination, entry));
+        }
+      } finally {
+        activeDirectories.delete(sourceReal);
+      }
+      return;
+    }
+
+    try {
+      const existing = lstatSync(destination);
+      if (existing.isDirectory() || existing.isSymbolicLink()) {
+        throw new Error(`destination is not a regular file: ${destination}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    copyFileSync(source, destination);
+  };
+
+  copyEntry(from, to);
+}
+
+function copyPathProduction(
+  from: string,
+  to: string,
+  sourceRoot: string = from,
+): void {
+  copyPathWithSafeSymlinks(from, to, sourceRoot);
 }
 
 let preserveDirMemo: string | null = null;
