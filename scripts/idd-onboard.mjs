@@ -2118,6 +2118,23 @@ function isControlFlowClosingParenthesis(text, index) {
   }
   return false;
 }
+function isBlockClosingBrace(text, index) {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === '}') {
+      depth += 1;
+    } else if (character === '{') {
+      depth -= 1;
+      if (depth === 0) {
+        return /(?:\b(?:else|do|try|finally)\s*|\)\s*$|=>\s*$)/u.test(
+          text.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
 function isRegexLiteralStart(text, index) {
   let previousIndex = index - 1;
   while (previousIndex >= 0 && /\s/u.test(text[previousIndex] ?? '')) {
@@ -2134,6 +2151,9 @@ function isRegexLiteralStart(text, index) {
     previous === ')' &&
     isControlFlowClosingParenthesis(text, previousIndex)
   ) {
+    return true;
+  }
+  if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
     return true;
   }
   return /\b(?:return|case|throw|else|do)$/u.test(

@@ -3844,6 +3844,18 @@ test('checkHeldSchemaDrift ignores regex literals after control-flow parentheses
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after block statements', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "if (ok) {}\n/readdirSync('schemas')/.test(text);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift keeps directory-scan API matching case-sensitive', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
