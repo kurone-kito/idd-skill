@@ -1776,42 +1776,51 @@ export function runLocalWorktreeRecovery(args, deps) {
     return verdict;
   }
   const routing = confirmed.routing;
-  if (
-    routing.state !== 'local_worktree_occupied' ||
-    !isAcceptedBlockReason(routing.reason)
-  ) {
-    verdict.step1.outcome = 'not-blocked';
-    verdict.step1.reason = `resume-claim-routing reports state=${routing.state} reason=${routing.reason}; nothing to recover`;
-    verdict.result = verdict.step1.reason;
-    return verdict;
-  }
-  const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
-  if (
-    !reportedPaths.some(
-      (reportedPath) =>
-        normalizeGitWorktreePathForComparison(reportedPath) ===
-        targetComparisonPath,
-    )
-  ) {
-    verdict.step1.outcome = 'path-mismatch';
-    verdict.step1.reason = `--worktree ${targetPath} is not among the occupied paths reported (${reportedPaths.join(', ') || 'none'})`;
-    verdict.result = verdict.step1.reason;
-    return verdict;
-  }
   const recovered = extractRecoveredClaim(routing);
   const recoveredClaimId = recovered.claimId;
   const recoveredBranch = recovered.branch;
-  // The prunable-and-absent shortcut skips the claim-lock check only
-  // (nothing to preserve or remove either, since the path is already gone)
-  // -- never the confirm-the-block spawn above. Passing the now-known
-  // recovered branch lets the locked/branch-matching guard actually apply,
-  // instead of the shortcut being reachable for an unrelated branch.
+  // A prunable record whose checkout is already absent is represented by the
+  // routing helper as an explicit `absent` local-worktree probe, which keeps
+  // the overall routing state stale rather than producing the ordinary
+  // occupied state. Evaluate this narrow shortcut before the general
+  // occupied-state gate so a verified prunable record remains reachable;
+  // every other stale, absent, or unreadable result still fails closed below.
   const shortcut = evaluatePrunableShortcut(
     records,
     targetPath,
     recoveredBranch,
     deps.pathExists,
   );
+  const reportedPaths = routing.evidence?.local_worktree?.paths ?? [];
+  const routingReportsTargetPath =
+    routing.state === 'local_worktree_occupied' &&
+    isAcceptedBlockReason(routing.reason) &&
+    reportedPaths.some(
+      (reportedPath) =>
+        normalizeGitWorktreePathForComparison(reportedPath) ===
+        targetComparisonPath,
+    );
+  const routingReportsExplicitAbsence =
+    routing.evidence?.local_worktree?.status === 'absent' &&
+    reportedPaths.length === 0;
+  if (
+    !routingReportsTargetPath &&
+    !(shortcut.eligible && routingReportsExplicitAbsence)
+  ) {
+    if (
+      routing.state === 'local_worktree_occupied' &&
+      isAcceptedBlockReason(routing.reason)
+    ) {
+      verdict.step1.outcome = 'path-mismatch';
+      verdict.step1.reason = `--worktree ${targetPath} is not among the occupied paths reported (${reportedPaths.join(', ') || 'none'})`;
+      verdict.result = verdict.step1.reason;
+      return verdict;
+    }
+    verdict.step1.outcome = 'not-blocked';
+    verdict.step1.reason = `resume-claim-routing reports state=${routing.state} reason=${routing.reason}; nothing to recover`;
+    verdict.result = verdict.step1.reason;
+    return verdict;
+  }
   if (shortcut.eligible) {
     verdict.step1.outcome = 'blocked-prunable';
     verdict.step1.reason = 'prunable record, absent on disk, unlocked';
@@ -2052,6 +2061,10 @@ export function runLocalWorktreeRecovery(args, deps) {
           normalizeGitWorktreePathForComparison(reportedPath) ===
           targetComparisonPath,
       );
+    const prunableStillExplicitlyAbsent =
+      shortcut.eligible &&
+      recheck.routing.evidence?.local_worktree?.status === 'absent' &&
+      (recheck.routing.evidence?.local_worktree?.paths ?? []).length === 0;
     let stillEligible;
     let staleReason;
     if (shortcut.eligible) {
@@ -2064,7 +2077,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           recoveredBranch,
           deps.pathExists,
         ).eligible &&
-        ordinaryStillOccupied;
+        (ordinaryStillOccupied || prunableStillExplicitlyAbsent);
       staleReason =
         'the prunable-and-absent record no longer matches at recheck time (it may have reappeared on disk, been locked, no longer names the recovered branch, or the issue claim state itself changed); stopping';
     } else {
@@ -2448,18 +2461,23 @@ export function runLocalWorktreeRecovery(args, deps) {
     const finalLinkedRecovered = finalLinkedRouting
       ? extractRecoveredClaim(finalLinkedRouting)
       : null;
-    const finalLinkedStillMatches =
-      finalLinkedConfirm.ok &&
+    const finalLinkedReportsTargetPath =
       finalLinkedRouting !== null &&
       finalLinkedRouting.state === 'local_worktree_occupied' &&
       isAcceptedBlockReason(finalLinkedRouting.reason) &&
-      (shortcut.eligible ||
-        !finalLinkedRouting.reason.endsWith('-local-worktree-unreadable')) &&
       (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).some(
         (reportedPath) =>
           normalizeGitWorktreePathForComparison(reportedPath) ===
           targetComparisonPath,
-      ) &&
+      );
+    const finalLinkedReportsPrunableAbsence =
+      shortcut.eligible &&
+      finalLinkedRouting?.evidence?.local_worktree?.status === 'absent' &&
+      (finalLinkedRouting.evidence?.local_worktree?.paths ?? []).length === 0;
+    const finalLinkedStillMatches =
+      finalLinkedConfirm.ok &&
+      finalLinkedRouting !== null &&
+      (finalLinkedReportsTargetPath || finalLinkedReportsPrunableAbsence) &&
       finalLinkedRecovered?.claimId === recoveredClaimId &&
       finalLinkedRecovered.branch === recoveredBranch;
     if (!finalLinkedStillMatches) {
@@ -2588,29 +2606,37 @@ export function runLocalWorktreeRecovery(args, deps) {
           'the prunable-and-absent record changed before forced removal; stopping before removal',
         );
       }
+      const shortcutRoutingStillMatches = () => {
+        const confirmation = deps.confirmBlock(cwd);
+        const routing = confirmation.routing;
+        const recovered = routing ? extractRecoveredClaim(routing) : null;
+        const reportsTargetPath =
+          routing !== null &&
+          routing.state === 'local_worktree_occupied' &&
+          isAcceptedBlockReason(routing.reason) &&
+          (routing.evidence?.local_worktree?.paths ?? []).some(
+            (reportedPath) =>
+              normalizeGitWorktreePathForComparison(reportedPath) ===
+              targetComparisonPath,
+          );
+        const reportsPrunableAbsence =
+          routing?.evidence?.local_worktree?.status === 'absent' &&
+          (routing.evidence?.local_worktree?.paths ?? []).length === 0;
+        return (
+          confirmation.ok &&
+          routing !== null &&
+          (reportsTargetPath || reportsPrunableAbsence) &&
+          recovered?.claimId === recoveredClaimId &&
+          recovered.branch === recoveredBranch
+        );
+      };
       // The private admin-directory copy above is itself a mutation window:
       // claim state can change while it runs, even though the target record
       // remains prunable and absent. Re-run the same routing/claim identity
-      // check immediately before the forced removal so the shortcut cannot
-      // delete a worktree whose stale claim has already changed hands.
-      const finalShortcutConfirm = deps.confirmBlock(cwd);
-      const finalShortcutRouting = finalShortcutConfirm.routing;
-      const finalShortcutRecovered = finalShortcutRouting
-        ? extractRecoveredClaim(finalShortcutRouting)
-        : null;
-      const finalShortcutStillMatches =
-        finalShortcutConfirm.ok &&
-        finalShortcutRouting !== null &&
-        finalShortcutRouting.state === 'local_worktree_occupied' &&
-        isAcceptedBlockReason(finalShortcutRouting.reason) &&
-        (finalShortcutRouting.evidence?.local_worktree?.paths ?? []).some(
-          (reportedPath) =>
-            normalizeGitWorktreePathForComparison(reportedPath) ===
-            targetComparisonPath,
-        ) &&
-        finalShortcutRecovered?.claimId === recoveredClaimId &&
-        finalShortcutRecovered.branch === recoveredBranch;
-      if (!finalShortcutStillMatches) {
+      // check before the backup verification, then repeat it after every
+      // filesystem check so the shortcut cannot delete a worktree whose
+      // stale claim changed hands during the final gap.
+      if (!shortcutRoutingStillMatches()) {
         return recordRemovalFailure(
           'the final prunable-worktree routing/claim identity no longer matches; stopping before forced removal',
         );
@@ -2628,6 +2654,11 @@ export function runLocalWorktreeRecovery(args, deps) {
       ) {
         return recordRemovalFailure(
           'the prunable worktree admin-data backup disappeared or moved before forced removal; stopping before removal',
+        );
+      }
+      if (!shortcutRoutingStillMatches()) {
+        return recordRemovalFailure(
+          'the final prunable-worktree routing/claim identity no longer matches; stopping before forced removal',
         );
       }
     }

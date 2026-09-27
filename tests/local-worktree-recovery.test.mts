@@ -1095,6 +1095,56 @@ test('step 1 always calls confirmBlock, even for a prunable-and-absent record (n
   assert.equal(verdict.plan.prunableShortcut, true);
 });
 
+test('prunable shortcut accepts the explicit absent probe from routing', () => {
+  let removeCalled = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      {
+        path: '/repo/linked',
+        branchRef: 'refs/heads/issue/1-task',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: true,
+      },
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'stale',
+        reason: 'active-claim-stale',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: { status: 'absent', paths: [], reason: null },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'blocked-prunable');
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(removeCalled, true);
+});
+
 test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not just step 1s stale read (CodeRabbit finding)', () => {
   // The window between step 1's read and the clone-scoped lock acquisition
   // is exactly what the lock exists to close -- the shortcut path must be
@@ -1360,6 +1410,74 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
   assert.equal(removeCalled, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /admin-data backup disappeared or moved/);
+});
+
+test('prunable shortcut rechecks claim identity after final backup verification', () => {
+  let confirmCalls = 0;
+  let removeCalled = false;
+  const record = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  };
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+      record,
+    ],
+    pathExists: (path) => path !== '/repo/linked',
+    confirmBlock: () => {
+      confirmCalls += 1;
+      return {
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: {
+            claim_id: confirmCalls >= 5 ? 'claim-y' : 'claim-x',
+            branch: 'issue/1-task',
+          },
+          evidence: {
+            local_worktree: {
+              status: 'unreadable',
+              paths: ['/repo/linked'],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      };
+    },
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+    copyPath: () => {},
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(confirmCalls, 5);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /final prunable-worktree routing/);
 });
 
 test('prunable shortcut stops when private admin-directory ownership cannot be established', () => {
