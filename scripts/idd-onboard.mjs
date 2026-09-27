@@ -2156,7 +2156,7 @@ function isRegexLiteralStart(text, index) {
   if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
     return true;
   }
-  return /\b(?:return|case|throw|else|do|await|yield|typeof|void|delete|new|in|of|instanceof)$/u.test(
+  return /\b(?:return|case|throw|else|do|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
     text.slice(0, previousIndex + 1),
   );
 }
@@ -2552,11 +2552,22 @@ function expandGlobRange(text) {
     }
     return values;
   }
-  const alphabetic = /^(?<start>[A-Za-z])\.\.(?<end>[A-Za-z])$/u.exec(text);
+  const alphabetic =
+    /^(?<start>[A-Za-z])\.\.(?<end>[A-Za-z])(?:\.\.(?<step>-?\d+))?$/u.exec(
+      text,
+    );
   if (alphabetic?.groups !== undefined) {
     const start = alphabetic.groups.start.codePointAt(0) ?? 0;
     const end = alphabetic.groups.end.codePointAt(0) ?? 0;
-    const step = start <= end ? 1 : -1;
+    const requestedStep = Number(alphabetic.groups.step ?? 0);
+    const step = requestedStep || (start <= end ? 1 : -1);
+    if (
+      !Number.isSafeInteger(step) ||
+      (start < end && step < 0) ||
+      (start > end && step > 0)
+    ) {
+      return null;
+    }
     const values = [];
     for (
       let value = start;
@@ -2613,14 +2624,51 @@ function globPatternToRegex(pattern) {
     } else if (character === '?') {
       expression += '[^/]';
     } else if (character === '[') {
-      const closing = pattern.indexOf(']', index + 1);
-      if (closing === -1) {
+      let closing = index + 1;
+      while (closing < pattern.length) {
+        if (
+          pattern[closing] === '[' &&
+          /[:.=]/u.test(pattern[closing + 1] ?? '')
+        ) {
+          const delimiter = pattern[closing + 1] ?? '';
+          const posixClosing = pattern.indexOf(`${delimiter}]`, closing + 2);
+          if (posixClosing !== -1) {
+            closing = posixClosing + 2;
+            continue;
+          }
+        }
+        if (pattern[closing] === ']') {
+          break;
+        }
+        closing += 1;
+      }
+      if (closing >= pattern.length) {
         expression += '\\[';
       } else {
         let characterClass = pattern.slice(index + 1, closing);
         if (characterClass.startsWith('!')) {
           characterClass = `^${characterClass.slice(1)}`;
         }
+        characterClass = characterClass.replace(
+          /\[:(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]/gu,
+          (_match, name) =>
+            ({
+              alnum: 'A-Za-z0-9',
+              alpha: 'A-Za-z',
+              ascii: '\\x00-\\x7F',
+              blank: ' \\t',
+              cntrl: '\\x00-\\x1F\\x7F',
+              digit: '0-9',
+              graph: '\\x21-\\x7E',
+              lower: 'a-z',
+              print: '\\x20-\\x7E',
+              punct: '!-/:-@[-`{-~',
+              space: '\\s',
+              upper: 'A-Z',
+              word: 'A-Za-z0-9_',
+              xdigit: 'A-Fa-f0-9',
+            })[name] ?? _match,
+        );
         expression += `[${characterClass.replaceAll('\\', '\\\\')}]`;
         index = closing;
       }
@@ -2669,11 +2717,15 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
     );
     const cwdCandidates = (() => {
       const cwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.exec(optionText);
-      return cwd === null
-        ? []
-        : pathExpressionCandidates(
-            firstCallArgument(argumentsText.slice(cwd.index + cwd[0].length)),
-          );
+      if (cwd === null) {
+        return [];
+      }
+      const cwdExpression = argumentsText.slice(cwd.index + cwd[0].length);
+      return pathExpressionCandidates(cwdExpression).map((candidate) =>
+        cwdExpression.includes('import.meta.dirname')
+          ? resolveModuleRelativeScanPath(candidate, modulePath)
+          : candidate,
+      );
     })();
     const hasCwd = /(?:\bcwd\b|['"]cwd['"])\s*:\s*/u.test(optionText);
     const excludeMatch = /(?:\bexclude\b|['"]exclude['"])\s*:\s*/u.exec(
