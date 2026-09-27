@@ -2175,6 +2175,28 @@ function isFunctionDeclarationPrefix(text) {
   }
   return false;
 }
+function stripLeadingDecorators(text) {
+  let candidate = text.trimStart();
+  while (candidate.startsWith('@')) {
+    const decorator =
+      /^@[^\n;{}]*?(?=\s+(?:@|(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b)|$)/u.exec(
+        candidate,
+      );
+    if (!decorator) {
+      break;
+    }
+    candidate = candidate.slice(decorator[0].length).trimStart();
+  }
+  return candidate;
+}
+function isClassLikeDeclarationPrefix(text) {
+  const statementStart =
+    Math.max(text.lastIndexOf(';'), text.lastIndexOf('}')) + 1;
+  const declarationPrefix = stripLeadingDecorators(text.slice(statementStart));
+  return /^(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
+    declarationPrefix,
+  );
+}
 function isBlockClosingBrace(text, index) {
   let depth = 0;
   for (let current = index; current >= 0; current -= 1) {
@@ -2197,9 +2219,7 @@ function isBlockClosingBrace(text, index) {
             )) ||
           /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
-          /(?:^|[;}])\s*(?:(?:@[^\n;{}]+)\s*)*(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
-            openingPrefix,
-          )
+          isClassLikeDeclarationPrefix(openingPrefix)
         );
       }
     }
