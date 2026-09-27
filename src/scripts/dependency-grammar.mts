@@ -257,10 +257,22 @@ export function consumeDependencyContinuationRefLines(
   /** Every bare invalid token (e.g. `#0`) seen on a swept continuation
    * line -- see {@link DependencyReferenceListResult.invalidTokens}. */
   invalidTokens: string[];
+  /**
+   * Parallel to `unresolvable`: the absolute 0-based index into `lines`
+   * each entry actually came from (`idd-skill#3285` final review round,
+   * Copilot) -- a caller reporting a per-line finding message must not
+   * attribute a continuation-line token to the keyword line's own
+   * number.
+   */
+  unresolvableLineIndexes: number[];
+  /** Parallel to `invalidTokens`, same idea as `unresolvableLineIndexes`. */
+  invalidTokenLineIndexes: number[];
 } {
   const numbers: number[] = [];
   const unresolvable: DependencyGrammarUnresolvedToken[] = [];
   const invalidTokens: string[] = [];
+  const unresolvableLineIndexes: number[] = [];
+  const invalidTokenLineIndexes: number[] = [];
   let index = startIndex;
   while (index < lines.length) {
     const trimmed = (lines[index] ?? '').trim();
@@ -285,6 +297,7 @@ export function consumeDependencyContinuationRefLines(
       // `lineInvalidTokens` here means nothing token-shaped matched at
       // all (ordinary unrelated text), so there is nothing to add.
       invalidTokens.push(...lineInvalidTokens);
+      invalidTokenLineIndexes.push(...lineInvalidTokens.map(() => index));
       break;
     }
     if (remaining.trim().length > 0) {
@@ -292,10 +305,18 @@ export function consumeDependencyContinuationRefLines(
     }
     numbers.push(...lineNumbers);
     unresolvable.push(...lineUnresolvable);
+    unresolvableLineIndexes.push(...lineUnresolvable.map(() => index));
     invalidTokens.push(...lineInvalidTokens);
+    invalidTokenLineIndexes.push(...lineInvalidTokens.map(() => index));
     index += 1;
   }
-  return { numbers, unresolvable, invalidTokens };
+  return {
+    numbers,
+    unresolvable,
+    invalidTokens,
+    unresolvableLineIndexes,
+    invalidTokenLineIndexes,
+  };
 }
 
 // Leading-anchor source for a dependency-keyword line: optional
@@ -395,6 +416,37 @@ export interface DependencyKeywordLineMatch {
    * fail the line, distinct from the `remaining`-scan path above.
    */
   invalidTokens: string[];
+  /**
+   * The length of `DEPENDENCY_LINE_PREFIX`'s own captured span at the
+   * start of `lines[index]` -- i.e. the offset within the line where the
+   * literal keyword text itself begins. Deliberately NOT `match.index`
+   * (which is always `0` here regardless: the whole line pattern is
+   * `^`-anchored via `DEPENDENCY_LINE_PREFIX`, whose own leading
+   * `[ \t]*` greedily consumes any amount of leading whitespace -- real
+   * indentation, or a discover-masked HTML comment/code span blanked to
+   * spaces -- so the match always begins matching at position `0`
+   * either way; a first attempt at this field mistakenly used
+   * `match.index` and found it could never distinguish the two cases,
+   * #3285 final review round, Copilot). A caller like
+   * `checkDependencyLineGrammar` that must not lose a hidden keyword
+   * mention preceding an accepted declaration on the same line (e.g.
+   * `<!-- Depends on #13 --> Blocked by #12`, where the masked comment
+   * is exactly this prefix) uses this alongside `remaining`'s own
+   * end-offset arithmetic to rescan BOTH the prefix and the suffix of
+   * the accepted span in the visible line, not only the suffix.
+   */
+  matchStart: number;
+  /**
+   * Parallel to `unresolvable`: the absolute 0-based index into `lines`
+   * each entry actually came from -- `index` itself for a token found on
+   * the keyword line, or a later index for one found on a swept
+   * continuation line (`idd-skill#3285` final review round, Copilot: a
+   * caller reporting a per-line finding must not attribute a
+   * continuation-line token to the keyword line's own number).
+   */
+  unresolvableLineIndexes: number[];
+  /** Parallel to `invalidTokens`, same idea as `unresolvableLineIndexes`. */
+  invalidTokenLineIndexes: number[];
 }
 
 /**
@@ -435,18 +487,31 @@ export function matchDependencyKeywordLine(
   keyword: string,
   options: DependencyGrammarOptions = {},
 ): DependencyKeywordLineMatch | undefined {
+  // The leading-anchor prefix is its own capturing group (`match[1]`,
+  // shifting the reference-list tail to `match[2]`) so its own LENGTH is
+  // directly available -- not `match.index`, which is always `0` here
+  // regardless of how much of the line precedes the literal keyword
+  // text: the whole pattern is `^`-anchored (via DEPENDENCY_LINE_PREFIX
+  // itself) and `[ \t]*` at its very start greedily consumes any amount
+  // of leading whitespace, including a discover-masked HTML
+  // comment/code span turned into spaces, so the match always begins
+  // matching at position 0 either way (`idd-skill#3285` final review
+  // round, Copilot -- a first attempt at this fix mistakenly used
+  // `match.index` and found it never distinguished the two cases).
   const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}:?[ \\t]+(${TOKEN_START}.*)$`,
+    `(${DEPENDENCY_LINE_PREFIX})${escapeRegex(keyword)}:?[ \\t]+(${TOKEN_START}.*)$`,
     'i',
   );
   const match = lines[index]?.match(linePattern);
   if (!match) {
     return undefined;
   }
-  const lineResult = consumeDependencyReferenceList(match[1], options);
+  const lineResult = consumeDependencyReferenceList(match[2], options);
   const numbers = [...lineResult.numbers];
   const unresolvable = [...lineResult.unresolvable];
   const invalidTokens = [...lineResult.invalidTokens];
+  const unresolvableLineIndexes = lineResult.unresolvable.map(() => index);
+  const invalidTokenLineIndexes = lineResult.invalidTokens.map(() => index);
   // #2441's line-wrap sweep only applies when the keyword line's own
   // reference list is the *entire* rest of the line -- trailing prose
   // (`Blocked by #10.`) means the next line is unrelated text, not a
@@ -462,6 +527,8 @@ export function matchDependencyKeywordLine(
     numbers.push(...continuation.numbers);
     unresolvable.push(...continuation.unresolvable);
     invalidTokens.push(...continuation.invalidTokens);
+    unresolvableLineIndexes.push(...continuation.unresolvableLineIndexes);
+    invalidTokenLineIndexes.push(...continuation.invalidTokenLineIndexes);
   }
   if (numbers.length === 0 && unresolvable.length === 0) {
     return undefined;
@@ -471,7 +538,7 @@ export function matchDependencyKeywordLine(
   // stripped with nothing left to consume after it -- including when
   // the "whitespace" was actually MASKED content (a code span, or an
   // HTML comment masked by a caller like `checkDependencyLineGrammar`)
-  // that only reads as blank in this already-masked `match[1]`. Slicing
+  // that only reads as blank in this already-masked `match[2]`. Slicing
   // from `consumedTokenEnd` instead recovers that swallowed tail, so a
   // hidden mention immediately after a valid reference on the same line
   // (`Blocked by #12 <!-- Depends on #13 -->`) still shows up here for
@@ -480,8 +547,11 @@ export function matchDependencyKeywordLine(
   return {
     numbers,
     unresolvable,
-    remaining: match[1].slice(lineResult.consumedTokenEnd),
+    remaining: match[2].slice(lineResult.consumedTokenEnd),
     invalidTokens,
+    matchStart: match[1].length,
+    unresolvableLineIndexes,
+    invalidTokenLineIndexes,
   };
 }
 

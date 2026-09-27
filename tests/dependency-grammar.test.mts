@@ -246,6 +246,8 @@ test('consumeDependencyContinuationRefLines stops at a blank line', () => {
     numbers: [2, 3],
     unresolvable: [],
     invalidTokens: [],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [],
   });
 });
 
@@ -326,6 +328,9 @@ test('matchDependencyKeywordLine returns numbers plus the same-line unconsumed r
       unresolvable: [],
       remaining: '. Depends on #13',
       invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [],
     },
   );
 });
@@ -333,7 +338,15 @@ test('matchDependencyKeywordLine returns numbers plus the same-line unconsumed r
 test('matchDependencyKeywordLine returns an empty remaining string when the reference list consumes the rest of the line', () => {
   assert.deepEqual(
     matchDependencyKeywordLine(['Blocked by #12'], 0, 'Blocked by'),
-    { numbers: [12], unresolvable: [], remaining: '', invalidTokens: [] },
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '',
+      invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [],
+    },
   );
 });
 
@@ -367,6 +380,9 @@ test('matchDependencyKeywordLine still returns a defined result for a cross-repo
       ],
       remaining: '',
       invalidTokens: [],
+      matchStart: 0,
+      unresolvableLineIndexes: [0],
+      invalidTokenLineIndexes: [],
     },
   );
 });
@@ -452,7 +468,15 @@ test('consumeDependencyReferenceList still treats a valid qualified cross-repo t
 test('matchDependencyKeywordLine still returns a defined result with numbers when an invalid token is mixed in, but reports it in invalidTokens', () => {
   assert.deepEqual(
     matchDependencyKeywordLine(['Blocked by #0, #12'], 0, 'Blocked by'),
-    { numbers: [12], unresolvable: [], remaining: '', invalidTokens: ['#0'] },
+    {
+      numbers: [12],
+      unresolvable: [],
+      remaining: '',
+      invalidTokens: ['#0'],
+      matchStart: 0,
+      unresolvableLineIndexes: [],
+      invalidTokenLineIndexes: [0],
+    },
   );
 });
 
@@ -462,6 +486,8 @@ test('consumeDependencyContinuationRefLines reports an invalid token on an inval
     numbers: [],
     unresolvable: [],
     invalidTokens: ['#0'],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [1],
   });
 });
 
@@ -471,10 +497,12 @@ test('consumeDependencyContinuationRefLines still reports nothing for genuinely 
     numbers: [],
     unresolvable: [],
     invalidTokens: [],
+    unresolvableLineIndexes: [],
+    invalidTokenLineIndexes: [],
   });
 });
 
-test("matchDependencyKeywordLine surfaces an invalid-only continuation line's token via invalidTokens", () => {
+test("matchDependencyKeywordLine surfaces an invalid-only continuation line's token via invalidTokens, attributed to its OWN line index (final review round, Copilot)", () => {
   const result = matchDependencyKeywordLine(
     ['Blocked by #12,', '#0'],
     0,
@@ -490,5 +518,37 @@ test("matchDependencyKeywordLine surfaces an invalid-only continuation line's to
     // own invalidTokens entry below is no longer silently dropped.
     remaining: ',',
     invalidTokens: ['#0'],
+    matchStart: 0,
+    unresolvableLineIndexes: [],
+    // `#0` is on line index 1 (the swept continuation line), NOT index 0
+    // (the keyword line itself) -- this is the field a caller uses to
+    // report the CORRECT physical line number instead of always citing
+    // the keyword line's own.
+    invalidTokenLineIndexes: [1],
   });
+});
+
+test('matchDependencyKeywordLine reports a non-zero matchStart for a list-marker prefix', () => {
+  assert.equal(
+    matchDependencyKeywordLine(['- Blocked by #12'], 0, 'Blocked by')
+      ?.matchStart,
+    2,
+  );
+  assert.equal(
+    matchDependencyKeywordLine(['1. Blocked by #12'], 0, 'Blocked by')
+      ?.matchStart,
+    3,
+  );
+});
+
+test('matchDependencyKeywordLine reports a non-zero matchStart for a masked (discover) prefix, recovering a hidden mention preceding it (final review round, Copilot: "<!-- Depends on #13 --> Blocked by #12")', () => {
+  // The discover-masked view blanks the HTML comment to spaces, which
+  // `DEPENDENCY_LINE_PREFIX`'s own leading `[ \t]*` consumes the same
+  // way it would consume genuine indentation -- `matchStart` still
+  // correctly reports how much of the line precedes the literal keyword
+  // text, regardless of whether that prefix was real whitespace or
+  // masked content.
+  const masked = '                        Blocked by #12';
+  const result = matchDependencyKeywordLine([masked], 0, 'Blocked by');
+  assert.equal(result?.matchStart, 24);
 });

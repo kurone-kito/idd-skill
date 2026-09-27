@@ -1403,6 +1403,29 @@ test('dependency-line-grammar fails on an invalid token in a GitHub-wrapped cont
   assert.match(finding.detail, /"#0"/);
 });
 
+test('dependency-line-grammar attributes a continuation-line invalid token to its OWN physical line, not the keyword line (final review round, Copilot: "Blocked by #12,\\n#0" previously reported "line 1" for a token actually on line 2)', () => {
+  const keywordLine = 'Blocked by #12,';
+  const continuationLine = '#0';
+  const body = childBody({
+    extraMarkers: `${keywordLine}\n${continuationLine}`,
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+  const bodyLines = body.split('\n');
+  const keywordLineNo = bodyLines.indexOf(keywordLine) + 1;
+  const continuationLineNo = bodyLines.indexOf(continuationLine) + 1;
+  assert.ok(keywordLineNo > 0 && continuationLineNo > 0);
+  assert.match(finding.detail, new RegExp(`line ${continuationLineNo}: "#0"`));
+  assert.doesNotMatch(
+    finding.detail,
+    new RegExp(`line ${keywordLineNo}: "#0"`),
+  );
+});
+
 test('dependency-line-grammar fails on an invalid-only continuation line, not just a mixed one (final review round, Copilot: "Blocked by #12,\\n#0")', () => {
   const body = childBody({
     extraMarkers: 'Blocked by #12,\n#0',
@@ -1426,6 +1449,16 @@ test('dependency-line-grammar fails on a same-repo qualified reference with a no
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
   assert.match(finding.detail, /"kurone-kito\/idd-skill#0"/);
   assert.doesNotMatch(finding.detail, /names another repository/);
+});
+
+test('dependency-line-grammar fails on a hidden mention inside an HTML comment PRECEDING a valid declaration on the same line (final review round, Copilot: "<!-- Depends on #13 --> Blocked by #12" -- the suffix-only rescan previously dropped this)', () => {
+  const { report, finding, lineNumber } = dependencyLineGrammarFinding(
+    '<!-- Depends on #13 --> Blocked by #12',
+  );
+  assert.equal(report.passed, false);
+  assert.equal(finding.result, 'fail');
+  assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
+  assert.match(finding.detail, /Depends on/);
 });
 
 test('dependency-line-grammar fails on a reference-style Markdown-link mention (final review round, CodeRabbit: "Blocked by [#12][ref]")', () => {

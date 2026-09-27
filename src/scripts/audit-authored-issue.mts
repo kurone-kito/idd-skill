@@ -1847,6 +1847,16 @@ function checkDependencyLineGrammar(
   // validated by the accepted match and must still be scanned below,
   // rather than the whole line being skipped outright.
   const acceptedRemainingLength = new Map<number, number>();
+  // Maps the same accepted line number to where the accepted match itself
+  // BEGAN (`idd-skill#3285` final review round, Copilot): a mention
+  // BEFORE the accepted declaration on the same line -- most notably one
+  // hidden inside an HTML comment, e.g. `<!-- Depends on #13 -->
+  // Blocked by #12` -- is just as unvalidated by the accepted match as a
+  // trailing one, but the earlier suffix-only rescan below silently
+  // dropped it (the accepted match's own leading prefix is entirely
+  // masked-comment content here, so `remaining` alone gave no signal
+  // that anything preceded it).
+  const acceptedMatchStart = new Map<number, number>();
   const issues: string[] = [];
 
   for (const keyword of ['Blocked by', 'Depends on'] as const) {
@@ -1862,6 +1872,7 @@ function checkDependencyLineGrammar(
       }
       const lineNo = index + 1;
       acceptedRemainingLength.set(lineNo, result.remaining.length);
+      acceptedMatchStart.set(lineNo, result.matchStart);
       // A qualified/URL token with an invalid number lands in BOTH
       // `unresolvable` (dependency-grammar.mts preserves this for
       // Discover's own runtime consumers, which read it directly and
@@ -1888,12 +1899,21 @@ function checkDependencyLineGrammar(
       // reference correctly regardless of what this offline invocation
       // happened to pass.
       if (result.unresolvable.length > 0 && currentRepo !== undefined) {
-        for (const token of result.unresolvable) {
+        for (const [tokenIndex, token] of result.unresolvable.entries()) {
           if (invalidTokenSet.has(token.token)) {
             continue;
           }
+          // Attribute to the token's OWN source line (`idd-skill#3285`
+          // final review round, Copilot), not unconditionally to the
+          // keyword line's `lineNo`: a token swept in from a
+          // GitHub-wrapped continuation line (#2441) is physically on a
+          // LATER line than the keyword itself, and reporting it under
+          // the keyword's own line number contradicts this check's own
+          // documented promise to name the offending line.
+          const tokenLineNo =
+            (result.unresolvableLineIndexes[tokenIndex] ?? index) + 1;
           issues.push(
-            `line ${lineNo}: "${token.token}" names another repository and cannot be resolved locally -- Discover will keep this issue blocked until the line is fixed`,
+            `line ${tokenLineNo}: "${token.token}" names another repository and cannot be resolved locally -- Discover will keep this issue blocked until the line is fixed`,
           );
         }
       }
@@ -1909,9 +1929,11 @@ function checkDependencyLineGrammar(
       // Discover's own runtime resolution is intentionally unaffected
       // and still resolves #12 from that same line.
       if (result.invalidTokens.length > 0) {
-        for (const token of result.invalidTokens) {
+        for (const [tokenIndex, token] of result.invalidTokens.entries()) {
+          const tokenLineNo =
+            (result.invalidTokenLineIndexes[tokenIndex] ?? index) + 1;
           issues.push(
-            `line ${lineNo}: "${token}" is not a valid issue reference (the number must be a positive integer) -- remove it or fix the number`,
+            `line ${tokenLineNo}: "${token}" is not a valid issue reference (the number must be a positive integer) -- remove it or fix the number`,
           );
         }
       }
@@ -1926,18 +1948,31 @@ function checkDependencyLineGrammar(
     // same normalized rawText, which preserves length and line structure
     // regardless of which regions each call happens to mask -- marker
     // masking above only blanks non-newline characters in place, so it
-    // doesn't change this either), so a trailing-character count measured
-    // against the discover-masked line slices the correct suffix of
-    // `scanLine` too -- re-scanning the marker-masked VISIBLE text (not
-    // the discover-masked one) keeps a hidden HTML-comment mention
-    // detectable the same way the no-prior-match branch below already
-    // scans it, while a well-formed blocked-by marker's own "blocked-by"
-    // substring stays masked out either way.
+    // doesn't change this either), so an offset measured against the
+    // discover-masked line slices the correct span of `scanLine` too --
+    // re-scanning the marker-masked VISIBLE text (not the discover-masked
+    // one) keeps a hidden HTML-comment mention detectable the same way
+    // the no-prior-match branch below already scans it, while a
+    // well-formed blocked-by marker's own "blocked-by" substring stays
+    // masked out either way.
+    //
+    // Scan BOTH the prefix before the accepted match and the suffix
+    // after it (`idd-skill#3285` final review round, Copilot), skipping
+    // only the accepted declaration's own span in between: a mention
+    // hidden inside an HTML comment BEFORE a valid declaration on the
+    // same line (`<!-- Depends on #13 --> Blocked by #12`) is just as
+    // unvalidated by the accepted match as a trailing one, but a
+    // suffix-only scan silently dropped it whenever the accepted match's
+    // own remaining suffix was empty (`Blocked by #12` here consumes the
+    // rest of the line, leaving nothing for a suffix-only slice to
+    // examine).
     const remainingLength = acceptedRemainingLength.get(lineNo);
+    const matchStart = acceptedMatchStart.get(lineNo);
     const scanText =
-      remainingLength === undefined
+      remainingLength === undefined || matchStart === undefined
         ? scanLine
-        : scanLine.slice(scanLine.length - remainingLength);
+        : scanLine.slice(0, matchStart) +
+          scanLine.slice(scanLine.length - remainingLength);
     const misuse = findDependencyKeywordMisuse(scanText);
     if (misuse !== undefined) {
       issues.push(
