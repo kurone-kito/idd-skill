@@ -527,8 +527,17 @@ function main() {
   // any network round-trip first.
   const { now: resolvedNow, error: nowFlagError } = resolveNowFlag(args.now);
   if (nowFlagError) {
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than a bare `1` -- see advisory-convergence.mts's identical
+    // comment for why a plain number misclassifies as `kind: 'gate'`
+    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
     process.stderr.write(`${nowFlagError}\n`);
-    return 1;
+    return {
+      exitCode: 1,
+      kind: 'usage',
+      message: nowFlagError,
+      httpStatus: null,
+    };
   }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();

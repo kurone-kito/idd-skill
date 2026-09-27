@@ -58,6 +58,7 @@ import {
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
 
@@ -6475,6 +6476,23 @@ test('runAdvisoryConvergence: a malformed --now returns a one-line usage error i
   assert.equal(result.verdict, null);
   assert.equal(result.exitCode, 1);
   assert.equal(result.nowFlagError, NOW_FLAG_USAGE_MESSAGE);
+});
+
+// #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
+// must classify as a usage error (kind "usage"), not a genuine convergence
+// failure (kind "gate") -- a caller that distinguishes the two could
+// otherwise retry a usage mistake indefinitely.
+test('bin/idd-advisory-convergence.mjs: a malformed --now classifies as a usage error under the opt-in error envelope', () => {
+  const result = spawnHelperBinWithEnvelope('idd-advisory-convergence.mjs', [
+    '--pr',
+    '1',
+    '--now',
+    'Sep 27 2026',
+  ]);
+  assert.equal(result.status, 1, JSON.stringify(result));
+  assert.ok(result.envelope, JSON.stringify(result));
+  assert.equal(result.envelope?.kind, 'usage');
+  assert.equal(result.envelope?.exitCode, 1);
 });
 
 // --- isSoleCopilotNotReviewedYetReason / runAdvisoryConvergenceWithPoll ----

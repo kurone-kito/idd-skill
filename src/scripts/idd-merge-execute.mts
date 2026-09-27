@@ -1150,8 +1150,12 @@ function main(): HelperCliResult {
   );
   if (nowFlagError) {
     // #3541: a clean one-line usage error, never an uncaught throw.
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than the bare `exitCode` number -- see
+    // advisory-convergence.mts's identical comment for why a plain number
+    // misclassifies as `kind: 'gate'` under `IDD_HELPER_ERROR_ENVELOPE=1`.
     process.stderr.write(`${nowFlagError}\n`);
-    return exitCode;
+    return { exitCode, kind: 'usage', message: nowFlagError, httpStatus: null };
   }
   if (verdict.localHeadDrift) {
     // #2453: surface this prominently on stderr too -- an agent running

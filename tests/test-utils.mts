@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
@@ -418,6 +418,70 @@ export function fixtureEnv(): NodeJS.ProcessEnv {
   env.GIT_CONFIG_KEY_0 = 'core.excludesFile';
   env.GIT_CONFIG_VALUE_0 = GIT_NULL_DEVICE;
   return env;
+}
+
+/** Result of {@link spawnHelperBinWithEnvelope}. */
+export interface HelperBinEnvelopeResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  /** Parsed `{"iddHelperError": {...}}` JSON envelope, the last non-empty
+   * stderr line -- `null` when absent or unparseable. */
+  envelope: { kind: string; exitCode: number; message: string } | null;
+}
+
+/**
+ * Spawn a packaged `bin/<binName>` helper with
+ * `IDD_HELPER_ERROR_ENVELOPE=1` set, parse its trailing stderr envelope
+ * line, and return both the raw process result and the parsed envelope
+ * (#3551 Codex review: a usage error returned as a bare exit-code number
+ * misclassifies as `kind: "gate"` under the opt-in envelope instead of
+ * `"usage"` -- this helper lets each CLI's own test file assert the
+ * correct classification without re-deriving the spawn/parse boilerplate
+ * `helper-cli-gate-envelope.test.mts` and `helper-cli-contract.test.mts`
+ * each already carry their own copy of).
+ */
+export function spawnHelperBinWithEnvelope(
+  binName: string,
+  args: readonly string[],
+  options: { cwd?: string; timeoutMs?: number } = {},
+): HelperBinEnvelopeResult {
+  const env = fixtureEnv();
+  env.IDD_HELPER_ERROR_ENVELOPE = '1';
+  const result = spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'bin', binName), ...args],
+    {
+      cwd: options.cwd ?? REPO_ROOT,
+      env,
+      encoding: 'utf8',
+      timeout: options.timeoutMs ?? 20_000,
+      killSignal: 'SIGKILL',
+    },
+  );
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  let envelope: HelperBinEnvelopeResult['envelope'] = null;
+  const lines = stderr.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === '') {
+      continue;
+    }
+    if (line.startsWith('{"iddHelperError":')) {
+      try {
+        envelope = (
+          JSON.parse(line) as {
+            iddHelperError: NonNullable<HelperBinEnvelopeResult['envelope']>;
+          }
+        ).iddHelperError;
+      } catch {
+        envelope = null;
+      }
+    }
+    break;
+  }
+  return { status: result.status, stdout, stderr, envelope };
 }
 
 /**

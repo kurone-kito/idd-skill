@@ -35,6 +35,7 @@ import {
   sanitizeRemoteConfig,
   UNCOVERED_HEAD_REASON_MARKER,
 } from '../src/scripts/rerun-advisory-convergence.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const NOW = '2026-07-16T12:00:00Z';
@@ -3061,6 +3062,20 @@ test('runRerunAdvisoryConvergence: a malformed --now returns a one-line usage er
   assert.equal(result.plan, null);
   assert.equal(result.refreshLatestPlan, null);
   assert.equal(result.nowFlagError, NOW_FLAG_USAGE_MESSAGE);
+});
+
+// #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
+// must classify as a usage error (kind "usage"), not a genuine rerun-plan
+// failure (kind "gate").
+test('bin/idd-rerun-advisory-convergence.mjs: a malformed --now classifies as a usage error under the opt-in error envelope', () => {
+  const result = spawnHelperBinWithEnvelope(
+    'idd-rerun-advisory-convergence.mjs',
+    ['--pr', '1', '--now', 'Sep 27 2026'],
+  );
+  assert.equal(result.status, 1, JSON.stringify(result));
+  assert.ok(result.envelope, JSON.stringify(result));
+  assert.equal(result.envelope?.kind, 'usage');
+  assert.equal(result.envelope?.exitCode, 1);
 });
 
 // --- computeRefreshLatestPlan (#2764 Phase 1, Codex P1 review on PR #2855) --

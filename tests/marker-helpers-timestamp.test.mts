@@ -167,3 +167,43 @@ test('NOW_FLAG_USAGE_MESSAGE names --now and shows an accepted example', () => {
   assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20Z/);
   assert.match(NOW_FLAG_USAGE_MESSAGE, /2026-09-27T02:20:20\+09:00/);
 });
+
+// #3551 Copilot + Codex review: `new Date()` silently rolls an impossible
+// calendar date forward (e.g. `2026-02-30T...` becomes `2026-03-02T...`)
+// instead of rejecting it. Since the normalized value drives merge-gate
+// and advisory-wait clocks, a typo'd day must fail closed rather than
+// silently shifting those clocks.
+test('normalizeNowFlag rejects a nonexistent calendar day (Feb 30, Apr 31)', () => {
+  assert.equal(normalizeNowFlag('2026-02-30T02:20:20Z'), null);
+  assert.equal(normalizeNowFlag('2026-04-31T00:00:00Z'), null);
+});
+
+test('normalizeNowFlag rejects Feb 29 on a non-leap year, accepts it on a leap year', () => {
+  // 2026 and 1900 (divisible by 100, not by 400) are not leap years.
+  assert.equal(normalizeNowFlag('2026-02-29T00:00:00Z'), null);
+  assert.equal(normalizeNowFlag('1900-02-29T00:00:00Z'), null);
+  // 2024 and 2000 (divisible by 400) are leap years.
+  assert.equal(
+    normalizeNowFlag('2024-02-29T00:00:00Z'),
+    '2024-02-29T00:00:00Z',
+  );
+  assert.equal(
+    normalizeNowFlag('2000-02-29T00:00:00Z'),
+    '2000-02-29T00:00:00Z',
+  );
+});
+
+test('normalizeNowFlag rejects hour 24 instead of silently rolling to the next day', () => {
+  assert.equal(normalizeNowFlag('2026-09-27T24:00:00Z'), null);
+});
+
+test('normalizeNowFlag still accepts every valid boundary date/time unaffected by the calendar check', () => {
+  assert.equal(
+    normalizeNowFlag('2026-12-31T23:59:59Z'),
+    '2026-12-31T23:59:59Z',
+  );
+  assert.equal(
+    normalizeNowFlag('2026-01-01T00:00:00Z'),
+    '2026-01-01T00:00:00Z',
+  );
+});

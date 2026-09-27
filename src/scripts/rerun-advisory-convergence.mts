@@ -3566,8 +3566,17 @@ function main(): HelperCliResult {
     runRerunAdvisoryConvergence(process.argv.slice(2));
   if (nowFlagError) {
     // #3541: a clean one-line usage error, never an uncaught throw.
+    // Returned as a classified `usage` outcome (Codex review, PR #3551)
+    // rather than a bare `1` -- see advisory-convergence.mts's identical
+    // comment for why a plain number misclassifies as `kind: 'gate'`
+    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
     process.stderr.write(`${nowFlagError}\n`);
-    return 1;
+    return {
+      exitCode: 1,
+      kind: 'usage',
+      message: nowFlagError,
+      httpStatus: null,
+    };
   }
   if (help) {
     printHelp();

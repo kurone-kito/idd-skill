@@ -3828,9 +3828,17 @@ function main() {
     });
   if (nowFlagError) {
     // #3541: a clean one-line usage error, never an uncaught throw --
-    // deliberately printed instead of the (null) verdict.
+    // deliberately printed instead of the (null) verdict. Returned as a
+    // classified `usage` outcome (Codex review, PR #3551) rather than the
+    // bare `exitCode` number below -- `normalizeOutcome`
+    // (helper-cli-runner.mts) classifies a plain number as `kind: 'gate'`
+    // whenever `IDD_HELPER_ERROR_ENVELOPE=1`, which would misreport this
+    // argument mistake as a genuine convergence failure to a caller that
+    // distinguishes the two (and might retry a `usage` error indefinitely).
     process.stderr.write(`${nowFlagError}\n`);
-  } else if (help) {
+    return { exitCode, kind: 'usage', message: nowFlagError, httpStatus: null };
+  }
+  if (help) {
     printHelp();
   } else if (verdict) {
     writeAdvisoryConvergenceCliOutput(verdict, {

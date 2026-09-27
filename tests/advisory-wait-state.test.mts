@@ -13,6 +13,7 @@ import {
   renderAdvisoryWaitRecoveryMarker,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const advisoryWaitStateSchema = loadJson(
   'schemas/advisory-wait-state.schema.json',
@@ -872,4 +873,20 @@ test('resolveNowFlag: a malformed value returns a one-line usage error instead o
   const { now, error } = resolveNowFlag('Sep 27 2026');
   assert.equal(now, '');
   assert.equal(error, NOW_FLAG_USAGE_MESSAGE);
+});
+
+// #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
+// must classify as a usage error (kind "usage"), not a genuine advisory-wait
+// state failure (kind "gate").
+test('bin/idd-advisory-wait-state.mjs: a malformed --now classifies as a usage error under the opt-in error envelope', () => {
+  const result = spawnHelperBinWithEnvelope('idd-advisory-wait-state.mjs', [
+    '--pr',
+    '1',
+    '--now',
+    'Sep 27 2026',
+  ]);
+  assert.equal(result.status, 1, JSON.stringify(result));
+  assert.ok(result.envelope, JSON.stringify(result));
+  assert.equal(result.envelope?.kind, 'usage');
+  assert.equal(result.envelope?.exitCode, 1);
 });

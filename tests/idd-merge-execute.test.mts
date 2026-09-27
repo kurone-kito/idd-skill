@@ -10,6 +10,7 @@ import {
   runMergeExecute,
 } from '../src/scripts/idd-merge-execute.mts';
 import { computePreMergeReadinessBlockers } from '../src/scripts/protocol-helpers.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const DRIFTED = '2222222222222222222222222222222222222222';
@@ -1169,6 +1170,26 @@ test('a malformed --now returns a one-line usage error instead of throwing, with
   assert.equal(result.exitCode, 1);
   assert.equal(result.verdict.ready, false);
   assert.match(result.nowFlagError ?? '', /--now/);
+});
+
+// #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
+// must classify as a usage error (kind "usage"), not a genuine merge-gate
+// failure (kind "gate").
+test('bin/idd-merge-execute.mjs: a malformed --now classifies as a usage error under the opt-in error envelope', () => {
+  const result = spawnHelperBinWithEnvelope('idd-merge-execute.mjs', [
+    '--pr',
+    '1',
+    '--claim-issue',
+    '1',
+    '--claim-id',
+    'x',
+    '--now',
+    'Sep 27 2026',
+  ]);
+  assert.equal(result.status, 1, JSON.stringify(result));
+  assert.ok(result.envelope, JSON.stringify(result));
+  assert.equal(result.envelope?.kind, 'usage');
+  assert.equal(result.envelope?.exitCode, 1);
 });
 
 test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
