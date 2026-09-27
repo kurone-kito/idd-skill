@@ -2571,6 +2571,43 @@ test('unknown uninitialized-submodule paths block removal before preservation is
   assert.match(verdict.result, /stopping before removal/);
 });
 
+test('retains a partial uninitialized-submodule copy and blocks removal', () => {
+  const copied: string[] = [];
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: cwd === '/repo/linked' ? '-abc123 submodule\n' : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    pathPresence: () => 'present',
+    copyPath: (_from, to) => {
+      copied.push(to);
+      throw new Error('unsupported special file in recovery source');
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  const entry = verdict.plan.uninitializedSubmodules[0];
+  assert.equal(entry?.copiedTo, copied[0]);
+  assert.equal(entry?.copyFailed, true);
+  assert.equal(verdict.mutated, true);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal, null);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
 test('excludes uninitialized submodule contents from the parent stash', () => {
   const stashCalls: string[][] = [];
   let stashPushed = false;

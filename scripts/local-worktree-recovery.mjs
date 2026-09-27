@@ -1359,6 +1359,9 @@ function cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
     if (entry.copiedTo === null) {
       return `uninitialized submodule ${entry.path} was not preserved`;
     }
+    if (entry.copyFailed) {
+      return `uninitialized submodule ${entry.path} was only partially preserved`;
+    }
     if (!isSafeRelativePath(entry.path)) {
       return `uninitialized submodule ${entry.path} is unsafe`;
     }
@@ -1516,6 +1519,7 @@ function planAndMaybePreserve(
         uninitializedSubmodules.push({
           path: submodule.path,
           copiedTo: null,
+          copyFailed: false,
         });
       } else if (submodulePresence === 'present') {
         // Dry-run must have zero side effects: report the planned destination
@@ -1530,6 +1534,7 @@ function planAndMaybePreserve(
               `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
             )
           : null;
+        let copyFailed = false;
         if (apply && destination) {
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
             try {
@@ -1540,7 +1545,7 @@ function planAndMaybePreserve(
                 targetGitDirForScope ? [targetGitDirForScope] : undefined,
               );
             } catch {
-              destination = null;
+              copyFailed = true;
             }
           } else {
             // Keep the planned path visible in dry-run only; an unsafe apply
@@ -1551,6 +1556,7 @@ function planAndMaybePreserve(
         uninitializedSubmodules.push({
           path: submodule.path,
           copiedTo: destination,
+          copyFailed,
         });
       }
       continue;
@@ -1836,6 +1842,7 @@ function preservationVerified(preserve, pathExists) {
   }
   for (const submodule of preserve.uninitializedSubmodules) {
     if (submodule.copiedTo === null) return false;
+    if (submodule.copyFailed) return false;
     if (!pathExists(submodule.copiedTo)) return false;
   }
   // Copilot review: `ignoredFilesCopied` was never included in verification
@@ -1949,6 +1956,7 @@ function reverifyPreservationArtifactsFresh(preserve, targetPath, deps) {
     }
   }
   for (const submodule of preserve.uninitializedSubmodules) {
+    if (submodule.copyFailed) return false;
     if (submodule.copiedTo !== null && !copyVerified(submodule.copiedTo)) {
       return false;
     }
@@ -2038,11 +2046,22 @@ function refreshUninitializedSubmoduleCopies(
         ensurePreserveDir(),
         `uninitialized-${Buffer.from(submodule.path).toString('base64url')}`,
       );
-      entry = { path: submodule.path, copiedTo: destination };
+      entry = {
+        path: submodule.path,
+        copiedTo: destination,
+        copyFailed: false,
+      };
       knownEntries.set(submodule.path, entry);
       added.push(entry);
     }
     if (entry === undefined) continue;
+    if (entry.copyFailed) {
+      return {
+        error: `late preservation for uninitialized submodule ${entry.path} was already partially copied; stopping before removal`,
+        added,
+        preserveDir,
+      };
+    }
     if (entry.copiedTo === null) {
       return {
         error: `late preservation for uninitialized submodule ${entry.path} has no verified destination; stopping before removal`,
@@ -2066,6 +2085,7 @@ function refreshUninitializedSubmoduleCopies(
         targetGitDir ? [targetGitDir] : undefined,
       );
     } catch {
+      entry.copyFailed = true;
       return {
         error: `late preservation for uninitialized submodule ${entry.path} could not be copied; stopping before removal`,
         added,
@@ -2076,6 +2096,7 @@ function refreshUninitializedSubmoduleCopies(
       !deps.pathExists(entry.copiedTo) ||
       !isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)
     ) {
+      entry.copyFailed = true;
       return {
         error: `late preservation for uninitialized submodule ${entry.path} could not be verified; stopping before removal`,
         added,
