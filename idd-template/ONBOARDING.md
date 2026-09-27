@@ -263,8 +263,8 @@ below instead.
    git -C <target-repo> commit -m "chore: record idd template mirror"
    ```
 
-   Keep `--target-ref` reachable; pass its pre-import ref (normally `HEAD^`)
-   as `--target-base-ref`.
+   Keep the pre-import commit reachable; pass its ref (normally `HEAD^`) as
+   `--target-base-ref`.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
@@ -707,9 +707,9 @@ error), so an agent can gate on the exit code without parsing prose.
   and held-schema drift (a changed schema or fixture is still named by a
   held module). Missing manifests, placeholders, or helper-load failures
   block; the three advisories do not. Repeat `--hold` for unchanged
-  manifest paths; unknown paths are usage errors. Git targets require
-  pre-import `--target-base-ref`; unborn targets use the fallback; other Git
-  failures are errors.
+  manifest paths; unknown paths are usage errors. `--target-base-ref`
+  defaults to `HEAD`; pass the pre-import ref after import. Unborn targets
+  use fallback; Git failures error.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
