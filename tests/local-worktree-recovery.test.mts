@@ -3879,7 +3879,7 @@ for (const operationCase of [
         pathExists: (path) => path === root || existsSync(path),
         confirmBlock: () => {
           confirmCalls += 1;
-          const occupied = confirmCalls < 3;
+          const occupied = confirmCalls < 4;
           return {
             ok: true,
             routing: {
@@ -4098,7 +4098,7 @@ test('primary-worktree cleanup clears an in-progress submodule operation before 
       ],
       confirmBlock: () => {
         confirmCalls += 1;
-        const occupied = confirmCalls < 3;
+        const occupied = confirmCalls < 4;
         return {
           ok: true,
           routing: {
@@ -4265,7 +4265,7 @@ test('primary recovery refuses a fresh claim during post-checkout absence confir
       pathExists: (path) => path === root || existsSync(path),
       confirmBlock: () => {
         confirmCalls += 1;
-        const absent = confirmCalls >= 3;
+        const absent = confirmCalls >= 4;
         return {
           ok: true,
           routing: {
@@ -4321,6 +4321,85 @@ test('primary recovery refuses a fresh claim during post-checkout absence confir
   }
 });
 
+test('primary recovery rechecks claim and lock identity immediately before checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-pre-checkout-'));
+  mkdirSync(join(root, '.git'), { recursive: true });
+  let confirmCalls = 0;
+  let checkoutAttempted = false;
+  let lockRemoved = false;
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) => path === root || existsSync(path),
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const changed = confirmCalls >= 3;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: {
+              claim_id: changed ? 'claim-y' : 'claim-x',
+              branch: changed ? 'issue/2-other' : 'issue/1-task',
+            },
+            evidence: {
+              local_worktree: {
+                status: 'occupied',
+                paths: [root],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'checkout') checkoutAttempted = true;
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(confirmCalls, 3);
+    assert.equal(checkoutAttempted, false);
+    assert.equal(lockRemoved, false);
+    assert.equal(verdict.plan.removal?.ran, false);
+    assert.match(verdict.result, /immediately before checkout/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery does not abort a merge already cleared by stash', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-stash-merge-'));
   mkdirSync(join(root, '.git'), { recursive: true });
@@ -4345,7 +4424,7 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
       pathExists: (path) => path === root || existsSync(path),
       confirmBlock: () => {
         confirmCalls += 1;
-        const occupied = confirmCalls < 3;
+        const occupied = confirmCalls < 4;
         return {
           ok: true,
           routing: {
@@ -4493,7 +4572,7 @@ test('primary recovery removes preserved ignored files before reporting release'
       ensurePreserveDir: () => preserveDir,
       confirmBlock: () => {
         confirmCalls += 1;
-        const occupied = confirmCalls < 3;
+        const occupied = confirmCalls < 4;
         return {
           ok: true,
           routing: {
@@ -4616,7 +4695,7 @@ test('primary recovery removes preserved deinitialized submodule paths before ch
       ensurePreserveDir: () => preserveDir,
       confirmBlock: () => {
         confirmCalls += 1;
-        const occupied = confirmCalls < 3;
+        const occupied = confirmCalls < 4;
         return {
           ok: true,
           routing: {
@@ -4735,8 +4814,8 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
             evidence: {
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
-                status: call <= 2 ? 'occupied' : 'absent',
-                paths: call <= 2 ? ['/repo/primary'] : [],
+                status: call <= 3 ? 'occupied' : 'absent',
+                paths: call <= 3 ? ['/repo/primary'] : [],
                 reason: null,
               },
             },
@@ -4777,16 +4856,18 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
 
 test('primary-worktree release re-checks the lock AFTER checkout, not only the pre-checkout recheck (Copilot review finding)', () => {
   // confirmBlock call sequence: 1 = step 1 (occupied, path included);
-  // 2 = step 4's pre-checkout recheck (still occupied, path included);
-  // 3 = the post-checkout confirmAbsent check (now absent). The production
+  // 2 = step 4's first recheck (still occupied, path included);
+  // 3 = the immediate pre-checkout identity recheck (still occupied);
+  // 4 = the post-checkout confirmAbsent check (now absent). The production
   // routing contract keeps the claim stale and omits the occupied state when
   // the branch probe is absent, but now retains an explicit absent probe in
   // evidence. checkLock
-  // call sequence: 1 = pre-checkout recheck (no lock, so the shared
-  // lock-match gate passes); 2 = the FINAL, post-checkout check, which
+  // call sequence: 1 = step 1; 2 = step 4's first recheck; 3 = immediate
+  // pre-checkout identity recheck; 4 = the FINAL, post-checkout check, which
   // must see a lock created DURING the checkout window (simulating
-  // another session racing in) and delete THAT one, not skip deletion
-  // based on the stale pre-checkout observation.
+  // another session racing in); 5 = the immediately-before-delete check.
+  // The post-checkout and immediately-before-delete checks must see the
+  // current lock, not skip deletion based on a stale pre-checkout observation.
   let confirmCalls = 0;
   let checkLockCalls = 0;
   let unlinkAttempted = false;
@@ -4804,9 +4885,9 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     cwd: () => '/repo/primary',
     checkLock: () => {
       checkLockCalls += 1;
-      // Call 1 = step 1's own check; call 2 = step 4's pre-checkout
-      // recheck; call 3 = the FINAL, post-checkout check; call 4 = the
-      // immediately-before-delete check. All four must observe the
+      // Calls 1-3 are step 1, step 4's first recheck, and the immediate
+      // pre-checkout recheck. Call 4 is the FINAL, post-checkout check and
+      // call 5 is the immediately-before-delete check. All five must observe the
       // recovered claim's lock before deletion is authorized.
       return {
         path: '/repo/primary/.git/idd-claim.lock',
@@ -4827,17 +4908,17 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
       return {
         ok: true,
         routing: {
-          state: confirmCalls <= 2 ? 'local_worktree_occupied' : 'stale',
+          state: confirmCalls <= 3 ? 'local_worktree_occupied' : 'stale',
           reason:
-            confirmCalls <= 2
+            confirmCalls <= 3
               ? 'stale-claim-local-worktree-occupied'
               : 'active-claim-stale',
           active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
           evidence: {
             released_claim: { claim_id: null, branch: 'issue/1-task' },
             local_worktree: {
-              status: confirmCalls <= 2 ? 'occupied' : 'absent',
-              paths: confirmCalls <= 2 ? ['/repo/primary'] : [],
+              status: confirmCalls <= 3 ? 'occupied' : 'absent',
+              paths: confirmCalls <= 3 ? ['/repo/primary'] : [],
               reason: null,
             },
           },
@@ -4866,7 +4947,7 @@ test('primary-worktree release re-checks the lock AFTER checkout, not only the p
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 4);
+  assert.equal(checkLockCalls, 5);
   assert.equal(
     unlinkAttempted,
     true,
@@ -4909,16 +4990,16 @@ test('primary-worktree release does not delete a lock replaced by another claim'
         return {
           ok: true,
           routing: {
-            state: call <= 2 ? 'local_worktree_occupied' : 'stale',
+            state: call <= 3 ? 'local_worktree_occupied' : 'stale',
             reason:
-              call <= 2
+              call <= 3
                 ? 'stale-claim-local-worktree-occupied'
                 : 'active-claim-stale',
             active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             evidence: {
               local_worktree: {
-                status: call <= 2 ? 'occupied' : 'absent',
-                paths: call <= 2 ? ['/repo/primary'] : [],
+                status: call <= 3 ? 'occupied' : 'absent',
+                paths: call <= 3 ? ['/repo/primary'] : [],
                 reason: null,
               },
             },
@@ -4945,7 +5026,7 @@ test('primary-worktree release does not delete a lock replaced by another claim'
   assert.equal(checkLockCalls, 3);
   assert.equal(unlinkAttempted, false);
   assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /different claim-id/);
+  assert.match(verdict.result, /identity changed immediately before checkout/);
 });
 
 test('primary-worktree release stops when the recovered claim lock disappears at final check', () => {
@@ -4965,7 +5046,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
     cwd: () => '/repo/primary',
     checkLock: () => {
       checkLockCalls += 1;
-      return checkLockCalls < 3
+      return checkLockCalls < 4
         ? {
             path: '/repo/primary/.git/idd-claim.lock',
             present: true,
@@ -4987,17 +5068,17 @@ test('primary-worktree release stops when the recovered claim lock disappears at
         return {
           ok: true,
           routing: {
-            state: call <= 2 ? 'local_worktree_occupied' : 'stale',
+            state: call <= 3 ? 'local_worktree_occupied' : 'stale',
             reason:
-              call <= 2
+              call <= 3
                 ? 'stale-claim-local-worktree-occupied'
                 : 'active-claim-stale',
             active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             evidence: {
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
-                status: call <= 2 ? 'occupied' : 'absent',
-                paths: call <= 2 ? ['/repo/primary'] : [],
+                status: call <= 3 ? 'occupied' : 'absent',
+                paths: call <= 3 ? ['/repo/primary'] : [],
                 reason: null,
               },
             },
@@ -5027,7 +5108,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 3);
+  assert.equal(checkLockCalls, 4);
   assert.equal(unlinkAttempted, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /lock disappeared before the final check/);
@@ -5050,7 +5131,7 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
     cwd: () => '/repo/primary',
     checkLock: () => {
       checkLockCalls += 1;
-      return checkLockCalls < 3
+      return checkLockCalls < 4
         ? {
             path: '/repo/primary/.git/idd-claim.lock',
             present: false,
@@ -5078,8 +5159,8 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
             evidence: {
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
-                status: call <= 2 ? 'occupied' : 'absent',
-                paths: call <= 2 ? ['/repo/primary'] : [],
+                status: call <= 3 ? 'occupied' : 'absent',
+                paths: call <= 3 ? ['/repo/primary'] : [],
                 reason: null,
               },
             },
@@ -5103,7 +5184,7 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 3);
+  assert.equal(checkLockCalls, 4);
   assert.equal(unlinkAttempted, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /different claim-id/);

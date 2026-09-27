@@ -3554,6 +3554,62 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      // The preservation and in-progress-operation cleanup above can take
+      // long enough for the remote claim or worktree-local lock to change.
+      // Re-run the complete identity gate while the clone lock is still held
+      // and immediately before checkout, so a failed later confirmation
+      // cannot leave the primary worktree switched to the development branch.
+      const preCheckoutConfirm = deps.confirmBlock(cwd);
+      const preCheckoutRouting = preCheckoutConfirm.routing;
+      const preCheckoutRecovered = preCheckoutRouting
+        ? extractRecoveredClaim(preCheckoutRouting)
+        : null;
+      const preCheckoutLegacyReleased =
+        preCheckoutRouting !== null &&
+        isLegacyReleasedRouting(preCheckoutRouting);
+      const preCheckoutStillOccupied =
+        preCheckoutConfirm.ok &&
+        preCheckoutRouting !== null &&
+        preCheckoutRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(preCheckoutRouting.reason) &&
+        !preCheckoutRouting.reason.endsWith('-local-worktree-unreadable') &&
+        (preCheckoutRouting.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      const preCheckoutClaimMatches =
+        preCheckoutRecovered !== null &&
+        preCheckoutRecovered.claimId === recoveredClaimId &&
+        preCheckoutRecovered.branch === recoveredBranch &&
+        preCheckoutLegacyReleased === recoveredFromReleasedClaim;
+      const preCheckoutLock =
+        preCheckoutStillOccupied && preCheckoutRouting !== null
+          ? deps.checkLock(targetPath)
+          : null;
+      const preCheckoutLockMatches =
+        preCheckoutLock !== null &&
+        lockMatchesRecoveredClaim(
+          preCheckoutLock,
+          recoveredClaimId,
+          preCheckoutLegacyReleased,
+        );
+      if (
+        !preCheckoutStillOccupied ||
+        !preCheckoutClaimMatches ||
+        !preCheckoutLockMatches
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail:
+            'the primary-worktree claim/branch/lock identity changed immediately before checkout; stopping before checkout',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
       if (!checkout.ok) {
         verdict.plan.removal = {
