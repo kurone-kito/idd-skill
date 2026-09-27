@@ -3371,3 +3371,57 @@ test('keeps local signing-key generation autonomous (#3522)', () => {
   assert.equal(result.passed, true);
   assert.deepEqual(result.failedCriteria, []);
 });
+
+test('does not let application-role approval prerequisites pass (#3522)', () => {
+  for (const actor of ['administrator', 'owner', 'team']) {
+    const result = evaluateA4Viability({
+      number: 201,
+      title: 'document credential storage',
+      body:
+        `Implementation requires ${actor} approval before work begins. ` +
+        'Verification: add unit tests.',
+      state: 'OPEN',
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.failedCriteria.includes('autonomous_completion'));
+  }
+});
+
+test('does not let a blocker after removal framing conjunction pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 202,
+    title: 'document credential storage',
+    body:
+      'Remove the old fallback yet implementation requires maintainer ' +
+      'approval before work begins. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('does not let only-after approval prerequisites pass (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 203,
+    title: 'document credential storage',
+    body:
+      'Implementation can begin only after maintainer approval. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps quoted status approval text descriptive (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 204,
+    title: 'parse API status values',
+    body:
+      'Parse the status "requires maintainer approval" from the API. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});

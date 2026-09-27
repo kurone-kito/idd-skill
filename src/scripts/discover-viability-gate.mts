@@ -210,12 +210,14 @@ const INDEPENDENT_EXTERNAL_COORDINATION_MEMBERSHIP_PATTERN = new RegExp(
   INDEPENDENT_EXTERNAL_COORDINATION_PATTERN.source,
   'i',
 );
-const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN =
-  /\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:(?:the|a|an)\s+)?customers?(?:'s|')?\s+(?:approval|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b/gi;
+const INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN = new RegExp(
+  String.raw`\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\b(?:requires?|needs?|await(?:s|ing)?|blocked\s+by)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b[^.;:!?]{0,80}\b(?:before|until)\b|\b(?:implementation|work|shipping|release|deployment|change)\b[^.;:!?]{0,80}\bonly\s+after\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}(?:'s|')?\s+(?:approval|sign-?off|access|permission|authorization)\b`,
+  'gi',
+);
 const REMOVAL_FRAMING_CUE_PATTERN =
   /\b(?:remove[sd]?|replace[sd]?|eliminate[sd]?|automate(?:s|d|ing)?(?=\s+(?:the|a|an|this|that|existing|legacy)\b)|retire[sd]?|drop(?:ped|s)?)\b/gi;
 const REMOVAL_FRAMING_CLAUSE_BREAK_PATTERN =
-  /\b(?:and|but|while|although|whereas|however|with|instead|rather|after|once|before|until|because|since)\b/i;
+  /\b(?:and|but|yet|while|although|whereas|however|with|instead|rather|after|once|before|until|because|since)\b/i;
 // A trigger phrase inside a phrase describing something other than a live,
 // remaining completion blocker should not count (#2738), mirroring
 // findUnexcludedBroadScopeMatch's per-occurrence shape above: a negated
@@ -868,7 +870,7 @@ function isDescribedExternalCoordinationExample(
   const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
   const sameClause = before.split(CUE_HARD_BREAK_PATTERN).at(-1) ?? before;
   if (
-    /\b(?:document(?:s|ed|ing)?|describe(?:s|d|ing)?|explain(?:s|ed|ing)?|outline(?:s|d|ing)?|specif(?:y|ies|ied|ying)|parse(?:s|d|ing)?|display(?:s|ed|ing)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:workflow|behavior|process|requirement|approval(?:-gated)?|access[- ]control)\b[^.;:!?]{0,40}$/i.test(
+    /\b(?:document(?:s|ed|ing)?|describe(?:s|d|ing)?|explain(?:s|ed|ing)?|outline(?:s|d|ing)?|specif(?:y|ies|ied|ying)|parse(?:s|d|ing)?|display(?:s|ed|ing)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:workflow|behavior|process|requirement|approval(?:-gated)?|access[- ]control|status|message|value|literal)\b[^.;:!?]{0,40}$/i.test(
       sameClause,
     )
   ) {
