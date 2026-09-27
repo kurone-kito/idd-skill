@@ -2410,16 +2410,63 @@ function normalizeManifestScanPath(path) {
   return segments.join('/');
 }
 function isGlobPattern(text) {
-  return /[?*[\]{}]|\+\(/u.test(text);
+  return /[?*[\]{}]|[+@!]\(/u.test(text);
 }
-function globPatternMatchesPath(pattern, targetPath) {
-  if (!isGlobPattern(pattern)) {
-    return false;
+function findGlobGroupEnd(pattern, start, opening, closing) {
+  let depth = 0;
+  for (let index = start; index < pattern.length; index += 1) {
+    if (pattern[index] === opening) {
+      depth += 1;
+    } else if (pattern[index] === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
   }
-  let expression = '^';
+  return -1;
+}
+function splitGlobAlternatives(text, separator) {
+  const alternatives = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '(' || text[index] === '{') {
+      depth += 1;
+    } else if (text[index] === ')' || text[index] === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (text[index] === separator && depth === 0) {
+      alternatives.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  alternatives.push(text.slice(start));
+  return alternatives;
+}
+function globPatternToRegex(pattern) {
+  let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index] ?? '';
-    if (character === '*' && pattern[index + 1] === '*') {
+    if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
+      const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+      if (closing === -1) {
+        expression += escapeRegExp(character);
+        continue;
+      }
+      const inner = splitGlobAlternatives(
+        pattern.slice(index + 2, closing),
+        '|',
+      )
+        .map(globPatternToRegex)
+        .join('|');
+      if (character === '!') {
+        expression += `(?!(?:${inner})(?=$|/))[^/]*`;
+      } else {
+        const quantifier = character === '@' ? '' : character;
+        expression += `(?:${inner})${quantifier}`;
+      }
+      index = closing;
+    } else if (character === '*' && pattern[index + 1] === '*') {
       index += 1;
       if (pattern[index + 1] === '/') {
         index += 1;
@@ -2444,27 +2491,28 @@ function globPatternMatchesPath(pattern, targetPath) {
         index = closing;
       }
     } else if (character === '{') {
-      const closing = pattern.indexOf('}', index + 1);
+      const closing = findGlobGroupEnd(pattern, index, '{', '}');
       if (closing === -1) {
         expression += '\\{';
       } else {
-        const alternatives = pattern.slice(index + 1, closing).split(',');
-        expression += `(?:${alternatives.map(escapeRegExp).join('|')})`;
-        index = closing;
-      }
-    } else if (character === '+' && pattern[index + 1] === '(') {
-      const closing = pattern.indexOf(')', index + 2);
-      if (closing === -1) {
-        expression += '\\+';
-      } else {
-        const alternatives = pattern.slice(index + 2, closing).split('|');
-        expression += `(?:${alternatives.map(escapeRegExp).join('|')})`;
+        const alternatives = splitGlobAlternatives(
+          pattern.slice(index + 1, closing),
+          ',',
+        );
+        expression += `(?:${alternatives.map(globPatternToRegex).join('|')})`;
         index = closing;
       }
     } else {
       expression += escapeRegExp(character);
     }
   }
+  return expression;
+}
+function globPatternMatchesPath(pattern, targetPath) {
+  if (!isGlobPattern(pattern)) {
+    return false;
+  }
+  const expression = globPatternToRegex(pattern);
   return new RegExp(`${expression}$`, 'u').test(targetPath);
 }
 function moduleScansManifestDirectory(text, targetPath) {

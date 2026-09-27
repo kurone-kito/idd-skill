@@ -3979,7 +3979,11 @@ test('checkHeldSchemaDrift supports glob character classes', () => {
 test('checkHeldSchemaDrift supports brace and extglob directory scans', () => {
   for (const pattern of [
     '{schemas,fixtures}/**/*.json',
+    '@(schemas|fixtures)/**/*.json',
+    '?(schemas|fixtures)/**/*.json',
+    '*(schemas|fixtures)/**/*.json',
     '+(schemas|fixtures)/**/*.json',
+    '!(other)/**/*.json',
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
