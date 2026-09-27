@@ -678,6 +678,25 @@ unsuitable, or fails) without inventing a wall-clock or tool-call cap,
 and require the critique brief to name the files or diff under review
 so an unsuitable pass is easier to distinguish from a thorough one.
 
+### C1/B2 — Bound delegated critique waits
+
+The no-cap stance from
+`kurone-kito/idd-skill#2825` covered slow but returning Grok passes:
+the observed 387-second, 575-second, and 172-second passes all produced
+usable findings. A later field-feedback report from the dotfiles run found a
+delegated Cursor pass that waited about 32 minutes without returning a findings
+list, leaving the unattended loop unable to reach its structured fallback
+(observed 2026-09-26, `kurone-kito/idd-skill#3542`). The default
+`critiqueLoop.subagentWaitCeiling = PT20M` addresses that hang case
+without treating the slower returning passes from
+`kurone-kito/idd-skill#2825` as failures. The parent must apply the ceiling
+through the harness's own per-invocation
+timeout control, rather than wrapping the delegated command in a timeout
+utility as the failure mode documented by
+`kurone-kito/idd-skill#3449` warns against. A
+harness that cannot bound its delegation primitive must record that
+residual risk and use structured self-critique instead.
+
 ### B2.1 — Premise verification (decision-transcription issues)
 
 Field evidence showed a worker asked to transcribe a maintainer's

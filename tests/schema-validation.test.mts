@@ -627,6 +627,37 @@ test('policy schema rejects a malformed advisoryWait.terminalWindow duration', (
   );
 });
 
+test('policy schema accepts positive critiqueLoop.subagentWaitCeiling durations (#3542)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  for (const subagentWaitCeiling of ['PT20M', 'P1DT2H']) {
+    instance.critiqueLoop = {
+      ...instance.critiqueLoop,
+      subagentWaitCeiling,
+    };
+    assert.deepEqual(validate(instance, schema), []);
+  }
+});
+
+test('policy schema rejects non-positive or malformed critiqueLoop.subagentWaitCeiling durations (#3542)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  for (const subagentWaitCeiling of ['PT0S', 'not-a-duration']) {
+    instance.critiqueLoop = {
+      ...instance.critiqueLoop,
+      subagentWaitCeiling,
+    };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected ${subagentWaitCeiling} to be rejected`,
+    );
+  }
+});
+
 // --- #1572: advisory-wait-state.schema.json's copilotRecovery object ------
 
 test('advisory-wait-state schema accepts a NOT_TERMINAL copilotRecovery object alongside the base fixture', () => {

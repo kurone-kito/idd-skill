@@ -240,6 +240,7 @@ interface PolicyConfigFile {
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
     deferByUrgency?: 'off' | 'low' | 'low-and-medium';
+    subagentWaitCeiling?: string;
     delegate?: {
       command: string;
       mode?: 'fallback' | 'combined' | 'on-success' | 'never';
@@ -1232,6 +1233,7 @@ const policyConfigFixture = {
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    subagentWaitCeiling: 'PT20M',
   },
   reviewEscalation: {
     changesRequestedFirstEscalation: 'PT24H',

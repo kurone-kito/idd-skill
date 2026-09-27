@@ -638,6 +638,11 @@
           "enum": ["off", "low", "low-and-medium"],
           "description": "Independent E4/E5 defer trigger, active from round 1, based on \"adopt-now urgency\" rather than round count: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) disposes `Reject (defer)` when its defer-eligibility severity is within this mode's ceiling. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low`: Low-severity items only. `low-and-medium`: Low or Medium; High is never eligible under any mode. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
+        "subagentWaitCeiling": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Positive ISO 8601 duration ceiling for a delegated per-agent critique pass. Optional; defaults to `PT20M`."
+        },
         "delegate": {
           "type": ["object", "null"],
           "additionalProperties": false,

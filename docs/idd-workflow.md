@@ -1282,6 +1282,29 @@ agent; only the mechanism differs.
 | Cursor CLI      | Launch an independent Cursor `Task` tool subagent with `subagent_type="generalPurpose"` (or the nearest equivalent general-purpose subagent) using the calling phase's critique checklist; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails. Do not substitute Cursor product review skills for IDD E-phase critique. |
 | Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                                                                       |
 
+The parent bounds its wait for each delegated per-agent critique pass by
+the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
+through the harness's own per-invocation timeout control, never through a
+timeout utility wrapped inside the delegated command, following the
+principle from issue `kurone-kito/idd-skill#3449`. Where the harness supports
+it, launching in
+the background and applying a bounded wait is an equivalent way to enforce
+the same ceiling only when the harness also cancels or cleans up the timed-out
+subagent and ignores any late output. Otherwise the background process may
+continue consuming resources or race with the structured fallback, so do not
+use that pattern as an equivalent implementation.
+
+Reaching the ceiling without a findings list is a delegation failure. A
+wait that ends through cancellation, interruption, or error without a
+findings list is also a delegation failure. Either outcome routes to the
+row's structured self-critique fallback, or to "perform the critique as a
+structured self-review step" for a row without an explicit fallback, and
+the critique result records that the delegated pass did not return.
+
+A harness whose delegation primitive offers no way to bound the wait
+cannot honor the ceiling. Record that residual risk explicitly and use
+structured self-critique as the unattended-safe path for that harness.
+
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
 

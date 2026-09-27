@@ -1490,6 +1490,7 @@ supports these keys:
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.deferAfterRounds` (default `12`)
 - `critiqueLoop.deferByUrgency` (default `off`; `low` or `low-and-medium`)
+- `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`
   (default `PT24H` / `PT48H`)
