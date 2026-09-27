@@ -71,7 +71,11 @@
 //    (`JSON.stringify(JSON.parse(x))`) on each side, then compared as
 //    strings -- deliberately stricter than a deep-equal, so a real value
 //    change still fails; only incidental formatting (indentation,
-//    trailing newline, spacing) is tolerated. A parsed value containing a
+//    trailing newline, spacing) is tolerated by default. With
+//    `--normalize-json-key`, a selected key may additionally differ when
+//    the target already equals upstream or exactly preserves its
+//    `--target-base-ref` value; the baseline is required only for that
+//    differing-key case. A parsed value containing a
 //    non-finite number (`JSON.parse` silently converts an overflowing
 //    number like `1e400` to `Infinity`, which `JSON.stringify`
 //    re-serializes as the bare token `null`) is treated the same as a
@@ -494,18 +498,21 @@ function canonicalizeJsonWithTargetKeys(
   if (applicable.length === 0) {
     return canonicalizeJson(upstreamContent);
   }
-  if (targetBaseContent === null) {
-    return null;
-  }
   const upstream = parseJsonForComparison(upstreamContent);
   const target = parseJsonForComparison(targetContent);
-  const targetBase = parseJsonForComparison(targetBaseContent);
-  if (upstream === null || target === null || targetBase === null) {
+  const targetBase =
+    targetBaseContent === null
+      ? null
+      : parseJsonForComparison(targetBaseContent);
+  if (
+    upstream === null ||
+    target === null ||
+    (targetBaseContent !== null && targetBase === null)
+  ) {
     return null;
   }
   for (const entry of applicable) {
     const targetValue = readJsonKey(target.value, entry.keyPath);
-    const targetBaseValue = readJsonKey(targetBase.value, entry.keyPath);
     const upstreamValue = readJsonKey(upstream.value, entry.keyPath);
     if (!targetValue.found || !upstreamValue.found) {
       return null;
@@ -515,6 +522,10 @@ function canonicalizeJsonWithTargetKeys(
     ) {
       continue;
     }
+    if (targetBase === null) {
+      return null;
+    }
+    const targetBaseValue = readJsonKey(targetBase.value, entry.keyPath);
     if (
       !targetBaseValue.found ||
       JSON.stringify(targetValue.value) !==
