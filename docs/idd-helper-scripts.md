@@ -500,7 +500,13 @@ The confirmed substitutions are:
   jq -s --argjson limit "$limit" '.[0:$limit]' "$issues_file"
   ```
 
-- For `gh issue view <number>`, use the individual issue endpoint.
+- For `gh issue view <number>`, use the individual issue endpoint for
+  scalar issue fields supported by REST. It is not equivalent for
+  GraphQL-only fields such as `closedByPullRequestsReferences`; if the
+  caller needs those fields to establish that a merged pull request
+  already delivered the issue, keep the GraphQL lookup or run a separate,
+  explicitly verified closing-PR lookup. Never infer merged delivery
+  from the REST issue object alone.
 
   ```sh
   gh api "repos/<owner>/<repo>/issues/<number>"
@@ -580,20 +586,24 @@ issue-comment responses do not provide that field, and `updated_at` is
 not an equivalent. This boundary was established by #3174 and protects
 the tamper-detection fix in #2901.
 
-There is one narrow manual exception only for an issue returned by an
-approved `issue-authoring` Stage 1 atomic create whose label, publication
-token, and returned identity were already recorded, and whose comment
-history was empty before creation: fetch the just-posted comment and
-issue with REST, then recompute the issue body's digest from the raw JSON
-response. Do not apply this exception to an arbitrary REST POST or use it
-to bypass the authoring flow. Parse the complete `gh api` response and
-read its `body` property; do not capture `gh api ... --jq '.body'` in a
-shell variable, because CLI output and shell command substitution can
-normalize trailing newlines and change the digest. This is a one-time
-read-back confidence check for that approved new issue, not a REST
-fallback for verification of an existing generation and not a change to
-the helper's GraphQL dependency. Pass only when the fetched issue still
-carries the configured authoring hold label (normally
+There is one narrow manual exception only for a standalone, self-anchor
+issue returned by an approved `issue-authoring` Stage 1 atomic create
+whose label, publication token, and returned identity were already
+recorded, and whose comment history was empty before creation: wait for
+the configured `claim.verifySettleDelay` (default `PT5S`), replay the
+complete paginated owner-marker log, then fetch the just-posted comment
+and issue with REST and recompute the issue body's digest from the raw
+JSON response. A multi-target child must instead use the normal
+anchor-heartbeat and anchor/child re-fetch gates; it cannot use this
+single-issue exception. Do not apply this exception to an arbitrary REST
+POST or use it to bypass the authoring flow. Parse the complete `gh api`
+response and read its `body` property; do not capture `gh api ... --jq
+'.body'` in a shell variable, because CLI output and shell command
+substitution can normalize trailing newlines and change the digest. This
+is a one-time read-back confidence check for that approved new issue, not
+a REST fallback for verification of an existing generation and not a
+change to the helper's GraphQL dependency. Pass only when the fetched
+issue still carries the configured authoring hold label (normally
 `status:authoring`), the fetched comment is the just-posted trusted
 marker (expected author and canonical marker fields), and its recorded
 `body-sha256` equals the digest recomputed from the fetched issue body.
