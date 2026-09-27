@@ -3215,7 +3215,13 @@ function pathExpressionCandidates(text: string): string[] {
   if (/\+\s*/u.test(expressionText)) {
     return literals.length === 0 ? [] : [literals.join('')];
   }
-  if (/\bjoin\s*\(/u.test(expressionText)) {
+  if (/\b(?:join|resolve)\s*\(/u.test(expressionText)) {
+    if (
+      /\bresolve\s*\(/u.test(expressionText) &&
+      literals.some((literal) => literal.startsWith('/'))
+    ) {
+      return [];
+    }
     return literals.length === 0 ? [] : [literals.join('/')];
   }
   return literals;

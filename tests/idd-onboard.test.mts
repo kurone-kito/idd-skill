@@ -3922,6 +3922,44 @@ test('checkHeldSchemaDrift detects multi-segment join-based directory scans', ()
   ]);
 });
 
+test('checkHeldSchemaDrift detects relative resolve-based directory scans', () => {
+  for (const moduleText of [
+    "readdirSync(resolve(root, 'fixtures', 'schemas'));\n",
+    "readdirSync(path.resolve(root, 'fixtures', 'schemas'));\n",
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+    const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+    sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+    targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+    writeDriftManifest(sourceRoot, sourceFiles);
+    writeDriftManifest(targetRoot, targetFiles);
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
+test('checkHeldSchemaDrift does not treat absolute resolve segments as target paths', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "readdirSync(resolve(root, '/fixtures', 'schemas'));\n";
+  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift combines literal directory-scan path fragments', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
