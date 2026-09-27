@@ -1713,6 +1713,12 @@ function looksLikeIssueMarkdownLink(
     }
     const definitionLabel =
       referenceMatch[2].length === 0 ? referenceMatch[1] : referenceMatch[2];
+    if (
+      !isValidLinkReferenceLabel(referenceMatch[1]) ||
+      !isValidLinkReferenceLabel(definitionLabel)
+    ) {
+      return false;
+    }
     const target = referenceDefinitions.get(
       normalizeLinkReferenceLabel(definitionLabel),
     );
@@ -1721,6 +1727,9 @@ function looksLikeIssueMarkdownLink(
   const shortcutMatch = text.match(MARKDOWN_SHORTCUT_LINK_START_PATTERN);
   if (shortcutMatch === null) {
     return false;
+  }
+  if (!isValidLinkReferenceLabel(shortcutMatch[1])) {
+    return /#\d+/.test(shortcutMatch[1]);
   }
   const target = referenceDefinitions.get(
     normalizeLinkReferenceLabel(shortcutMatch[1]),
@@ -1811,6 +1820,12 @@ function findMultilineReferenceLinkMisuses(
       continue;
     }
     const definitionLabel = match[2].length === 0 ? match[1] : match[2];
+    if (
+      !isValidLinkReferenceLabel(match[1]) ||
+      !isValidLinkReferenceLabel(definitionLabel)
+    ) {
+      continue;
+    }
     const target = referenceDefinitions.get(
       normalizeLinkReferenceLabel(definitionLabel),
     );
@@ -1841,6 +1856,9 @@ function findMultilineShortcutLinkMisuses(
   for (const match of text.matchAll(MULTILINE_SHORTCUT_LINK_USAGE_PATTERN)) {
     const matchIndex = match.index ?? -1;
     if (matchIndex < 0) {
+      continue;
+    }
+    if (!isValidLinkReferenceLabel(match[1])) {
       continue;
     }
     const target = referenceDefinitions.get(
@@ -2927,6 +2945,14 @@ function normalizeLinkReferenceLabel(label: string): string {
     .replace(/\s+/g, ' ');
 }
 
+// CommonMark limits a link reference label to 999 Unicode characters. Keep
+// this check beside normalization so definitions and usages apply the same
+// rule before they enter or query the document-wide definition map.
+function isValidLinkReferenceLabel(label: string): boolean {
+  const normalized = normalizeLinkReferenceLabel(label);
+  return normalized.length > 0 && [...normalized].length <= 999;
+}
+
 // CommonMark §6.6 allows a reference definition's destination to be
 // wrapped in angle brackets (`[ref]: <https://...>`). Without unwrapping,
 // resolveReferenceStyleLinks would rewrite a usage to
@@ -3090,13 +3116,31 @@ function stripReferenceDefinitionContainers(
 function readReferenceDefinitionDestination(
   suffix: string,
 ): string | null | undefined {
-  if (suffix.length === 0) {
+  const token = readReferenceDefinitionDestinationToken(suffix);
+  if (token === undefined || token === null) {
+    return token;
+  }
+  return isReferenceDefinitionTitleSuffix(token.remainder)
+    ? token.destination
+    : null;
+}
+
+interface ReferenceDefinitionDestinationToken {
+  destination: string;
+  remainder: string;
+}
+
+function readReferenceDefinitionDestinationToken(
+  suffix: string,
+): ReferenceDefinitionDestinationToken | null | undefined {
+  const value = suffix.trimStart();
+  if (value.length === 0) {
     return undefined;
   }
-  if (suffix.startsWith('<')) {
+  if (value.startsWith('<')) {
     let closingBracket = -1;
-    for (let index = 1; index < suffix.length; index += 1) {
-      const character = suffix[index];
+    for (let index = 1; index < value.length; index += 1) {
+      const character = value[index];
       if (character === '\\') {
         index += 1;
         continue;
@@ -3112,12 +3156,12 @@ function readReferenceDefinitionDestination(
     if (closingBracket <= 1) {
       return null;
     }
-    if (!isReferenceDefinitionTitleSuffix(suffix.slice(closingBracket + 1))) {
-      return null;
-    }
-    return suffix.slice(0, closingBracket + 1);
+    return {
+      destination: value.slice(0, closingBracket + 1),
+      remainder: value.slice(closingBracket + 1),
+    };
   }
-  const destination = suffix.match(/^\S+/u)?.[0];
+  const destination = value.match(/^\S+/u)?.[0];
   if (destination === undefined) {
     return undefined;
   }
@@ -3137,10 +3181,61 @@ function readReferenceDefinitionDestination(
       parenthesisDepth -= 1;
     }
   }
-  return parenthesisDepth === 0 &&
-    isReferenceDefinitionTitleSuffix(suffix.slice(destination.length))
-    ? destination
+  return parenthesisDepth === 0
+    ? { destination, remainder: value.slice(destination.length) }
     : null;
+}
+
+type ReferenceDefinitionTitleDelimiter = '"' | "'" | ')';
+
+interface ReferenceDefinitionPendingTitle {
+  destination: string;
+  titlePrefix: string;
+  delimiter: ReferenceDefinitionTitleDelimiter;
+}
+
+function readReferenceDefinitionPendingTitle(
+  suffix: string,
+): ReferenceDefinitionPendingTitle | undefined {
+  const token = readReferenceDefinitionDestinationToken(suffix);
+  if (token === undefined || token === null) {
+    return undefined;
+  }
+  const remainder = token.remainder.trimStart();
+  const opener = remainder[0];
+  const delimiter: ReferenceDefinitionTitleDelimiter | undefined =
+    opener === '"' || opener === "'"
+      ? opener
+      : opener === '('
+        ? ')'
+        : undefined;
+  if (
+    delimiter === undefined ||
+    hasUnescapedTitleDelimiter(remainder, delimiter)
+  ) {
+    return undefined;
+  }
+  return {
+    destination: token.destination,
+    titlePrefix: remainder,
+    delimiter,
+  };
+}
+
+function hasUnescapedTitleDelimiter(
+  title: string,
+  delimiter: ReferenceDefinitionTitleDelimiter,
+): boolean {
+  for (let index = 1; index < title.length; index += 1) {
+    if (title[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (title[index] === delimiter) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isReferenceDefinitionTitleSuffix(suffix: string): boolean {
@@ -3151,6 +3246,21 @@ function isReferenceDefinitionTitleSuffix(suffix: string): boolean {
       trimmed,
     )
   );
+}
+
+function isReferenceDefinitionMultilineTitle(
+  titlePrefix: string,
+  continuation: string,
+  delimiter: ReferenceDefinitionTitleDelimiter,
+): boolean {
+  const title = `${titlePrefix}\n${continuation.trim()}`;
+  const titleStart = delimiter === ')' ? '\\(' : delimiter;
+  const titleEnd = delimiter === ')' ? '\\)' : delimiter;
+  const escaped = `\\\\.|[^${delimiter}\\\\\\n]`;
+  return new RegExp(
+    `^${titleStart}(?:${escaped})*\\n(?:${escaped})*${titleEnd}$`,
+    'u',
+  ).test(title);
 }
 
 function referenceDefinitionHasTitle(suffix: string): boolean {
@@ -3174,6 +3284,7 @@ function referenceDefinitionHasTitle(suffix: string): boolean {
 interface ReferenceDefinitionCandidate {
   label: string;
   destination: string | null | undefined;
+  pendingTitle: ReferenceDefinitionPendingTitle | undefined;
   hasTitle: boolean;
   containerKinds: string[];
   canListContainerInterruptParagraph: boolean;
@@ -3190,12 +3301,17 @@ function parseReferenceDefinitionCandidate(
   if (!match) {
     return undefined;
   }
-  if (normalizeLinkReferenceLabel(match[1]).length === 0) {
+  if (!isValidLinkReferenceLabel(match[1])) {
     return undefined;
   }
+  const destination = readReferenceDefinitionDestination(match[2]);
   return {
     label: match[1],
-    destination: readReferenceDefinitionDestination(match[2]),
+    destination,
+    pendingTitle:
+      destination === null
+        ? readReferenceDefinitionPendingTitle(match[2])
+        : undefined,
     hasTitle: referenceDefinitionHasTitle(match[2]),
     containerKinds,
     canListContainerInterruptParagraph,
@@ -3319,6 +3435,12 @@ function collectReferenceStyleLinkDefinitions(
   let pendingContinuation:
     | { label: string; containerKinds: string[] }
     | undefined;
+  let pendingTitleContinuation:
+    | (ReferenceDefinitionPendingTitle & {
+        label: string;
+        containerKinds: string[];
+      })
+    | undefined;
 
   for (const line of mergeMultilineReferenceDefinitionLabels(text)) {
     const { content, containerKinds } =
@@ -3329,7 +3451,47 @@ function collectReferenceStyleLinkDefinitions(
       previousDefinitionTitleConsumed = false;
       previousContainerKinds = [];
       pendingContinuation = undefined;
+      pendingTitleContinuation = undefined;
       continue;
+    }
+
+    if (pendingTitleContinuation) {
+      if (
+        matchesReferenceDefinitionContinuationContainer(
+          line,
+          containerKinds,
+          pendingTitleContinuation.containerKinds,
+        ) &&
+        isReferenceDefinitionMultilineTitle(
+          pendingTitleContinuation.titlePrefix,
+          content,
+          pendingTitleContinuation.delimiter,
+        )
+      ) {
+        const key = normalizeLinkReferenceLabel(pendingTitleContinuation.label);
+        if (!definitions.has(key)) {
+          definitions.set(
+            key,
+            decodeMarkdownCharacterReferences(
+              decodeMarkdownBackslashEscapes(
+                unwrapAngleBracketDestination(
+                  pendingTitleContinuation.destination,
+                ),
+              ),
+            ),
+          );
+        }
+        pendingTitleContinuation = undefined;
+        paragraphOpen = false;
+        previousDefinition = true;
+        previousDefinitionTitleConsumed = true;
+        previousContainerKinds = containerKinds;
+        continue;
+      }
+      pendingTitleContinuation = undefined;
+      paragraphOpen = true;
+      previousDefinition = false;
+      previousDefinitionTitleConsumed = false;
     }
 
     if (pendingContinuation) {
@@ -3412,6 +3574,17 @@ function collectReferenceStyleLinkDefinitions(
           previousDefinitionTitleConsumed = false;
           previousContainerKinds = candidate.containerKinds;
           continue;
+        } else if (candidate.pendingTitle !== undefined) {
+          pendingTitleContinuation = {
+            ...candidate.pendingTitle,
+            label: candidate.label,
+            containerKinds: candidate.containerKinds,
+          };
+          paragraphOpen = false;
+          previousDefinition = false;
+          previousDefinitionTitleConsumed = false;
+          previousContainerKinds = candidate.containerKinds;
+          continue;
         }
       }
     }
@@ -3453,6 +3626,12 @@ function resolveReferenceStyleLinks(text: string): string {
           return whole;
         }
         const definitionLabel = ref.length === 0 ? label : ref;
+        if (
+          !isValidLinkReferenceLabel(label) ||
+          !isValidLinkReferenceLabel(definitionLabel)
+        ) {
+          return whole;
+        }
         const target = definitions.get(
           normalizeLinkReferenceLabel(definitionLabel),
         );
@@ -3462,6 +3641,12 @@ function resolveReferenceStyleLinks(text: string): string {
     .replace(
       REFERENCE_STYLE_LINK_USAGE_PATTERN,
       (whole: string, label: string, ref: string) => {
+        if (
+          !isValidLinkReferenceLabel(label) ||
+          !isValidLinkReferenceLabel(ref)
+        ) {
+          return whole;
+        }
         const target = definitions.get(normalizeLinkReferenceLabel(ref));
         return target === undefined ? whole : `[${label}](${target})`;
       },
@@ -3469,6 +3654,9 @@ function resolveReferenceStyleLinks(text: string): string {
     .replace(
       COLLAPSED_REFERENCE_LINK_USAGE_PATTERN,
       (whole: string, label: string) => {
+        if (!isValidLinkReferenceLabel(label)) {
+          return whole;
+        }
         const target = definitions.get(normalizeLinkReferenceLabel(label));
         return target === undefined ? whole : `[${label}](${target})`;
       },
@@ -3476,6 +3664,9 @@ function resolveReferenceStyleLinks(text: string): string {
     .replace(
       MULTILINE_SHORTCUT_LINK_USAGE_PATTERN,
       (whole: string, label: string) => {
+        if (!isValidLinkReferenceLabel(label)) {
+          return whole;
+        }
         const target = definitions.get(normalizeLinkReferenceLabel(label));
         return target === undefined ? whole : `[${label}](${target})`;
       },
@@ -3483,6 +3674,9 @@ function resolveReferenceStyleLinks(text: string): string {
     .replace(
       MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN,
       (whole: string, label: string) => {
+        if (!isValidLinkReferenceLabel(label)) {
+          return whole;
+        }
         const target = definitions.get(normalizeLinkReferenceLabel(label));
         return target === undefined ? whole : `[${label}](${target})`;
       },

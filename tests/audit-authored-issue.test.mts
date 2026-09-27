@@ -1734,6 +1734,51 @@ test('dependency-line-grammar accepts escaped delimiters in continued titles', (
   assert.equal(finding.result, 'fail');
 });
 
+test('dependency-line-grammar resolves a title that continues after its inline opener', () => {
+  const body = childBody({
+    extraMarkers:
+      '[ref]: https://github.com/kurone-kito/idd-skill/issues/12 "first\n' +
+      'second"\n\n' +
+      'Blocked by [Issue 12][ref]',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
+test('dependency-line-grammar ignores reference definitions whose labels exceed 999 characters', () => {
+  const longLabel = 'x'.repeat(1000);
+  const body = childBody({
+    extraMarkers:
+      `Blocked by [Issue 12][${longLabel}]\n\n` +
+      `[${longLabel}]: https://github.com/kurone-kito/idd-skill/issues/12`,
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
+test('dependency-line-grammar does not resolve usages whose labels exceed 999 characters', () => {
+  const longLabel = 'x'.repeat(1000);
+  const body = childBody({
+    extraMarkers:
+      `Blocked by [${longLabel}][ref]\n\n` +
+      '[ref]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
+});
+
 test('dependency-line-grammar leaves unresolved and non-issue reference-style links unchanged', () => {
   for (const markerLine of [
     'Blocked by [Issue 12][missing]',
