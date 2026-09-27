@@ -6938,31 +6938,21 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(noneText, /newer event/);
   assert.match(noneText, /review_requested/);
-  assert.match(noneText, /gh pr edit \d+ --add-reviewer copilot/);
-  // #2159: add-reviewer alone is not a complete request. #3500: neither
-  // that call nor the REST requested_reviewers POST is registration
-  // evidence. The pointer must route the GraphQL fallback through the
-  // guarded E14 procedure before the advisory-wait marker.
-  assert.match(
+  // #2159: add-reviewer alone is not a complete request. #3500: the
+  // executable next action must enter the guarded E14 procedure before any
+  // mutation, rather than emitting a sequence whose initial mutations can
+  // invalidate the procedure's before-snapshot.
+  assert.match(noneText, /E14 REQUEST_NEEDED/);
+  assert.match(noneText, /registration-proven-review-request/);
+  assert.match(noneText, /account-typed fallback/);
+  assert.match(noneText, /Do not run separate add-reviewer or REST commands/);
+  assert.doesNotMatch(noneText, /gh pr edit \d+ --add-reviewer/);
+  assert.match(noneText, /revalidate the claim and HEAD/);
+  assert.doesNotMatch(noneText, /requested_reviewers -X POST/);
+  assert.doesNotMatch(
     noneText,
-    /gh api repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/requested_reviewers -X POST -f "reviewers\[\]=copilot-pull-request-reviewer\[bot\]"/,
+    /<profile-selected-E14-guarded-registration-procedure>/,
   );
-  assert.match(noneText, /fresh node absent from that snapshot/);
-  assert.match(noneText, /resume E14's guarded registration-proven procedure/);
-  assert.match(noneText, /profile-selected-E14-guarded-registration-procedure/);
-  assert.doesNotMatch(noneText, /REGISTRATION_STATUS/);
-  assert.doesNotMatch(noneText, /post-idd-marker\.mjs --type advisory/);
-  assert.doesNotMatch(noneText, /<<EOF/);
-  const snapshotAt = noneText.indexOf(
-    'snapshot the matching event and request node before either mutation',
-  );
-  const requestAt = noneText.indexOf('gh pr edit');
-  assert.ok(snapshotAt > 0 && requestAt > snapshotAt);
-  const payloadAt = noneText.indexOf('guarded registration-proven');
-  const guardedPointerAt = noneText.indexOf(
-    '<profile-selected-E14-guarded-registration-procedure>',
-  );
-  assert.ok(payloadAt > 0 && guardedPointerAt > payloadAt);
   assert.doesNotMatch(
     noneText,
     /copilot has not reviewed this pull request yet/,

@@ -4593,8 +4593,6 @@ export function collectAssertNextActions(
   const pr = verdict.prNumber;
   const sha = verdict.prHeadSha;
   const bot = verdict.primaryBotLogin || 'copilot';
-  const restLogin =
-    bot === 'copilot' ? 'copilot-pull-request-reviewer[bot]' : bot;
   const T = ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN;
   const items: AdvisoryConvergenceNextAction[] = [];
 
@@ -4614,22 +4612,14 @@ export function collectAssertNextActions(
   }
 
   if (!verdict.review.found) {
-    const reviewer = bot === 'copilot' ? 'copilot' : restLogin;
     items.push({
       token: T.REQUEST_REVIEW,
       summary:
         `${bot} has not reviewed this PR. Request a review (E14) and post an advisory-wait marker only after registration evidence ` +
         `(snapshot the matching review_requested event and request node before mutation; require a newer event after the current HEAD commit or a fresh node absent from that snapshot). Exit status is not evidence:`,
       pointer: [
-        `# snapshot the matching event and request node before either mutation; see docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request`,
-        `gh pr edit ${pr} --add-reviewer ${reviewer}`,
-        `# if that leaves evidence absent, including a zero exit with no event and no node for ${restLogin}:`,
-        `gh api repos/{owner}/{repo}/pulls/${pr}/requested_reviewers -X POST -f "reviewers[]=${restLogin}"`,
-        `# re-read both proofs; accept only a newer event after HEAD or a fresh node absent from the snapshot`,
-        `# if REST leaves evidence absent, stop this pointer and resume E14's guarded registration-proven procedure; it resolves bot ids live and revalidates the claim before every mutation`,
-        `# confirm the same evidence for ${restLogin}, then:`,
-        `# invoke the complete E14 guarded registration-and-marker procedure in one shell; it snapshots evidence, performs the fallback, returns its status, and owns the final claim/HEAD gate plus status-0 marker post:`,
-        `<profile-selected-E14-guarded-registration-procedure> --pr ${pr} --head-sha ${sha} --apply`,
+        `E14 REQUEST_NEEDED: follow the profile-selected guarded registration procedure in docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request`,
+        `It must snapshot the matching event and request node before any mutation, perform the account-typed fallback, revalidate the claim and HEAD, and post the advisory-wait marker only after status 0 evidence. Do not run separate add-reviewer or REST commands before entering E14.`,
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {
