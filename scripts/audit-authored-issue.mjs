@@ -469,6 +469,12 @@ const MARKDOWN_LINK_START_PATTERN = /^\[([^\]\n]*)\]\(([^)\n]*)\)/;
 // decide (`idd-skill#3285` final review round, CodeRabbit). Same TDZ
 // hazard as MARKDOWN_LINK_START_PATTERN immediately above.
 const MARKDOWN_REFERENCE_LINK_START_PATTERN = /^\[([^\]\n]*)\]\[([^\]\n]*)\]/;
+// A CommonMark reference-link label may contain a nonblank line ending,
+// which is normalized to a space before the definition lookup. The regular
+// per-line near-miss scan cannot see this shape, so checkDependencyLineGrammar
+// handles it with a whole-body pass after masking opaque regions.
+const MULTILINE_REFERENCE_LINK_USAGE_PATTERN =
+  /\[([^\]\n]*)\]\[([^\]\n]*(?:\n[^\]\n]+)+)\]/g;
 // Matches a CommonMark shortcut reference link at the start of a string:
 // `[text]` whose next character is not `[` (full/collapsed reference), `(`
 // (inline link), or `:` (reference-definition declaration). Its visible
@@ -1445,6 +1451,32 @@ function findDependencyKeywordMisuse(line, referenceDefinitions) {
   }
   return undefined;
 }
+function findMultilineReferenceLinkMisuses(text, referenceDefinitions) {
+  const misuses = new Map();
+  for (const match of text.matchAll(MULTILINE_REFERENCE_LINK_USAGE_PATTERN)) {
+    const matchIndex = match.index ?? -1;
+    if (matchIndex < 0) {
+      continue;
+    }
+    const target = referenceDefinitions.get(
+      normalizeLinkReferenceLabel(match[2]),
+    );
+    if (target === undefined || !GITHUB_ISSUE_OR_PR_URL_PATTERN.test(target)) {
+      continue;
+    }
+    const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1;
+    const linePrefix = text.slice(lineStart, matchIndex);
+    const normalizedReference = `[${match[1]}][${match[2].replace(/\s+/gu, ' ')}]`;
+    const misuse = findDependencyKeywordMisuse(
+      `${linePrefix}${normalizedReference}`,
+      referenceDefinitions,
+    );
+    if (misuse !== undefined) {
+      misuses.set(text.slice(0, lineStart).split('\n').length, misuse);
+    }
+  }
+  return misuses;
+}
 /**
  * #3285: fails on a `Blocked by`/`Depends on` mention that Discover's own
  * shared line-anchored grammar (`dependency-grammar.mts`, #3284) would
@@ -1563,6 +1595,10 @@ function checkDependencyLineGrammar(rawText, currentRepo, markerPrefix) {
     .split('\n');
   const referenceDefinitions = collectReferenceStyleLinkDefinitions(
     discoverMaskedLines.join('\n'),
+  );
+  const multilineReferenceLinkMisuses = findMultilineReferenceLinkMisuses(
+    nearMissScanText.join(''),
+    referenceDefinitions,
   );
   // Maps a 1-based accepted line number to how many trailing characters of
   // that line the shared grammar's match left unconsumed (#3285 review,
@@ -1696,7 +1732,9 @@ function checkDependencyLineGrammar(rawText, currentRepo, markerPrefix) {
         ? scanLine
         : scanLine.slice(0, matchStart) +
           scanLine.slice(scanLine.length - remainingLength);
-    const misuse = findDependencyKeywordMisuse(scanText, referenceDefinitions);
+    const misuse =
+      findDependencyKeywordMisuse(scanText, referenceDefinitions) ??
+      multilineReferenceLinkMisuses.get(lineNo);
     if (misuse !== undefined) {
       issues.push(
         `line ${lineNo}: "${misuse}" is not a canonical Blocked by / Depends on line -- use "Blocked by #N" (or "Depends on #N") on its own line, or "Refs #N (non-blocking)" for an informational reference`,
@@ -2545,6 +2583,9 @@ function parseReferenceDefinitionCandidate(line) {
     stripReferenceDefinitionContainers(line);
   const match = content.match(/^\[([^\]\n]+)\]:[ \t]*(.*)$/u);
   if (!match) {
+    return undefined;
+  }
+  if (normalizeLinkReferenceLabel(match[1]).length === 0) {
     return undefined;
   }
   return {

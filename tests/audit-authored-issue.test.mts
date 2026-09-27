@@ -1491,6 +1491,20 @@ test('dependency-line-grammar resolves a reference-style Markdown-link definitio
   assert.match(finding.detail, new RegExp(`line ${lineNumber}:`));
 });
 
+test('dependency-line-grammar resolves a reference-style link whose label wraps across a nonblank line', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ref\nlabel]\n\n' +
+      '[ref label]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'fail');
+});
+
 test('dependency-line-grammar resolves a shortcut reference link', () => {
   const body = childBody({
     extraMarkers:
@@ -1547,6 +1561,20 @@ test('dependency-line-grammar leaves unresolved and non-issue reference-style li
     assert.ok(finding);
     assert.equal(finding.result, 'pass', markerLine);
   }
+});
+
+test('dependency-line-grammar ignores whitespace-only reference labels', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by [Issue 12][ ]\n\n' +
+      '[ ]: https://github.com/kurone-kito/idd-skill/issues/12',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-line-grammar',
+  );
+  assert.ok(finding);
+  assert.equal(finding.result, 'pass');
 });
 
 test('dependency-line-grammar ignores reference definitions inside HTML comments', () => {
