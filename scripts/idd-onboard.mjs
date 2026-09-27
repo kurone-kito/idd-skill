@@ -2094,7 +2094,7 @@ function readHeldModule(targetRoot, targetPath) {
  * mention a directory in comments or diagnostics without reading it.
  */
 const DIRECTORY_SCAN_CALL_PATTERN =
-  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)]*)\)/giu;
+  /(?<!['"`])\b(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))\s*\(([^)]*)\)/gu;
 const DIRECTORY_SCAN_STRING_PATTERN = /(['"`])([^'"`\r\n)]*)\1/gu;
 const DIRECTORY_SCAN_API_NAME_AT_START =
   /^(?:readdir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
@@ -2365,6 +2365,18 @@ function globPatternMatchesPath(pattern, targetPath) {
       expression += '[^/]*';
     } else if (character === '?') {
       expression += '[^/]';
+    } else if (character === '[') {
+      const closing = pattern.indexOf(']', index + 1);
+      if (closing === -1) {
+        expression += '\\[';
+      } else {
+        let characterClass = pattern.slice(index + 1, closing);
+        if (characterClass.startsWith('!')) {
+          characterClass = `^${characterClass.slice(1)}`;
+        }
+        expression += `[${characterClass.replaceAll('\\', '\\\\')}]`;
+        index = closing;
+      }
     } else {
       expression += escapeRegExp(character);
     }
@@ -2377,11 +2389,15 @@ function moduleScansManifestDirectory(text, targetPath) {
     return false;
   }
   const directory = targetPath.slice(0, slash);
-  const directoryPrefix = new RegExp(`^${escapeRegExp(directory)}(?=$|/)`, 'u');
   for (const match of stripJavaScriptComments(text).matchAll(
     DIRECTORY_SCAN_CALL_PATTERN,
   )) {
     const argumentsText = match[1] ?? '';
+    const apiName =
+      match[0]?.match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0] ?? '';
+    const recursive =
+      /\brecursive\s*:\s*true\b/u.test(argumentsText) ||
+      /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument);
     const cwdCandidates = (() => {
@@ -2404,7 +2420,12 @@ function moduleScansManifestDirectory(text, targetPath) {
       candidates.some(
         (candidate) =>
           globPatternMatchesPath(candidate, targetPath) ||
-          (!isGlobPattern(candidate) && directoryPrefix.test(candidate)),
+          (!isGlobPattern(candidate) &&
+            (recursive
+              ? new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
+                  targetPath,
+                )
+              : candidate === directory)),
       )
     ) {
       return true;
