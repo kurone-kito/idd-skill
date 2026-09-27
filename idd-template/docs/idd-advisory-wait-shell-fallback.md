@@ -233,7 +233,12 @@ export BOT_REST_LOGIN_BARE
 claim_revalidate() {
   # Resolve this to the profile-selected shared claim gate, including the
   # worktree lock, active claim id, activation nonce, and branch/cwd check.
-  <profile-selected-claim-revalidation-command>
+  <profile-selected-claim-revalidation-command> || return 2
+  LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
+  [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
+    echo "PR HEAD moved; restart from E1" >&2
+    return 2
+  }
 }
 head_timeline_index() {
   local result
@@ -250,40 +255,44 @@ request_event() {
   result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
   printf '%s' "$result" | jq -r -s '
     def matches_configured_bot($login):
-      ($login // "" | ascii_downcase) as $l
+      ($login.login // "" | ascii_downcase) as $l
+      | ($login.type // "" | ascii_downcase) as $type
       | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
-      | ($l == $bare
+      | ($type == "bot"
+         and ($l == $bare
          or $l == ($bare + "[bot]")
          or (($bare == "copilot"
               or $bare == "copilot-pull-request-reviewer")
              and ($l == "copilot"
                   or $l == "copilot-pull-request-reviewer"
-                  or $l == "copilot-pull-request-reviewer[bot]")));
+                  or $l == "copilot-pull-request-reviewer[bot]"))));
     (add // [])
     | to_entries
     | map(select(.value.event == "review_requested"
-        and matches_configured_bot(.value.requested_reviewer.login)))
+        and matches_configured_bot(.value.requested_reviewer)))
     | last
     | if . == null then empty
       else [.value.id, .value.created_at, .key] | @tsv end' || return 1
 }
 request_nodes() {
   local result
-  result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{... on Bot{login} ... on User{login}}}}}}}') || return 1
+  result=$(gh api graphql -F owner={owner} -F repo={repo} -F number={pr-number} -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewRequests(first:100){nodes{id requestedReviewer{__typename ... on Bot{login} ... on User{login}}}}}}}') || return 1
   printf '%s' "$result" |
     jq -r '
       def matches_configured_bot($login):
-        ($login // "" | ascii_downcase) as $l
+        ($login.login // "" | ascii_downcase) as $l
+        | ($login.__typename // "" | ascii_downcase) as $type
         | (env.BOT_REST_LOGIN_BARE | ascii_downcase) as $bare
-        | ($l == $bare
+        | ($type == "bot"
+           and ($l == $bare
            or $l == ($bare + "[bot]")
            or (($bare == "copilot"
                 or $bare == "copilot-pull-request-reviewer")
                and ($l == "copilot"
                     or $l == "copilot-pull-request-reviewer"
-                    or $l == "copilot-pull-request-reviewer[bot]")));
+                    or $l == "copilot-pull-request-reviewer[bot]"))));
       .data.repository.pullRequest.reviewRequests.nodes[]
-      | select(matches_configured_bot(.requestedReviewer.login))
+      | select(matches_configured_bot(.requestedReviewer))
       | .id'
 }
 registration_attempt() {
@@ -351,8 +360,8 @@ EOF
   return 1
 }
 
-# E14 stops/asks on status 1 or 2. AW3-S preserves the status and continues
-# to its step 4 bounded rechecks instead of aborting this shared procedure.
+# E14 stops/asks on status 1 or 2. AW3-S may recheck status 1, but status 2
+# is unreadable evidence: hold via AW4 and never count a failed cycle.
 REGISTRATION_STATUS=0
 registration_attempt || REGISTRATION_STATUS=$?
 ```
@@ -399,6 +408,11 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 # counted disposition: proven re-registration for a pending entry, or
 # proven failure-to-register within the same short budget for a
 # non-pending entry (#2327 -- see the instruction file's step 4).
+# Re-run the shared claim gate and compare the live PR head immediately
+# before posting; on either mismatch, abort and restart from E1.
+<profile-selected-claim-revalidation-command> || exit 2
+LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || exit 2
+[ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || exit 2
 # source repo / vendored-node profile:
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
