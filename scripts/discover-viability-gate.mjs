@@ -291,11 +291,15 @@ const CREDENTIAL_FORWARD_STATUS_ASSERTION_PATTERN =
 const CREDENTIAL_BACKWARD_STATUS_ASSERTION_PATTERN =
   /\b(?:missing|absent|unavailable|not\s+(?:available|provided|supplied))\s+$/i;
 const CREDENTIAL_ACQUISITION_ASSERTION_PATTERN =
-  /\b(?:obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
+  /\b(?:request|obtain|acquire|fetch|retrieve)\s+(?:(?:an?|the)\s+)?(?:[A-Za-z][\w-]*\s+){0,3}$/i;
 const CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN =
   /\b(?:cannot|can't|impossible|unable)\b[^.;:!?]{0,80}\b(?:without|unless)\s+(?:(?:an?|the)\s+)?$/i;
 const CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN = new RegExp(
   String.raw`(?:\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to|mandatory|essential|necessary)\b[^.;:!?\n]{0,80}\b(?:supplied|provided|performed|created|obtained|acquired|fetched|retrieved|generated)\b(?:\s+(?:by|from)\s+[^.;:!?\n]{1,40})?\s+(?:before|until)\b|\b(?:require[sd]?|needs?)\b[^.;:!?\n]{0,80}\b(?:from|by)\s+(?:the\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b)`,
+  'i',
+);
+const CREDENTIAL_WAITING_EXTERNAL_REQUIREMENT_PATTERN = new RegExp(
+  String.raw`\bwait(?:s|ing)?\s+for\s+(?:(?:a|an|the)\s+)?(?:${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\s+)?credentials?\b`,
   'i',
 );
 const CREDENTIAL_LOCAL_OPERATION_PATTERN =
@@ -305,11 +309,15 @@ const CREDENTIAL_LOCAL_OPERATION_EXTERNAL_ACTOR_PATTERN = new RegExp(
   'i',
 );
 const CREDENTIAL_LOCAL_FEATURE_PATTERN =
-  /\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:keys?|tokens?)\b|\b(?:keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:support|handling|management|rotation|redaction|validation|parsing)\b/i;
+  /\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:credentials?|keys?|tokens?)\b|\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:support|handling|management|rotation|redaction|validation|parsing)\b/i;
 const CREDENTIAL_LOCAL_FEATURE_EXTERNAL_ACTOR_PATTERN = new RegExp(
-  String.raw`\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:from|by)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b`,
+  String.raw`(?:\b(?:add|implement|support|handle|manage|refresh|rotate|redact|store|validate|parse)\b[^.;:!?\n]{0,40}\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:from|by)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b[^.;:!?\n]{0,80}\b(?:before|until)\b|\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:handling|management|rotation|redaction|validation|parsing)\b[^.;:!?\n]{0,40}\b(?:will\s+be\s+)?(?:performed|supplied|provided|created)\b(?:\s+(?:by|from)\s+(?:(?:the|a|an)\s+)?${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b)?[^.;:!?\n]{0,40}\b(?:before|until)\b)`,
   'i',
 );
+const CREDENTIAL_LOCAL_FEATURE_REQUIREMENT_PATTERN =
+  /\b(?:must|require[sd]?|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,40}\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:before|until)\b/i;
+const CREDENTIAL_LOCAL_BEHAVIOR_PATTERN =
+  /\b(?:credentials?|keys?|tokens?)\b[^.;:!?\n]{0,40}\b(?:expiration|expiry|expir(?:e|es|ed)|revocation|rejection)\b[^.;:!?\n]{0,40}\b(?:must|shall|should|will|can)\s+(?:trigger|cause|detect|reject|invalidate|refresh|prompt)\b/i;
 const CREDENTIAL_PROMPTING_ASSERTION_PATTERN =
   /\bcredential[- ]prompt(?:ing)?\b/i;
 const CREDENTIAL_WAITING_PERSON_ASSERTION_PATTERN =
@@ -710,6 +718,13 @@ function isExplicitQuotedExampleFraming(textBeforeQuote) {
 function isDescribedExternalCoordinationExample(corpus, matchIndex) {
   const before = corpus.slice(Math.max(0, matchIndex - 120), matchIndex);
   const sameClause = before.split(CUE_HARD_BREAK_PATTERN).at(-1) ?? before;
+  if (
+    /\b(?:document(?:s|ed|ing)?|describe(?:s|d|ing)?|explain(?:s|ed|ing)?|outline(?:s|d|ing)?|specif(?:y|ies|ied|ying)|parse(?:s|d|ing)?|display(?:s|ed|ing)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:workflow|behavior|process|requirement|approval(?:-gated)?|access[- ]control)\b[^.;:!?]{0,40}$/i.test(
+      sameClause,
+    )
+  ) {
+    return true;
+  }
   return /\b(?:unit\s+tests?|test(?:ing)?\s+coverage|fixture|assert(?:s|ed|ion)?|render(?:s|ed|ing)?)\b[^.;:!?]{0,80}\b(?:for|of|that|which|where)\b/i.test(
     sameClause,
   );
@@ -987,7 +1002,10 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   const directRequirementContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
   if (
     CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN.test(requirementContextBefore) ||
-    CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext)
+    CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext) ||
+    CREDENTIAL_WAITING_EXTERNAL_REQUIREMENT_PATTERN.test(
+      directRequirementContext,
+    )
   ) {
     return false;
   }
@@ -1040,12 +1058,22 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   if (
     CREDENTIAL_LOCAL_FEATURE_EXTERNAL_ACTOR_PATTERN.test(
       `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
+    ) ||
+    CREDENTIAL_LOCAL_FEATURE_REQUIREMENT_PATTERN.test(
+      `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
     )
   ) {
     return false;
   }
   if (
     CREDENTIAL_LOCAL_FEATURE_PATTERN.test(
+      `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
+    )
+  ) {
+    return true;
+  }
+  if (
+    CREDENTIAL_LOCAL_BEHAVIOR_PATTERN.test(
       `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
     )
   ) {

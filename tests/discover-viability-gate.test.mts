@@ -3200,3 +3200,65 @@ test('clear_verification still passes when the only verification command is insi
   );
   assert.equal(clearVerification?.result, 'pass');
 });
+
+test('does not let vendor credential dependencies hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 188,
+    title: 'document credential storage',
+    body:
+      'Implementation is waiting for a vendor credential before work begins. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps local token expiration behavior autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 189,
+    title: 'document token lifecycle behavior',
+    body: 'Authentication token expiration must trigger reauthentication. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('does not let a maintainer credential request hide in descriptive context (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 190,
+    title: 'document credential storage',
+    body: 'Request the credential from the maintainer for the build. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+test('keeps ordinary plural credential feature work autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 191,
+    title: 'add credential support',
+    body: 'Add support for multiple credentials. Verification: add unit tests.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
+
+test('keeps documentation of approval-gated behavior autonomous (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 192,
+    title: 'document approval workflow',
+    body: 'Document the workflow that requires maintainer approval. Verification: run docs lint.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});
