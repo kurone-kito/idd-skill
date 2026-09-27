@@ -3486,3 +3486,16 @@ test('does not let an external credential request pass as description (#3522)', 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
+
+test('keeps parser token provisioning local (#3522)', () => {
+  const result = evaluateA4Viability({
+    number: 210,
+    title: 'parse token input',
+    body:
+      'The parser token must be provided before parsing. ' +
+      'Verification: add unit tests.',
+    state: 'OPEN',
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failedCriteria, []);
+});

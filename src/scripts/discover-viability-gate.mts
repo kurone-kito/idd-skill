@@ -1185,9 +1185,26 @@ function isDescribedSecurityVocabulary(
       statusContext,
     );
   const directRequirementContext = `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`;
+  // Ordinary parser/cache terminology must not become an external security
+  // dependency merely because it uses `key` or `token` (#3522 Copilot
+  // review). Compute this guard before provider checks so a phrase such as
+  // "parser token must be provided before parsing" remains local behavior.
+  const contextStart = Math.max(0, matchIndex - 100);
+  const contextEnd = Math.min(corpus.length, matchEnd + 100);
+  const context = corpus.slice(contextStart, contextEnd);
+  const isProgrammingVocabulary =
+    /^(?:keys?|tokens?)$/i.test(vocabulary) &&
+    /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index|binding|bindings|pagination|cursor|page|keymap|token-based)\b/i.test(
+      context,
+    ) &&
+    !new RegExp(
+      String.raw`\b(?:production|credential|credentials|secret|secrets|security|authentication|authorization|access|permission|api|signing|private|public|${CREDENTIAL_EXTERNAL_ACTOR_PATTERN})\b`,
+      'i',
+    ).test(context);
   if (
     CREDENTIAL_BACKWARD_CANNOT_WITHOUT_PATTERN.test(requirementContextBefore) ||
-    CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext) ||
+    (!isProgrammingVocabulary &&
+      CREDENTIAL_PROVIDER_REQUIREMENT_PATTERN.test(directRequirementContext)) ||
     CREDENTIAL_BLOCKED_PENDING_REQUIREMENT_PATTERN.test(
       directRequirementContext,
     ) ||
@@ -1197,22 +1214,6 @@ function isDescribedSecurityVocabulary(
   ) {
     return false;
   }
-
-  // Ordinary parser/cache terminology must not become an external security
-  // dependency merely because it uses `key` or `token` (#3522 Copilot
-  // review). Keep the programming-language exception narrow and let nearby
-  // security context win when both meanings are present.
-  const contextStart = Math.max(0, matchIndex - 100);
-  const contextEnd = Math.min(corpus.length, matchEnd + 100);
-  const context = corpus.slice(contextStart, contextEnd);
-  const isProgrammingVocabulary =
-    /^(?:keys?|tokens?)$/i.test(vocabulary) &&
-    /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index|binding|bindings|pagination|cursor|page|keymap|token-based)\b/i.test(
-      context,
-    ) &&
-    !/\b(?:production|credential|credentials|secret|secrets|security|authentication|authorization|access|permission|api|signing|private|public)\b/i.test(
-      context,
-    );
 
   if (
     CREDENTIAL_PROMPTING_ASSERTION_PATTERN.test(
