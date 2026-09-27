@@ -217,8 +217,7 @@ below instead.
    node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
    ```
 
-2. Validate the operator's answers against the catalog and print the
-   confirmed transcript. Save that transcript to a file.
+2. Validate the answers, print the confirmed transcript, and save it.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --apply \
@@ -231,10 +230,11 @@ below instead.
    3-5; they write the template directly without review (`direct-import`
    default).
 
-   Require a clean target before Step 3:
+   Require a clean target:
 
    ```sh
-   git -C <target-repo> rev-parse --show-toplevel >/dev/null 2>&1 &&
+   root=$(git -C <target-repo> rev-parse --show-toplevel) &&
+   test "$root" = "$(cd <target-repo> && pwd -P)" &&
    test -z "$(git -C <target-repo> status --short --untracked-files=all)" || exit 1
    ```
 
