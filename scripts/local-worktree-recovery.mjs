@@ -622,6 +622,7 @@ export function extractDirtyEntries(statusPorcelain) {
   }
   return entries;
 }
+// audit:ignore-dead-export: exported for focused parser tests; production use remains in this module
 export function extractDirtyPaths(statusPorcelain) {
   return extractDirtyEntries(statusPorcelain).map((entry) => entry.path);
 }
