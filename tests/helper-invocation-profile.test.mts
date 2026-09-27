@@ -27,7 +27,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { globFiles } from '../src/scripts/consistency-helpers.mts';
-import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
+import {
+  buildHelperRuntimeManifest,
+  PACKAGE_MANAGER_ONLY_HELPERS,
+} from '../src/scripts/helper-runtime-manifest.mts';
 import { readJson } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -40,7 +43,12 @@ interface FileInput {
 interface Violation {
   file: string;
   rule: 'unbacked-helper' | 'distributed-bin-path';
-  form: 'node-scripts' | 'bin-mjs' | 'package-script' | 'bare-bin-command';
+  form:
+    | 'node-scripts'
+    | 'package-manager-entry'
+    | 'bin-mjs'
+    | 'package-script'
+    | 'bare-bin-command';
   name: string;
   message: string;
 }
@@ -189,6 +197,15 @@ const NON_ADOPTER_BIN_NAMES = new Set(['idd-emit-authoring-marker']);
 // has a home and the violation message below stays accurate.
 const NON_ADOPTER_SCRIPT_NAMES = new Set<string>();
 
+// `verify-import-mirror` is intentionally not an adopter command catalog
+// entry: it is a source-repository verification helper with one narrowly
+// supported package-manager path. The machine-readable exception lives in
+// helper-runtime-manifest.mts; this test consumes that same declaration so a
+// new direct installed-package path cannot bypass the manifest contract.
+const PACKAGE_MANAGER_ONLY_ENTRY_PATHS = new Set(
+  PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
+);
+
 // Both copies discuss `bin/idd-merge-execute.mjs` as a Bash-permission
 // deny-pattern string (see docs/permissions.md around line 447), not as
 // a prescribed invocation for a reader to run -- the opposite of what
@@ -202,6 +219,8 @@ const DISTRIBUTED_BIN_BAN_EXEMPT_FILES = new Set([
 ]);
 
 const NODE_SCRIPTS_RE = /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g;
+const PACKAGE_MANAGER_ENTRY_RE =
+  /\bnode\s+(node_modules\/@kurone-kito\/idd-skill\/scripts\/[a-z0-9-]+\.mjs)\b/g;
 const BIN_MJS_RE = /(?:\.\/)?\bbin\/(idd-[a-zA-Z0-9-]+)\.mjs\b/g;
 const PACKAGE_SCRIPT_RE =
   /(?:npm run|pnpm(?: run)?|yarn(?: run)?)\s+(idd:[a-zA-Z0-9-]+)/g;
@@ -226,11 +245,15 @@ const FENCED_LANGS = new Set(['', 'sh', 'bash', 'shell', 'console']);
 /** Scans one file's text for all four invocation forms (raw matches, no manifest cross-check). */
 function scanInvocations(content: string): {
   nodeScripts: string[];
+  packageManagerEntries: string[];
   binMjs: string[];
   packageScripts: string[];
   bareBinCommands: string[];
 } {
   const nodeScripts = [...content.matchAll(NODE_SCRIPTS_RE)].map((m) => m[1]);
+  const packageManagerEntries = [
+    ...content.matchAll(PACKAGE_MANAGER_ENTRY_RE),
+  ].map((m) => m[1]);
   const binMjs = [...content.matchAll(BIN_MJS_RE)].map((m) => m[1]);
   const packageScripts = [...content.matchAll(PACKAGE_SCRIPT_RE)].map(
     (m) => m[1],
@@ -260,7 +283,13 @@ function scanInvocations(content: string): {
     }
   }
 
-  return { nodeScripts, binMjs, packageScripts, bareBinCommands };
+  return {
+    nodeScripts,
+    packageManagerEntries,
+    binMjs,
+    packageScripts,
+    bareBinCommands,
+  };
 }
 
 /**
@@ -284,8 +313,13 @@ function collectHelperInvocationViolations(
   const violations: Violation[] = [];
 
   for (const file of files) {
-    const { nodeScripts, binMjs, packageScripts, bareBinCommands } =
-      scanInvocations(file.content);
+    const {
+      nodeScripts,
+      packageManagerEntries,
+      binMjs,
+      packageScripts,
+      bareBinCommands,
+    } = scanInvocations(file.content);
 
     for (const entryPath of nodeScripts) {
       if (
@@ -298,6 +332,18 @@ function collectHelperInvocationViolations(
           form: 'node-scripts',
           name: entryPath,
           message: `\`node ${entryPath}\` names no HELPER_COMMANDS entryPath and is not in the source-repo-internal allowlist`,
+        });
+      }
+    }
+
+    for (const entryPath of packageManagerEntries) {
+      if (!PACKAGE_MANAGER_ONLY_ENTRY_PATHS.has(entryPath)) {
+        violations.push({
+          file: file.path,
+          rule: 'unbacked-helper',
+          form: 'package-manager-entry',
+          name: entryPath,
+          message: `\`node ${entryPath}\` names no package-manager-only helper exception in the runtime manifest`,
         });
       }
     }

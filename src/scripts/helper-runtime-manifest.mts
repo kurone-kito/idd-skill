@@ -39,6 +39,25 @@ interface HelperCommand {
   contractPaths?: string[];
 }
 
+/**
+ * A source-repository helper may have a narrowly supported package-manager
+ * path without becoming an adopter-facing command or package.json script.
+ * Keep such paths explicit in the runtime manifest so documentation and
+ * invocation guards cannot accidentally treat an unregistered direct path as
+ * a general helper surface (issue #3571, building on the profile mismatch
+ * regression tracked by #1674).
+ */
+export const PACKAGE_MANAGER_ONLY_HELPERS = [
+  {
+    id: 'verify-import-mirror',
+    sourceEntryPath: 'scripts/verify-import-mirror.mjs',
+    installedEntryPath:
+      'node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs',
+    invocation:
+      'node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs',
+  },
+] as const;
+
 interface ManagedFile {
   sourcePath: string;
   targetPath: string;
@@ -861,6 +880,7 @@ export function buildHelperRuntimeManifest({
     recommendation,
     availableProfiles: [...PROFILE_NAMES],
     commandCatalog,
+    packageManagerOnlyHelpers: PACKAGE_MANAGER_ONLY_HELPERS,
     profiles: selectedProfiles,
     switching:
       normalizedProfile && normalizedFromProfile

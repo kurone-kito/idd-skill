@@ -1059,9 +1059,15 @@ future inventory reviews do not need to re-infer their role from code.
   `--upstream-path`; checking an older import against a later working tree can
   therefore report false mismatches or falsely pass matching local edits
   (observed in [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
-  target commit must be the mirror-only commit made after copying the
-  upstream files and before `--substitute` rewrites placeholders. The
-  template core file set also includes the root-level
+  The target commit must be the mirror-only commit made after copying the
+  upstream files and before `--substitute` rewrites placeholders.
+  During a re-import, `idd-onboard --import` may intentionally restore the
+  target's existing commands table in `.github/idd/config.json` after the
+  template copy; that restoration is part of the re-import result, not a
+  reason to verify the later substituted commit as a pure mirror (the
+  preservation behavior is tracked by
+  [kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222)).
+  The template core file set also includes the root-level
   `.cspell.config.yml`, `.markdownlint.yml`, and `.markdownlint-cli2.yaml`.
   Because an untouched prefix produces no comparison, retain each prefix
   only when that file or root was touched by the mirror-only commit. Restrict
@@ -1077,6 +1083,13 @@ future inventory reviews do not need to re-infer their role from code.
     --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
     --path-prefix .markdownlint-cli2.yaml
   ```
+
+  On native Windows, omit `.githooks` from this content check unless the
+  command runs under WSL. The nested `idd-template/` path is read from the
+  filesystem rather than a Git tree, so native Windows cannot establish the
+  imported executable bit reliably; use Linux, macOS, or WSL when hook mode
+  equivalence must also be verified (the mode rule is part of
+  [kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216)).
 
   Do not add a directory prefix merely because it exists upstream: use only
   roots and root-level files touched by the mirror-only commit. A later
@@ -1111,14 +1124,17 @@ future inventory reviews do not need to re-infer their role from code.
   ```
 
   `verify-import-mirror` is not an `idd-*` bin in the `package-manager` or
-  `ephemeral-npx` profiles. The installed-package path above is supported for
-  `package-manager` only when its `node_modules` linker exposes the path. It
-  is not available under Yarn Plug'n'Play, which has no
-  `node_modules/@kurone-kito/idd-skill/` tree; use a source checkout or the
-  `vendored-node` profile for package-manager adopters using PnP. The
-  `ephemeral-npx` profile does not install a supported copy of this
-  source-repository helper, so use a source checkout or the `vendored-node`
-  profile instead.
+  `ephemeral-npx` profiles. The installed-package path above is a deliberate
+  package-manager-only runtime-manifest exception: it is recorded under
+  `packageManagerOnlyHelpers` rather than `commandCatalog` or
+  `managedPackageJsonScripts` because this source-repository verification
+  helper is not an adopter command. It is supported only when a
+  `node_modules` linker exposes the path. It is not available under Yarn
+  Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree; use a
+  source checkout or the `vendored-node` profile for package-manager adopters
+  using PnP. The `ephemeral-npx` profile does not install a supported copy of
+  this source-repository helper, so use a source checkout or the
+  `vendored-node` profile instead.
 
 ### Discover Roadmap Graph Contract
 

@@ -289,6 +289,13 @@ supplied the mirror-only import; the helper reads the current files under
 `--upstream-path`, so a later working tree can produce false mismatches or
 falsely pass matching local edits.
 
+During a re-import, `idd-onboard --import` may intentionally restore the
+target's existing commands table in `.github/idd/config.json` after the
+template copy. Treat that restoration as part of the re-import result, and
+verify the earlier mirror-only commit rather than the later substituted
+commit as a pure mirror. This preservation behavior is tracked by
+[kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
+
 The helper is not an `idd-*` bin. For a source checkout, invoke it directly
 and restrict the check with one `--path-prefix` per imported root or root-level
 file that the target commit actually touched. The template core file set also
@@ -307,6 +314,13 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
+On native Windows, omit `.githooks` from this content check unless the
+command runs under WSL. The nested `idd-template/` path is read from the
+filesystem rather than a Git tree, so native Windows cannot establish the
+imported executable bit reliably; use Linux, macOS, or WSL when hook mode
+equivalence must also be verified. The mode rule is part of
+[kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
+
 For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
 or Yarn configured for `node_modules`) without the source checkout, run the
 same helper from the installed package. It is intentionally not an `idd-*`
@@ -322,11 +336,16 @@ node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-This direct path does not apply to Yarn Plug'n'Play, which has no
-`node_modules/@kurone-kito/idd-skill/` tree. Use a source checkout or the
-`vendored-node` profile for package-manager adopters using PnP. The
-`ephemeral-npx` profile also does not install a supported copy of this
-source-repository helper, so use a source checkout or `vendored-node`.
+This direct path is a deliberate package-manager-only runtime-manifest
+exception recorded under `packageManagerOnlyHelpers`; it is not a
+`commandCatalog` entry or a managed package.json script because this
+source-repository verification helper is not an adopter command. It applies
+only when the `node_modules` linker exposes the path. It does not apply to
+Yarn Plug'n'Play, which has no `node_modules/@kurone-kito/idd-skill/` tree.
+Use a source checkout or the `vendored-node` profile for package-manager
+adopters using PnP. The `ephemeral-npx` profile also does not install a
+supported copy of this source-repository helper, so use a source checkout or
+`vendored-node`.
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes
