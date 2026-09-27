@@ -1052,6 +1052,43 @@ future inventory reviews do not need to re-infer their role from code.
   Source-repo internal helper; not distributed via the package-manager /
   ephemeral-npx profiles.
 
+  For an adopter's template import, point `--upstream-path` at the
+  checkout's `idd-template/` directory, not at the checkout root. The
+  target commit must be the mirror-only commit made after copying the
+  upstream files and before `--substitute` rewrites placeholders. Restrict
+  the comparison to the imported roots present in that commit with repeated
+  `--path-prefix` options, for example:
+
+  ```sh
+  node <idd-skill>/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --upstream-path <idd-skill>/idd-template \
+    --path-prefix .github --path-prefix docs --path-prefix profiles \
+    --path-prefix .githooks --path-prefix .claude
+  ```
+
+  Do not add a prefix merely because it exists upstream: use only roots
+  touched by the mirror-only commit. A later substituted commit is expected
+  to differ in rewritten placeholders, pinned workflow references, and other
+  adopter-specific output, so it is not a pure-mirror target.
+
+  For the `vendored-node` profile, compare helper and schema paths against
+  the checkout root instead. The helper's source-root mapping uses the
+  following repeatable prefixes when they are present in the target commit:
+
+  ```sh
+  node <idd-skill>/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --upstream-path <idd-skill> \
+    --path-prefix src --path-prefix scripts --path-prefix bin \
+    --path-prefix schemas --path-prefix fixtures
+  ```
+
+  `verify-import-mirror` is source-repository-only. It has no `idd-*` bin
+  in the package-manager or ephemeral-npx profiles; run it through the
+  direct `node <idd-skill>/scripts/verify-import-mirror.mjs` path shown
+  above.
+
 ### Discover Roadmap Graph Contract
 
 `scripts/discover-roadmap-graph.mjs` evaluates the recursive A1.5/A2

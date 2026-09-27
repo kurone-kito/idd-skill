@@ -275,6 +275,47 @@ those shorter checks, confirm the detailed items below.
 - [ ] `profiles/README.md` and the non-default profile artifacts under
       `profiles/` are present.
 
+### Verifying a re-import commit
+
+For an adopter that imported the template from a local `idd-skill` clone,
+run `verify-import-mirror` against the mirror-only commit made after the
+copy and before placeholder substitution. The upstream path must be the
+clone's `idd-template/` directory: using the repository root compares
+template paths such as `docs/idd-workflow.md` with source-repository paths
+and produces false mismatches.
+
+The helper is source-repository-only, so invoke it directly rather than
+looking for an `idd-*` package-manager bin. Restrict the check with one
+`--path-prefix` per imported root that the target commit actually touched:
+
+```sh
+node <idd-skill>/scripts/verify-import-mirror.mjs \
+  --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --upstream-path <idd-skill>/idd-template \
+  --path-prefix .github --path-prefix docs --path-prefix profiles \
+  --path-prefix .githooks --path-prefix .claude
+```
+
+When the target uses the `vendored-node` profile, run a separate check for
+helper and schema paths against the checkout root, using only the prefixes
+present in that target commit:
+
+```sh
+node <idd-skill>/scripts/verify-import-mirror.mjs \
+  --target-root <target-repo> --target-ref <mirror-only-commit> \
+  --upstream-path <idd-skill> \
+  --path-prefix src --path-prefix scripts --path-prefix bin \
+  --path-prefix schemas --path-prefix fixtures
+```
+
+`--target-ref` must not be moved to the post-substitution commit when
+interpreting a pure mirror. Placeholder rewrites, pinned workflow action
+references, and a deliberately regenerated
+`.github/workflows/strip-untrusted-labels.yml` (including its GHES-specific
+result) are intentional adopter-side differences; they do not make the
+mirror-only commit impure. Conversely, a content or file-mode mismatch in
+the selected mirror-only paths remains a real import discrepancy.
+
 ### Recorded policies and selected companions
 
 - [ ] The operator's selected PR review policy profile is recorded, and
