@@ -4628,13 +4628,8 @@ export function collectAssertNextActions(
         `# re-read both proofs; accept only a newer event after HEAD or a fresh node absent from the snapshot`,
         `# if REST leaves evidence absent, stop this pointer and resume E14's guarded registration-proven procedure; it resolves bot ids live and revalidates the claim before every mutation`,
         `# confirm the same evidence for ${restLogin}, then:`,
-        `# the guarded E14 procedure must return REGISTRATION_STATUS=0 before this final mutation:`,
-        `if [ "\${REGISTRATION_STATUS:-}" -eq 0 ]; then`,
-        `  claim_revalidate || exit 2`,
-        `  node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
-        `else`,
-        `  exit 2`,
-        `fi`,
+        `# invoke the complete E14 guarded registration-and-marker procedure in one shell; it snapshots evidence, performs the fallback, returns its status, and owns the final claim/HEAD gate plus status-0 marker post:`,
+        `<profile-selected-E14-guarded-registration-procedure> --pr ${pr} --head-sha ${sha} --apply`,
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {
