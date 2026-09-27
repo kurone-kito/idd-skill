@@ -550,12 +550,18 @@ Ask these checks:
    default (observed 2026-08-12/13 on an adopter repository,
    `setup.ubuntu`, kurone-kito/idd-skill#2012).
 6. When a draft proposes changes to `.github/instructions/` files or
-   their `idd-template/` sources, check both the affected bundle's
-   `bundleBudgets.limitBytes` and the live `contextCeiling.maxUtilizationPct`
-   threshold before claiming byte-budget headroom. Compare the measured,
-   banner-stripped total with the configured limit and apply the context
-   ceiling as a separate constraint; `bundleBudgets.limitBytes` alone is
-   not sufficient. Use the
+   their `idd-template/` sources, first resolve the target repository's
+   own bundle-budget policy. If it defines the affected bundle's
+   `bundleBudgets.limitBytes` and `contextCeiling.maxUtilizationPct`,
+   compare the measured, banner-stripped total with the configured limit
+   and apply the context ceiling as a separate constraint before claiming
+   byte-budget headroom. Also check the context ceiling's absolute
+   `maxBundleLimitBytes` and `exemptBundles` rules where they are defined;
+   utilization alone is not sufficient. If the target repository does not
+   define these source-repository-only settings, do not apply this
+   repository's values: use the target's own declared budget checks when
+   available, or state that no repository-configured byte/context ceiling
+   was found instead of claiming headroom. Use the
    [Context ceiling](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#context-ceiling)
    section as the authoritative policy reference instead of copying its
    mechanics into the issue.
