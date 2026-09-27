@@ -295,20 +295,17 @@ E14's **Primary advisory bot**):
 2. **Verify** removal and current HEAD before proceeding.
 3. **Request** Copilot again, same fallback pattern; preserve its return
    status for step 4's bounded rechecks.
-4. **Verify association**: keep step 3's event/node baselines. A node
-   absent from the baseline is fresh proof through step 5; do not discard
-   node-only proof. Otherwise require `review_requested` after HEAD's
-   `committed` event (same proof as `COPILOT_PENDING_COVERS_HEAD`). If
-   not yet true: recheck after a brief pause only on readable evidence
-   (default: 3 attempts); unreadable evidence is indeterminate — use AW4,
-   without a marker or cycle count. Otherwise disposition by entry type:
-   - **Pending entry**: still unproven → abort without posting a
-     marker or counting a cycle, return to the polling loop (or E1) —
-     never tight-loop on unresolved lag.
-   - **Non-pending entry** (`#2327`): fresh node or event proves this
-     re-request registered — abort without counting (ordinary success;
-     the next `COPILOT_PENDING_COVERS_HEAD` check picks it up). No fresh
-     proof in the short budget proves this re-request _also_ failed: the
+4. **Verify association**: retain step 3's baselines, but require a new
+   matching `review_requested` event after HEAD's `committed` event (the
+   `COPILOT_PENDING_COVERS_HEAD` proof). A fresh request node is not tied
+   to a commit and is insufficient for AW3-S. If absent, recheck only
+   readable evidence (default: 3 attempts); unreadable is indeterminate —
+   use AW4, with no marker or cycle count. Then:
+   - **Pending entry**: still unproven → abort without marker/count and
+     return to polling or E1; never tight-loop on lag.
+   - **Non-pending entry** (`#2327`): a fresh event proves registration →
+     abort without count; the next `COPILOT_PENDING_COVERS_HEAD` check
+     picks it up. No fresh event in the short budget proves failure; the
      entry already spent `SETTLED_WINDOW_MINUTES` confirming silence, so
      proceed to step 5 and count the cycle.
 5. **Post exactly one** bound marker, once step 4 concludes in a

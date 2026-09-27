@@ -4628,6 +4628,8 @@ export function collectAssertNextActions(
         `# re-read both proofs; accept only a newer event after HEAD or a fresh node absent from the snapshot`,
         `# if REST leaves evidence absent, stop this pointer and resume E14's guarded registration-proven procedure; it resolves bot ids live and revalidates the claim before every mutation`,
         `# confirm the same evidence for ${restLogin}, then:`,
+        `# immediately before posting the marker, rerun the procedure's claim/HEAD gate and abort if it fails:`,
+        `claim_revalidate || exit 2`,
         `node scripts/post-idd-marker.mjs --type advisory --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`,
       ].join('\n'),
     });

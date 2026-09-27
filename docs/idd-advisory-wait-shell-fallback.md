@@ -212,13 +212,16 @@ curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/com
 
 ## Registration-proven review request
 
-E14's `REQUEST_NEEDED` branch (and AW3-S step 3 below) uses this
-procedure. Snapshot both matching proofs before the first mutation: the
+E14's `REQUEST_NEEDED` branch uses this procedure in its default
+event-or-node mode. AW3-S step 3 below calls it with `aw3-s`, which
+requires the event-after-HEAD mode because a request node is not tied to
+a commit. Snapshot both matching proofs before the first mutation: the
 latest `review_requested` event and the matching `reviewRequests` node
 ids. Post an E14 `advisory-wait` marker only when a re-read finds a
 newer matching event after the current HEAD `committed` event, or a
-request node whose id was absent from the snapshot. An older event,
-exit status, or HTTP 201 is not evidence. Observed 2026-09-26 in issue
+request node whose id was absent from the snapshot. AW3-S accepts only
+the newer event after HEAD. An older event, exit status, or HTTP 201 is
+not evidence. Observed 2026-09-26 in issue
 `#3500` (refs issues `#3481` and `#3491`): both calls returned success
 while `requested_reviewers` stayed empty and no `review_requested` event
 was recorded.
@@ -300,6 +303,11 @@ request_nodes() {
       | .id'
 }
 registration_attempt() {
+  local evidence_mode=${1:-e14}
+  case "$evidence_mode" in
+    e14|aw3-s) ;;
+    *) echo "unknown registration evidence mode" >&2; return 2 ;;
+  esac
   HEAD_TIMELINE_INDEX=$(head_timeline_index) || {
     echo "HEAD timeline snapshot unreadable" >&2
     return 2
@@ -333,7 +341,11 @@ EOF
     done <<EOF
 $NODES_AFTER
 EOF
-    [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
+    if [ "$evidence_mode" = "aw3-s" ]; then
+      [ "$EVENT_NEW" = true ]
+    else
+      [ "$EVENT_NEW" = true ] || [ "$NODE_FRESH" = true ]
+    fi
   }
 
   # Re-run the shared claim revalidation gate immediately before every
@@ -385,16 +397,18 @@ EOF
 # E14 stops/asks on status 1 or 2. AW3-S may recheck status 1, but status 2
 # is unreadable evidence: hold via AW4 and never count a failed cycle.
 REGISTRATION_STATUS=0
-registration_attempt || REGISTRATION_STATUS=$?
+registration_attempt e14 || REGISTRATION_STATUS=$?
 ```
 
 The post-request reads must run after each mutating attempt. The
-`EVENT_BEFORE`/`NODES_BEFORE` values are the AW3-S baselines; carry a
-fresh node proof into step 4 and step 5 rather than discarding it when
-the event is delayed. E14 posts its `advisory-wait` marker only when
-`REGISTRATION_STATUS` is `0`; statuses `1`/`2` stop and ask. AW3-S
-uses step 4 only after readable evidence; status `2` routes to AW4 and
-cannot count a failed cycle or post a marker.
+`EVENT_BEFORE`/`NODES_BEFORE` values are the baselines for the selected
+mode. E14 can carry a fresh node proof when the event is delayed, but
+AW3-S uses event-after-HEAD proof only; a fresh node alone cannot prove
+that the stale-request re-registration covers this HEAD. E14 posts its
+`advisory-wait` marker only when `REGISTRATION_STATUS` is `0`; statuses
+`1`/`2` stop and ask. AW3-S uses step 4 only after readable event
+evidence; status `2` routes to AW4 and cannot count a failed cycle or
+post a marker.
 
 ## AW3-S
 
@@ -430,8 +444,11 @@ gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
 
 # Step 3 — request again (non-pending entry: the first mutating step;
 # pending entry: after step 2 verifies the removal). Run the
-# registration-proven review request above. Its event/node snapshots
-# precede both mutations; step 4 carries either fresh proof forward.
+# registration-proven review request above in AW3-S mode. Its
+# event/node snapshots precede both mutations, but step 4 accepts only
+# a fresh review_requested event after HEAD's committed event.
+REGISTRATION_STATUS=0
+registration_attempt aw3-s || REGISTRATION_STATUS=$?
 
 # Step 5 -- post exactly one bound marker, only once step 4 reaches a
 # counted disposition: proven re-registration for a pending entry, or

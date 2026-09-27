@@ -6949,6 +6949,7 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   );
   assert.match(noneText, /fresh node absent from that snapshot/);
   assert.match(noneText, /resume E14's guarded registration-proven procedure/);
+  assert.match(noneText, /claim_revalidate \|\| exit 2/);
   assert.doesNotMatch(noneText, /<<EOF/);
   const snapshotAt = noneText.indexOf(
     'snapshot the matching event and request node before either mutation',
@@ -6956,8 +6957,11 @@ test('formatAssertNextActions covers no-review and off-HEAD (#2142)', () => {
   const requestAt = noneText.indexOf('gh pr edit');
   assert.ok(snapshotAt > 0 && requestAt > snapshotAt);
   const payloadAt = noneText.indexOf('guarded registration-proven');
+  const revalidateAt = noneText.indexOf('claim_revalidate || exit 2');
   const markerAt = noneText.indexOf('post-idd-marker.mjs --type advisory');
-  assert.ok(payloadAt > 0 && markerAt > payloadAt);
+  assert.ok(
+    payloadAt > 0 && revalidateAt > payloadAt && markerAt > revalidateAt,
+  );
   assert.match(noneText, /post-idd-marker\.mjs --type advisory/);
   assert.doesNotMatch(
     noneText,
@@ -7184,6 +7188,11 @@ test('#3500 shell fallback guards the GraphQL request and marker order', () => {
   assert.match(fallback, /userIds:\$reviewer/);
   assert.match(fallback, /REVIEWER_TYPE=.*ascii_downcase/);
   assert.match(fallback, /type == "user" and \$l == \$configured/);
+  assert.match(fallback, /registration_attempt aw3-s/);
+  assert.match(
+    fallback,
+    /if \[ "\$evidence_mode" = "aw3-s" \][\s\S]*?\[ "\$EVENT_NEW" = true \]/,
+  );
   assert.match(fallback, /claim_revalidate \|\| return 2[\s\S]*?jq -n/);
 });
 
