@@ -2116,6 +2116,24 @@ function moduleReferencesManifestPath(text, targetPath) {
 }
 const SAFE_GIT_REF = /^[A-Za-z0-9._/-]+$/u;
 /**
+ * Keep target baseline reads tied to the requested repository instead of
+ * ambient Git overrides inherited from a hook, wrapper, or parent process.
+ */
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return env;
+}
+/**
  * Resolve a target repository's pre-import Git tree. Non-Git target trees
  * keep the historical source-vs-current-target comparison so the exported
  * helper remains useful for directory fixtures and non-Git adopters. A Git
@@ -2128,7 +2146,11 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
     gitRoot = execFileSync(
       'git',
       ['-C', targetRoot, 'rev-parse', '--show-toplevel'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: sanitizedGitEnvironment(),
+      },
     ).trim();
   } catch {
     return undefined;
@@ -2162,7 +2184,7 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
     execFileSync(
       'git',
       ['-C', targetRoot, 'rev-parse', '--verify', `${baselineRef}^{commit}`],
-      { stdio: ['ignore', 'pipe', 'ignore'] },
+      { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
     );
   } catch {
     if (targetBaseRef === undefined) {
@@ -2183,7 +2205,11 @@ function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
         return execFileSync(
           'git',
           ['-C', normalizedGitRoot, 'show', `${baselineRef}:${treePath}`],
-          { encoding: null, stdio: ['ignore', 'pipe', 'ignore'] },
+          {
+            encoding: null,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            env: sanitizedGitEnvironment(),
+          },
         );
       } catch {
         // A path absent from the baseline is meaningful drift: --import

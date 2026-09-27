@@ -3674,6 +3674,56 @@ test('checkHeldSchemaDrift reads a nested Git target baseline from its target ro
   ]);
 });
 
+test('checkHeldSchemaDrift ignores ambient Git repository overrides', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const overrideRoot = makeFixtureDir();
+  const moduleText = `import { schema } from '${DRIFT_SCHEMA}';\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  writeDriftManifest(
+    overrideRoot,
+    driftFiles('{ "version": 2 }\n', moduleText),
+  );
+  for (const root of [targetRoot, overrideRoot]) {
+    execFileSync('git', ['init', '--initial-branch=main', root], {
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['-C', root, 'config', 'user.email', 'fixture@example.com'],
+      { stdio: 'ignore' },
+    );
+    execFileSync('git', ['-C', root, 'config', 'user.name', 'Fixture'], {
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['-C', root, 'add', '.'], { stdio: 'ignore' });
+    execFileSync(
+      'git',
+      ['-C', root, 'commit', '--no-gpg-sign', '-m', 'baseline'],
+      { stdio: 'ignore' },
+    );
+  }
+  writeFileSync(join(targetRoot, DRIFT_SCHEMA), '{ "version": 2 }\n');
+  const previousGitDir = process.env.GIT_DIR;
+  process.env.GIT_DIR = join(overrideRoot, '.git');
+  try {
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+      targetBaseRef: 'HEAD',
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  } finally {
+    if (previousGitDir === undefined) {
+      delete process.env.GIT_DIR;
+    } else {
+      process.env.GIT_DIR = previousGitDir;
+    }
+  }
+});
+
 test('checkHeldSchemaDrift does not flag a schema and its referencing module updated together', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
