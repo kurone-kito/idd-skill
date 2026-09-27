@@ -1063,7 +1063,10 @@ future inventory reviews do not need to re-infer their role from code.
   upstream files and before `--substitute` rewrites placeholders.
   Set `--target-base-ref` to the pre-import commit. For a root
   mirror-only commit, use `git -C <target-repo> hash-object -t tree /dev/null`
-  as the base so the first commit is diffable too.
+  as the base so the first commit is diffable too. Without that base, a root
+  mirror-only commit is not diffable (observed 2026-09-27 during
+  [kurone-kito/idd-skill#3576](https://github.com/kurone-kito/idd-skill/pull/3576)
+  review).
   During a re-import, `idd-onboard --import` may restore the target's three
   validate-command rows in `.github/idd/config.json` after the template copy.
   Keep that file in scope with `--path-prefix .github/idd/config.json`, and
