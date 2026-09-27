@@ -2166,6 +2166,67 @@ test('#3539: revalidates passed-sibling recovery immediately before rerun', () =
   assert.equal(result.resolved, true);
 });
 
+test('#3539: honors higher-priority work found by final sibling revalidation', () => {
+  const computedPlan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '8301',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '8302',
+          conclusion: 'success',
+          completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T10:59:30Z',
+        }),
+        baseInstance({
+          checkRunId: 'ordinary-held',
+          runId: '8303',
+          conclusion: 'failure',
+          runAttempt: 2,
+          completedAt: '2026-07-16T11:01:00Z',
+          runStartedAt: '2026-07-16T10:59:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const initialPlan = { ...computedPlan, recoveryRefreshPlan: [] };
+  const siblingEntry = initialPlan.passedSiblingRecoveryPlan[0];
+  assert.ok(siblingEntry);
+
+  const higherPriorityPlan = {
+    ...computeRerunPlan(baseInput({ instances: [] }), baseOptions()),
+    plan: [
+      {
+        ...siblingEntry,
+        runId: '8304',
+        command: 'gh run rerun 8304',
+      },
+    ],
+  };
+  const resolvedPlan = computeRerunPlan(
+    baseInput({ instances: [] }),
+    baseOptions(),
+  );
+  const executed: string[] = [];
+  const result = applyRerunPlan(initialPlan, {
+    rerunAndWait: (command) => executed.push(command.runId),
+    recomputePlan: () =>
+      executed.length === 0 ? higherPriorityPlan : resolvedPlan,
+  });
+
+  assert.deepEqual(executed, ['8304']);
+  assert.deepEqual(
+    result.executed.map((entry) => entry.section),
+    ['plan'],
+  );
+  assert.equal(result.resolved, true);
+});
+
 // Issue #2549 acceptance criterion: MAX_APPLY_RERUNS still bounds the
 // total reruns in one --apply call even when MULTIPLE
 // live-coverage-recovery-held siblings exist and qualify for promotion --

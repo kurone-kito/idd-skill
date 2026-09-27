@@ -2845,9 +2845,9 @@ export function applyRerunPlan(
   let plan = initialPlan;
 
   for (let attempt = 0; attempt < MAX_APPLY_RERUNS; attempt += 1) {
-    const fromRefresh = plan.recoveryRefreshPlan[0];
-    const fromPlan = plan.plan[0];
-    const fromLiveCoverageRecovery = plan.liveCoverageRecoveryPlan[0];
+    let fromRefresh = plan.recoveryRefreshPlan[0];
+    let fromPlan = plan.plan[0];
+    let fromLiveCoverageRecovery = plan.liveCoverageRecoveryPlan[0];
     let fromPassedSiblingRecovery = plan.passedSiblingRecoveryPlan[0];
     if (
       !fromRefresh &&
@@ -2859,6 +2859,9 @@ export function applyRerunPlan(
       // snapshot above. Re-fetch immediately before rerunning the held run
       // so this bounded recovery cannot cancel that newer live attempt.
       plan = deps.recomputePlan();
+      fromRefresh = plan.recoveryRefreshPlan[0];
+      fromPlan = plan.plan[0];
+      fromLiveCoverageRecovery = plan.liveCoverageRecoveryPlan[0];
       fromPassedSiblingRecovery = plan.passedSiblingRecoveryPlan[0];
     }
     const next =
