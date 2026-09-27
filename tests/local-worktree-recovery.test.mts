@@ -556,6 +556,70 @@ test('detectInProgressOperation reports null when nothing is in progress', () =>
   assert.equal(result, null);
 });
 
+test('detectInProgressOperation fails closed when rebase metadata is unreadable', () => {
+  const runGit = (argv: string[]): LocalGitCommandResult => {
+    if (
+      argv[0] === 'rev-parse' &&
+      (argv.includes('MERGE_HEAD') || argv.includes('CHERRY_PICK_HEAD'))
+    ) {
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    if (
+      argv[0] === 'rev-parse' &&
+      argv.includes('--git-path') &&
+      argv.includes('rebase-merge')
+    ) {
+      return {
+        ok: true,
+        status: 0,
+        stdout: '/repo/.git/rebase-merge\n',
+        stderr: '',
+      };
+    }
+    return { ok: true, status: 0, stdout: '', stderr: '' };
+  };
+  const result = detectInProgressOperation(
+    '/repo',
+    runGit,
+    () => false,
+    () => null,
+    () => 'unknown',
+  );
+  assert.deepEqual(result, { kind: 'rebase', tipSha: null });
+});
+
+test('detectInProgressOperation fails closed when bisect metadata is unreadable', () => {
+  const runGit = (argv: string[]): LocalGitCommandResult => {
+    if (
+      argv[0] === 'rev-parse' &&
+      (argv.includes('MERGE_HEAD') || argv.includes('CHERRY_PICK_HEAD'))
+    ) {
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    }
+    if (
+      argv[0] === 'rev-parse' &&
+      argv.includes('--git-path') &&
+      argv.includes('BISECT_LOG')
+    ) {
+      return {
+        ok: true,
+        status: 0,
+        stdout: '/repo/.git/BISECT_LOG\n',
+        stderr: '',
+      };
+    }
+    return { ok: true, status: 0, stdout: '', stderr: '' };
+  };
+  const result = detectInProgressOperation(
+    '/repo',
+    runGit,
+    () => false,
+    () => null,
+    () => 'unknown',
+  );
+  assert.deepEqual(result, { kind: 'bisect', tipSha: null });
+});
+
 test('submoduleStatusEntries parses a path containing spaces (Copilot review finding)', () => {
   const raw = [
     ' abc123def456abc123def456abc123def456abcd libs/my module (heads/main)',
@@ -4271,6 +4335,14 @@ test('primary-worktree cleanup clears an in-progress submodule operation before 
             stderr: '',
           };
         }
+        if (argv[0] === 'ls-tree') {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `160000 commit ${'a'.repeat(40)}\tsubmodule\0`,
+            stderr: '',
+          };
+        }
         if (argv[0] === 'checkout') {
           events.push('checkout');
         }
@@ -4598,6 +4670,111 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
     );
     assert.equal(abortCalled, false);
     assert.equal(submoduleUpdateCalled, true);
+    assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('primary recovery removes initialized submodules deleted by the target branch', () => {
+  const root = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-deleted-submodule-'),
+  );
+  const submodulePath = join(root, 'submodule');
+  let confirmCalls = 0;
+  const events: string[] = [];
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    mkdirSync(submodulePath);
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) =>
+        path === root || path === join(root, '.git') || existsSync(path),
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 4;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === root
+                ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+                : '',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'status') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'ls-tree') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'checkout') events.push('checkout');
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          events.push('submodule-update');
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      removePath: (path) => {
+        events.push('remove-submodule');
+        rmSync(path, { recursive: true, force: true });
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.deepEqual(events, [
+      'remove-submodule',
+      'checkout',
+      'submodule-update',
+    ]);
+    assert.equal(existsSync(submodulePath), false);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
   } finally {
     rmSync(root, { recursive: true, force: true });

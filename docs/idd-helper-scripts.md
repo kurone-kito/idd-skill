@@ -3453,12 +3453,13 @@ still fails closed:
   dry-run mode to make the routing observation reproducible; combining it
   with `--apply` is rejected so a mutation cannot use a synthetic clock.
   This is preventive hardening; no observed incident yet.
-- On platforms where Node does not expose the no-follow file-open primitive
-  used by the secure recovery copy (notably Windows), `--apply` refuses before
-  step 3 starts. This prevents stash or recovery-ref mutations from preceding
-  a copy failure; use dry-run for inspection and an environment with the
-  required no-follow support for apply. This guard follows the Copilot review
-  finding in PR `#3550`, comment `#4116259512`.
+- On platforms where Node does not expose the no-follow and nonblocking
+  file-open primitives used by the secure recovery copy (notably Windows),
+  `--apply` refuses before step 3 starts. This prevents stash or recovery-ref
+  mutations from preceding a copy failure; use dry-run for inspection and an
+  environment with the required no-follow and nonblocking support for apply.
+  This guard follows the Copilot review finding in PR `#3550`, comment
+  `#4116259512`.
 - Must be invoked from the primary worktree (or from the primary worktree
   itself, when that IS `--worktree`) — never from the linked worktree
   being recovered; refuses immediately otherwise.

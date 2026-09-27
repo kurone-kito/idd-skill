@@ -781,6 +781,8 @@ export function detectInProgressOperation(
   runGit: (argv: string[], cwd: string) => LocalGitCommandResult,
   pathExists: (p: string) => boolean,
   readFile: (p: string) => string | null,
+  pathPresence: (p: string) => PathPresence = (candidate) =>
+    pathExists(candidate) ? 'present' : 'absent',
 ): InProgressOperation | null {
   const merge = runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], path);
   if (merge.ok) {
@@ -796,7 +798,11 @@ export function detectInProgressOperation(
     const resolved = gitPath.stdout.trim();
     if (!resolved) continue;
     const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
-    if (!pathExists(absolute)) continue;
+    const presence = pathPresence(absolute);
+    if (presence === 'absent') continue;
+    if (presence === 'unknown') {
+      return { kind: 'rebase', tipSha: null };
+    }
     // The sequencer directory exists, so a rebase IS in progress -- an
     // unreadable `orig-head` must report the operation with an
     // unresolved tip (fail closed downstream), never silently `continue`
@@ -819,7 +825,11 @@ export function detectInProgressOperation(
   if (bisectLogPath.ok) {
     const resolved = bisectLogPath.stdout.trim();
     const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
-    if (resolved && pathExists(absolute)) {
+    const presence = resolved ? pathPresence(absolute) : 'absent';
+    if (presence === 'unknown') {
+      return { kind: 'bisect', tipSha: null };
+    }
+    if (resolved && presence === 'present') {
       // Codex review: during an active bisect, `HEAD` is the commit
       // currently being tested, not the tip the bisect started from --
       // `git bisect reset` returns to THAT original state, per Git's own
@@ -857,6 +867,7 @@ function clearInProgressOperation(
   path: string,
   operation: InProgressOperation,
   runGit: LocalWorktreeRecoveryDeps['runGit'],
+  pathPresence?: LocalWorktreeRecoveryDeps['pathPresence'],
 ): string | null {
   const command: string[] =
     operation.kind === 'rebase'
@@ -910,6 +921,7 @@ function clearInProgressOperation(
         return null;
       }
     },
+    pathPresence,
   );
   return remaining === null
     ? null
@@ -1882,6 +1894,66 @@ function cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
   return null;
 }
 
+function gitlinkPathsAtRevision(output: string): Set<string> {
+  const paths = new Set<string>();
+  for (const record of output.split('\0')) {
+    const separator = record.indexOf('\t');
+    if (separator < 0 || !record.startsWith('160000 ')) continue;
+    const path = record.slice(separator + 1);
+    if (path.length > 0) paths.add(path);
+  }
+  return paths;
+}
+
+/** Remove initialized submodule checkouts that the development branch no
+ * longer names. `git submodule update --recursive` only visits gitlinks in
+ * the checked-out tree, so Git otherwise leaves a populated old submodule
+ * directory behind and the post-checkout cleanliness gate reports it as an
+ * untracked path. The checkout was already preserved and verified, so remove
+ * only those recorded initialized paths whose target-branch tree is not a
+ * gitlink, then verify their absence before checkout. */
+function cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
+  stashes: readonly StashPlanEntry[],
+  developmentBranch: string,
+  targetPath: string,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'runGit' | 'pathExists' | 'pathPresence' | 'removePath'
+  >,
+): string | null {
+  const tree = deps.runGit(
+    ['ls-tree', '-r', '-z', '--full-tree', developmentBranch],
+    targetPath,
+  );
+  if (!tree.ok) {
+    return `could not inspect ${developmentBranch}'s gitlinks before checkout: ${tree.stderr}`;
+  }
+  const developmentGitlinks = gitlinkPathsAtRevision(tree.stdout);
+  const initializedPaths = new Set(
+    stashes.map((stash) => stash.scope).filter((scope) => scope !== '.'),
+  );
+  for (const submodulePath of initializedPaths) {
+    if (developmentGitlinks.has(submodulePath)) continue;
+    if (!isSafeRelativePath(submodulePath)) {
+      return `initialized submodule ${submodulePath} is unsafe; stopping before checkout`;
+    }
+    const checkoutPath = join(targetPath, submodulePath);
+    try {
+      deps.removePath(checkoutPath);
+    } catch (error) {
+      return `could not remove initialized submodule ${submodulePath} deleted by ${developmentBranch}: ${errorMessageForProduction(error)}`;
+    }
+    const presence = pathPresenceForDeps(deps, checkoutPath);
+    if (presence === 'unknown') {
+      return `could not verify cleanup of initialized submodule ${submodulePath} deleted by ${developmentBranch}`;
+    }
+    if (presence === 'present') {
+      return `initialized submodule ${submodulePath} deleted by ${developmentBranch} remained before checkout`;
+    }
+  }
+  return null;
+}
+
 function planAndMaybePreserve(
   path: string,
   branch: string,
@@ -1940,6 +2012,7 @@ function planAndMaybePreserve(
     deps.runGit,
     deps.pathExists,
     readFile,
+    deps.pathPresence,
   );
 
   const submoduleStatus = deps.runGit(
@@ -2099,6 +2172,7 @@ function planAndMaybePreserve(
       deps.runGit,
       deps.pathExists,
       readFile,
+      deps.pathPresence,
     );
     submoduleOperations.set(submodule.path, submoduleOperation);
     stashes.push(
@@ -3532,6 +3606,7 @@ export function runLocalWorktreeRecovery(
           deps.runGit,
           deps.pathExists,
           readFileOrNull,
+          deps.pathPresence,
         );
         if (
           currentOperation !== null &&
@@ -3554,6 +3629,7 @@ export function runLocalWorktreeRecovery(
             targetPath,
             currentOperation,
             deps.runGit,
+            deps.pathPresence,
           );
           if (operationError !== null) {
             verdict.plan.removal = {
@@ -3576,6 +3652,7 @@ export function runLocalWorktreeRecovery(
           deps.runGit,
           deps.pathExists,
           readFileOrNull,
+          deps.pathPresence,
         );
         if (
           currentOperation !== null &&
@@ -3597,6 +3674,7 @@ export function runLocalWorktreeRecovery(
             submoduleRoot,
             currentOperation,
             deps.runGit,
+            deps.pathPresence,
           );
           if (operationError !== null) {
             verdict.plan.removal = {
@@ -3768,6 +3846,24 @@ export function runLocalWorktreeRecovery(
           ran: false,
           detail:
             'the primary-worktree claim/branch/lock identity changed immediately before checkout; stopping before checkout',
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const initializedSubmoduleCleanupError =
+        cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
+          verdict.plan.stashes,
+          developmentBranch,
+          targetPath,
+          deps,
+        );
+      if (initializedSubmoduleCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
