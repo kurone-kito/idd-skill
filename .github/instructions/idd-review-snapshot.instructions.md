@@ -18,10 +18,10 @@ E1 re-fetches all of its state from GitHub on every entry, so, unlike
 B1/B3, there is no local plan or worktree artifact that could go stale
 between checks.
 
-**If ReviewItems_snapshot is empty after E3**: proceed to the
-E-phase branch-sync check in `idd-review-triage.instructions.md`.
-**If ReviewItems_snapshot is non-empty after E3**: proceed to
-`idd-review-triage.instructions.md` (E4).
+After E3, an empty snapshot proceeds to branch-sync unless Step 2 was
+deferred; deferred state uses the E15/E14 route below and returns to E1.
+A non-empty snapshot proceeds to `idd-review-triage.instructions.md`
+(E4).
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
@@ -288,8 +288,8 @@ from this episode's own E1-E3 pass -- following
 "Review feedback accepted" routing rows, or an orchestrator delegation
 brief that hands off mid-review.
 
-**Procedure**: run E1 Steps 1-3 above (Step 2 already posts the
-watermark; do not post a second one) -- re-running them now _is_ the
+**Procedure**: run E1 Steps 1-3 above (Step 2 posts the watermark when
+eligible; do not post a second one) -- re-running them now _is_ the
 reconstruction. Run edge case 2's steps 1-3
 below unconditionally before E3 -- a local fix can predate E4 and
 never re-surface there; edge case 1's check at E4 then covers it.

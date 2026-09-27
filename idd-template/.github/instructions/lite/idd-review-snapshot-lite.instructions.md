@@ -1,7 +1,7 @@
 # IDD — Review Snapshot Phase (Lite) (E1-E3)
 
-Lite helper profile; claimed open PRs after CI/reviews. `instructions-only`
-uses the standard file.
+Lite helper profile for claimed open PRs. `instructions-only` uses the
+standard file.
 
 ## Helper runtime contract
 
@@ -244,9 +244,11 @@ follow the note here either.
 
 ## E3 — Empty/non-empty routing
 
-- **ReviewItems_snapshot is empty** → proceed to
-  `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
+- **ReviewItems_snapshot is empty and Step 2 was not deferred** → proceed
+  to `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
   Never route this to the excluded `idd-review-triage.instructions.md`.
+- **ReviewItems_snapshot is empty and Step 2 was deferred** → use the
+  bounded E15/E14 wait route and return to E1 before F1/F2.
 - **ReviewItems_snapshot is non-empty** → this session's job ends here
   (see Triage hand-off boundary); hand off to
   `idd-review-triage.instructions.md` (E4) for a stronger session or a
@@ -257,7 +259,7 @@ follow the note here either.
 Read this entering E4/E9 without this episode's ReviewItems_snapshot
 (lost/restarted session, or mid-review delegation hand-off).
 
-**Procedure**: rerun Step 1-3 (Step 2 already posts the watermark —
+**Procedure**: rerun Step 1-3 (Step 2 posts the watermark when eligible —
 never a second one), then edge case 2's steps 1-3 unconditionally
 before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8
 fully before E9. An edge-case-1 item routed to E14 runs E14 after edge
