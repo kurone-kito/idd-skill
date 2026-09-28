@@ -5232,6 +5232,127 @@ test('primary recovery removes initialized submodules deleted by the target bran
   }
 });
 
+test('primary recovery stops when an initialized submodule tip changes late', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-late-tip-'));
+  const submodulePath = join(root, 'submodule');
+  let submoduleHeadReads = 0;
+  let destructiveCall = false;
+  let confirmCalls = 0;
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    mkdirSync(join(submodulePath, '.git'), { recursive: true });
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) =>
+        path === root ||
+        path === submodulePath ||
+        path === join(root, '.git') ||
+        path === join(submodulePath, '.git') ||
+        path.startsWith('/tmp/preserve'),
+      confirmBlock: () => {
+        confirmCalls += 1;
+        return {
+          ok: true,
+          routing: {
+            state: 'local_worktree_occupied',
+            reason: 'stale-claim-local-worktree-occupied',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: 'occupied',
+                paths: [root],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === root
+                ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
+                : '',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === submodulePath
+                ? `${submodulePath}/.git\n`
+                : `${root}/.git\n`,
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('HEAD')) {
+          if (cwd === submodulePath) {
+            submoduleHeadReads += 1;
+            return {
+              ok: true,
+              status: 0,
+              stdout: `${submoduleHeadReads === 1 ? 'initial' : 'late'}-tip\n`,
+              stderr: '',
+            };
+          }
+          return { ok: true, status: 0, stdout: 'primary-tip\n', stderr: '' };
+        }
+        if (argv[0] === 'status') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          destructiveCall = true;
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => {
+        destructiveCall = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(confirmCalls, 2);
+    assert.equal(submoduleHeadReads, 2);
+    assert.equal(destructiveCall, false);
+    assert.equal(verdict.plan.removal?.ran, false);
+    assert.match(verdict.result, /changed its preserved tip or admin state/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery removes late ignored files before reporting release', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-ignored-'));
   const preserveDir = mkdtempSync(

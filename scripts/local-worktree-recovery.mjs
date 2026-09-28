@@ -193,6 +193,7 @@ function sameTargetWorktreeIdentity(before, after) {
     sameDirectoryIdentity(before.admin, after.admin)
   );
 }
+const backupRefLocalRefSnapshots = new WeakMap();
 function pathPresenceForDeps(deps, path) {
   return (
     deps.pathPresence?.(path) ?? (deps.pathExists(path) ? 'present' : 'absent')
@@ -1200,6 +1201,7 @@ function planAndMaybeBackupRef(
     written: false,
     verifiedOid: null,
   };
+  backupRefLocalRefSnapshots.set(entry, localRefs.ok ? localRefs.stdout : null);
   if (
     localRefsQueryFailed ||
     unpushedQueryFailed ||
@@ -2259,6 +2261,9 @@ function refreshUninitializedSubmoduleCopies(
 }
 function refreshInitializedSubmoduleStashes(
   stashes,
+  backupRefs,
+  submoduleInProgressOperations,
+  backupBranch,
   targetPath,
   tag,
   targetGitDirForScope,
@@ -2295,10 +2300,77 @@ function refreshInitializedSubmoduleStashes(
     (submodule) => submodule.status !== '-',
   );
   const allInitializedPaths = initialized.map((submodule) => submodule.path);
+  const knownBackupRefs = new Map(
+    backupRefs.map((backupRef) => [backupRef.scope, backupRef]),
+  );
+  const knownOperations = new Map(
+    submoduleInProgressOperations.map((entry) => [entry.path, entry.operation]),
+  );
+  const readFile = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
   const refreshed = [];
   for (const submodule of initialized) {
+    const initialBackupRef = knownBackupRefs.get(submodule.path);
+    if (initialBackupRef === undefined) {
+      return {
+        error: `initialized submodule ${submodule.path} appeared after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
+    const submodulePath = join(targetPath, submodule.path);
+    const operation = detectInProgressOperation(
+      submodulePath,
+      deps.runGit,
+      deps.pathExists,
+      readFile,
+      (path) => pathPresenceForDeps(deps, path),
+    );
+    const initialOperation = knownOperations.get(submodule.path) ?? null;
+    if (
+      (initialOperation === null && operation !== null) ||
+      (initialOperation !== null &&
+        operation !== null &&
+        (operation.kind !== initialOperation.kind ||
+          operation.tipSha !== initialOperation.tipSha))
+    ) {
+      return {
+        error: `initialized submodule ${submodule.path} changed its in-progress operation after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
+    const freshBackupRef = planAndMaybeBackupRef(
+      submodulePath,
+      submodule.path,
+      backupBranch,
+      operation,
+      false,
+      deps.runGit,
+    );
+    const initialLocalRefs = backupRefLocalRefSnapshots.get(initialBackupRef);
+    const freshLocalRefs = backupRefLocalRefSnapshots.get(freshBackupRef);
+    if (
+      initialLocalRefs === undefined ||
+      freshLocalRefs === undefined ||
+      freshBackupRef.localRefsQueryFailed ||
+      freshBackupRef.unpushedQueryFailed ||
+      (!(initialOperation !== null && operation === null) &&
+        (freshBackupRef.tipSha !== initialBackupRef.tipSha ||
+          freshBackupRef.hasUnpushed !== initialBackupRef.hasUnpushed)) ||
+      freshBackupRef.hasLocalOnlyRefs !== initialBackupRef.hasLocalOnlyRefs ||
+      freshLocalRefs !== initialLocalRefs
+    ) {
+      return {
+        error: `initialized submodule ${submodule.path} changed its preserved tip or admin state after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
     const refreshedStash = planAndMaybeStashScope(
-      join(targetPath, submodule.path),
+      submodulePath,
       submodule.path,
       tag,
       true,
@@ -3361,6 +3433,9 @@ export function runLocalWorktreeRecovery(args, deps) {
       }
       const initializedRefresh = refreshInitializedSubmoduleStashes(
         verdict.plan.stashes,
+        verdict.plan.backupRefs,
+        verdict.plan.submoduleInProgressOperations,
+        recoveredBranch ?? '',
         targetPath,
         tag,
         targetGitDir,

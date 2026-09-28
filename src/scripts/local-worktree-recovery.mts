@@ -361,6 +361,11 @@ export interface BackupRefPlanEntry {
   verifiedOid: string | null;
 }
 
+const backupRefLocalRefSnapshots = new WeakMap<
+  BackupRefPlanEntry,
+  string | null
+>();
+
 export interface UninitializedSubmoduleEntry {
   path: string;
   copiedTo: string | null;
@@ -1657,6 +1662,7 @@ function planAndMaybeBackupRef(
     written: false,
     verifiedOid: null,
   };
+  backupRefLocalRefSnapshots.set(entry, localRefs.ok ? localRefs.stdout : null);
   if (
     localRefsQueryFailed ||
     unpushedQueryFailed ||
@@ -2844,6 +2850,9 @@ interface InitializedSubmoduleRefresh {
 
 function refreshInitializedSubmoduleStashes(
   stashes: readonly StashPlanEntry[],
+  backupRefs: readonly BackupRefPlanEntry[],
+  submoduleInProgressOperations: readonly SubmoduleInProgressOperation[],
+  backupBranch: string,
   targetPath: string,
   tag: string,
   targetGitDirForScope: string | null,
@@ -2852,6 +2861,7 @@ function refreshInitializedSubmoduleStashes(
     | 'copyPath'
     | 'ensurePreserveDir'
     | 'pathExists'
+    | 'pathPresence'
     | 'realpathOrNull'
     | 'readlinkOrNull'
     | 'runGit'
@@ -2888,10 +2898,77 @@ function refreshInitializedSubmoduleStashes(
     (submodule) => submodule.status !== '-',
   );
   const allInitializedPaths = initialized.map((submodule) => submodule.path);
+  const knownBackupRefs = new Map(
+    backupRefs.map((backupRef) => [backupRef.scope, backupRef]),
+  );
+  const knownOperations = new Map(
+    submoduleInProgressOperations.map((entry) => [entry.path, entry.operation]),
+  );
+  const readFile = (path: string): string | null => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
   const refreshed: StashPlanEntry[] = [];
   for (const submodule of initialized) {
+    const initialBackupRef = knownBackupRefs.get(submodule.path);
+    if (initialBackupRef === undefined) {
+      return {
+        error: `initialized submodule ${submodule.path} appeared after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
+    const submodulePath = join(targetPath, submodule.path);
+    const operation = detectInProgressOperation(
+      submodulePath,
+      deps.runGit,
+      deps.pathExists,
+      readFile,
+      (path) => pathPresenceForDeps(deps, path),
+    );
+    const initialOperation = knownOperations.get(submodule.path) ?? null;
+    if (
+      (initialOperation === null && operation !== null) ||
+      (initialOperation !== null &&
+        operation !== null &&
+        (operation.kind !== initialOperation.kind ||
+          operation.tipSha !== initialOperation.tipSha))
+    ) {
+      return {
+        error: `initialized submodule ${submodule.path} changed its in-progress operation after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
+    const freshBackupRef = planAndMaybeBackupRef(
+      submodulePath,
+      submodule.path,
+      backupBranch,
+      operation,
+      false,
+      deps.runGit,
+    );
+    const initialLocalRefs = backupRefLocalRefSnapshots.get(initialBackupRef);
+    const freshLocalRefs = backupRefLocalRefSnapshots.get(freshBackupRef);
+    if (
+      initialLocalRefs === undefined ||
+      freshLocalRefs === undefined ||
+      freshBackupRef.localRefsQueryFailed ||
+      freshBackupRef.unpushedQueryFailed ||
+      (!(initialOperation !== null && operation === null) &&
+        (freshBackupRef.tipSha !== initialBackupRef.tipSha ||
+          freshBackupRef.hasUnpushed !== initialBackupRef.hasUnpushed)) ||
+      freshBackupRef.hasLocalOnlyRefs !== initialBackupRef.hasLocalOnlyRefs ||
+      freshLocalRefs !== initialLocalRefs
+    ) {
+      return {
+        error: `initialized submodule ${submodule.path} changed its preserved tip or admin state after preservation; stopping before checkout`,
+        refreshed,
+      };
+    }
     const refreshedStash = planAndMaybeStashScope(
-      join(targetPath, submodule.path),
+      submodulePath,
       submodule.path,
       tag,
       true,
@@ -3981,6 +4058,9 @@ export function runLocalWorktreeRecovery(
       }
       const initializedRefresh = refreshInitializedSubmoduleStashes(
         verdict.plan.stashes,
+        verdict.plan.backupRefs,
+        verdict.plan.submoduleInProgressOperations,
+        recoveredBranch ?? '',
         targetPath,
         tag,
         targetGitDir,
