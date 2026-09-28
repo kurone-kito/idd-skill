@@ -2277,7 +2277,11 @@ function stripLeadingDecorators(text) {
 }
 function isClassLikeDeclarationPrefix(text) {
   const statementStart =
-    Math.max(text.lastIndexOf(';'), text.lastIndexOf('}')) + 1;
+    Math.max(
+      text.lastIndexOf(';'),
+      text.lastIndexOf('}'),
+      text.lastIndexOf('{'),
+    ) + 1;
   const declarationPrefix = stripLeadingDecorators(text.slice(statementStart));
   return /^(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
     declarationPrefix,
@@ -2762,6 +2766,17 @@ function normalizeComputedDirectoryScanMembers(text) {
 function findDirectoryScanAliases(text) {
   const aliases = new Map();
   const knownNames = new Set(DIRECTORY_SCAN_API_NAMES);
+  const namespaceNames = new Set();
+  const namespaceImportPattern =
+    /(?:^|[;\n])\s*import\s+\*\s+as\s+([\w$]+)\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(namespaceImportPattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
+  const namespaceRequirePattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s+([\w$]+)\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
+  for (const match of text.matchAll(namespaceRequirePattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
   const importPattern =
     /(?:^|[;\n])\s*import\s*\{([\s\S]*?)\}\s*from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
   for (const match of text.matchAll(importPattern)) {
@@ -2792,12 +2807,18 @@ function findDirectoryScanAliases(text) {
       }
       const aliasName = declarator.slice(0, equals).trim();
       const sourceName = declarator.slice(equals + 1).trim();
-      if (!/^[\w$]+$/u.test(aliasName) || !/^[\w$]+$/u.test(sourceName)) {
+      if (!/^[\w$]+$/u.test(aliasName)) {
         continue;
       }
+      const qualifiedSource = /^([\w$]+)\.([\w$]+)$/u.exec(sourceName);
       const apiName = knownNames.has(sourceName)
         ? sourceName
-        : aliases.get(sourceName);
+        : (aliases.get(sourceName) ??
+          (qualifiedSource !== null &&
+          namespaceNames.has(qualifiedSource[1] ?? '') &&
+          knownNames.has(qualifiedSource[2] ?? '')
+            ? qualifiedSource[2]
+            : undefined));
       if (apiName !== undefined) {
         aliases.set(aliasName, apiName);
       }
@@ -3699,6 +3720,9 @@ function globPatternToRegex(
           ((pattern[questionEnd] === '*' && pattern[questionEnd + 1] !== '(') ||
             /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u.test(
               pattern.slice(0, index),
+            ) ||
+            /^\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u.test(
+              pattern.slice(questionEnd),
             )),
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;

@@ -5310,11 +5310,39 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
   }
 });
 
+test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText =
     "function helper<T>(): void {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift ignores regex literals after block-nested classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "if (ok) { class Parser {} /readdirSync('schemas')/.test(input); }\n";
   writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
   writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -5768,6 +5796,29 @@ test('checkHeldSchemaDrift preserves astral question matches after POSIX classes
   assert.deepEqual(result.findings, [
     {
       schemaOrFixturePath: 'schemas/a🙂.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
+test('checkHeldSchemaDrift preserves astral question matches before POSIX classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?[[:alpha:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/🙂a.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
