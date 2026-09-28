@@ -196,7 +196,6 @@ function sameTargetWorktreeIdentity(before, after) {
     sameDirectoryIdentity(before.admin, after.admin)
   );
 }
-const backupRefLocalRefSnapshots = new WeakMap();
 function isRecord(value) {
   return typeof value === 'object' && value !== null;
 }
@@ -246,6 +245,7 @@ function isBackupRefPlanEntry(value) {
     isNullableString(value.tipSha) &&
     typeof value.hasLocalOnlyRefs === 'boolean' &&
     typeof value.localRefsQueryFailed === 'boolean' &&
+    isNullableString(value.localRefsSnapshot) &&
     typeof value.written === 'boolean' &&
     isNullableString(value.verifiedOid)
   );
@@ -1385,10 +1385,10 @@ function planAndMaybeBackupRef(
     tipSha,
     hasLocalOnlyRefs,
     localRefsQueryFailed,
+    localRefsSnapshot,
     written: false,
     verifiedOid: null,
   };
-  backupRefLocalRefSnapshots.set(entry, localRefsSnapshot);
   if (
     localRefsQueryFailed ||
     unpushedQueryFailed ||
@@ -2568,8 +2568,8 @@ function refreshInitializedSubmoduleStashes(
       false,
       deps.runGit,
     );
-    const initialLocalRefs = backupRefLocalRefSnapshots.get(initialBackupRef);
-    const freshLocalRefs = backupRefLocalRefSnapshots.get(freshBackupRef);
+    const initialLocalRefs = initialBackupRef.localRefsSnapshot;
+    const freshLocalRefs = freshBackupRef.localRefsSnapshot;
     if (
       initialLocalRefs === undefined ||
       freshLocalRefs === undefined ||
@@ -3853,45 +3853,52 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
-      const initializedRefresh = refreshInitializedSubmoduleStashes(
-        verdict.plan.stashes,
-        verdict.plan.backupRefs,
-        verdict.plan.submoduleInProgressOperations,
-        recoveredBranch ?? '',
-        targetPath,
-        tag,
-        targetGitDir,
-        primaryRecoveryDeps,
-      );
-      verdict.plan.stashes.push(...initializedRefresh.refreshed);
-      verdict.mutated ||= initializedRefresh.refreshed.some(
-        (stash) => stash.stashed || stash.unmergedFallbackCopiedTo !== null,
-      );
-      if (initializedRefresh.error !== null) {
-        return recordRemovalFailure(initializedRefresh.error);
-      }
-      // Remove initialized submodule checkouts that the development branch
-      // deletes before the final claim/lock confirmation below. The final
-      // confirmation must remain immediately before `checkout`; otherwise a
-      // new claim can arrive while this cleanup mutates the primary tree and
-      // the later checkout can switch that new claim's worktree.
-      const initializedSubmoduleCleanupError =
-        cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
+      // A resumed recovery is already on the development branch. The
+      // pre-checkout refresh compares the current submodule tree with the
+      // saved issue-branch plan, so replaying it here would reject expected
+      // gitlink deletions or tip changes before post-checkout validation can
+      // complete the recovery (Codex review).
+      if (!primaryRecoveryResume) {
+        const initializedRefresh = refreshInitializedSubmoduleStashes(
           verdict.plan.stashes,
-          developmentBranch,
+          verdict.plan.backupRefs,
+          verdict.plan.submoduleInProgressOperations,
+          recoveredBranch ?? '',
           targetPath,
-          deps,
+          tag,
+          targetGitDir,
+          primaryRecoveryDeps,
         );
-      if (initializedSubmoduleCleanupError !== null) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
+        verdict.plan.stashes.push(...initializedRefresh.refreshed);
+        verdict.mutated ||= initializedRefresh.refreshed.some(
+          (stash) => stash.stashed || stash.unmergedFallbackCopiedTo !== null,
+        );
+        if (initializedRefresh.error !== null) {
+          return recordRemovalFailure(initializedRefresh.error);
+        }
+        // Remove initialized submodule checkouts that the development branch
+        // deletes before the final claim/lock confirmation below. The final
+        // confirmation must remain immediately before `checkout`; otherwise a
+        // new claim can arrive while this cleanup mutates the primary tree and
+        // the later checkout can switch that new claim's worktree.
+        const initializedSubmoduleCleanupError =
+          cleanPreservedInitializedSubmodulesBeforePrimaryCheckout(
+            verdict.plan.stashes,
+            developmentBranch,
+            targetPath,
+            deps,
+          );
+        if (initializedSubmoduleCleanupError !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
       }
       // The preservation and in-progress-operation cleanup above can take
       // long enough for the remote claim or worktree-local lock to change.
@@ -5319,6 +5326,173 @@ export function runLocalWorktreeRecovery(args, deps) {
         return recordRemovalFailure(
           'the worktree-local claim lock changed after final ignored-file cleanup; stopping before removal',
         );
+      }
+      // The confirmation above is itself a concurrency window: an editor or
+      // hook can create a new ignored file after the scan and cleanup but
+      // before the identity-bound removal. Scan once more after that
+      // confirmation, then repeat the identity checks after this second
+      // preservation pass so the final remove cannot discard the new file.
+      const postConfirmTargetGitDirResult = deps.runGit(
+        ['rev-parse', '--absolute-git-dir'],
+        targetPath,
+      );
+      const postConfirmTargetGitDir =
+        postConfirmTargetGitDirResult.ok &&
+        postConfirmTargetGitDirResult.stdout.trim()
+          ? postConfirmTargetGitDirResult.stdout.trim()
+          : null;
+      const postConfirmIgnoredEntries = [];
+      let postConfirmIgnoredScanFailed = false;
+      const postConfirmIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        null,
+        [
+          targetPath,
+          ...(postConfirmTargetGitDir ? [postConfirmTargetGitDir] : []),
+        ],
+        deps,
+        'final-removal-after-confirm',
+      );
+      postConfirmIgnoredEntries.push(...postConfirmIgnored.copied);
+      postConfirmIgnoredScanFailed ||= postConfirmIgnored.scanFailed;
+      for (const stash of verdict.plan.stashes) {
+        if (stash.scope === '.') continue;
+        const submodulePath = join(targetPath, stash.scope);
+        const submoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          submodulePath,
+        );
+        const submoduleGitDir =
+          submoduleGitDirResult.ok && submoduleGitDirResult.stdout.trim()
+            ? submoduleGitDirResult.stdout.trim()
+            : null;
+        const postConfirmSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          submodulePath,
+          stash.scope,
+          true,
+          targetPath,
+          null,
+          [
+            targetPath,
+            submodulePath,
+            ...(postConfirmTargetGitDir ? [postConfirmTargetGitDir] : []),
+            ...(submoduleGitDir ? [submoduleGitDir] : []),
+          ],
+          deps,
+          'final-removal-after-confirm',
+        );
+        postConfirmIgnoredEntries.push(...postConfirmSubmoduleIgnored.copied);
+        postConfirmIgnoredScanFailed ||= postConfirmSubmoduleIgnored.scanFailed;
+      }
+      if (
+        postConfirmIgnoredScanFailed ||
+        postConfirmIgnoredEntries.length > 0
+      ) {
+        verdict.plan.ignoredFilesCopied.push(...postConfirmIgnoredEntries);
+        verdict.plan.ignoredFilesScanFailed ||= postConfirmIgnoredScanFailed;
+        verdict.mutated ||= postConfirmIgnoredEntries.some(
+          (ignored) => ignored.copiedTo !== null,
+        );
+        if (
+          postConfirmIgnoredScanFailed ||
+          postConfirmIgnoredEntries.some(
+            (ignored) =>
+              ignored.copyFailed ||
+              ignored.copiedTo === null ||
+              !deps.pathExists(ignored.copiedTo),
+          )
+        ) {
+          return recordRemovalFailure(
+            'ignored-file preservation after the final linked confirmation could not be fully verified; stopping before removal',
+          );
+        }
+        const postConfirmIgnoredCleanupError =
+          cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+            postConfirmIgnoredEntries,
+            targetPath,
+            deps,
+          );
+        if (postConfirmIgnoredCleanupError !== null) {
+          return recordRemovalFailure(
+            `before final linked-worktree removal after the final confirmation, ${postConfirmIgnoredCleanupError}; stopping before removal`,
+          );
+        }
+        if (
+          !reverifyPreservationArtifactsFresh(
+            {
+              stashes: verdict.plan.stashes,
+              backupRefs: verdict.plan.backupRefs,
+              uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+              ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+              submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+              worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+            },
+            targetPath,
+            deps,
+          )
+        ) {
+          return recordRemovalFailure(
+            'a preservation artifact disappeared after the final linked confirmation scan; stopping before removal',
+          );
+        }
+        const finalLinkedConfirmAfterPostConfirmIgnored =
+          deps.confirmBlock(cwd);
+        const finalLinkedRoutingAfterPostConfirmIgnored =
+          finalLinkedConfirmAfterPostConfirmIgnored.routing;
+        const finalLinkedRecoveredAfterPostConfirmIgnored =
+          finalLinkedRoutingAfterPostConfirmIgnored
+            ? extractRecoveredClaim(finalLinkedRoutingAfterPostConfirmIgnored)
+            : null;
+        const finalLinkedReleasedAfterPostConfirmIgnored =
+          finalLinkedRoutingAfterPostConfirmIgnored !== null &&
+          isReleasedClaimRouting(finalLinkedRoutingAfterPostConfirmIgnored);
+        const finalLinkedReportsTargetAfterPostConfirmIgnored =
+          finalLinkedRoutingAfterPostConfirmIgnored !== null &&
+          finalLinkedRoutingAfterPostConfirmIgnored.state ===
+            'local_worktree_occupied' &&
+          isAcceptedBlockReason(
+            finalLinkedRoutingAfterPostConfirmIgnored.reason,
+          ) &&
+          !finalLinkedRoutingAfterPostConfirmIgnored.reason.endsWith(
+            '-local-worktree-unreadable',
+          ) &&
+          (
+            finalLinkedRoutingAfterPostConfirmIgnored.evidence?.local_worktree
+              ?.paths ?? []
+          ).some(
+            (reportedPath) =>
+              normalizeGitWorktreePathForComparison(reportedPath) ===
+              targetComparisonPath,
+          );
+        if (
+          !finalLinkedConfirmAfterPostConfirmIgnored.ok ||
+          !finalLinkedReportsTargetAfterPostConfirmIgnored ||
+          finalLinkedRecoveredAfterPostConfirmIgnored?.claimId !==
+            recoveredClaimId ||
+          finalLinkedRecoveredAfterPostConfirmIgnored.branch !==
+            recoveredBranch ||
+          finalLinkedReleasedAfterPostConfirmIgnored !==
+            recoveredFromReleasedClaim
+        ) {
+          return recordRemovalFailure(
+            'the linked-worktree routing/claim identity changed after the final confirmation preservation; stopping before removal',
+          );
+        }
+        finalLinkedLock = deps.checkLock(targetPath);
+        if (
+          !lockMatchesRecoveredClaim(
+            finalLinkedLock,
+            recoveredClaimId,
+            finalLinkedReleasedAfterPostConfirmIgnored,
+          )
+        ) {
+          return recordRemovalFailure(
+            'the worktree-local claim lock changed after the final confirmation preservation; stopping before removal',
+          );
+        }
       }
     }
     let remove;

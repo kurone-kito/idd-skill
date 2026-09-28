@@ -3556,7 +3556,9 @@ test('late preservation rescans initialized submodule ignored files before remov
                 ? ''
                 : submoduleIgnoredScans <= 3
                   ? '!! cache.tmp\0'
-                  : '!! final-cache.tmp\0',
+                  : submoduleIgnoredScans <= 5
+                    ? '!! final-cache.tmp\0'
+                    : '',
             stderr: '',
           };
         }
@@ -3619,7 +3621,7 @@ test('late preservation rescans initialized submodule ignored files before remov
       ],
     },
   ]);
-  assert.equal(submoduleIgnoredScans, 5);
+  assert.equal(submoduleIgnoredScans, 6);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -4103,6 +4105,7 @@ test('captures ignored files before stash can change the ignore rules', () => {
 
 test('rescans ignored files immediately before ordinary linked removal', () => {
   let ignoredScanCalls = 0;
+  let removalAttempted = false;
   const copied: string[] = [];
   const cleanedPaths = new Set<string>();
   const deps = fakeDeps({
@@ -4117,7 +4120,11 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
               ? ''
               : ignoredScanCalls <= 3
                 ? '!! late.env\0'
-                : '!! final.env\0',
+                : ignoredScanCalls <= 5
+                  ? '!! final.env\0'
+                  : ignoredScanCalls <= 7
+                    ? '!! after-confirm.env\0'
+                    : '',
           stderr: '',
         };
       }
@@ -4125,6 +4132,9 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
         cleanedPaths.add(
           `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
         );
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
       }
       return cleanRepoRunGit(argv);
     },
@@ -4135,12 +4145,17 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(ignoredScanCalls, 5);
+  assert.equal(ignoredScanCalls, 7);
   assert.deepEqual(copied, [
     '/tmp/preserve/ignored/late.env',
     '/tmp/preserve/ignored/final-removal/final.env',
+    '/tmp/preserve/ignored/final-removal-after-confirm/after-confirm.env',
   ]);
-  assert.equal(verdict.plan.ignoredFilesCopied.at(-1)?.path, 'final.env');
+  assert.equal(
+    verdict.plan.ignoredFilesCopied.at(-1)?.path,
+    'after-confirm.env',
+  );
+  assert.equal(removalAttempted, true);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -7710,6 +7725,7 @@ test('sandbox: unpushed commits -- refs/idd-lwr/<branch> resolves to the recorde
     const output = JSON.parse(result.stdout);
     assert.equal(output.plan.backupRefs[0].hasUnpushed, true);
     assert.equal(output.plan.backupRefs[0].tipSha, tipSha);
+    assert.equal(output.plan.backupRefs[0].localRefsSnapshot, '');
     assert.equal(output.plan.backupRefs[0].written, true);
     assert.equal(output.plan.backupRefs[0].verifiedOid, tipSha);
     const resolved = execFileSync(
