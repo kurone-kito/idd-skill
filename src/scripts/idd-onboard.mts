@@ -3364,16 +3364,25 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
       }
     }
   }
-  const directAliasPattern =
-    /(?:^|[;\n])\s*(?:const|let|var)\s+([\w$]+)\s*=\s*([\w$]+)\s*;?/gu;
-  for (const match of text.matchAll(directAliasPattern)) {
-    const aliasName = match[1] ?? '';
-    const sourceName = match[2] ?? '';
-    const apiName = knownNames.has(sourceName)
-      ? sourceName
-      : aliases.get(sourceName);
-    if (apiName !== undefined) {
-      aliases.set(aliasName, apiName);
+  const directAliasDeclarationPattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s+([^;\n]+)/gu;
+  for (const match of text.matchAll(directAliasDeclarationPattern)) {
+    for (const declarator of splitTopLevelArguments(match[1] ?? '')) {
+      const equals = findTopLevelCharacter(declarator, '=');
+      if (equals === -1) {
+        continue;
+      }
+      const aliasName = declarator.slice(0, equals).trim();
+      const sourceName = declarator.slice(equals + 1).trim();
+      if (!/^[\w$]+$/u.test(aliasName) || !/^[\w$]+$/u.test(sourceName)) {
+        continue;
+      }
+      const apiName = knownNames.has(sourceName)
+        ? sourceName
+        : aliases.get(sourceName);
+      if (apiName !== undefined) {
+        aliases.set(aliasName, apiName);
+      }
     }
   }
   return aliases;
