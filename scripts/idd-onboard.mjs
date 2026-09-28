@@ -2238,7 +2238,7 @@ function isFunctionDeclarationPrefix(text) {
           const declarationPrefix = trimmed.slice(0, current);
           let declarationStart;
           for (const match of declarationPrefix.matchAll(
-            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?/gu,
+            /(?:^|[;{}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?/gu,
           )) {
             declarationStart = match;
           }
@@ -3657,7 +3657,8 @@ function globPatternToRegex(
         expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
       }
     } else if (character === '*') {
-      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+      const questionRunFollows = pattern[index + 1] === '?';
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*${questionRunFollows ? '?' : ''}`;
     } else if (character === '?') {
       let questionEnd = index + 1;
       while (pattern[questionEnd] === '?' && pattern[questionEnd + 1] !== '(') {

@@ -229,16 +229,12 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
-   For an unborn target, inspect contents and record an intentional baseline.
-   Before staging, confirm the status listing contains only onboarding files.
-   Preventive guard; no incident observed in this workflow.
+   For an unborn target, inspect contents; stage onboarding files
+   (preventive; no incident observed).
 
    ```sh
-   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
-     git -C <target-repo> status --short --untracked-files=all
-   # After confirming the listing is intentional:
-   git -C <target-repo> add -A && \
-     git -C <target-repo> commit --allow-empty -m "chore: record baseline"
+   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || git -C <target-repo> status --short --untracked-files=all
+   git -C <target-repo> add -A && git -C <target-repo> commit --allow-empty -m "chore: record baseline"
    ```
 
    Require a clean target:
@@ -253,6 +249,14 @@ below instead.
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).
 
+   Before import, record `<pre-import-ref>` (SHA/tag); reuse it with
+   `--target-base-ref` on retries. Never recompute
+   `HEAD^` after checkpoints (preventive; no incident observed).
+
+   ```sh
+   git -C <target-repo> rev-parse --verify HEAD  # record as <pre-import-ref>
+   ```
+
    ```sh
    node scripts/idd-onboard.mjs --import \
      --source <idd-skill-clone> --target <target-repo>
@@ -264,9 +268,6 @@ below instead.
    git -C <target-repo> add -A && \
    git -C <target-repo> commit --allow-empty -m "chore: record idd template mirror"
    ```
-
-   Keep a baseline commit reachable; pass its ref `HEAD^` as
-   `--target-base-ref`.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
