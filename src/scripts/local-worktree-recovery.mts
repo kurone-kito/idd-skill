@@ -3917,7 +3917,9 @@ export function runLocalWorktreeRecovery(
     let dryRunDevelopmentBranch: string | null = null;
     if (verdict.primaryOrLinked === 'primary') {
       try {
-        dryRunDevelopmentBranch = deps.resolveDevelopmentBranch();
+        dryRunDevelopmentBranch = primaryRecoveryResume
+          ? (primaryRecoveryMarker?.developmentBranch ?? null)
+          : deps.resolveDevelopmentBranch();
       } catch (error) {
         return recordRemovalFailure(
           `could not plan primary-worktree release: ${errorMessage(error)}`,
@@ -4196,7 +4198,9 @@ export function runLocalWorktreeRecovery(
     let applyDevelopmentBranch: string | null = null;
     if (verdict.primaryOrLinked === 'primary') {
       try {
-        applyDevelopmentBranch = deps.resolveDevelopmentBranch();
+        applyDevelopmentBranch = primaryRecoveryResume
+          ? (primaryRecoveryMarker?.developmentBranch ?? null)
+          : deps.resolveDevelopmentBranch();
       } catch (error) {
         return recordRemovalFailure(
           `could not resolve the primary development branch before preservation: ${errorMessage(error)}`,
@@ -6579,6 +6583,46 @@ export function copyPathWithSafeSymlinks(
     }
   };
 
+  const assertSourceSymlinkStable = (
+    source: string,
+    sourceStat: Stats,
+    linkText: string,
+    resolvedTarget: string | null,
+  ): void => {
+    let currentStat: Stats;
+    try {
+      currentStat = lstatSync(source);
+    } catch {
+      throw new Error(`source symlink changed during copy: ${source}`);
+    }
+    if (
+      !currentStat.isSymbolicLink() ||
+      !sameSourceMetadata(sourceStat, currentStat)
+    ) {
+      throw new Error(`source symlink changed during copy: ${source}`);
+    }
+    let currentLinkText: string;
+    try {
+      currentLinkText = readlinkSync(source, 'utf8');
+    } catch {
+      throw new Error(`source symlink changed during copy: ${source}`);
+    }
+    if (currentLinkText !== linkText) {
+      throw new Error(`source symlink changed during copy: ${source}`);
+    }
+    let currentResolvedTarget: string | null = null;
+    try {
+      currentResolvedTarget = realpathSync(source);
+    } catch {
+      // A dangling external link is preserved by link text. The before and
+      // after null values still compare equal below; a link that becomes
+      // readable (or changes to another target) fails closed.
+    }
+    if (currentResolvedTarget !== resolvedTarget) {
+      throw new Error(`source symlink changed during copy: ${source}`);
+    }
+  };
+
   const ensureDestinationDirectory = (destination: string): string => {
     const parentReal = ensureDestinationParent(destination);
     try {
@@ -6625,6 +6669,7 @@ export function copyPathWithSafeSymlinks(
         sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root))
       ) {
         copyEntry(resolvedTarget, destination);
+        assertSourceSymlinkStable(source, sourceStat, linkText, resolvedTarget);
         return;
       }
 
@@ -6646,6 +6691,7 @@ export function copyPathWithSafeSymlinks(
       }
       symlinkSync(destinationLink, destination);
       assertDestinationParentStable(destination, parentReal);
+      assertSourceSymlinkStable(source, sourceStat, linkText, resolvedTarget);
       return;
     }
 

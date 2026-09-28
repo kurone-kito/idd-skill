@@ -5012,6 +5012,8 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
   try {
     const deps = fakeDeps({
       cwd: () => root,
+      resolveDevelopmentBranch: () =>
+        firstAttempt ? 'main' : 'changed-config',
       listWorktreeRecords: () => [
         {
           path: root,
@@ -5140,6 +5142,7 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     );
     assert.equal(dryRunVerdict.step1.outcome, 'blocked-primary-resume');
     assert.equal(dryRunVerdict.preserveDir, preserveDir);
+    assert.equal(dryRunVerdict.plan.removal?.developmentBranch, 'main');
     assert.equal(dryRunVerdict.plan.removal?.ran, false);
     assert.equal(primaryMarker?.preservation, savedPreservation);
     const resumedVerdict = runLocalWorktreeRecovery(
@@ -5152,6 +5155,7 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
       deps,
     );
     assert.equal(resumedVerdict.step1.outcome, 'blocked-primary-resume');
+    assert.equal(resumedVerdict.plan.removal?.developmentBranch, 'main');
     assert.equal(resumedVerdict.plan.removal?.ran, true);
     assert.equal(lockRemoved, true);
     assert.equal(submoduleSyncCalls, 2);
