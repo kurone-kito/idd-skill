@@ -3292,7 +3292,7 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
   const aliases = new Map<string, string>();
   const knownNames: Set<string> = new Set(DIRECTORY_SCAN_API_NAMES);
   const importPattern =
-    /(?:^|[;\n])\s*import\s*\{([\s\S]*?)\}\s*from\s*(['"])node:(?:fs|fs\/promises)\2\s*;?/gu;
+    /(?:^|[;\n])\s*import\s*\{([\s\S]*?)\}\s*from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
   for (const match of text.matchAll(importPattern)) {
     for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
       const alias = /^([\w$]+)\s+as\s+([\w$]+)$/u.exec(specifier.trim());
@@ -4329,7 +4329,8 @@ function globPatternToRegex(
           questionCaptures.push({
             name: captureName,
             codeUnitCount: 1,
-            allowsAstralCodePoint: pattern[closing + 1] === '*',
+            allowsAstralCodePoint:
+              pattern[closing + 1] === '*' && pattern[closing + 2] !== '(',
           });
           expression += `(?<${captureName}>${segmentCharacterClassPrefix}[${characterClass}])`;
         }

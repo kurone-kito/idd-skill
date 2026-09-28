@@ -5171,18 +5171,30 @@ test('checkHeldSchemaDrift detects generic scan calls across line breaks', () =>
 });
 
 test('checkHeldSchemaDrift resolves static directory-scan import aliases', () => {
-  const sourceRoot = makeFixtureDir();
-  const targetRoot = makeFixtureDir();
-  const moduleText =
-    "import { globSync as find } from 'node:fs';\nfind('schemas/*.json');\n";
-  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
-  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
-  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
-    hold: [DRIFT_MODULE],
-  });
-  assert.deepEqual(result.findings, [
-    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
-  ]);
+  for (const [specifier, apiName] of [
+    ['node:fs', 'globSync'],
+    ['fs', 'globSync'],
+    ['node:fs/promises', 'readdir'],
+    ['fs/promises', 'readdir'],
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `import { ${apiName} as find } from '${specifier}';\nfind('schemas/*.json');\n`;
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
@@ -5672,6 +5684,24 @@ test('checkHeldSchemaDrift preserves astral ordinary character-class matches', (
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: 'schemas/🙂.json', heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift does not widen classes before extglob stars', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a]*(a|b).json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift preserves UTF-16 splitting across adjacent classes', () => {
