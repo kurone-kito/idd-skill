@@ -3939,6 +3939,33 @@ test('checkHeldSchemaDrift ignores similarly named scanned directories', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift preserves scan directory names containing API words', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const schemaPath = 'fixtures/schemas/readdirSync/widget.valid.json';
+  const moduleText = "readdirSync('fixtures/schemas/readdirSync');\n";
+  const sourceFiles = {
+    [schemaPath]: '{ "version": 2 }\n',
+    [DRIFT_FIXTURE]: '{ "ok": true }\n',
+    [DRIFT_MODULE]: moduleText,
+    [DRIFT_UNRELATED]: 'export const unrelated = true;\n',
+  };
+  const targetFiles = {
+    [schemaPath]: '{ "version": 1 }\n',
+    [DRIFT_FIXTURE]: '{ "ok": true }\n',
+    [DRIFT_MODULE]: moduleText,
+    [DRIFT_UNRELATED]: 'export const unrelated = true;\n',
+  };
+  writeDriftManifest(sourceRoot, sourceFiles);
+  writeDriftManifest(targetRoot, targetFiles);
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: schemaPath, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects join-based directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

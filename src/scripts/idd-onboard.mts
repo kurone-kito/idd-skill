@@ -2935,9 +2935,13 @@ function maskDirectoryApiNamesInString(
 
 function stripJavaScriptComments(
   text: string,
-  apiNameAtStart = DIRECTORY_SCAN_API_NAME_AT_START,
+  apiNameAtStart: RegExp | null = DIRECTORY_SCAN_API_NAME_AT_START,
 ): string {
   type ScanResult = { text: string; nextIndex: number };
+  const preserveString = (value: string): string =>
+    apiNameAtStart === null
+      ? value
+      : maskDirectoryApiNamesInString(value, apiNameAtStart);
   let scanCode: (start: number, stopAtClosingBrace: boolean) => ScanResult;
   let scanTemplate: (start: number) => ScanResult;
 
@@ -2952,18 +2956,12 @@ function stripJavaScriptComments(
         continue;
       }
       if (character === '`') {
-        result += maskDirectoryApiNamesInString(
-          text.slice(literalStart, index),
-          apiNameAtStart,
-        );
+        result += preserveString(text.slice(literalStart, index));
         result += '`';
         return { text: result, nextIndex: index + 1 };
       }
       if (character === '$' && text[index + 1] === '{') {
-        result += maskDirectoryApiNamesInString(
-          text.slice(literalStart, index),
-          apiNameAtStart,
-        );
+        result += preserveString(text.slice(literalStart, index));
         result += '${';
         const expression = scanCode(index + 2, true);
         result += expression.text;
@@ -2973,10 +2971,7 @@ function stripJavaScriptComments(
       }
       index += 1;
     }
-    result += maskDirectoryApiNamesInString(
-      text.slice(literalStart),
-      apiNameAtStart,
-    );
+    result += preserveString(text.slice(literalStart));
     return { text: result, nextIndex: text.length };
   };
 
@@ -3005,10 +3000,7 @@ function stripJavaScriptComments(
           }
           end += 1;
         }
-        result += maskDirectoryApiNamesInString(
-          text.slice(index, end),
-          apiNameAtStart,
-        );
+        result += preserveString(text.slice(index, end));
         index = end;
         continue;
       }
@@ -3444,6 +3436,7 @@ function findDirectoryScanCalls(
     normalizedSource,
     createDirectoryScanApiNameAtStart(apiNames),
   );
+  const pathExpressionText = stripJavaScriptComments(normalizedSource, null);
   for (const match of normalizedText.matchAll(
     createDirectoryScanApiPattern(apiNames),
   )) {
@@ -3553,7 +3546,7 @@ function findDirectoryScanCalls(
           if (!isDeclaration) {
             calls.push({
               apiName,
-              argumentsText: normalizedText.slice(openIndex + 1, index),
+              argumentsText: pathExpressionText.slice(openIndex + 1, index),
             });
           }
           break;
