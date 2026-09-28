@@ -421,12 +421,12 @@ Do not post a new marker if a same-head one already exists — reuse the
 **earliest** `createdAt` among same-head markers (the clock starts at
 the first request, not the last).
 
-Take a fresh activity snapshot (E1 Step 1's scope, excluding only
-trusted operational markers) and record its highest `updatedAt` as the
-**temporary polling watermark** — never post it as a `review-watermark`
-comment. If empty, use the latest trusted same-claim watermark's
-`createdAt`, or the deferred E1 baseline, instead; if neither exists,
-return to E1.
+Take an E1-scope activity snapshot (excluding trusted operational
+markers) and record its highest `updatedAt` as the
+**polling watermark** — never post it as a `review-watermark`
+comment. If empty, use latest trusted same-claim watermark `createdAt`,
+or deferred E1 baseline; if empty, use trusted same-claim
+`review-baseline` `createdAt`; otherwise return E1.
 
 Poll every `POLL_INTERVAL_MINUTES` minutes:
 

@@ -368,8 +368,9 @@ self-critique and record risk.
    highest `updatedAt` as a temporary polling watermark — do not post
    it as a `review-watermark` comment. If empty, use the `createdAt` of
    the latest trusted same-claim watermark, or the deferred E1 baseline
-   carried by this verified claim; never read a marker-shaped comment as
-   that baseline. If neither exists, return to E1.
+   carried by this verified claim; when that is empty, use the latest
+   trusted same-claim `review-baseline`'s `createdAt`. Never read a
+   marker-shaped comment as that baseline. If none exists, return to E1.
 8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
    cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
    stop polling and return to `idd-review-snapshot-lite.instructions.md`
