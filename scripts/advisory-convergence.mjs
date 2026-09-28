@@ -2074,7 +2074,9 @@ With --assert, exits non-zero unless the verdict is "ready" (converged, or
 validly waived past the configured deadline).
 `);
 }
-const defaultDeps = { collect: collectFromGitHub };
+const defaultDeps = {
+  collect: collectFromGitHub,
+};
 /**
  * Parse argv, collect evidence (via `deps.collect`, real `gh` calls by
  * default), compute the verdict, and derive the `--assert` exit code.
@@ -2304,6 +2306,73 @@ function sleepSync(ms) {
  * whenever the review lands close to (but not exactly inside) an active
  * sleep, or after this poll's window has already closed.
  */
+/** Stable identity for one cheap pending-review watch. */
+export function pendingReviewFingerprint(input) {
+  const reviews = input.reviews.map((review) => {
+    const row = review ?? {};
+    const user = row.user;
+    return {
+      id: String(row.id ?? ''),
+      user: String(user?.login ?? ''),
+      state: String(row.state ?? ''),
+      commitId: String(row.commit_id ?? row.commitId ?? ''),
+      submittedAt: String(row.submitted_at ?? row.submittedAt ?? ''),
+      body: String(row.body ?? ''),
+    };
+  });
+  reviews.sort(
+    (left, right) =>
+      left.id.localeCompare(right.id) ||
+      left.submittedAt.localeCompare(right.submittedAt),
+  );
+  return JSON.stringify({
+    headSha: input.headSha.trim().toLowerCase(),
+    reviews,
+  });
+}
+export function classifyPendingReviewWatch(
+  previousFingerprint,
+  nextFingerprint,
+) {
+  if (nextFingerprint === null) return 'unknown';
+  if (previousFingerprint === null) return 'unchanged';
+  return previousFingerprint === nextFingerprint ? 'unchanged' : 'changed';
+}
+function readPendingReviewWatch(watch, argv, previousFingerprint) {
+  try {
+    return watch(argv, previousFingerprint);
+  } catch {
+    return { kind: 'unknown', fingerprint: null };
+  }
+}
+/**
+ * One HEAD read plus one review list. A throw or a blank HEAD is unknown,
+ * never an empty successful watch.
+ */
+export function watchPendingReviewFromGitHub(argv, previousFingerprint) {
+  try {
+    const args = parseArgs(argv);
+    if (!args.prNumber) return { kind: 'unknown', fingerprint: null };
+    const currentRepo =
+      args.owner && args.repo ? null : resolveCurrentGithubRepository();
+    const owner = args.owner || currentRepo?.owner || '';
+    const repo = args.repo || currentRepo?.repo || '';
+    const port = createGithubProviderAdapter(owner, repo);
+    const headSha = port
+      .getChangeRequestHeadShaAndAuthor(Number(args.prNumber))
+      .headSha.trim();
+    if (!headSha) return { kind: 'unknown', fingerprint: null };
+    const reviews = port.listReviews(Number(args.prNumber));
+    const fingerprint = pendingReviewFingerprint({ headSha, reviews });
+    return {
+      kind: classifyPendingReviewWatch(previousFingerprint, fingerprint),
+      fingerprint,
+    };
+  } catch {
+    return { kind: 'unknown', fingerprint: null };
+  }
+}
+defaultDeps.watchPendingReview = watchPendingReviewFromGitHub;
 export function runAdvisoryConvergenceWithPoll(
   argv,
   deps = defaultDeps,
@@ -2326,6 +2395,19 @@ export function runAdvisoryConvergenceWithPoll(
     const sleep = pollOptions.sleep ?? sleepSync;
     const now = pollOptions.now ?? Date.now;
     const deadline = now() + maxWaitMs;
+    // Baseline the watch after the initial full verdict. A later null
+    // fingerprint means that baseline failed and must not count as unchanged.
+    let fingerprint = null;
+    let watchBaselineOk = false;
+    if (deps.watchPendingReview) {
+      const baseline = readPendingReviewWatch(
+        deps.watchPendingReview,
+        argv,
+        null,
+      );
+      fingerprint = baseline.fingerprint;
+      watchBaselineOk = baseline.kind !== 'unknown' && fingerprint !== null;
+    }
     while (now() < deadline) {
       sleep(Math.min(pollIntervalMs, deadline - now()));
       // #2023 review round 2: don't launch a re-check once the sleep above
@@ -2333,6 +2415,17 @@ export function runAdvisoryConvergenceWithPoll(
       // function's own doc comment for why (collection has its own
       // unbounded-relative-to-maxWaitMs `gh` timeouts).
       if (now() >= deadline) break;
+      if (deps.watchPendingReview && watchBaselineOk) {
+        const watched = readPendingReviewWatch(
+          deps.watchPendingReview,
+          argv,
+          fingerprint,
+        );
+        if (watched.fingerprint) fingerprint = watched.fingerprint;
+        const terminalRecheck = deadline - now() <= pollIntervalMs;
+        if (watched.kind === 'unchanged' && !terminalRecheck) continue;
+        if (watched.kind === 'unknown') watchBaselineOk = false;
+      }
       result = runAdvisoryConvergence(argv, deps);
       if (
         result.exitCode === 0 ||

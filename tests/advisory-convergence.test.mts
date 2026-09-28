@@ -18,6 +18,7 @@ import {
   type AdvisoryConvergenceOptions,
   classifyClaimCandidateAmbiguity,
   classifyCopilotAuthoredThreadIds,
+  classifyPendingReviewWatch,
   collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
   DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
@@ -26,6 +27,7 @@ import {
   hasTrustedClaimMarkerHistory,
   isSoleCopilotNotReviewedYetReason,
   parseArgs,
+  pendingReviewFingerprint,
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
@@ -6646,6 +6648,155 @@ test('runAdvisoryConvergenceWithPoll: review never landing still fails with the 
   // 20s bound on this exact input.
   assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
   assert.equal(now(), 20_000);
+});
+
+test('unchanged pending-review watches skip rich collection until the last in-budget recheck', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  let watches = 0;
+  deps.watchPendingReview = (_argv, previous) => {
+    watches += 1;
+    return { kind: 'unchanged', fingerprint: previous ?? 'baseline' };
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.deepEqual(verdict?.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  // Baseline, one unchanged tick, and the terminal tick. Only the initial
+  // verdict and that terminal recheck collect. The watch never sets ready.
+  assert.equal(watches, 3);
+  assert.equal(collectCalls(), 2);
+});
+
+test('a changed pending-review watch collects one fresh verdict and can become ready only from that collection', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] }), baseInputs({ reviews: [copilotReview()] })],
+    baseOptions(),
+  );
+  let watches = 0;
+  deps.watchPendingReview = () => {
+    watches += 1;
+    return watches === 1
+      ? { kind: 'unchanged', fingerprint: 'baseline' }
+      : { kind: 'changed', fingerprint: 'review-arrived' };
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 60_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 0);
+  assert.equal(verdict?.ready, true);
+  assert.equal(watches, 2);
+  assert.equal(collectCalls(), 2);
+});
+
+test('unknown pending-review watch evidence collects again and stays not ready', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  deps.watchPendingReview = (_argv, previous) => {
+    if (previous === null) {
+      return { kind: 'unchanged', fingerprint: 'baseline' };
+    }
+    return { kind: 'unknown', fingerprint: null };
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(collectCalls(), 3);
+});
+
+test('pending-review fingerprint changes on HEAD movement, a new review, and a body edit', () => {
+  const base = pendingReviewFingerprint({
+    headSha: 'abc',
+    reviews: [
+      {
+        id: 7,
+        user: { login: 'copilot-pull-request-reviewer[bot]' },
+        state: 'COMMENTED',
+        commit_id: 'abc',
+        submitted_at: '2026-09-28T00:00:00Z',
+        body: 'original',
+      },
+    ],
+  });
+  assert.equal(classifyPendingReviewWatch(base, base), 'unchanged');
+  assert.equal(classifyPendingReviewWatch(null, base), 'unchanged');
+  assert.equal(classifyPendingReviewWatch(base, null), 'unknown');
+  assert.equal(
+    classifyPendingReviewWatch(
+      base,
+      pendingReviewFingerprint({
+        headSha: 'def',
+        reviews: [
+          {
+            id: 7,
+            user: { login: 'copilot-pull-request-reviewer[bot]' },
+            state: 'COMMENTED',
+            commit_id: 'abc',
+            submitted_at: '2026-09-28T00:00:00Z',
+            body: 'original',
+          },
+        ],
+      }),
+    ),
+    'changed',
+  );
+  assert.equal(
+    classifyPendingReviewWatch(
+      base,
+      pendingReviewFingerprint({
+        headSha: 'abc',
+        reviews: [
+          {
+            id: 8,
+            user: { login: 'copilot-pull-request-reviewer[bot]' },
+            state: 'COMMENTED',
+            commit_id: 'abc',
+            submitted_at: '2026-09-28T00:05:00Z',
+            body: 'original',
+          },
+        ],
+      }),
+    ),
+    'changed',
+  );
+  assert.equal(
+    classifyPendingReviewWatch(
+      base,
+      pendingReviewFingerprint({
+        headSha: 'abc',
+        reviews: [
+          {
+            id: 7,
+            user: { login: 'copilot-pull-request-reviewer[bot]' },
+            state: 'COMMENTED',
+            commit_id: 'abc',
+            submitted_at: '2026-09-28T00:00:00Z',
+            body: 'edited finding',
+          },
+        ],
+      }),
+    ),
+    'changed',
+  );
 });
 
 test('runAdvisoryConvergenceWithPoll: pollIntervalMs >= maxWaitMs yields zero re-checks, not an over-budget one', () => {
