@@ -82,12 +82,12 @@ CI pass exists yet for this HEAD.
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
 and `--trusted-marker-logins <trusted-logins>`; then profile-selected
 `ci-wait-state` with `--pr {pr-number}` (see
-`docs/idd-helper-scripts.md`). Require `outcome: SATISFIED`,
-`copilotRecovery.activeClaimProvided: true`,
+`docs/idd-helper-scripts.md`). Require `outcome: SATISFIED`, or
+`CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
+defer. Require `copilotRecovery.activeClaimProvided: true`,
 `staleRequestRecovery.action`, and `requiredChecks.status: success` (or
-`no-required-checks` with non-empty all-success `checks[]`). For
-`CAP_EXHAUSTED`, only `capExhaustedRoute: phase-specific` passes;
-else defer. No helper: finish AW1-AW3; missing CI contract:
+`no-required-checks` with non-empty all-success `checks[]`). No helper:
+finish AW1-AW3; missing CI contract:
 stop/ask; else read rulesets/protection and normalize
 `gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link`
 against their union, including opt-in steps; unreadable policy/non-pass

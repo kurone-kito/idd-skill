@@ -59,11 +59,11 @@ GitHub side effect, confirm all of the following:
 
 Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
 `--trusted-marker-logins`, then profile-selected `ci-wait-state` with
-`--pr {pr-number}` (resolve via `docs/idd-helper-scripts.md`).
-Require
+`--pr` (see `docs/idd-helper-scripts.md`).
 `requiredChecks.status: success`; `no-required-checks` only with
 non-empty all-success `checks[]`; `pending`/`failing`/`missing` defer
-Step 2; otherwise stop/ask. Require `outcome: SATISFIED` and
+Step 2. Require `outcome: SATISFIED`, or `CAP_EXHAUSTED` with
+`capExhaustedRoute: phase-specific`; otherwise stop/ask. Require
 `copilotRecovery.activeClaimProvided: true`; same-head:
 `lastCopilotCommit == prHeadSha`, off-head needs
 `staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
@@ -86,8 +86,7 @@ E1.
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`, or its
    package-manager equivalent. It supplies Step 2 data and
    `embeddedFindings` for Step 3; raw triage fetch remains required.
-   Use its `latestPassingCiCompletedAt` (passing or treated-as-passed),
-   never the latest completion regardless of outcome.
+   Use `latestPassingCiCompletedAt`, not the latest completion.
 3. Independently fetch, in one pass before filtering: every review
    thread (resolved or not — paginate until `hasNextPage` is `false`,
    never stop at a fixed page size), every review body submission, and
@@ -120,8 +119,8 @@ E1.
 
 ### Step 2 — Record the watermark
 
-After deferral, rerun Step 1; use fresh `latest-ci-completed-at`, never
-deferred value.
+After deferral, rerun Step 1 for fresh `latest-ci-completed-at`; never
+reuse deferred value.
 
 Post a marker per E1 pass when satisfied. Prefer
 the one-command path: `node
