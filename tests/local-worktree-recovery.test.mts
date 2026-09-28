@@ -5143,6 +5143,18 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
             stderr: '',
           };
         }
+        if (
+          !firstAttempt &&
+          cwd === deinitializedSubmodulePath &&
+          argv[0] === 'status'
+        ) {
+          return {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'stale issue-branch submodule scope',
+          };
+        }
         if (argv[0] === 'checkout') {
           checkoutDone = true;
           return { ok: true, status: 0, stdout: '', stderr: '' };
@@ -5197,6 +5209,19 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     assert.equal(ensurePreserveDirCalls, 2);
     assert.notEqual(primaryMarker, null);
     assert.equal(typeof primaryMarker?.preservation, 'string');
+
+    const savedManifest = JSON.parse(primaryMarker?.preservation ?? '') as {
+      stashes: typeof firstVerdict.plan.stashes;
+    };
+    const savedRootStash = firstVerdict.plan.stashes[0];
+    assert.ok(savedRootStash);
+    savedManifest.stashes.push({ ...savedRootStash, scope: 'vendor' });
+    const currentMarker = primaryMarker;
+    assert.ok(currentMarker);
+    primaryMarker = {
+      ...currentMarker,
+      preservation: JSON.stringify(savedManifest),
+    };
 
     firstAttempt = false;
     mkdirSync(deinitializedSubmodulePath);

@@ -4426,6 +4426,26 @@ export function runLocalWorktreeRecovery(
       // development branch (Copilot review).
       const lateIgnoredEntries: IgnoredFileEntry[] = [];
       let lateIgnoredScanFailed = false;
+      let resumedInitializedSubmodulePaths: Set<string> | null = null;
+      if (primaryRecoveryResume) {
+        const currentSubmodules = deps.runGit(
+          ['submodule', 'status', '--recursive'],
+          targetPath,
+        );
+        if (
+          !currentSubmodules.ok ||
+          !submoduleStatusOutputIsValid(currentSubmodules.stdout)
+        ) {
+          return recordRemovalFailure(
+            `could not inspect submodules before resuming primary cleanup; stopping before removal`,
+          );
+        }
+        resumedInitializedSubmodulePaths = new Set(
+          submoduleStatusEntries(currentSubmodules.stdout)
+            .filter((submodule) => submodule.status !== '-')
+            .map((submodule) => submodule.path),
+        );
+      }
       const lateIgnored = scanAndMaybeCopyIgnoredFiles(
         targetPath,
         '.',
@@ -4439,6 +4459,12 @@ export function runLocalWorktreeRecovery(
       lateIgnoredScanFailed ||= lateIgnored.scanFailed;
       for (const stash of verdict.plan.stashes) {
         if (stash.scope === '.') continue;
+        if (
+          primaryRecoveryResume &&
+          !resumedInitializedSubmodulePaths?.has(stash.scope)
+        ) {
+          continue;
+        }
         const submodulePath = join(targetPath, stash.scope);
         const submoduleGitDirResult = deps.runGit(
           ['rev-parse', '--absolute-git-dir'],
