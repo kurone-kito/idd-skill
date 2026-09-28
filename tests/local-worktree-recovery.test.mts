@@ -4951,6 +4951,58 @@ test('primary recovery resolves the development branch before preservation', () 
   assert.match(verdict.result, /before preservation/);
 });
 
+test('primary recovery verifies the development branch exists before preservation', () => {
+  let preservationMutation = false;
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/primary'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'show-ref') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: '',
+          stderr: 'missing branch',
+        };
+      }
+      if (
+        (argv[0] === 'stash' && argv[1] === 'push') ||
+        argv[0] === 'update-ref' ||
+        argv[0] === 'checkout'
+      ) {
+        preservationMutation = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(preservationMutation, false);
+  assert.equal(verdict.mutated, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /not available locally/);
+});
+
 test('primary recovery does not abort a merge already cleared by stash', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-stash-merge-'));
   mkdirSync(join(root, '.git'), { recursive: true });
@@ -5840,6 +5892,74 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
   );
 });
 
+test('primary-worktree release rechecks the complete status immediately before lock removal', () => {
+  let lockRemoved = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    confirmBlock: (() => {
+      let calls = 0;
+      return () => {
+        calls += 1;
+        const occupied = calls <= 3;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv.includes('--untracked-files=all')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: ' M created-after-final-scan.txt\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeLockIfMatches: () => {
+      lockRemoved = true;
+      return true;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(lockRemoved, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /final primary-worktree status/);
+});
+
 test('primary-worktree release accepts a new-format claim after checkout', () => {
   // confirmBlock call sequence: 1 = step 1 (occupied, path included);
   // 2 = step 4's first recheck (still occupied, path included);
@@ -6290,6 +6410,43 @@ test('an unmerged index entry preserves its working-tree conflict file', () => {
   assert.notEqual(copied, null);
   assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, true);
   assert.equal(verdict.plan.stashes[0]?.unmergedFallbackCopiedFiles.length, 1);
+});
+
+test('retains a partial unmerged fallback copy and blocks removal', () => {
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'UU conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: () => {
+      throw new Error('copy interrupted after partial write');
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(
+    verdict.plan.stashes[0]?.unmergedFallbackCopiedTo,
+    '/tmp/preserve/unmerged-Lg',
+  );
+  assert.deepEqual(verdict.plan.stashes[0]?.unmergedFallbackCopiedFiles, [
+    '/tmp/preserve/unmerged-Lg/conflict.txt',
+  ]);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, false);
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal, null);
+  assert.match(verdict.result, /step 3 preservation/);
 });
 
 test('unmerged initialized-submodule fallback uses the parent worktree as symlink root', () => {

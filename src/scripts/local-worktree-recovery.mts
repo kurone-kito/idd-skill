@@ -1553,12 +1553,21 @@ function planAndMaybeStashScope(
           allLanded = false;
           continue;
         }
-        deps.copyPath(
-          from,
-          to,
-          targetPath,
-          targetGitDirForScope ? [targetGitDirForScope] : undefined,
-        );
+        try {
+          deps.copyPath(
+            from,
+            to,
+            targetPath,
+            targetGitDirForScope ? [targetGitDirForScope] : undefined,
+          );
+        } catch {
+          // Keep the attempted destination in the public plan even when a
+          // recursive copy wrote only a prefix before failing. The caller
+          // must retain that partial artifact and block removal rather than
+          // losing the only record of where recovery may have mutated data.
+          allLanded = false;
+          continue;
+        }
         if (!deps.pathExists(to)) {
           allLanded = false;
         }
@@ -3765,6 +3774,20 @@ export function runLocalWorktreeRecovery(
           `could not resolve the primary development branch before preservation: ${errorMessage(error)}`,
         );
       }
+      const developmentBranchRef = deps.runGit(
+        [
+          'show-ref',
+          '--verify',
+          '--quiet',
+          `refs/heads/${applyDevelopmentBranch}`,
+        ],
+        targetPath,
+      );
+      if (!developmentBranchRef.ok) {
+        return recordRemovalFailure(
+          `the configured development branch ${applyDevelopmentBranch} is not available locally; stopping before preservation`,
+        );
+      }
     }
 
     // Step 3 must run only after the clone-scoped exclusion is held and the
@@ -4715,6 +4738,23 @@ export function runLocalWorktreeRecovery(
       ) {
         return recordRemovalFailure(
           `a preservation artifact disappeared after the final ignored-file scan; stopping before removing the lock after checkout ${developmentBranch}`,
+        );
+      }
+      const finalPrimaryStatus = deps.runGit(
+        [
+          'status',
+          '--porcelain',
+          '--ignored',
+          '--untracked-files=all',
+          '--ignore-submodules=none',
+        ],
+        targetPath,
+      );
+      if (!finalPrimaryStatus.ok || finalPrimaryStatus.stdout.length > 0) {
+        return recordRemovalFailure(
+          finalPrimaryStatus.ok
+            ? `the final primary-worktree status after checkout ${developmentBranch} was not clean; stopping before removing the lock`
+            : `could not verify the final primary-worktree status after checkout ${developmentBranch}: ${finalPrimaryStatus.stderr}`,
         );
       }
       try {

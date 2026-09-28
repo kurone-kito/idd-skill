@@ -32,6 +32,7 @@ import {
   acquireCloneLock,
   type CloneLockHandle,
   releaseCloneLock,
+  withCloneLock,
 } from '../src/scripts/clone-lock.mts';
 
 // Used only by the token-verified-release test below, to reach the CJS
@@ -411,6 +412,73 @@ test('acquire: normal acquisition waits for the clone lock held by recovery', as
   } finally {
     if (cloneLock !== null) releaseCloneLock(cloneLock);
     if (child.exitCode === null) child.kill();
+    teardown(fixture);
+  }
+});
+
+test('acquire: primary refusal does not wait for a held clone lock', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_PATH,
+      '--acquire',
+      '--worktree',
+      fixture.primary,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+    ],
+    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    assert.equal(await exited, 4);
+    assert.equal(JSON.parse(stdout).mode, 'primary-worktree-refused');
+  } finally {
+    if (cloneLock !== null) {
+      releaseCloneLock(cloneLock);
+      cloneLock = null;
+    }
+    if (child.exitCode === null) child.kill();
+    teardown(fixture);
+  }
+});
+
+test('acquire: a claim-lock child reuses the clone lock inherited from --exec', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const exitCode = await withCloneLock(
+      fixture.primary,
+      'outer-recovery',
+      process.execPath,
+      [
+        CLI_PATH,
+        '--acquire',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'agent-a',
+        '--claim-id',
+        'claim-a',
+      ],
+      1_000,
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(checkClaimLock(fixture.worktree).holder?.claimId, 'claim-a');
+  } finally {
     teardown(fixture);
   }
 });

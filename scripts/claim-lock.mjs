@@ -190,6 +190,7 @@ import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   acquireCloneLockAtPath,
+  inheritedCloneLockAtPath,
   releaseCloneLock,
   resolveCloneLockPath,
 } from './clone-lock.mjs';
@@ -754,14 +755,22 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         message: PRIMARY_WORKTREE_ACQUIRE_MESSAGE,
       }
     : undefined;
+  // A new lock in the primary worktree is refused regardless of the
+  // clone-wide mutex. Return that documented refusal before waiting when the
+  // lock is absent; otherwise a recovery command holding the mutex can make
+  // this read-only refusal look like a deadlock (Codex review).
+  if (refused && readLock(path).status === 'absent') {
+    return refused;
+  }
   // Resolve before waiting: local-worktree recovery may remove the linked
   // worktree while this acquisition waits for the clone mutex. All paths,
   // including a matching-claim reacquire, must join this mutex because
   // recovery holds it across its final lock check and worktree removal.
-  const claimCloneLock = acquireCloneLockAtPath(
-    resolveCloneLockPath(worktree),
-    `claim-lock:${agentId}`,
-  );
+  const cloneLockPath = resolveCloneLockPath(worktree);
+  const inheritedCloneLock = inheritedCloneLockAtPath(cloneLockPath);
+  const claimCloneLock =
+    inheritedCloneLock ??
+    acquireCloneLockAtPath(cloneLockPath, `claim-lock:${agentId}`);
   try {
     // Recovery may have removed and recreated the requested worktree while
     // this call waited. Re-resolve both git-admin directories while the
@@ -878,7 +887,9 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
       holder: finalRead.status === 'present' ? finalRead.lock : undefined,
     };
   } finally {
-    releaseCloneLock(claimCloneLock);
+    if (inheritedCloneLock === null) {
+      releaseCloneLock(claimCloneLock);
+    }
   }
 }
 /** Read-only lock inspection: never creates, mutates, or deletes the lock. */
