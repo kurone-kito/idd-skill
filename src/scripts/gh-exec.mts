@@ -16,12 +16,13 @@
 // need the CLI-entry-point guard.
 
 import type { StdioOptions } from 'node:child_process';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import {
   closeSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readSync,
   rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -123,6 +124,32 @@ export const DEFAULT_GH_TIMEOUT_MS = 30_000;
  * override it. Recorded here so this default isn't re-litigated later.
  */
 export const DEFAULT_GH_PAGINATED_TIMEOUT_MS = 120_000;
+
+/**
+ * Fail-closed ceiling, in bytes, for one paginated `gh api --paginate`
+ * body (issue #3597). It sits above the 1,073,028-byte response measured
+ * for a 300-file pull request. Crossing it throws
+ * {@link GhPaginatedResponseLimitError} with the ceiling and the number
+ * of bytes actually read. It is not a larger silent `maxBuffer`: the
+ * paginated reader never accumulates that body in a fixed child-process
+ * buffer, and it does not return a partial item list.
+ */
+export const GH_API_PAGINATED_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Structured over-ceiling failure from {@link ghApiJson}'s paginated path. */
+export class GhPaginatedResponseLimitError extends Error {
+  readonly limitBytes: number;
+  readonly observedBytes: number;
+
+  constructor(limitBytes: number, observedBytes: number) {
+    super(
+      `paginated gh api response exceeded ${limitBytes} bytes (observed ${observedBytes})`,
+    );
+    this.name = 'GhPaginatedResponseLimitError';
+    this.limitBytes = limitBytes;
+    this.observedBytes = observedBytes;
+  }
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -666,7 +693,137 @@ export function combineOwnerRepoFlags(args: {
  * this fix's intended effect, not a regression to chase; a future report
  * of silent degradation there should add a log line at the caller, not
  * revert this change.
+ *
+ * Paginated calls do not use this `execFileSync` path. See
+ * {@link readPaginatedGhApi}.
  */
+function appendPaginatedNdjsonLine(items: unknown[], bytes: Buffer): boolean {
+  const text = bytes.toString('utf8').replace(/\r$/, '').trim();
+  if (!text) return false;
+  items.push(...parsePaginatedGhNdjson(text));
+  return text.startsWith('{') || text.startsWith('[');
+}
+
+/**
+ * Parse paginated NDJSON from an already-closed stdout capture, one line
+ * at a time. The raw bytes are not retained as a single string. Crossing
+ * {@link GH_API_PAGINATED_MAX_BYTES} throws before any partial list is
+ * returned.
+ */
+function parsePaginatedNdjsonFile(
+  filePath: string,
+  limitBytes: number,
+): { items: unknown[]; jsonShaped: boolean } {
+  const items: unknown[] = [];
+  let jsonShaped = false;
+  let observedBytes = 0;
+  let pending = Buffer.alloc(0);
+  const chunk = Buffer.alloc(64 * 1024);
+  const fd = openSync(filePath, 'r');
+  try {
+    while (true) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      observedBytes += read;
+      if (observedBytes > limitBytes) {
+        throw new GhPaginatedResponseLimitError(limitBytes, observedBytes);
+      }
+      pending = Buffer.concat([pending, chunk.subarray(0, read)]);
+      let start = 0;
+      for (let index = 0; index < pending.length; index += 1) {
+        if (pending[index] !== 0x0a) continue;
+        if (appendPaginatedNdjsonLine(items, pending.subarray(start, index))) {
+          jsonShaped = true;
+        }
+        start = index + 1;
+      }
+      pending = Buffer.from(pending.subarray(start));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  if (pending.length > 0 && appendPaginatedNdjsonLine(items, pending)) {
+    jsonShaped = true;
+  }
+  return { items, jsonShaped };
+}
+
+function ghCommandFailure(status: number, stderr: string): Error {
+  const error = new Error(`gh command failed: ${stderr.trim()}`);
+  Object.defineProperty(error, 'status', {
+    value: status,
+    enumerable: false,
+  });
+  if (stderr.length > 0) {
+    Object.defineProperty(error, 'stderr', {
+      value: stderr,
+      enumerable: false,
+    });
+  }
+  return tagGhCommandError(error);
+}
+
+/**
+ * Run paginated `gh api --paginate` without Node's 1 MiB `maxBuffer`.
+ * Stdout goes straight to a temporary file; the parser above consumes
+ * that file incrementally. A non-zero exit still honors `allowStatuses`
+ * when the captured body is JSON-shaped and under the ceiling.
+ */
+function readPaginatedGhApi(
+  args: string[],
+  options: { timeout: number; input?: string; allowStatuses: number[] },
+): unknown[] {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-exec-paginate-'));
+  const outPath = join(dir, 'stdout');
+  try {
+    const writeFd = openSync(outPath, 'w');
+    let result: ReturnType<typeof spawnSync>;
+    try {
+      result = spawnSync('gh', args, {
+        timeout: options.timeout,
+        encoding: 'utf8',
+        stdio: [
+          options.input !== undefined ? 'pipe' : 'ignore',
+          writeFd,
+          'pipe',
+        ],
+        ...(options.input !== undefined ? { input: options.input } : {}),
+      });
+    } catch (error) {
+      throw tagGhCommandError(error);
+    } finally {
+      closeSync(writeFd);
+    }
+    const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+    let parsed: { items: unknown[]; jsonShaped: boolean };
+    try {
+      parsed = parsePaginatedNdjsonFile(outPath, GH_API_PAGINATED_MAX_BYTES);
+    } catch (error) {
+      if (error instanceof GhPaginatedResponseLimitError) throw error;
+      if (result.error) throw tagGhCommandError(result.error);
+      const status = Number(result.status ?? -1);
+      // A zero exit with a malformed body stays a parse failure. Status 0
+      // is a successful gh exit, so it stays off the allow-listed
+      // failure path.
+      if (status !== 0 && !options.allowStatuses.includes(status)) {
+        throw ghCommandFailure(status, stderr);
+      }
+      throw error;
+    }
+    if (result.error) throw tagGhCommandError(result.error);
+    const status = Number(result.status ?? 0);
+    if (status !== 0) {
+      if (options.allowStatuses.includes(status) && parsed.jsonShaped) {
+        return parsed.items;
+      }
+      throw ghCommandFailure(status, stderr);
+    }
+    return parsed.items;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function ghApiJson(
   path: string,
   options: GhApiJsonOptions = {},
@@ -679,12 +836,17 @@ export function ghApiJson(
     ...(hostname ? ['--hostname', hostname] : []),
     ...extraArgs,
   ];
-  if (paginate) {
-    args.push('--paginate', '--jq', '.[]');
-  }
   const timeout =
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
+  if (paginate) {
+    args.push('--paginate', '--jq', '.[]');
+    return readPaginatedGhApi(args, {
+      timeout,
+      input: options.input,
+      allowStatuses,
+    });
+  }
   let raw: string;
   try {
     raw = execFileSync('gh', args, {
@@ -704,10 +866,6 @@ export function ghApiJson(
       throw tagGhCommandError(error);
     }
     raw = stdout;
-  }
-  if (paginate) {
-    // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    return parsePaginatedGhNdjson(raw);
   }
   // JSON.parse itself ignores surrounding whitespace, so only trim to
   // decide whether the output was empty.

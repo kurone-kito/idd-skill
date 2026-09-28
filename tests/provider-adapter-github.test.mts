@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { GhPaginatedResponseLimitError } from '../src/scripts/gh-exec.mts';
 import {
   createGithubProviderAdapter,
   fetchLastEditedAtByNodeId,
@@ -4685,6 +4686,23 @@ test('listChangeRequestChangedFiles reports only current paths, never a renamed-
     'src/scripts/renamed-checker.mts',
     'README.md',
   ]);
+});
+
+test('listChangeRequestChangedFiles rethrows a paginated response-limit error (#3597)', () => {
+  const limit = new GhPaginatedResponseLimitError(8, 9);
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => {
+        throw limit;
+      },
+    }),
+  );
+  assert.throws(
+    () => port.listChangeRequestChangedFiles(42),
+    (error: unknown) => error === limit,
+  );
 });
 
 test("listChangeRequestRenamedFromPaths reports a renamed file's previous path", () => {

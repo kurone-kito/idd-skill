@@ -13,6 +13,10 @@ import {
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
+  GH_API_PAGINATED_MAX_BYTES,
+  GhPaginatedResponseLimitError,
+} from '../src/scripts/gh-exec.mts';
+import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
   renderOutOfLoopMarker,
@@ -9371,6 +9375,84 @@ test('renderCliUsageError: a malformed --now renders as a clean one-line error n
   const result = renderCliUsageError(caught);
   assert.match(result.error, /--now/);
   assert.equal(result.hint, undefined);
+});
+
+const CHANGED_FILES_READ_ARGV = [
+  '--pr',
+  '1',
+  '--claim-issue',
+  '7',
+  '--owner',
+  'o',
+  '--repo',
+  'r',
+  '--now',
+  '2026-08-01T00:00:00Z',
+];
+
+test('collectPreMergeReadiness: a changed-files response limit renders unavailable (#3597)', () => {
+  const port = {
+    ...closingSetSmokeFakePort(),
+    listChangeRequestChangedFiles() {
+      throw new GhPaginatedResponseLimitError(
+        GH_API_PAGINATED_MAX_BYTES,
+        GH_API_PAGINATED_MAX_BYTES + 1,
+      );
+    },
+  };
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        CHANGED_FILES_READ_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    (error: unknown) => {
+      const rendered = renderCliUsageError(error);
+      assert.equal(rendered.hint, undefined);
+      assert.match(rendered.error, /exceeded/);
+      assert.deepEqual(rendered.changedFiles, {
+        status: 'unavailable',
+        recovery: {
+          reason: 'response-limit',
+          limitBytes: GH_API_PAGINATED_MAX_BYTES,
+          observedBytes: GH_API_PAGINATED_MAX_BYTES + 1,
+        },
+      });
+      return true;
+    },
+  );
+});
+
+test('collectPreMergeReadiness: any other changed-files read failure renders process-transport (#3597)', () => {
+  const port = {
+    ...closingSetSmokeFakePort(),
+    listChangeRequestChangedFiles() {
+      throw new Error('simulated changed-files transport failure');
+    },
+  };
+  assert.throws(
+    () =>
+      collectPreMergeReadiness(
+        CHANGED_FILES_READ_ARGV,
+        () => port,
+        () => ({}),
+      ),
+    (error: unknown) => {
+      const rendered = renderCliUsageError(error);
+      assert.equal(rendered.error, 'simulated changed-files transport failure');
+      assert.equal(rendered.hint, undefined);
+      assert.deepEqual(rendered.changedFiles, {
+        status: 'unavailable',
+        recovery: {
+          reason: 'process-transport',
+          limitBytes: null,
+          observedBytes: null,
+        },
+      });
+      return true;
+    },
+  );
 });
 
 test('buildPreMergeReadinessSummary: claimless emits not-applicable ownership (#2017)', () => {

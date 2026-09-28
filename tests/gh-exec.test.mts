@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -9,8 +9,10 @@ import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   DEFAULT_GH_TIMEOUT_MS,
+  GH_API_PAGINATED_MAX_BYTES,
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  GhPaginatedResponseLimitError,
   ghApiJson,
   ghApiJsonWithHeaders,
   ghGraphql,
@@ -1060,6 +1062,120 @@ test('ghApiJson (paginated) succeeds under the default paginated timeout when th
     ]);
   } finally {
     restore();
+  }
+});
+
+// #3597: the measured 300-file pull-request body is 1,073,028 bytes, just
+// over Node's default 1 MiB child-process buffer. The paginated reader
+// must return every filename. A body one byte past
+// GH_API_PAGINATED_MAX_BYTES must throw and must not return a partial list.
+const MEASURED_CHANGED_FILES_BYTES = 1_073_028;
+const MEASURED_CHANGED_FILES_ROWS = 300;
+
+function writeMeasuredChangedFilesFixture(filePath: string): string[] {
+  const names: string[] = [];
+  const chunks: Buffer[] = [];
+  for (let index = 0; index < MEASURED_CHANGED_FILES_ROWS - 1; index += 1) {
+    const name = `file-${String(index).padStart(3, '0')}.txt`;
+    names.push(name);
+    chunks.push(Buffer.from(`{"filename":${JSON.stringify(name)}}\n`));
+  }
+  const prefix = Buffer.concat(chunks);
+  const wrapper = Buffer.byteLength('{"filename":""}\n');
+  const padLength = MEASURED_CHANGED_FILES_BYTES - prefix.length - wrapper;
+  assert.ok(padLength > 0, `fixture prefix is ${prefix.length} bytes`);
+  const lastName = 'x'.repeat(padLength);
+  names.push(lastName);
+  const body = Buffer.concat([
+    prefix,
+    Buffer.from(`{"filename":${JSON.stringify(lastName)}}\n`),
+  ]);
+  assert.equal(body.length, MEASURED_CHANGED_FILES_BYTES);
+  writeFileSync(filePath, body);
+  return names;
+}
+
+function writeOverCeilingPaginatedFixture(filePath: string): number {
+  const line = Buffer.from(`{"filename":"${'n'.repeat(60_000)}"}\n`);
+  assert.ok(line.length < 64 * 1024);
+  const body = Buffer.alloc(GH_API_PAGINATED_MAX_BYTES + 1, 0x20);
+  for (
+    let offset = 0;
+    offset + line.length <= GH_API_PAGINATED_MAX_BYTES;
+    offset += line.length
+  ) {
+    line.copy(body, offset);
+  }
+  writeFileSync(filePath, body);
+  return body.length;
+}
+
+function stubGhStdoutFile(fixturePath: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+process.stdout.write(fs.readFileSync(${JSON.stringify(fixturePath)}));
+`);
+}
+
+test('ghApiJson (paginated) parses a 1,073,028-byte 300-file body (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const names = writeMeasuredChangedFilesFixture(fixturePath);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const rows = ghApiJson('repos/o/r/pulls/1/files', {
+      paginate: true,
+    }) as { filename?: unknown }[];
+    assert.equal(rows.length, MEASURED_CHANGED_FILES_ROWS);
+    assert.equal(rows[0]?.filename, names[0]);
+    assert.equal(rows[rows.length - 1]?.filename, names[names.length - 1]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and returns no partial list (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const observedBytes = writeOverCeilingPaginatedFixture(fixturePath);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/pulls/1/files', { paginate: true }),
+      (error: unknown) => {
+        assert.ok(error instanceof GhPaginatedResponseLimitError);
+        assert.equal(error.limitBytes, GH_API_PAGINATED_MAX_BYTES);
+        assert.equal(error.observedBytes, observedBytes);
+        assert.equal(error.observedBytes, GH_API_PAGINATED_MAX_BYTES + 1);
+        assert.equal(Array.isArray(error), false);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (non-paginated) still stops above the 1 MiB child-process buffer (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'body.json');
+  writeFileSync(fixturePath, Buffer.alloc(MEASURED_CHANGED_FILES_BYTES, 0x78));
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues/1'),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        const code = String((error as { code?: unknown }).code ?? '');
+        assert.match(code, /MAXBUFFER|ENOBUFS/);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
