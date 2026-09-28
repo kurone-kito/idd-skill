@@ -18,6 +18,7 @@ import {
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
   ghTextAsync,
+  ghTextUnbounded,
   readGithubRepoDefaultBranch,
   resolveGhApiHostname,
   withBoundedRetry,
@@ -183,16 +184,15 @@ function mapLastEditedAt(raw: unknown): string | null | undefined {
 /**
  * #3246: batch-resolve GraphQL `IssueComment.lastEditedAt` for the given
  * comment node ids via `nodes(ids:)`, chunked to 100 ids per request
- * (matching this file's own `first:100` page-size convention). Backs
- * {@link ProviderPort.listWorkItemComments}'s and
- * {@link ProviderPort.listWorkItemCommentsWithRetryAsync}'s opt-in
- * `includeEditState` -- both read REST `issues/{n}/comments`, which has
- * no edit-timestamp field, so resolving it needs this separate GraphQL
- * round trip. Exported so `external-check-waiver.mts` -- which predates
- * the #2266 provider-port migration and still calls `gh` directly for its
- * own REST comment read (needing `html_url`/`url`, fields
- * {@link ProviderComment} does not carry) -- can share this one
- * resolution instead of forking a second copy.
+ * (matching this file's own `first:100` page-size convention). Kept for
+ * callers that already hold REST rows and only need edit timestamps
+ * (`external-check-waiver.mts`, which predates the #2266 provider-port
+ * migration and still calls `gh` directly for its own REST comment read
+ * needing `html_url`/`url`, fields {@link ProviderComment} does not
+ * carry, plus the other direct `gh` comment readers). The port's own
+ * `includeEditState` reads no longer use this helper: they page a
+ * GraphQL `comments` connection that selects `lastEditedAt` itself
+ * (#3590) instead of REST plus this enrichment.
  *
  * Every requested id must resolve to a well-formed `IssueComment` node
  * with a three-state-contract-valid `lastEditedAt`
@@ -255,6 +255,474 @@ export function fetchLastEditedAtByNodeId(
     });
   }
   return result;
+}
+
+/** Page size for both the GraphQL edit-evidence collection and the plain
+ * REST comment reads (#3590). */
+const WORK_ITEM_COMMENT_PAGE_SIZE = 100;
+
+const WORK_ITEM_COMMENT_NODE_FIELDS =
+  'id databaseId body createdAt updatedAt lastEditedAt author { login __typename }';
+
+type WorkItemCommentSide = 'issue' | 'pullRequest';
+
+/** A comment-page failure. `retryable` is true only for a transport or
+ * parse failure of the same protocol. Schema, capability, and malformed
+ * evidence failures are not retried and never fall back to REST. */
+class WorkItemCommentReadError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable = false) {
+    super(message);
+    this.name = 'WorkItemCommentReadError';
+    this.retryable = retryable;
+  }
+}
+
+function isRetryableWorkItemCommentError(error: unknown): boolean {
+  return !(error instanceof WorkItemCommentReadError) || error.retryable;
+}
+
+/** GraphQL `Bot.login` omits the REST `[bot]` suffix (`github-actions`
+ * versus `github-actions[bot]`). Append it only for a real Bot so a
+ * same-named user account is left unchanged. */
+function normalizeGraphqlAuthorLogin(
+  author: { login?: unknown; __typename?: unknown } | null | undefined,
+): string {
+  const login = typeof author?.login === 'string' ? author.login : '';
+  if (
+    author?.__typename === 'Bot' &&
+    login !== '' &&
+    !login.toLowerCase().endsWith('[bot]')
+  ) {
+    return `${login}[bot]`;
+  }
+  return login;
+}
+
+interface MappedWorkItemComment {
+  id: number;
+  nodeId: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin: string;
+  lastEditedAt: string | null;
+}
+
+function mapWorkItemGraphqlComment(
+  node: unknown,
+  label: string,
+): MappedWorkItemComment {
+  if (node === null || typeof node !== 'object') {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} returned a non-object comment node`,
+    );
+  }
+  const record = node as {
+    id?: unknown;
+    databaseId?: unknown;
+    body?: unknown;
+    createdAt?: unknown;
+    updatedAt?: unknown;
+    lastEditedAt?: unknown;
+    author?: { login?: unknown; __typename?: unknown } | null;
+  };
+  const databaseId = record.databaseId;
+  if (
+    typeof databaseId !== 'number' ||
+    !Number.isInteger(databaseId) ||
+    databaseId <= 0
+  ) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} comment is missing a positive integer databaseId`,
+    );
+  }
+  const nodeId = typeof record.id === 'string' ? record.id : '';
+  if (nodeId === '') {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: comment #${databaseId} on ${label} is missing a node id`,
+    );
+  }
+  if (typeof record.body !== 'string') {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: comment #${databaseId} on ${label} is missing a string body`,
+    );
+  }
+  const createdAt = record.createdAt;
+  if (typeof createdAt !== 'string' || Number.isNaN(Date.parse(createdAt))) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: comment #${databaseId} on ${label} has a missing or unparseable createdAt`,
+    );
+  }
+  const lastEditedAt = mapLastEditedAt(record.lastEditedAt);
+  if (lastEditedAt === undefined) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: comment #${databaseId} on ${label} has a missing or unparseable lastEditedAt`,
+    );
+  }
+  const updatedAtRaw = record.updatedAt;
+  const updatedAt =
+    typeof updatedAtRaw === 'string' && !Number.isNaN(Date.parse(updatedAtRaw))
+      ? updatedAtRaw
+      : createdAt;
+  return {
+    id: databaseId,
+    nodeId,
+    body: record.body,
+    createdAt,
+    updatedAt,
+    authorLogin: normalizeGraphqlAuthorLogin(record.author),
+    lastEditedAt,
+  };
+}
+
+function workItemCommentsQuery(side: 'both' | WorkItemCommentSide): string {
+  const connection = `comments(first:${WORK_ITEM_COMMENT_PAGE_SIZE},after:$cursor){ nodes { ${WORK_ITEM_COMMENT_NODE_FIELDS} } pageInfo { hasNextPage endCursor } }`;
+  const issue = `issue(number:$number){ ${connection} }`;
+  const pullRequest = `pullRequest(number:$number){ ${connection} }`;
+  const body =
+    side === 'both'
+      ? `${issue} ${pullRequest}`
+      : side === 'issue'
+        ? issue
+        : pullRequest;
+  return `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$repo){
+    ${body}
+  }
+}`;
+}
+
+function readAdapterGhText(
+  deps: GithubProviderAdapterDeps,
+  args: string[],
+  timeoutMs: number | undefined,
+): string {
+  // The injected test seam stays `deps.ghText`. Production uses the
+  // unbounded reader: a 100-comment page has no safe maxBuffer (#2935).
+  if (deps.ghText === ghText) {
+    return ghTextUnbounded(
+      args,
+      timeoutMs !== undefined ? { timeout: timeoutMs } : {},
+    );
+  }
+  const options: GhTextOptions =
+    timeoutMs !== undefined
+      ? { ...GH_TEXT_LOOP_OPTIONS, timeout: timeoutMs }
+      : GH_TEXT_LOOP_OPTIONS;
+  return deps.ghText(args, options);
+}
+
+interface WorkItemCommentPage {
+  comments: MappedWorkItemComment[];
+  side: WorkItemCommentSide;
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+function readWorkItemCommentPage(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+  side: 'both' | WorkItemCommentSide,
+  cursor: string | null,
+  timeoutMs: number | undefined,
+): WorkItemCommentPage {
+  const label = `${owner}/${repo}#${number}`;
+  const apiArgs = [
+    'api',
+    'graphql',
+    ...graphqlHostnameArgs(),
+    '-f',
+    `query=${workItemCommentsQuery(side)}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${number}`,
+  ];
+  if (cursor) {
+    apiArgs.push('-f', `cursor=${cursor}`);
+  }
+  let raw: string;
+  try {
+    raw = readAdapterGhText(deps, apiArgs, timeoutMs);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
+      true,
+    );
+  }
+  let parsed: {
+    errors?: { message?: unknown }[];
+    data?: {
+      repository?: {
+        issue?: { comments?: unknown } | null;
+        pullRequest?: { comments?: unknown } | null;
+      } | null;
+    };
+  };
+  try {
+    parsed = JSON.parse(raw.trim() || '{}') as typeof parsed;
+  } catch {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: GraphQL response was not JSON for ${label}`,
+      true,
+    );
+  }
+  if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+    const detail = parsed.errors
+      .map((entry) => String(entry.message ?? ''))
+      .filter(Boolean)
+      .join('; ')
+      .slice(0, 200);
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+    );
+  }
+  const repository = parsed.data?.repository;
+  if (repository == null) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} returned no repository`,
+    );
+  }
+  let resolvedSide: WorkItemCommentSide;
+  let connection: unknown;
+  if (side === 'both') {
+    const issuePresent = repository.issue != null;
+    const pullRequestPresent = repository.pullRequest != null;
+    if (issuePresent === pullRequestPresent) {
+      throw new WorkItemCommentReadError(
+        issuePresent
+          ? `listWorkItemComments: ${label} returned both an issue and a pull request`
+          : `listWorkItemComments: ${label} is not an issue or pull request`,
+      );
+    }
+    resolvedSide = issuePresent ? 'issue' : 'pullRequest';
+    connection = issuePresent
+      ? repository.issue?.comments
+      : repository.pullRequest?.comments;
+  } else {
+    resolvedSide = side;
+    const node = side === 'issue' ? repository.issue : repository.pullRequest;
+    if (node == null) {
+      throw new WorkItemCommentReadError(
+        `listWorkItemComments: ${label} ${side} disappeared during pagination`,
+      );
+    }
+    connection = node.comments;
+  }
+  if (connection == null || typeof connection !== 'object') {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} returned a null comments connection`,
+    );
+  }
+  const typed = connection as {
+    nodes?: unknown;
+    pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+  };
+  if (!Array.isArray(typed.nodes)) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} comments page is missing a nodes array`,
+    );
+  }
+  const pageInfo = typed.pageInfo;
+  if (pageInfo == null || typeof pageInfo.hasNextPage !== 'boolean') {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} comments page hasNextPage is not a boolean`,
+    );
+  }
+  const endCursor =
+    typeof pageInfo.endCursor === 'string' && pageInfo.endCursor !== ''
+      ? pageInfo.endCursor
+      : null;
+  if (pageInfo.hasNextPage && !endCursor) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: page reported hasNextPage without endCursor for ${label}`,
+    );
+  }
+  return {
+    comments: typed.nodes.map((node) => mapWorkItemGraphqlComment(node, label)),
+    side: resolvedSide,
+    hasNextPage: pageInfo.hasNextPage,
+    endCursor,
+  };
+}
+
+function collectWorkItemCommentsWithEditState(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+  timeoutMs: number | undefined,
+): ProviderComment[] {
+  const label = `${owner}/${repo}#${number}`;
+  const seen = new Set<string>();
+  let side: 'both' | WorkItemCommentSide = 'both';
+  let cursor: string | null = null;
+  const out: ProviderComment[] = [];
+  while (true) {
+    const requestKey = `${side}:${cursor ?? ''}`;
+    if (seen.has(requestKey)) {
+      throw new WorkItemCommentReadError(
+        `listWorkItemComments: repeated comments cursor for ${label}`,
+      );
+    }
+    seen.add(requestKey);
+    const page = readWorkItemCommentPage(
+      deps,
+      owner,
+      repo,
+      number,
+      side,
+      cursor,
+      timeoutMs,
+    );
+    side = page.side;
+    out.push(
+      ...page.comments.map((comment) => ({
+        id: comment.id,
+        nodeId: comment.nodeId,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        authorLogin: comment.authorLogin,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+    );
+    if (!page.hasNextPage) {
+      return out;
+    }
+    cursor = page.endCursor;
+  }
+}
+
+async function collectWorkItemCommentsWithEditStateRetrying(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<MappedWorkItemComment[]> {
+  const label = `${owner}/${repo}#${number}`;
+  const seen = new Set<string>();
+  let side: 'both' | WorkItemCommentSide = 'both';
+  let cursor: string | null = null;
+  const out: MappedWorkItemComment[] = [];
+  while (true) {
+    const requestKey = `${side}:${cursor ?? ''}`;
+    if (seen.has(requestKey)) {
+      throw new WorkItemCommentReadError(
+        `listWorkItemComments: repeated comments cursor for ${label}`,
+      );
+    }
+    seen.add(requestKey);
+    const page = await withBoundedRetry(
+      async () =>
+        readWorkItemCommentPage(
+          deps,
+          owner,
+          repo,
+          number,
+          side,
+          cursor,
+          undefined,
+        ),
+      { isRetryable: isRetryableWorkItemCommentError },
+    );
+    side = page.side;
+    out.push(...page.comments);
+    if (!page.hasNextPage) {
+      return out;
+    }
+    cursor = page.endCursor;
+  }
+}
+
+function toRawRestComment(
+  comment: MappedWorkItemComment,
+): Record<string, unknown> {
+  return {
+    id: comment.id,
+    node_id: comment.nodeId,
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    user: { login: comment.authorLogin },
+    last_edited_at: comment.lastEditedAt,
+  };
+}
+
+function parseIncludedRestPage(raw: string): {
+  data: unknown;
+  link: string | undefined;
+} {
+  const trimmed = raw.trim();
+  if (!/^HTTP\/\d/i.test(trimmed)) {
+    throw new WorkItemCommentReadError(
+      'listWorkItemComments: REST page is missing an HTTP envelope',
+      true,
+    );
+  }
+  const sections = raw.split(/\r?\n\r?\n/);
+  const body = sections.pop()?.trim() ?? '';
+  const headerBlock = sections.pop() ?? '';
+  const headers: Record<string, string> = {};
+  for (const line of headerBlock.split(/\r?\n/).slice(1)) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) {
+      continue;
+    }
+    headers[line.slice(0, separator).trim().toLowerCase()] = line
+      .slice(separator + 1)
+      .trim();
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(body || '[]');
+  } catch {
+    throw new WorkItemCommentReadError(
+      'listWorkItemComments: REST page body was not JSON',
+      true,
+    );
+  }
+  return { data, link: headers.link };
+}
+
+function linkHeaderHasNext(link: string | undefined): boolean {
+  if (!link) {
+    return false;
+  }
+  return link.split(',').some((part) => /rel="?next"?/i.test(part));
+}
+
+function readRestCommentPage(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+  page: number,
+): { rows: unknown[]; hasNextPage: boolean } {
+  const raw = readAdapterGhText(
+    deps,
+    [
+      'api',
+      ...graphqlHostnameArgs(),
+      '--include',
+      `repos/${owner}/${repo}/issues/${number}/comments?per_page=${WORK_ITEM_COMMENT_PAGE_SIZE}&page=${page}`,
+    ],
+    undefined,
+  );
+  const parsed = parseIncludedRestPage(raw);
+  if (!Array.isArray(parsed.data)) {
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: REST page ${page} for ${owner}/${repo}#${number} was not an array`,
+    );
+  }
+  return { rows: parsed.data, hasNextPage: linkHeaderHasNext(parsed.link) };
 }
 
 /** Bounds the single unpaginated `last:N` page {@link
@@ -2289,12 +2757,27 @@ export function createGithubProviderAdapter(
       number: number,
       options?: { timeoutMs?: number; includeEditState?: boolean },
     ): ProviderComment[] {
-      const rows = deps.ghApiJson(`${repoPath}/issues/${number}/comments`, {
-        paginate: true,
-        ...(options?.timeoutMs !== undefined
-          ? { timeout: options.timeoutMs }
-          : {}),
-      }) as {
+      if (options?.includeEditState) {
+        return collectWorkItemCommentsWithEditState(
+          deps,
+          owner,
+          repo,
+          number,
+          options.timeoutMs,
+        );
+      }
+      // `gh api --paginate` follows Link and stops without a speculative
+      // empty page. Explicit per_page keeps a 300-comment log to three
+      // REST pages instead of the API default of 30 (#3590).
+      const rows = deps.ghApiJson(
+        `${repoPath}/issues/${number}/comments?per_page=${WORK_ITEM_COMMENT_PAGE_SIZE}`,
+        {
+          paginate: true,
+          ...(options?.timeoutMs !== undefined
+            ? { timeout: options.timeoutMs }
+            : {}),
+        },
+      ) as {
         id?: unknown;
         node_id?: unknown;
         body?: unknown;
@@ -2302,7 +2785,7 @@ export function createGithubProviderAdapter(
         updated_at?: unknown;
         user?: { login?: unknown };
       }[];
-      const mapped = rows.map((row) => ({
+      return rows.map((row) => ({
         id: Number(row.id),
         nodeId: String(row.node_id ?? ''),
         body: String(row.body ?? ''),
@@ -2310,34 +2793,6 @@ export function createGithubProviderAdapter(
         updatedAt: String(row.updated_at ?? row.created_at ?? ''),
         authorLogin: String(row.user?.login ?? ''),
       }));
-      if (!options?.includeEditState) {
-        return mapped;
-      }
-      // #3246: REST has no edit-timestamp field -- resolve it via one
-      // follow-up GraphQL batch read, keyed by each comment's own
-      // `node_id`. A comment missing `node_id` cannot be resolved at all;
-      // fail closed rather than silently reporting it 'unknown'.
-      const nodeIds = mapped.map((comment) => comment.nodeId);
-      if (nodeIds.some((id) => id === '')) {
-        throw new Error(
-          `listWorkItemComments: includeEditState requires every comment on #${number} to carry a node_id`,
-        );
-      }
-      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
-        deps.ghText,
-        nodeIds,
-      );
-      return mapped.map((comment) => {
-        if (!lastEditedAtByNodeId.has(comment.nodeId)) {
-          throw new Error(
-            `listWorkItemComments: missing edit-state resolution for comment #${comment.id}`,
-          );
-        }
-        return {
-          ...comment,
-          lastEditedAt: lastEditedAtByNodeId.get(comment.nodeId) ?? null,
-        };
-      });
     },
 
     postWorkItemComment(number: number, body: string): ProviderPostedComment {
@@ -2732,62 +3187,30 @@ export function createGithubProviderAdapter(
       number: number,
       options?: { includeEditState?: boolean },
     ): Promise<unknown[]> {
-      const comments: unknown[] = [];
-      const pageSize = 100;
-      for (let page = 1; ; page += 1) {
-        const pageItems = await withBoundedRetry(async () => {
-          const raw = deps
-            .ghText(
-              [
-                'api',
-                `repos/${owner}/${repo}/issues/${number}/comments?per_page=${pageSize}&page=${page}`,
-                '--jq',
-                '.',
-              ],
-              GH_TEXT_LOOP_OPTIONS,
-            )
-            .trim();
-          return raw && raw !== 'null' ? JSON.parse(raw) : [];
-        });
-        if (!Array.isArray(pageItems) || pageItems.length === 0) {
-          break;
-        }
-        comments.push(...pageItems);
-        if (pageItems.length < pageSize) {
-          break;
-        }
-      }
-      if (!options?.includeEditState) {
-        return comments;
-      }
-      // #3246: same edit-state resolution as `listWorkItemComments`, but
-      // merged onto each raw REST row as snake_case `last_edited_at` --
-      // this method's return type is a raw passthrough, not
-      // `ProviderComment`.
-      const nodeIds = comments.map((row) =>
-        String((row as { node_id?: unknown })?.node_id ?? ''),
-      );
-      if (nodeIds.some((id) => id === '')) {
-        throw new Error(
-          `listWorkItemCommentsWithRetryAsync: includeEditState requires every comment on #${number} to carry a node_id`,
+      if (options?.includeEditState) {
+        const comments = await collectWorkItemCommentsWithEditStateRetrying(
+          deps,
+          owner,
+          repo,
+          number,
         );
+        return comments.map(toRawRestComment);
       }
-      const lastEditedAtByNodeId = fetchLastEditedAtByNodeId(
-        deps.ghText,
-        nodeIds,
-      );
-      return comments.map((row, index) => {
-        const nodeId = nodeIds[index];
-        if (!lastEditedAtByNodeId.has(nodeId)) {
-          throw new Error(
-            `listWorkItemCommentsWithRetryAsync: missing edit-state resolution for node ${nodeId}`,
-          );
+      const comments: unknown[] = [];
+      for (let page = 1; ; page += 1) {
+        const pageResult = await withBoundedRetry(
+          async () => readRestCommentPage(deps, owner, repo, number, page),
+          { isRetryable: isRetryableWorkItemCommentError },
+        );
+        comments.push(...pageResult.rows);
+        // Link is the end signal, including a full page with no
+        // rel="next" and a page whose Link header is absent. Do not
+        // fetch another page just because this one was full (#3590).
+        if (!pageResult.hasNextPage) {
+          break;
         }
-        return {
-          ...(row as Record<string, unknown>),
-          last_edited_at: lastEditedAtByNodeId.get(nodeId) ?? null,
-        };
-      });
+      }
+      return comments;
     },
 
     searchOpenWorkItems(query: {

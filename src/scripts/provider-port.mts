@@ -95,8 +95,9 @@ export interface ProviderWorkItem {
  * body-edited, a parseable ISO timestamp means it was, and `undefined`
  * means the caller never asked {@link ProviderPort.listWorkItemComments}
  * (or {@link ProviderPort.listWorkItemCommentsWithRetryAsync}) to resolve
- * it -- REST alone cannot answer this, so it costs an extra GraphQL round
- * trip callers opt into explicitly rather than pay unconditionally. */
+ * it. REST alone cannot answer this, so the opt-in reads a paginated
+ * GraphQL `comments` connection that selects the field itself (#3590)
+ * instead of paying a separate enrichment round trip. */
 export interface ProviderComment {
   id: number;
   body: string;
@@ -700,14 +701,16 @@ export interface ProviderPort {
    * #2788) -- same rationale as {@link ProviderPort.getChangeRequestHeadSha}'s
    * own `options.timeoutMs`. Omit it to keep that default unchanged.
    *
-   * `options.includeEditState` (#3246), when `true`, additionally resolves
-   * each returned comment's {@link ProviderComment.lastEditedAt} via one
-   * follow-up GraphQL batch read -- REST alone has no edit-timestamp
-   * field. A caller that omits it (the default) leaves `lastEditedAt`
-   * `undefined` on every returned comment and pays no extra round trip.
-   * When set and the GraphQL read fails or comes back incomplete for any
-   * comment, this method throws rather than returning a partial or
-   * `null`-defaulted result.
+   * `options.includeEditState` (#3246, #3590), when `true`, reads the
+   * comment log through one paginated GraphQL `comments(first: 100)`
+   * connection that selects {@link ProviderComment.lastEditedAt} on every
+   * node. It does not call REST and does not fall back to REST when
+   * GraphQL fails. A caller that omits it (the default) leaves
+   * `lastEditedAt` `undefined` on every returned comment and uses the
+   * REST issues-comments endpoint with explicit `per_page=100`. When the
+   * opt-in read fails or comes back incomplete for any comment, this
+   * method throws rather than returning a partial or `null`-defaulted
+   * result.
    */
   listWorkItemComments(
     number: number,
@@ -869,13 +872,15 @@ export interface ProviderPort {
    * retries (if at all) the WHOLE fetch, where this one retries one page
    * at a time -- a real granularity difference, not interchangeable.
    *
-   * `options.includeEditState` (#3246): same opt-in contract as
+   * `options.includeEditState` (#3246, #3590): same opt-in contract as
    * {@link ProviderPort.listWorkItemComments}'s own option of the same
-   * name. Since this method's return type is a raw passthrough, not
-   * {@link ProviderComment}, an opted-in edit-state value is merged onto
-   * each row as `last_edited_at` (snake_case, matching every other raw
-   * REST field this method already passes through unchanged) rather than
-   * the port's own camelCase `lastEditedAt`.
+   * name, including the single paginated GraphQL collection and the
+   * no-REST-fallback rule. Since this method's return type is a raw
+   * passthrough, not {@link ProviderComment}, an opted-in row is shaped
+   * like a REST issue comment (`id`, `node_id`, `body`, `created_at`,
+   * `updated_at`, `user.login`) plus snake_case `last_edited_at`, rather
+   * than the port's camelCase `lastEditedAt`. A caller that omits the
+   * option keeps the REST page loop and does not add `last_edited_at`.
    */
   listWorkItemCommentsWithRetryAsync(
     number: number,

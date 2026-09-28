@@ -1355,6 +1355,11 @@ test('listWorkItemSubIssueNodesAsync throws on a truncated page (hasNextPage, no
 // listWorkItemCommentsWithRetryAsync (#2266)
 // ---------------------------------------------------------------------------
 
+function restHttpPage(body: unknown, link?: string): string {
+  const linkLine = link === undefined ? '' : `link: ${link}\r\n`;
+  return `HTTP/2.0 200 OK\r\n${linkLine}\r\n${JSON.stringify(body)}`;
+}
+
 test('listWorkItemCommentsWithRetryAsync retries once past a transient page-fetch failure, then succeeds', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
@@ -1366,7 +1371,7 @@ test('listWorkItemCommentsWithRetryAsync retries once past a transient page-fetc
         if (calls === 1) {
           return '[{"body": "trunca';
         }
-        return JSON.stringify([
+        return restHttpPage([
           {
             body: 'hello',
             created_at: '2026-01-01T00:00:00Z',
@@ -1396,6 +1401,47 @@ function graphqlNodesLastEditedAtBody(
   entries: { id: string; lastEditedAt: unknown }[],
 ): string {
   return JSON.stringify({ data: { nodes: entries } });
+}
+
+function graphqlWorkItemCommentsPage(input: {
+  side?: 'issue' | 'pullRequest';
+  nodes: unknown[];
+  hasNextPage?: boolean;
+  endCursor?: string | null;
+}): string {
+  const side = input.side ?? 'issue';
+  const other = side === 'issue' ? 'pullRequest' : 'issue';
+  return JSON.stringify({
+    data: {
+      repository: {
+        [side]: {
+          comments: {
+            nodes: input.nodes,
+            pageInfo: {
+              hasNextPage: input.hasNextPage ?? false,
+              endCursor: input.endCursor ?? null,
+            },
+          },
+        },
+        [other]: null,
+      },
+    },
+  });
+}
+
+function workItemCommentNode(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: 'IC_1',
+    databaseId: 1,
+    body: 'hi',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    lastEditedAt: null,
+    author: { login: 'kurone-kito', __typename: 'User' },
+    ...overrides,
+  };
 }
 
 test('listWorkItemComments: a call that does not ask for edit state leaves lastEditedAt undefined, even when updated_at differs from created_at (#3246)', () => {
@@ -1432,22 +1478,19 @@ test('listWorkItemComments: includeEditState maps a stubbed GraphQL null lastEdi
     'o',
     'r',
     fakeDeps({
-      ghApiJson: () => [
-        {
-          id: 1,
-          node_id: 'IC_1',
-          body: 'hi',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-          user: { login: 'kurone-kito' },
-        },
-      ],
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
       ghText: () =>
-        graphqlNodesLastEditedAtBody([{ id: 'IC_1', lastEditedAt: null }]),
+        graphqlWorkItemCommentsPage({
+          nodes: [workItemCommentNode({ lastEditedAt: null })],
+        }),
     }),
   );
   const result = port.listWorkItemComments(900, { includeEditState: true });
   assert.equal(result[0].lastEditedAt, null);
+  assert.equal(result[0].id, 1);
+  assert.equal(result[0].nodeId, 'IC_1');
 });
 
 test('listWorkItemComments: includeEditState maps a stubbed GraphQL timestamp lastEditedAt to that timestamp', () => {
@@ -1455,70 +1498,222 @@ test('listWorkItemComments: includeEditState maps a stubbed GraphQL timestamp la
     'o',
     'r',
     fakeDeps({
-      ghApiJson: () => [
-        {
-          id: 1,
-          node_id: 'IC_1',
-          body: 'hi',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:05:00Z',
-          user: { login: 'kurone-kito' },
-        },
-      ],
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
       ghText: () =>
-        graphqlNodesLastEditedAtBody([
-          { id: 'IC_1', lastEditedAt: '2026-01-01T00:05:00Z' },
-        ]),
+        graphqlWorkItemCommentsPage({
+          nodes: [
+            workItemCommentNode({
+              updatedAt: '2026-01-01T00:05:00Z',
+              lastEditedAt: '2026-01-01T00:05:00Z',
+            }),
+          ],
+        }),
     }),
   );
   const result = port.listWorkItemComments(900, { includeEditState: true });
   assert.equal(result[0].lastEditedAt, '2026-01-01T00:05:00Z');
+  assert.equal(result[0].updatedAt, '2026-01-01T00:05:00Z');
 });
 
-test('listWorkItemComments: includeEditState throws when the GraphQL batch read fails', () => {
+test('listWorkItemComments: includeEditState throws on a GraphQL capability error and does not call REST', () => {
+  let calls = 0;
   const port = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
-      ghApiJson: () => [
-        {
-          id: 1,
-          node_id: 'IC_1',
-          body: 'hi',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-          user: { login: 'kurone-kito' },
-        },
-      ],
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
       ghText: () => {
-        throw new Error('gh api graphql failed');
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              message:
+                "Field 'lastEditedAt' doesn't exist on type 'IssueComment'",
+            },
+          ],
+        });
       },
     }),
   );
   assert.throws(() =>
     port.listWorkItemComments(900, { includeEditState: true }),
   );
+  assert.equal(calls, 1);
 });
 
-test('listWorkItemComments: includeEditState throws when a comment is missing node_id', () => {
+test('listWorkItemComments: includeEditState throws when a comment node is missing its id', () => {
   const port = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
-      ghApiJson: () => [
-        {
-          id: 1,
-          body: 'hi',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-          user: { login: 'kurone-kito' },
-        },
-      ],
+      ghText: () =>
+        graphqlWorkItemCommentsPage({
+          nodes: [workItemCommentNode({ id: '' })],
+        }),
     }),
   );
   assert.throws(() =>
     port.listWorkItemComments(900, { includeEditState: true }),
   );
+});
+
+test('listWorkItemComments: includeEditState reads 300 comments as three GraphQL pages (#3590)', () => {
+  const calls: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
+      ghText: (args) => {
+        calls.push(args);
+        const cursor = args
+          .find((arg) => arg.startsWith('cursor='))
+          ?.slice('cursor='.length);
+        const page = cursor === 'c2' ? 2 : cursor === 'c3' ? 3 : 1;
+        const start = (page - 1) * 100;
+        const nodes = Array.from({ length: 100 }, (_, index) =>
+          workItemCommentNode({
+            id: `IC_${start + index}`,
+            databaseId: start + index + 1,
+            body: `c${start + index}`,
+          }),
+        );
+        return graphqlWorkItemCommentsPage({
+          nodes,
+          hasNextPage: page < 3,
+          endCursor: page === 1 ? 'c2' : page === 2 ? 'c3' : null,
+        });
+      },
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every((args) => args[1] === 'graphql'));
+  assert.match(calls[0].join('\n'), /pullRequest\(number:\$number\)/);
+  assert.doesNotMatch(calls[1].join('\n'), /pullRequest\(number:\$number\)/);
+  assert.equal(result.length, 300);
+  assert.equal(result[0]?.id, 1);
+  assert.equal(result[299]?.id, 300);
+  assert.equal(result[299]?.nodeId, 'IC_299');
+  assert.equal(result[299]?.lastEditedAt, null);
+});
+
+test('listWorkItemComments: includeEditState normalizes GitHub Actions bot login variants (#3590)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        graphqlWorkItemCommentsPage({
+          nodes: [
+            workItemCommentNode({
+              id: 'IC_actions',
+              databaseId: 1,
+              author: { login: 'github-actions', __typename: 'Bot' },
+            }),
+            workItemCommentNode({
+              id: 'IC_actions_suffixed',
+              databaseId: 2,
+              author: { login: 'github-actions[bot]', __typename: 'Bot' },
+            }),
+            workItemCommentNode({
+              id: 'IC_user',
+              databaseId: 3,
+              author: { login: 'github-actions', __typename: 'User' },
+            }),
+          ],
+        }),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.deepEqual(
+    result.map((comment) => comment.authorLogin),
+    ['github-actions[bot]', 'github-actions[bot]', 'github-actions'],
+  );
+});
+
+test('listWorkItemComments: includeEditState reads pull request comments when the issue side is null (#3590)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        graphqlWorkItemCommentsPage({
+          side: 'pullRequest',
+          nodes: [
+            workItemCommentNode({
+              id: 'IC_pr',
+              databaseId: 7,
+              body: 'on the pr',
+            }),
+          ],
+        }),
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0]?.id, 7);
+  assert.equal(result[0]?.body, 'on the pr');
+});
+
+test('listWorkItemComments: includeEditState fails closed on a non-object row and an omitted lastEditedAt (#3590)', () => {
+  const malformed = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => graphqlWorkItemCommentsPage({ nodes: [null] }),
+    }),
+  );
+  assert.throws(() =>
+    malformed.listWorkItemComments(900, { includeEditState: true }),
+  );
+  const omitted = workItemCommentNode();
+  delete omitted.lastEditedAt;
+  const missingEdit = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => graphqlWorkItemCommentsPage({ nodes: [omitted] }),
+    }),
+  );
+  assert.throws(() =>
+    missingEdit.listWorkItemComments(900, { includeEditState: true }),
+  );
+});
+
+test('listWorkItemComments: plain REST requests per_page=100 and paginates by Link (#3590)', () => {
+  let captured: { path?: string; paginate?: boolean } = {};
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: (path, options) => {
+        captured = {
+          path,
+          paginate: (options as { paginate?: boolean } | undefined)?.paginate,
+        };
+        return [
+          {
+            id: 1,
+            node_id: 'IC_1',
+            body: 'hi',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+            user: { login: 'kurone-kito' },
+          },
+        ];
+      },
+    }),
+  );
+  const result = port.listWorkItemComments(900);
+  assert.match(captured.path ?? '', /comments\?per_page=100$/);
+  assert.equal(captured.paginate, true);
+  assert.equal(result[0]?.lastEditedAt, undefined);
 });
 
 test('listWorkItemCommentsWithRetryAsync: a call that does not ask for edit state leaves last_edited_at absent (#3246)', async () => {
@@ -1527,7 +1722,7 @@ test('listWorkItemCommentsWithRetryAsync: a call that does not ask for edit stat
     'r',
     fakeDeps({
       ghText: () =>
-        JSON.stringify([
+        restHttpPage([
           {
             id: 1,
             node_id: 'IC_1',
@@ -1545,33 +1740,102 @@ test('listWorkItemCommentsWithRetryAsync: a call that does not ask for edit stat
   assert.equal(Object.hasOwn(result[0], 'last_edited_at'), false);
 });
 
-test('listWorkItemCommentsWithRetryAsync: includeEditState merges last_edited_at from the GraphQL batch read', async () => {
+test('listWorkItemCommentsWithRetryAsync: includeEditState maps the GraphQL page onto REST rows', async () => {
   const port = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
-      ghText: (args) => {
-        if (args[1] === 'graphql') {
-          return graphqlNodesLastEditedAtBody([
-            { id: 'IC_1', lastEditedAt: null },
-          ]);
-        }
-        return JSON.stringify([
-          {
-            id: 1,
-            node_id: 'IC_1',
-            body: 'hi',
-            created_at: '2026-01-01T00:00:00Z',
-            user: { login: 'kurone-kito' },
-          },
-        ]);
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
       },
+      ghText: () =>
+        graphqlWorkItemCommentsPage({
+          nodes: [workItemCommentNode({ lastEditedAt: null })],
+        }),
     }),
   );
   const result = (await port.listWorkItemCommentsWithRetryAsync(900, {
     includeEditState: true,
   })) as Record<string, unknown>[];
   assert.equal(result[0].last_edited_at, null);
+  assert.equal(result[0].node_id, 'IC_1');
+  assert.deepEqual(result[0].user, { login: 'kurone-kito' });
+});
+
+test('listWorkItemCommentsWithRetryAsync: a GraphQL capability error is not retried (#3590)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              message:
+                "Field 'lastEditedAt' doesn't exist on type 'IssueComment'",
+            },
+          ],
+        });
+      },
+    }),
+  );
+  await assert.rejects(() =>
+    port.listWorkItemCommentsWithRetryAsync(900, { includeEditState: true }),
+  );
+  assert.equal(calls, 1);
+});
+
+test('listWorkItemCommentsWithRetryAsync: a full page with no Link next is not followed by an empty probe (#3590)', async () => {
+  let calls = 0;
+  const rows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1 }));
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls += 1;
+        assert.ok(
+          args.some((arg) => String(arg).includes('per_page=100')),
+          'REST page must request per_page=100',
+        );
+        return restHttpPage(
+          rows,
+          '<https://api.github.com/comments?page=1>; rel="prev"',
+        );
+      },
+    }),
+  );
+  const result = await port.listWorkItemCommentsWithRetryAsync(900);
+  assert.equal(calls, 1);
+  assert.equal(result.length, 100);
+});
+
+test('listWorkItemCommentsWithRetryAsync: Link next is followed and a terminal page stops the walk (#3590)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        if (calls === 1) {
+          return restHttpPage(
+            Array.from({ length: 100 }, (_, index) => ({ id: index + 1 })),
+            '<https://api.github.com/comments?page=2>; rel="next"',
+          );
+        }
+        if (calls === 2) {
+          return restHttpPage([{ id: 101 }]);
+        }
+        throw new Error('speculative empty page');
+      },
+    }),
+  );
+  const result = await port.listWorkItemCommentsWithRetryAsync(900);
+  assert.equal(calls, 2);
+  assert.equal(result.length, 101);
 });
 
 test('fetchLastEditedAtByNodeId: chunks a 101-id batch into two requests of 100 and 1 (C1 review)', () => {

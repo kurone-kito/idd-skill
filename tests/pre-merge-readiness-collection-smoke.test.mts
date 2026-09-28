@@ -410,9 +410,37 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comme
 }
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
-// #3246: listWorkItemComments' includeEditState opt-in batch-resolves
-// each PR comment's lastEditedAt via nodes(ids:) -- every fixture
-// comment is unedited by construction.
+// #3590: includeEditState pages a GraphQL comments connection. The
+// number= variable selects the PR conversation or the claim issue.
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('databaseId')) {
+  const numberArg = args.find((value) => String(value).startsWith('number='));
+  const number = numberArg ? String(numberArg).slice('number='.length) : '';
+  const source = number === '${String(PR_NUMBER)}'
+    ? ${JSON.stringify(prComments)}
+    : ${JSON.stringify(claimComments)};
+  const nodes = source.map((row) => ({
+    id: row.node_id,
+    databaseId: row.id,
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+    lastEditedAt: null,
+    author: { login: row.user.login, __typename: 'User' },
+  }));
+  const connection = {
+    nodes,
+    pageInfo: { hasNextPage: false, endCursor: null },
+  };
+  const asIssue = number !== '${String(PR_NUMBER)}';
+  out(JSON.stringify({
+    data: {
+      repository: {
+        issue: asIssue ? { comments: connection } : null,
+        pullRequest: asIssue ? null : { comments: connection },
+      },
+    },
+  }));
+}
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('nodes(ids:')) {
   const requestedIds = args
     .filter((value) => value.startsWith('ids[]='))
