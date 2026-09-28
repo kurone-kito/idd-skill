@@ -251,16 +251,16 @@ follow the note here either.
 
 ## E3 — Empty/non-empty routing
 
-- **ReviewItems_snapshot is empty and Step 2 was not deferred** → proceed
-  to `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
-  Never route this to the excluded `idd-review-triage.instructions.md`.
-- **ReviewItems_snapshot is empty and Step 2 was deferred** → run E15
-  for CI or E14 for advisory; both pending: E14 first, then E1 before
-  F1/F2
-- **ReviewItems_snapshot is non-empty** → this session's job ends here
-  (see Triage hand-off boundary); hand off to
-  `idd-review-triage.instructions.md` (E4) for a stronger session or a
-  human to run.
+When Step 2 was deferred, reread the live PR HEAD before E3. A mismatch
+with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
+stale items into E3/E4.
+
+- **Empty, Step 2 ready** → `idd-pre-merge-lite.instructions.md` (F1);
+  never route to excluded triage.
+- **Empty, Step 2 deferred** → E15 for CI or E14 for advisory; both:
+  E14 first, then E1 before F1/F2.
+- **Non-empty** → stop this session; hand off to
+  `idd-review-triage.instructions.md` (E4).
 
 ## Cold-start ReviewItems_snapshot reconstruction
 

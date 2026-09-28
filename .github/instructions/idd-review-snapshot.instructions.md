@@ -265,6 +265,10 @@ after the note" rule applies here too.
 
 ## E3 — Empty list check
 
+When Step 2 was deferred, reread the live PR HEAD before E3. A mismatch
+with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
+stale items into E3/E4.
+
 Empty + Step 2 ready → branch-sync. Empty + deferred → use the E15/E14
 route above, then E1. Non-empty → `idd-review-triage.instructions.md`
 (E4).
