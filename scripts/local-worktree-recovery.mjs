@@ -2160,7 +2160,21 @@ function refreshUninitializedSubmoduleCopies(
     };
   }
   const knownEntries = new Map(entries.map((entry) => [entry.path, entry]));
-  const lateSubmodules = submoduleStatusEntries(status.stdout).filter(
+  const currentSubmodules = submoduleStatusEntries(status.stdout);
+  const currentByPath = new Map(
+    currentSubmodules.map((submodule) => [submodule.path, submodule]),
+  );
+  for (const entry of entries) {
+    const current = currentByPath.get(entry.path);
+    if (current !== undefined && current.status !== '-') {
+      return {
+        error: `uninitialized submodule ${entry.path} became initialized before removal; stopping before removal`,
+        added,
+        preserveDir,
+      };
+    }
+  }
+  const lateSubmodules = currentSubmodules.filter(
     (submodule) => submodule.status === '-',
   );
   const ensurePreserveDir = () => {

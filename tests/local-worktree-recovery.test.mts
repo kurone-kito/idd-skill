@@ -3601,6 +3601,48 @@ test('late preservation discovers an uninitialized submodule that appears after 
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('late preservation rejects an uninitialized submodule that becomes initialized', () => {
+  let submoduleStatusCalls = 0;
+  let removeCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        if (cwd === '/repo/linked') submoduleStatusCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            cwd === '/repo/linked'
+              ? submoduleStatusCalls === 1
+                ? '-abc123 late-submodule\n'
+                : ' abc123 late-submodule (heads/main)\n'
+              : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    pathExists: (path) =>
+      path === '/repo/linked' ||
+      path === '/repo/linked/late-submodule' ||
+      path.startsWith('/tmp/preserve'),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(submoduleStatusCalls, 2);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /became initialized before removal/);
+});
+
 test('late preservation rejects an unreadable ownership suffix after refresh', () => {
   let confirmCalls = 0;
   let removeCalled = false;
