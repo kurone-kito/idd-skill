@@ -5036,6 +5036,25 @@ test('checkHeldSchemaDrift rejects ambiguous repeating extglobs', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift rejects nested repeating extglobs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const relativePath = `schemas/${'a'.repeat(30)}.json`;
+  const moduleText = "globSync('schemas/+(+(a))b.json');\n";
+  writeDriftManifest(sourceRoot, {
+    [relativePath]: '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    [relativePath]: '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores closing parentheses inside extglob classes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

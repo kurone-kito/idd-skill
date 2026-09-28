@@ -3881,8 +3881,12 @@ function hasAmbiguousRepeatingExtglob(pattern: string): boolean {
     if (closing === -1) {
       continue;
     }
+    const content = pattern.slice(index + 2, closing);
+    if (hasNestedRepeatingExtglob(content)) {
+      return true;
+    }
     const expandedGroups = expandGlobBracePatternsBounded(
-      pattern.slice(index + 2, closing),
+      content,
       0,
       MAX_GLOB_BRACE_EXPANSIONS,
       MAX_GLOB_BRACE_EXPANSION_DEPTH,
@@ -3901,6 +3905,33 @@ function hasAmbiguousRepeatingExtglob(pattern: string): boolean {
           }
         }
       }
+    }
+  }
+  return false;
+}
+
+function hasNestedRepeatingExtglob(text: string): boolean {
+  let inCharacterClass = false;
+  for (let index = 0; index < text.length - 1; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '[') {
+      inCharacterClass = true;
+      continue;
+    }
+    if (character === ']') {
+      inCharacterClass = false;
+      continue;
+    }
+    if (
+      !inCharacterClass &&
+      /[+*]/u.test(character) &&
+      text[index + 1] === '('
+    ) {
+      return true;
     }
   }
   return false;
