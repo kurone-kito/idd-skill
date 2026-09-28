@@ -2853,6 +2853,33 @@ function findDirectoryScanAliases(text) {
       }
     }
   }
+  const directAliasAssignmentPattern = /(?:^|[;\n])\s*([\w$]+)\s*=\s*([^;]+)/gu;
+  for (const match of text.matchAll(directAliasAssignmentPattern)) {
+    const aliasName = match[1] ?? '';
+    if (!/^[\w$]+$/u.test(aliasName)) {
+      continue;
+    }
+    const sourceName = stripStaticTypeAssertions(match[2] ?? '');
+    const inlineRequireSource =
+      /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
+        sourceName,
+      );
+    const qualifiedSource = /^([\w$]+)\.([\w$]+)$/u.exec(sourceName);
+    const apiName = knownNames.has(sourceName)
+      ? sourceName
+      : (aliases.get(sourceName) ??
+        (inlineRequireSource !== null &&
+        knownNames.has(inlineRequireSource[2] ?? '')
+          ? inlineRequireSource[2]
+          : qualifiedSource !== null &&
+              namespaceNames.has(qualifiedSource[1] ?? '') &&
+              knownNames.has(qualifiedSource[2] ?? '')
+            ? qualifiedSource[2]
+            : undefined));
+    if (apiName !== undefined) {
+      aliases.set(aliasName, apiName);
+    }
+  }
   return aliases;
 }
 function createDirectoryScanApiPattern(names) {

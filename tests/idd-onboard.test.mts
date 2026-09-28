@@ -5402,6 +5402,21 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
   }
 });
 
+test('checkHeldSchemaDrift resolves scan aliases assigned after declaration', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { globSync } from 'node:fs';\nlet find;\nfind = globSync;\nfind('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
   for (const moduleText of [
     "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
