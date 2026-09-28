@@ -3392,7 +3392,10 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
       if (equals === -1) {
         continue;
       }
-      const aliasName = declarator.slice(0, equals).trim();
+      const aliasNameMatch = /^(?<name>[\w$]+)(?:\s*:\s*[\s\S]+)?$/u.exec(
+        declarator.slice(0, equals).trim(),
+      );
+      const aliasName = aliasNameMatch?.groups?.name ?? '';
       const sourceName = declarator.slice(equals + 1).trim();
       if (!/^[\w$]+$/u.test(aliasName)) {
         continue;
@@ -4326,7 +4329,8 @@ function globPatternToRegex(
             0,
             slash === -1 ? trailingPattern.length : slash,
           );
-          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures)}(?=$|/))[^/]*`;
+          const wildcard = /^\?/u.test(trailingPattern) ? '[^/]*?' : '[^/]*';
+          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures)}(?=$|/))${wildcard}`;
         }
         const quantifier =
           character === '@'
@@ -4479,12 +4483,16 @@ function globPatternToRegex(
           const hasAdjacentPosixClass =
             POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
             POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(closing + 1));
+          const hasPosixClassInSegment = hasPosixGlobClassInSegment(
+            pattern,
+            index,
+          );
           questionCaptures.push({
             name: captureName,
             codeUnitCount: 1,
             allowsAstralCodePoint:
               (pattern[closing + 1] === '*' && pattern[closing + 2] !== '(') ||
-              hasAdjacentPosixClass,
+              hasPosixClassInSegment,
             requiresCodePointCount: hasAdjacentPosixClass,
           });
           expression += `(?<${captureName}>${segmentCharacterClassPrefix}[${characterClass}])`;

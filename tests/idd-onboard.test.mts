@@ -5289,6 +5289,7 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
   for (const declaration of [
     'const find = globSync;',
     'const unused = 1, find = globSync;',
+    'const find: typeof globSync = globSync;',
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
@@ -5960,6 +5961,29 @@ test('checkHeldSchemaDrift preserves astral classes beside POSIX classes', () =>
   ]);
 });
 
+test('checkHeldSchemaDrift preserves astral classes across literals before POSIX classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a]x[[:alpha:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂xa.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂xa.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/🙂xa.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift does not widen classes before extglob stars', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -6626,6 +6650,26 @@ test('checkHeldSchemaDrift applies negative extglob suffixes', () => {
     hold: [DRIFT_MODULE],
   });
   assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift backtracks negative extglobs before question runs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/!(a|b)??.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/cc.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/cc.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/cc.json', heldModulePath: DRIFT_MODULE },
+  ]);
 });
 
 test('checkHeldSchemaDrift excludes dotfiles from negative extglobs', () => {
