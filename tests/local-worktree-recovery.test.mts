@@ -7060,6 +7060,45 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('does not treat initialized submodule remote-tracking refs as local-only', () => {
+  let refQuery: string[] = [];
+  let copied = false;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n',
+          stderr: '',
+        };
+      }
+      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+        refQuery = argv;
+        return {
+          ok: true,
+          status: 0,
+          stdout: 'refs/remotes/origin/main\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    copyPath: () => {
+      copied = true;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(refQuery.includes('--exclude=refs/remotes/**'), true);
+  assert.equal(verdict.plan.submoduleAdminCopies.length, 0);
+  assert.equal(copied, false);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('copies linked worktree admin data for top-level local refs', () => {
   const copied: Array<{ from: string; to: string }> = [];
   const deps = fakeDeps({

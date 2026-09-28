@@ -1327,7 +1327,12 @@ function planAndMaybeBackupRef(
   const refNamespaces =
     scopeLabel === '.' ? ['refs/worktree', 'refs/bisect'] : ['refs'];
   const localRefs = runGit(
-    ['for-each-ref', '--format=%(refname)', ...refNamespaces],
+    [
+      'for-each-ref',
+      '--format=%(refname)',
+      '--exclude=refs/remotes/**',
+      ...refNamespaces,
+    ],
     scopePath,
   );
   const localRefsQueryFailed = !localRefs.ok;
@@ -1339,7 +1344,12 @@ function planAndMaybeBackupRef(
   const localRefsSnapshot = localRefs.ok
     ? localRefs.stdout
         .split(/\r?\n/)
-        .filter((line) => line.length > 0 && line !== ref)
+        .filter(
+          (line) =>
+            line.length > 0 &&
+            line !== ref &&
+            !line.startsWith('refs/remotes/'),
+        )
         .join('\n')
     : null;
   // A commit-reachability scan is insufficient for disposable submodule
@@ -5955,8 +5965,22 @@ export function copyPathWithSafeSymlinks(
       activeDirectories.add(sourceReal);
       try {
         ensureDestinationDirectory(destination);
-        for (const entry of readdirSync(source)) {
+        const entriesBeforeCopy = readdirSync(source).sort();
+        for (const entry of entriesBeforeCopy) {
           copyEntry(join(source, entry), join(destination, entry));
+        }
+        const entriesAfterCopy = readdirSync(source).sort();
+        const sourceAfterCopyStat = lstatSync(source);
+        if (
+          !sourceAfterCopyStat.isDirectory() ||
+          sourceAfterCopyStat.isSymbolicLink() ||
+          !sameSourceMetadata(sourceStat, sourceAfterCopyStat) ||
+          entriesBeforeCopy.length !== entriesAfterCopy.length ||
+          entriesBeforeCopy.some(
+            (entry, index) => entry !== entriesAfterCopy[index],
+          )
+        ) {
+          throw new Error(`source directory changed during copy: ${source}`);
         }
       } finally {
         activeDirectories.delete(sourceReal);
