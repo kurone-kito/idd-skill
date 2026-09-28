@@ -995,6 +995,7 @@ function fakeDeps(
     }),
     realpathOrNull: (p: string) => p,
     readlinkOrNull: () => null,
+    readPathFingerprint: () => 'test-fingerprint',
     acquireCloneLock: () => ({ path: '/repo/.idd-clone.lock', token: 'tok' }),
     releaseCloneLock: () => {},
     resolveDevelopmentBranch: () => 'main',
@@ -1116,6 +1117,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   assert.deepEqual(callOrder, [
     'confirm-step1',
     'acquire',
+    'confirm-recheck',
     'confirm-recheck',
     'confirm-recheck',
     'confirm-recheck',
@@ -2630,7 +2632,7 @@ test('forced retry re-verifies preservation after the final identity checks', ()
           ok: true,
           status: 0,
           stdout:
-            stashListCalls === 1 || stashListCalls === 9
+            stashListCalls === 1 || stashListCalls === 10
               ? ''
               : `${stashEntry}\n`,
           stderr: '',
@@ -2656,7 +2658,7 @@ test('forced retry re-verifies preservation after the final identity checks', ()
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(stashListCalls, 9);
+  assert.equal(stashListCalls, 10);
   assert.equal(guardCalls, 1);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /forced-removal preservation artifact/);
@@ -2669,6 +2671,7 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
   const tag = 'idd-lwr claim-x';
   const first = `stash@{0}: On issue/1-task: ${tag}`;
   const both = `${first}\nstash@{1}: On issue/1-task: ${tag}`;
+  const all = `${both}\nstash@{2}: On issue/1-task: ${tag}`;
   const deps = fakeDeps({
     runGit: (argv) => {
       if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
@@ -2691,11 +2694,13 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
           ok: true,
           status: 0,
           stdout:
-            stashPushCount >= 2
-              ? `${both}\n`
-              : stashPushCount === 1
-                ? `${first}\n`
-                : '',
+            stashPushCount >= 3
+              ? `${all}\n`
+              : stashPushCount >= 2
+                ? `${both}\n`
+                : stashPushCount === 1
+                  ? `${first}\n`
+                  : '',
           stderr: '',
         };
       }
@@ -2719,7 +2724,7 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(stashPushCount, 2);
+  assert.equal(stashPushCount, 3);
   assert.equal(guardCalls, 2);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -3640,7 +3645,7 @@ test('late preservation rescans initialized submodule ignored files before remov
       ],
     },
   ]);
-  assert.equal(submoduleIgnoredScans, 6);
+  assert.equal(submoduleIgnoredScans, 7);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -4164,7 +4169,7 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(ignoredScanCalls, 7);
+  assert.equal(ignoredScanCalls, 8);
   assert.deepEqual(copied, [
     '/tmp/preserve/ignored/late.env',
     '/tmp/preserve/ignored/final-removal/final.env',
@@ -4176,6 +4181,40 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
   );
   assert.equal(removalAttempted, true);
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('blocks cleanup when a preserved ignored source changes after its copy', () => {
+  let fingerprintCalls = 0;
+  let removalAttempted = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! race.env\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'clean') {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    readPathFingerprint: () => {
+      fingerprintCalls += 1;
+      return fingerprintCalls <= 5 ? 'before-change' : 'after-change';
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(removalAttempted, false);
+  assert.match(verdict.result, /changed contents or identity/);
 });
 
 test('linked removal rechecks routing after final ignored-file cleanup', () => {
@@ -5637,6 +5676,43 @@ test('primary recovery verifies the development branch exists before preservatio
     deps,
   );
   assert.equal(preservationMutation, false);
+  assert.equal(verdict.mutated, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /not available locally/);
+});
+
+test('primary dry-run verifies the development branch exists before removal', () => {
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/primary'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) =>
+      argv[0] === 'show-ref'
+        ? {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'missing branch',
+          }
+        : cleanRepoRunGit(argv),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ worktree: '/repo/primary' }),
+    deps,
+  );
   assert.equal(verdict.mutated, false);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /not available locally/);

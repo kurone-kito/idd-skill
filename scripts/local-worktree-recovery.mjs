@@ -33,6 +33,7 @@
 //
 // Default mode is dry-run (no mutation); `--apply` performs steps 3 and 4.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -166,6 +167,93 @@ function readFileOrNull(path) {
     return null;
   }
 }
+/** Return a content-and-identity fingerprint for a recovery source path.
+ * Ignored files are copied before destructive cleanup, so checking only that
+ * the path is still ignored is insufficient: a writer can replace its
+ * contents after the copy and `git clean` would then delete newer data. The
+ * fingerprint covers regular-file bytes, symlink text, and recursive
+ * directory contents together with lstat identity metadata. Any unreadable
+ * or concurrently changing path fails closed by returning null. */
+function pathFingerprintOnDisk(path) {
+  const hash = createHash('sha256');
+  const activeDirectories = new Set();
+  const statSignature = (stat) =>
+    [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(
+      ':',
+    );
+  const sameStat = (before, after) =>
+    statSignature(before) === statSignature(after);
+  const visit = (candidate) => {
+    let before;
+    try {
+      before = lstatSync(candidate);
+    } catch {
+      return false;
+    }
+    hash.update(`entry:${candidate}\0${statSignature(before)}\0`);
+    if (before.isSymbolicLink()) {
+      let linkText;
+      try {
+        linkText = readlinkSync(candidate, 'utf8');
+      } catch {
+        return false;
+      }
+      hash.update(`link:${linkText}\0`);
+      try {
+        return sameStat(before, lstatSync(candidate));
+      } catch {
+        return false;
+      }
+    }
+    if (before.isFile()) {
+      let contents;
+      try {
+        contents = readFileSync(candidate);
+      } catch {
+        return false;
+      }
+      hash.update(`file:${contents.length}:`);
+      hash.update(contents);
+      try {
+        return sameStat(before, lstatSync(candidate));
+      } catch {
+        return false;
+      }
+    }
+    if (!before.isDirectory()) return false;
+    let realDirectory;
+    let entriesBefore;
+    try {
+      realDirectory = realpathSync(candidate);
+      entriesBefore = readdirSync(candidate).sort();
+    } catch {
+      return false;
+    }
+    if (activeDirectories.has(realDirectory)) return false;
+    activeDirectories.add(realDirectory);
+    try {
+      for (const entry of entriesBefore) {
+        hash.update(`name:${entry}\0`);
+        if (!visit(join(candidate, entry))) return false;
+      }
+      const entriesAfter = readdirSync(candidate).sort();
+      let after;
+      try {
+        after = lstatSync(candidate);
+      } catch {
+        return false;
+      }
+      return (
+        sameStat(before, after) &&
+        entriesBefore.length === entriesAfter.length &&
+        entriesBefore.every((entry, index) => entry === entriesAfter[index])
+      );
+    } finally {
+      activeDirectories.delete(realDirectory);
+    }
+  };
+  return visit(path) ? hash.digest('hex') : null;
+}
 function readDirectoryIdentity(path) {
   const stat = statSync(path, { bigint: true });
   if (!stat.isDirectory()) {
@@ -292,6 +380,8 @@ function isPrimaryRecoveryPreservationManifest(value) {
         typeof entry.scope === 'string' &&
         typeof entry.path === 'string' &&
         isNullableString(entry.copiedTo) &&
+        (entry.sourceFingerprint === undefined ||
+          isNullableString(entry.sourceFingerprint)) &&
         typeof entry.copyFailed === 'boolean',
     ) &&
     typeof value.ignoredFilesScanFailed === 'boolean' &&
@@ -332,6 +422,13 @@ function parsePrimaryRecoveryPreservationManifest(encoded) {
       backupRefs: parsed.backupRefs.map((entry) => ({
         ...entry,
         localRefsSnapshot: entry.localRefsSnapshot ?? null,
+      })),
+      ignoredFilesCopied: parsed.ignoredFilesCopied.map((entry) => ({
+        ...entry,
+        // Markers written before source fingerprints were introduced are
+        // readable, but their ignored-file evidence is incomplete and must
+        // fail closed before destructive cleanup.
+        sourceFingerprint: entry.sourceFingerprint ?? null,
       })),
     };
   } catch {
@@ -1508,6 +1605,7 @@ function scanAndMaybeCopyIgnoredFiles(
         scope: scopeLabel,
         path: ignoredPath,
         copiedTo: null,
+        sourceFingerprint: null,
         copyFailed: false,
       });
       continue;
@@ -1535,6 +1633,7 @@ function scanAndMaybeCopyIgnoredFiles(
           scope: scopeLabel,
           path: ignoredPath,
           copiedTo: null,
+          sourceFingerprint: null,
           copyFailed: false,
         });
         continue;
@@ -1556,16 +1655,24 @@ function scanAndMaybeCopyIgnoredFiles(
           scope: scopeLabel,
           path: ignoredPath,
           copiedTo: destination,
+          sourceFingerprint: null,
           copyFailed: true,
         });
         continue;
       }
     }
+    const sourceFingerprint = apply
+      ? deps.readPathFingerprint(join(scopePath, ignoredPath))
+      : null;
+    if (apply && sourceFingerprint === null) {
+      scanFailed = true;
+    }
     copied.push({
       scope: scopeLabel,
       path: ignoredPath,
       copiedTo: destination,
-      copyFailed: false,
+      sourceFingerprint,
+      copyFailed: apply && sourceFingerprint === null,
     });
   }
   return { copied, scanFailed };
@@ -1593,11 +1700,14 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     if (!isSafeRelativePath(entry.path)) {
       return `ignored path ${entry.scope}/${entry.path} is unsafe`;
     }
-    const paths = pathsByScope.get(entry.scope) ?? new Set();
-    paths.add(entry.path);
+    const paths = pathsByScope.get(entry.scope) ?? new Map();
+    // A later scan may intentionally refresh the same destination after a
+    // prior scan. Verify the newest source snapshot for that path.
+    paths.set(entry.path, entry);
     pathsByScope.set(entry.scope, paths);
   }
-  for (const [scope, paths] of pathsByScope) {
+  for (const [scope, entriesByPath] of pathsByScope) {
+    const paths = new Set(entriesByPath.keys());
     const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
     const currentStatus = deps.runGit(
       [
@@ -1628,6 +1738,25 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       ) {
         return `preserved ignored path ${scope}/${path} changed status before cleanup`;
       }
+      const presence = pathPresenceForDeps(deps, join(scopePath, path));
+      if (presence === 'unknown') {
+        return `could not establish the preserved ignored path ${scope}/${path} before cleanup`;
+      }
+      if (presence === 'present') {
+        const entry = entriesByPath.get(path);
+        if (entry?.sourceFingerprint === null) {
+          return `preserved ignored path ${scope}/${path} has no source fingerprint`;
+        }
+        const currentFingerprint = deps.readPathFingerprint(
+          join(scopePath, path),
+        );
+        if (currentFingerprint === null) {
+          return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
+        }
+        if (currentFingerprint !== entry?.sourceFingerprint) {
+          return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
+        }
+      }
     }
     const cleaned = deps.runGit(
       ['clean', '-fdx', '--', ...Array.from(paths, literalGitPathspec)],
@@ -1643,6 +1772,82 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     }
   }
   return null;
+}
+/** Preserve and clean ignored files for one final linked-worktree window.
+ * Keeping this as one operation makes the scan/cleanup result easy to append
+ * to the recovery manifest and lets callers repeat it after a final
+ * network-backed routing confirmation. */
+function preserveAndCleanIgnoredFilesForScopes(
+  targetPath,
+  scopes,
+  deps,
+  destinationNamespace,
+) {
+  const targetGitDirResult = deps.runGit(
+    ['rev-parse', '--absolute-git-dir'],
+    targetPath,
+  );
+  const targetGitDir =
+    targetGitDirResult.ok && targetGitDirResult.stdout.trim()
+      ? targetGitDirResult.stdout.trim()
+      : null;
+  const entries = [];
+  const addScan = (scopePath, scopeLabel, sourceRoots) => {
+    const scan = scanAndMaybeCopyIgnoredFiles(
+      scopePath,
+      scopeLabel,
+      true,
+      targetPath,
+      null,
+      sourceRoots,
+      deps,
+      destinationNamespace,
+    );
+    entries.push(...scan.copied);
+    if (scan.scanFailed) {
+      return `ignored-file preservation for ${scopeLabel} could not be fully scanned`;
+    }
+    if (
+      scan.copied.some(
+        (entry) =>
+          entry.copyFailed ||
+          entry.copiedTo === null ||
+          !deps.pathExists(entry.copiedTo),
+      )
+    ) {
+      return `ignored-file preservation for ${scopeLabel} could not be fully verified`;
+    }
+    return null;
+  };
+  const topLevelError = addScan(targetPath, '.', [
+    targetPath,
+    ...(targetGitDir ? [targetGitDir] : []),
+  ]);
+  if (topLevelError !== null) return { entries, error: topLevelError };
+  for (const scope of scopes) {
+    const scopePath = join(targetPath, scope);
+    const scopeGitDirResult = deps.runGit(
+      ['rev-parse', '--absolute-git-dir'],
+      scopePath,
+    );
+    const scopeGitDir =
+      scopeGitDirResult.ok && scopeGitDirResult.stdout.trim()
+        ? scopeGitDirResult.stdout.trim()
+        : null;
+    const error = addScan(scopePath, scope, [
+      targetPath,
+      scopePath,
+      ...(targetGitDir ? [targetGitDir] : []),
+      ...(scopeGitDir ? [scopeGitDir] : []),
+    ]);
+    if (error !== null) return { entries, error };
+  }
+  const cleanupError = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    targetPath,
+    deps,
+  );
+  return { entries, error: cleanupError };
 }
 /** Remove source paths copied by the unmerged-path fallback before a primary
  * checkout. A plain copy preserves the working-tree bytes but leaves the
@@ -2323,6 +2528,7 @@ function preservationVerified(preserve, pathExists) {
   // removal despite §LWR requiring these copies verified before step 4.
   for (const ignored of preserve.ignoredFilesCopied) {
     if (ignored.copyFailed || ignored.copiedTo === null) return false;
+    if (ignored.sourceFingerprint === null) return false;
     if (!pathExists(ignored.copiedTo)) return false;
   }
   if (preserve.submoduleAdminCopyFailed) return false;
@@ -2460,7 +2666,19 @@ function reverifyPreservationArtifactsFresh(
   for (const ignored of preserve.ignoredFilesCopied) {
     if (
       ignored.copyFailed ||
-      (ignored.copiedTo !== null && !copyVerified(ignored.copiedTo))
+      ignored.copiedTo === null ||
+      ignored.sourceFingerprint === null ||
+      !copyVerified(ignored.copiedTo)
+    ) {
+      return false;
+    }
+    if (!isSafeRelativePath(ignored.path)) return false;
+    const source = join(scopePath(ignored.scope), ignored.path);
+    const presence = pathPresenceForDeps(deps, source);
+    if (presence === 'unknown') return false;
+    if (
+      presence === 'present' &&
+      deps.readPathFingerprint(source) !== ignored.sourceFingerprint
     ) {
       return false;
     }
@@ -3390,6 +3608,25 @@ export function runLocalWorktreeRecovery(args, deps) {
           `could not plan primary-worktree release: ${errorMessage(error)}`,
         );
       }
+      if (dryRunDevelopmentBranch === null) {
+        return recordRemovalFailure(
+          'could not plan primary-worktree release because the development branch is missing; stopping before removal',
+        );
+      }
+      const developmentBranchRef = deps.runGit(
+        [
+          'show-ref',
+          '--verify',
+          '--quiet',
+          `refs/heads/${dryRunDevelopmentBranch}`,
+        ],
+        targetPath,
+      );
+      if (!developmentBranchRef.ok) {
+        return recordRemovalFailure(
+          `the configured development branch ${dryRunDevelopmentBranch} is not available locally; stopping before removal`,
+        );
+      }
     }
     verdict.plan.removal = {
       kind: verdict.primaryOrLinked ?? 'linked',
@@ -3743,9 +3980,26 @@ export function runLocalWorktreeRecovery(args, deps) {
     // Preservation was performed under the exclusion, but its artifacts must
     // still be reverified before the destructive step because the copy/stash
     // operations themselves can race with unrelated filesystem writers.
+    let scopesMissingFromCurrentTree = new Set();
+    if (primaryRecoveryResume && verdict.primaryOrLinked === 'primary') {
+      const currentTree = deps.runGit(
+        ['ls-tree', '-r', '-z', '--full-tree', applyDevelopmentBranch ?? ''],
+        targetPath,
+      );
+      if (!currentTree.ok) {
+        return recordRemovalFailure(
+          `could not inspect the resumed development tree before preservation verification: ${currentTree.stderr}`,
+        );
+      }
+      const currentGitlinks = gitlinkPathsAtRevision(currentTree.stdout);
+      scopesMissingFromCurrentTree = new Set(
+        verdict.plan.stashes
+          .map((stash) => stash.scope)
+          .filter((scope) => scope !== '.' && !currentGitlinks.has(scope)),
+      );
+    }
     if (
       !shortcut.eligible &&
-      !primaryRecoveryResume &&
       !reverifyPreservationArtifactsFresh(
         {
           stashes: verdict.plan.stashes,
@@ -3757,6 +4011,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         },
         targetPath,
         deps,
+        scopesMissingFromCurrentTree,
       )
     ) {
       verdict.plan.removal = {
@@ -4549,7 +4804,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
-      const scopesMissingFromCurrentTree = new Set();
+      scopesMissingFromCurrentTree = new Set();
       if (verdict.plan.stashes.some((stash) => stash.scope !== '.')) {
         const currentTree = deps.runGit(
           ['ls-tree', '-r', '-z', '--full-tree', 'HEAD'],
@@ -5751,6 +6006,97 @@ export function runLocalWorktreeRecovery(args, deps) {
           'the worktree-local claim lock changed after the final confirmation preservation; stopping before removal',
         );
       }
+      // The last routing confirmation above is itself a concurrency window:
+      // a watcher can create or modify an ignored path after the previous
+      // scan and cleanup. Perform one complete ignored-file preservation pass
+      // after that confirmation, then repeat ownership checks so the guarded
+      // removal cannot discard data created in this final gap (Codex review
+      // #4124706512).
+      const finalAfterConfirmationIgnored =
+        preserveAndCleanIgnoredFilesForScopes(
+          targetPath,
+          verdict.plan.stashes
+            .map((stash) => stash.scope)
+            .filter((scope) => scope !== '.'),
+          deps,
+          'final-removal-after-final-confirmation',
+        );
+      verdict.plan.ignoredFilesCopied.push(
+        ...finalAfterConfirmationIgnored.entries,
+      );
+      verdict.mutated ||= finalAfterConfirmationIgnored.entries.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      if (finalAfterConfirmationIgnored.error !== null) {
+        return recordRemovalFailure(
+          `after the final linked confirmation, ${finalAfterConfirmationIgnored.error}; stopping before removal`,
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a preservation artifact disappeared after the final linked confirmation scan; stopping before removal',
+        );
+      }
+      const finalLinkedConfirmAfterFinalScan = deps.confirmBlock(cwd);
+      const finalLinkedRoutingAfterFinalScan =
+        finalLinkedConfirmAfterFinalScan.routing;
+      const finalLinkedRecoveredAfterFinalScan =
+        finalLinkedRoutingAfterFinalScan
+          ? extractRecoveredClaim(finalLinkedRoutingAfterFinalScan)
+          : null;
+      const finalLinkedReleasedAfterFinalScan =
+        finalLinkedRoutingAfterFinalScan !== null &&
+        isReleasedClaimRouting(finalLinkedRoutingAfterFinalScan);
+      const finalLinkedReportsTargetAfterFinalScan =
+        finalLinkedRoutingAfterFinalScan !== null &&
+        finalLinkedRoutingAfterFinalScan.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(finalLinkedRoutingAfterFinalScan.reason) &&
+        !finalLinkedRoutingAfterFinalScan.reason.endsWith(
+          '-local-worktree-unreadable',
+        ) &&
+        (
+          finalLinkedRoutingAfterFinalScan.evidence?.local_worktree?.paths ?? []
+        ).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      if (
+        !finalLinkedConfirmAfterFinalScan.ok ||
+        !finalLinkedReportsTargetAfterFinalScan ||
+        finalLinkedRecoveredAfterFinalScan?.claimId !== recoveredClaimId ||
+        finalLinkedRecoveredAfterFinalScan.branch !== recoveredBranch ||
+        finalLinkedReleasedAfterFinalScan !== recoveredFromReleasedClaim
+      ) {
+        return recordRemovalFailure(
+          'the linked-worktree routing/claim identity changed after the final post-confirmation preservation; stopping before removal',
+        );
+      }
+      finalLinkedLock = deps.checkLock(targetPath);
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLinkedLock,
+          recoveredClaimId,
+          finalLinkedReleasedAfterFinalScan,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed after the final post-confirmation preservation; stopping before removal',
+        );
+      }
     }
     let remove;
     if (shortcut.eligible) {
@@ -5904,6 +6250,103 @@ export function runLocalWorktreeRecovery(args, deps) {
           'a forced-removal preservation artifact disappeared after the final identity checks; stopping before removal',
         );
       }
+      // The final routing/lock checks and artifact verification above can
+      // still be followed by a writer racing with the forced retry. Run the
+      // complete preservation/status pass again immediately before the final
+      // identity checks, then re-read routing and the lock once more. This
+      // keeps `git worktree remove --force` from deleting data that appeared
+      // after the first late preservation (Codex review #4124706520).
+      const finalForcePreserve = planAndMaybePreserve(
+        targetPath,
+        recoveredBranch ?? '',
+        tag,
+        true,
+        deps,
+        applyPreserveDir,
+        targetGitDir,
+      );
+      incorporatePreservation(finalForcePreserve, true);
+      if (!preservationVerified(finalForcePreserve, deps.pathExists)) {
+        return recordRemovalFailure(
+          'the final preservation before forced removal could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a final preservation artifact disappeared before forced removal; stopping before removal',
+        );
+      }
+      const finalForceConfirm = deps.confirmBlock(cwd);
+      const finalForceRouting = finalForceConfirm.routing;
+      const finalForceRecovered = finalForceRouting
+        ? extractRecoveredClaim(finalForceRouting)
+        : null;
+      const finalForceFromReleasedClaim =
+        finalForceRouting !== null && isReleasedClaimRouting(finalForceRouting);
+      const finalForceReportsTarget =
+        finalForceRouting !== null &&
+        finalForceRouting.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(finalForceRouting.reason) &&
+        !finalForceRouting.reason.endsWith('-local-worktree-unreadable') &&
+        (finalForceRouting.evidence?.local_worktree?.paths ?? []).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      if (
+        !finalForceConfirm.ok ||
+        !finalForceReportsTarget ||
+        finalForceRecovered?.claimId !== recoveredClaimId ||
+        finalForceRecovered.branch !== recoveredBranch ||
+        finalForceFromReleasedClaim !== recoveredFromReleasedClaim
+      ) {
+        return recordRemovalFailure(
+          'the forced-removal routing/claim identity changed after final preservation; stopping before removal',
+        );
+      }
+      const finalForceLock = deps.checkLock(targetPath);
+      if (
+        !lockMatchesRecoveredClaim(
+          finalForceLock,
+          recoveredClaimId,
+          finalForceFromReleasedClaim,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed after final preservation; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a final preservation artifact disappeared after final forced-removal identity checks; stopping before removal',
+        );
+      }
       if (!deps.removeWorktreeIfLockMatches) {
         return recordRemovalFailure(
           'no identity-bound forced-removal guard is available; stopping before removal',
@@ -5912,7 +6355,7 @@ export function runLocalWorktreeRecovery(args, deps) {
       const forcedRemove = deps.removeWorktreeIfLockMatches(
         targetPath,
         repoPath,
-        forceLock,
+        finalForceLock,
         true,
       );
       if (forcedRemove === null) {
@@ -6658,6 +7101,7 @@ function createProductionDeps(args) {
     readDirectoryIdentity,
     realpathOrNull,
     readlinkOrNull,
+    readPathFingerprint: pathFingerprintOnDisk,
     acquireCloneLock: (repoPath, agentId) =>
       acquireCloneLock(repoPath, agentId),
     releaseCloneLock: (handle) => releaseCloneLock(handle),
