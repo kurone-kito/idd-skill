@@ -260,7 +260,7 @@ below instead.
 
    ```sh
    git -C <target-repo> add -A && \
-   git -C <target-repo> commit -m "chore: record idd template mirror"
+   git -C <target-repo> commit --allow-empty -m "chore: record idd template mirror"
    ```
 
    Keep the pre-import commit reachable; pass its ref (normally `HEAD^`) as
