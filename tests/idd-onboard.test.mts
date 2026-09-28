@@ -4352,6 +4352,31 @@ test('checkHeldSchemaDrift ignores regex literals after function declarations', 
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after typed function declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "function helper(): void {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift ignores regex literals after labeled blocks', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "label: {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after bindingless catch bodies', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5579,6 +5604,16 @@ test('checkHeldSchemaDrift follows Node print-class semantics', () => {
 test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {
   for (const [pattern, relativePath, expected] of [
     ['schemas/?.json', 'schemas/🙂.json', []],
+    [
+      'schemas/?*.json',
+      'schemas/🙂.json',
+      [
+        {
+          schemaOrFixturePath: 'schemas/🙂.json',
+          heldModulePath: DRIFT_MODULE,
+        },
+      ],
+    ],
     [
       'schemas/??.json',
       'schemas/🙂.json',

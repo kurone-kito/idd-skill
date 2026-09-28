@@ -2156,20 +2156,32 @@ function isFunctionClosingParenthesis(text, index) {
 }
 function isFunctionDeclarationPrefix(text) {
   const trimmed = text.trimEnd();
-  if (!trimmed.endsWith(')')) {
-    return false;
-  }
-  let depth = 0;
-  for (let current = trimmed.length - 1; current >= 0; current -= 1) {
-    const character = trimmed[current] ?? '';
-    if (character === ')') {
-      depth += 1;
-    } else if (character === '(') {
-      depth -= 1;
-      if (depth === 0) {
-        return /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?$/u.test(
-          trimmed.slice(0, current),
-        );
+  for (
+    let close = trimmed.lastIndexOf(')');
+    close >= 0;
+    close = trimmed.lastIndexOf(')', close - 1)
+  ) {
+    let depth = 0;
+    for (let current = close; current >= 0; current -= 1) {
+      const character = trimmed[current] ?? '';
+      if (character === ')') {
+        depth += 1;
+      } else if (character === '(') {
+        depth -= 1;
+        if (depth === 0) {
+          const returnAnnotation = trimmed.slice(close + 1).trimStart();
+          if (returnAnnotation !== '' && !returnAnnotation.startsWith(':')) {
+            break;
+          }
+          if (
+            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?$/u.test(
+              trimmed.slice(0, current),
+            )
+          ) {
+            return true;
+          }
+          break;
+        }
       }
     }
   }
@@ -2219,6 +2231,7 @@ function isBlockClosingBrace(text, index) {
             )) ||
           /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
+          /(?:^|[;}])\s*(?:[$\w]+\s*:\s*)+$/u.test(openingPrefix) ||
           isClassLikeDeclarationPrefix(openingPrefix)
         );
       }
@@ -3455,6 +3468,8 @@ function globPatternToRegex(
       questionCaptures.push({
         name: captureName,
         codeUnitCount: questionEnd - index,
+        allowsAstralCodePoint:
+          questionEnd - index === 1 && pattern[questionEnd] === '*',
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
       index = questionEnd - 1;
