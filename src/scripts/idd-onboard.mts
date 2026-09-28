@@ -2909,6 +2909,7 @@ function stripJavaScriptComments(
       if (character === '$' && text[index + 1] === '{') {
         result += maskDirectoryApiNamesInString(
           text.slice(literalStart, index),
+          apiNameAtStart,
         );
         result += '${';
         const expression = scanCode(index + 2, true);
@@ -3601,6 +3602,22 @@ function pathExpressionCandidates(text: string): string[] {
     return splitTopLevelArguments(expression.slice(1, -1)).flatMap((entry) =>
       pathExpressionCandidates(entry),
     );
+  }
+  const conditionalIndex = findTopLevelCharacter(expression, '?');
+  if (conditionalIndex !== -1 && expression[conditionalIndex + 1] !== '.') {
+    const alternateOffset = findTopLevelCharacter(
+      expression.slice(conditionalIndex + 1),
+      ':',
+    );
+    if (alternateOffset !== -1) {
+      const alternateIndex = conditionalIndex + 1 + alternateOffset;
+      return [
+        ...pathExpressionCandidates(
+          expression.slice(conditionalIndex + 1, alternateIndex),
+        ),
+        ...pathExpressionCandidates(expression.slice(alternateIndex + 1)),
+      ];
+    }
   }
   const literals = scanStringLiterals(expression);
   const expressionText = maskJavaScriptStringContents(expression);

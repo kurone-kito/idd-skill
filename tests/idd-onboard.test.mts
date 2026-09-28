@@ -4044,6 +4044,21 @@ test('checkHeldSchemaDrift combines literal directory-scan path fragments', () =
   ]);
 });
 
+test('checkHeldSchemaDrift preserves conditional path branches before concatenation', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync(enabled ? 'schemas/' + '*.json' : 'fixtures/' + '*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects multiline directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5195,6 +5210,21 @@ test('checkHeldSchemaDrift resolves static directory-scan import aliases', () =>
       { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
     ]);
   }
+});
+
+test('checkHeldSchemaDrift masks import aliases in raw template segments', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { globSync as find } from 'node:fs';\nconst message = `x find('schemas/*.json') " +
+    '${' +
+    'enabled}`;\n';
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {

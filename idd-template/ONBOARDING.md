@@ -234,6 +234,9 @@ below instead.
    confirmed that the status listing contains only files intended for this
    onboarding:
 
+   This is preventive guidance; no accidental-staging incident has been
+   observed in this workflow.
+
    ```sh
    git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
      git -C <target-repo> status --short --untracked-files=all
