@@ -4960,6 +4960,7 @@ test('primary recovery removes initialized submodules deleted by the target bran
   const submodulePath = join(root, 'submodule');
   let submodulePresent = true;
   let submoduleStashCreated = false;
+  let submoduleStashPushes = 0;
   let checkedOut = false;
   let confirmCalls = 0;
   const events: string[] = [];
@@ -5034,6 +5035,7 @@ test('primary recovery removes initialized submodules deleted by the target bran
         }
         if (argv[0] === 'stash' && argv[1] === 'push') {
           submoduleStashCreated = true;
+          submoduleStashPushes += 1;
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
         if (
@@ -5045,7 +5047,10 @@ test('primary recovery removes initialized submodules deleted by the target bran
           return {
             ok: true,
             status: 0,
-            stdout: 'stash@{0}: idd-lwr claim-x\n',
+            stdout: Array.from(
+              { length: submoduleStashPushes },
+              (_, index) => `stash@{${index}}: idd-lwr claim-x`,
+            ).join('\n'),
             stderr: '',
           };
         }
@@ -5061,7 +5066,9 @@ test('primary recovery removes initialized submodules deleted by the target bran
                     ? ''
                     : ' M submodule\n'
                   : cwd === submodulePath
-                    ? ' M changed.txt\n'
+                    ? submoduleStashPushes > 0
+                      ? ' M changed-after-initial-preservation.txt\n'
+                      : ' M changed.txt\n'
                     : '',
             stderr: '',
           };
@@ -5083,6 +5090,9 @@ test('primary recovery removes initialized submodules deleted by the target bran
         if (argv[0] === 'checkout') {
           checkedOut = true;
           events.push('checkout');
+        }
+        if (argv[0] === 'submodule' && argv[1] === 'sync') {
+          events.push('submodule-sync');
         }
         if (argv[0] === 'submodule' && argv[1] === 'update') {
           events.push('submodule-update');
@@ -5119,9 +5129,11 @@ test('primary recovery removes initialized submodules deleted by the target bran
       deps,
     );
     assert.equal(events.includes('copy-submodule-admin'), true);
-    assert.deepEqual(events.slice(-3), [
+    assert.equal(submoduleStashPushes, 2);
+    assert.deepEqual(events.slice(-4), [
       'remove-submodule',
       'checkout',
+      'submodule-sync',
       'submodule-update',
     ]);
     assert.equal(existsSync(submodulePath), false);
@@ -5348,6 +5360,9 @@ test('primary recovery removes preserved deinitialized submodule paths before ch
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
         if (argv[0] === 'checkout') events.push('checkout');
+        if (argv[0] === 'submodule' && argv[1] === 'sync') {
+          events.push('submodule-sync');
+        }
         if (argv[0] === 'submodule' && argv[1] === 'update') {
           events.push('submodule-update');
         }
@@ -5375,13 +5390,18 @@ test('primary recovery removes preserved deinitialized submodule paths before ch
       }),
       deps,
     );
+    const uninitializedCopy = `copy:${join(
+      preserveDir,
+      `uninitialized-${Buffer.from('vendor').toString('base64url')}`,
+    )}`;
+    assert.equal(
+      events.filter((event) => event === uninitializedCopy).length,
+      2,
+    );
     assert.deepEqual(events.slice(-4), [
-      `copy:${join(
-        preserveDir,
-        `uninitialized-${Buffer.from('vendor').toString('base64url')}`,
-      )}`,
       `remove:${submodulePath}`,
       'checkout',
+      'submodule-sync',
       'submodule-update',
     ]);
     assert.equal(submodulePresent, false);

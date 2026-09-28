@@ -2818,6 +2818,92 @@ function refreshUninitializedSubmoduleCopies(
   return { error: null, added, preserveDir };
 }
 
+/** Refresh initialized-submodule stashes immediately before primary cleanup.
+ * The primary path may remove an initialized checkout when the development
+ * branch no longer contains its gitlink. Re-scan every initialized
+ * submodule, including one that appeared after the initial plan, and stash
+ * any tracked or untracked changes that arrived after the first pass. */
+interface InitializedSubmoduleRefresh {
+  error: string | null;
+  refreshed: StashPlanEntry[];
+}
+
+function refreshInitializedSubmoduleStashes(
+  stashes: readonly StashPlanEntry[],
+  targetPath: string,
+  tag: string,
+  targetGitDirForScope: string | null,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    | 'copyPath'
+    | 'ensurePreserveDir'
+    | 'pathExists'
+    | 'realpathOrNull'
+    | 'readlinkOrNull'
+    | 'runGit'
+  >,
+): InitializedSubmoduleRefresh {
+  const knownScopes = new Set(
+    stashes.map((stash) => stash.scope).filter((scope) => scope !== '.'),
+  );
+  const status = deps.runGit(
+    ['submodule', 'status', '--recursive'],
+    targetPath,
+  );
+  if (!status.ok || !submoduleStatusOutputIsValid(status.stdout)) {
+    return {
+      error:
+        'could not rescan initialized submodules immediately before primary cleanup; stopping before checkout',
+      refreshed: [],
+    };
+  }
+  const submodules = submoduleStatusEntries(status.stdout);
+  const byPath = new Map(
+    submodules.map((submodule) => [submodule.path, submodule]),
+  );
+  for (const scope of knownScopes) {
+    const submodule = byPath.get(scope);
+    if (submodule === undefined || submodule.status === '-') {
+      return {
+        error: `initialized submodule ${scope} disappeared or became uninitialized before primary cleanup; stopping before checkout`,
+        refreshed: [],
+      };
+    }
+  }
+  const initialized = submodules.filter(
+    (submodule) => submodule.status !== '-',
+  );
+  const allInitializedPaths = initialized.map((submodule) => submodule.path);
+  const refreshed: StashPlanEntry[] = [];
+  for (const submodule of initialized) {
+    const refreshedStash = planAndMaybeStashScope(
+      join(targetPath, submodule.path),
+      submodule.path,
+      tag,
+      true,
+      targetPath,
+      deps,
+      nestedSubmodulePathsForScope(allInitializedPaths, submodule.path),
+      targetGitDirForScope,
+    );
+    refreshed.push(refreshedStash);
+    if (
+      refreshedStash.statusReadFailed ||
+      refreshedStash.stashListReadFailed ||
+      refreshedStash.hardStashFailure ||
+      (refreshedStash.hasChanges &&
+        !refreshedStash.stashed &&
+        refreshedStash.unmergedFallbackAllPreserved !== true)
+    ) {
+      return {
+        error: `late preservation for initialized submodule ${submodule.path} could not be fully verified; stopping before checkout`,
+        refreshed,
+      };
+    }
+  }
+  return { error: null, refreshed };
+}
+
 /**
  * Run the full §LWR steps 1/3/4 sequence. Pure over injected `deps` so a
  * unit test can assert exact call order (acquire-lock before recheck,
@@ -3816,6 +3902,32 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      const lateUninitialized = refreshUninitializedSubmoduleCopies(
+        verdict.plan.uninitializedSubmodules,
+        targetPath,
+        targetGitDir,
+        deps,
+      );
+      if (lateUninitialized.preserveDir !== null) {
+        verdict.preserveDir ??= lateUninitialized.preserveDir;
+      }
+      if (lateUninitialized.added.length > 0) {
+        verdict.plan.uninitializedSubmodules.push(...lateUninitialized.added);
+        verdict.mutated ||= lateUninitialized.added.some(
+          (entry) => entry.copiedTo !== null,
+        );
+      }
+      if (lateUninitialized.error !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before checkout ${developmentBranch}, ${lateUninitialized.error}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       const uninitializedCleanupError =
         cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
           verdict.plan.uninitializedSubmodules,
@@ -3832,6 +3944,20 @@ export function runLocalWorktreeRecovery(
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
+      }
+      const initializedRefresh = refreshInitializedSubmoduleStashes(
+        verdict.plan.stashes,
+        targetPath,
+        tag,
+        targetGitDir,
+        deps,
+      );
+      verdict.plan.stashes.push(...initializedRefresh.refreshed);
+      verdict.mutated ||= initializedRefresh.refreshed.some(
+        (stash) => stash.stashed || stash.unmergedFallbackCopiedTo !== null,
+      );
+      if (initializedRefresh.error !== null) {
+        return recordRemovalFailure(initializedRefresh.error);
       }
       // Remove initialized submodule checkouts that the development branch
       // deletes before the final claim/lock confirmation below. The final
@@ -3920,6 +4046,21 @@ export function runLocalWorktreeRecovery(
           wouldRun: true,
           ran: false,
           detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const submoduleSync = deps.runGit(
+        ['submodule', 'sync', '--recursive'],
+        targetPath,
+      );
+      if (!submoduleSync.ok) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `submodule sync after checkout ${developmentBranch} failed: ${submoduleSync.stderr}`,
         };
         verdict.result = verdict.plan.removal.detail;
         return verdict;
