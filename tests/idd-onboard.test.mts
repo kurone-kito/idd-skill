@@ -6164,7 +6164,12 @@ test('checkHeldSchemaDrift follows Node print-class semantics', () => {
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     hold: [DRIFT_MODULE],
   });
-  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/A.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
 });
 
 test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {

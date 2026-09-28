@@ -4569,7 +4569,7 @@ function globPatternToRegex(
           digit: '\\p{Nd}',
           graph: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}',
           lower: '\\p{Ll}',
-          print: '\\x00',
+          print: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S} ',
           punct: '\\p{P}',
           space: '\\s',
           upper: '\\p{Lu}',
