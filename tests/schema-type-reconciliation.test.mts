@@ -1594,6 +1594,7 @@ const postIddMarkerKeys = [
   'commentId',
   'url',
   'warnings',
+  'operationLocal',
 ] as const satisfies readonly (keyof PostIddMarkerResult)[];
 
 const postIddMarkerFixture = {

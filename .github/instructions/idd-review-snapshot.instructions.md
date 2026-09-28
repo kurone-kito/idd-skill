@@ -114,8 +114,8 @@ Persist all six values by posting a PR comment with this format (when
 helper runtime is enabled, prefer the **one-command** profile-selected
 post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---apply` — which derives the other fields from a fresh
-`review-activity-snapshot` and posts in one step; forward
+--apply --operation-local` — one capture derives the fields;
+CI-incomplete defers only the post; forward
 `--trusted-marker-logins` too). **Always pass `--expected-head-sha`
 with the exact `{head-SHA}` from Step 1** — the helper fails closed
 (posts nothing) if it disagrees with the fresh snapshot's live HEAD,

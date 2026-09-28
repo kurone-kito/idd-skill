@@ -17,13 +17,11 @@
 // claim-revalidation gate immediately before invoking `--apply`, exactly as the
 // manual POST path it replaces already requires.
 
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
 import {
-  ciWaitSummaryIsPreMergeCiPassing,
   collectCiWaitState,
-  latestPassingCompletedAt,
+  type RequiredCiHeadAgreement,
+  requiredCiHeadAgreementFromSummary,
 } from './ci-wait-state.mts';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -62,6 +60,7 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
+import { collectReviewActivitySnapshot } from './review-activity-snapshot.mts';
 
 /**
  * Marker types whose prior same-family comments this module automatically
@@ -128,8 +127,8 @@ export type MarkerType = (typeof MARKER_TYPES)[number];
 
 /**
  * The marker `type`s that accept `--from-pr <n>`. `watermark` derives all
- * four snapshot fields via the full {@link runReviewActivitySnapshot}
- * composition; the advisory-family types (`advisory` / `advisory-recovery` /
+ * four snapshot fields from one in-process review-activity capture;
+ * the advisory-family types (`advisory` / `advisory-recovery` /
  * `advisory-reroll`, added in #1889; `review-ack`, added in #2050) derive
  * only `--head-sha` via the lighter {@link headShaFromPr} single `gh pr
  * view` call, since those renderers accept no other snapshot-shaped field.
@@ -303,6 +302,47 @@ export interface PostIddMarkerResult {
    * gets POSTed.
    */
   warnings?: string[];
+  /**
+   * Present only for `--operation-local`. The snapshot is the capture this
+   * operation just collected. `watermarkFields` describe that same object.
+   */
+  operationLocal?: OperationLocalWatermarkView;
+}
+
+/** Decision for one operation-local snapshot/watermark capture. */
+export type OperationLocalDecision = 'publish' | 'defer' | 'refuse';
+
+export type OperationLocalReasonCode =
+  | 'publish'
+  | 'required-checks'
+  | 'expected-head'
+  | 'new-head'
+  | 'ci-completion'
+  | 'ci-read'
+  | 'same-head-activity';
+
+/** Stored watermark boundary from an earlier, separate operation. */
+export interface OperationLocalPriorBoundary {
+  totalItemCount: number;
+  maxActivityUpdatedAt: string;
+}
+
+export interface OperationLocalWatermarkResult {
+  snapshot: unknown;
+  watermarkFields: MarkerFields | null;
+  warnings: string[];
+  decision: OperationLocalDecision;
+  reasonCode: OperationLocalReasonCode;
+  reason: string | null;
+}
+
+/** JSON view embedded in the CLI envelope. */
+export interface OperationLocalWatermarkView {
+  decision: OperationLocalDecision;
+  reason: string | null;
+  snapshot: unknown;
+  watermarkFields: MarkerFields | null;
+  warnings: string[];
 }
 
 /**
@@ -573,6 +613,170 @@ export function describeUnaddressedActivity(snapshot: unknown): string[] {
   ];
 }
 
+function sameHeadActivityAdvanced(
+  snapshot: unknown,
+  prior: OperationLocalPriorBoundary,
+): boolean {
+  const snap = (snapshot ?? {}) as Record<string, unknown>;
+  const count = snap.totalItemCount;
+  if (typeof count === 'number' && count > prior.totalItemCount) {
+    return true;
+  }
+  const max = snap.maxActivityUpdatedAt;
+  if (typeof max !== 'string' || max.trim() === '' || max === 'none') {
+    return false;
+  }
+  if (prior.maxActivityUpdatedAt === 'none') {
+    return true;
+  }
+  return max > prior.maxActivityUpdatedAt;
+}
+
+/**
+ * Derive watermark fields from one fresh activity capture, then compare a
+ * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
+ * `collectRichActivity` runs once per call; a later operation must call again.
+ * A thrown collector is an incomplete collection and does not become an empty
+ * success snapshot. The agreement reader is not called in that case.
+ */
+export function runOperationLocalSnapshotWatermark(input: {
+  prNumber: number;
+  expectedHeadSha?: string;
+  priorBoundary?: OperationLocalPriorBoundary | null;
+  collectRichActivity: () => unknown;
+  readRequiredCiAgreement: () => RequiredCiHeadAgreement;
+}): OperationLocalWatermarkResult {
+  let snapshot: unknown;
+  try {
+    snapshot = input.collectRichActivity();
+  } catch (error) {
+    throw new Error(
+      `incomplete review-activity collection: ${(error as Error).message}`,
+      { cause: error },
+    );
+  }
+  let watermarkFields: MarkerFields;
+  try {
+    watermarkFields = watermarkFieldsFromSnapshot(snapshot);
+  } catch (error) {
+    throw new Error(
+      `incomplete review-activity collection: ${(error as Error).message}`,
+      { cause: error },
+    );
+  }
+  const warnings = describeUnaddressedActivity(snapshot);
+  const liveHeadSha = watermarkFields['head-sha'];
+  let agreement: RequiredCiHeadAgreement;
+  try {
+    agreement = input.readRequiredCiAgreement();
+  } catch (error) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'ci-read',
+      reason:
+        `refusing to post watermark: could not read required-check state ` +
+        `for PR ${input.prNumber}: ${(error as Error).message}`,
+    };
+  }
+  const expected = input.expectedHeadSha ?? '';
+  if (expected && liveHeadSha.toLowerCase() !== expected.toLowerCase()) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'expected-head',
+      reason:
+        `refusing to post watermark: PR ${input.prNumber}'s live HEAD ` +
+        `(${liveHeadSha}) no longer matches the Step 1 stored ` +
+        `--expected-head-sha (${expected}); the branch moved between E1 ` +
+        `Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.`,
+    };
+  }
+  const ciHead = agreement.headRefOid.trim();
+  if (ciHead.toLowerCase() !== liveHeadSha.toLowerCase()) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'new-head',
+      reason:
+        `refusing to post watermark: PR ${input.prNumber}'s required-check ` +
+        `read is for HEAD ${ciHead || '(empty)'}, which does not match the ` +
+        `activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.`,
+    };
+  }
+  if (
+    input.priorBoundary &&
+    warnings.length > 0 &&
+    sameHeadActivityAdvanced(snapshot, input.priorBoundary)
+  ) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'same-head-activity',
+      reason:
+        `refusing to post watermark: PR ${input.prNumber} has newly ` +
+        `actionable same-HEAD activity beyond the stored watermark ` +
+        `boundary. Route this snapshot to fresh triage; do not publish a ` +
+        `watermark that marks those findings handled.`,
+    };
+  }
+  if (!agreement.requiredChecksPassing) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'defer',
+      reasonCode: 'required-checks',
+      reason:
+        `refusing to post watermark: PR ${input.prNumber}'s required ` +
+        `checks are not passing. Re-run --from-pr once they pass.`,
+    };
+  }
+  const snapshotPassingCompletedAt = watermarkFields['ci-completed-at'];
+  if (agreement.latestPassingCompletedAt !== snapshotPassingCompletedAt) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'ci-completion',
+      reason:
+        `refusing to post watermark: PR ${input.prNumber}'s live passing ` +
+        `completion ${agreement.latestPassingCompletedAt} does not match ` +
+        `the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. ` +
+        `Re-run --from-pr.`,
+    };
+  }
+  return {
+    snapshot,
+    watermarkFields,
+    warnings,
+    decision: 'publish',
+    reasonCode: 'publish',
+    reason: null,
+  };
+}
+
+function operationLocalView(
+  local: OperationLocalWatermarkResult,
+): OperationLocalWatermarkView {
+  return {
+    decision: local.decision,
+    reason: local.reason,
+    snapshot: local.snapshot,
+    watermarkFields: local.watermarkFields,
+    warnings: local.warnings,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -596,6 +800,10 @@ interface CliArgs {
    * branch moved between E1 Step 1 and this Step 2 call.
    */
   expectedHeadSha: string;
+  /** `--operation-local`: return the capture and defer the post when CI is incomplete. */
+  operationLocal: boolean;
+  priorTotalItemCount: number | null;
+  priorMaxActivityAt: string;
   apply: boolean;
   owner: string;
   repo: string;
@@ -615,6 +823,17 @@ interface CliArgs {
 function parsePositiveIntToken(token: string, label: string): number {
   const parsed = Number.parseInt(token, 10);
   if (!/^\d+$/.test(token) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label}: ${token}`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeIntToken(token: string, label: string): number {
+  if (!/^\d+$/.test(token)) {
+    throw new Error(`${label}: ${token}`);
+  }
+  const parsed = Number(token);
+  if (!Number.isSafeInteger(parsed)) {
     throw new Error(`${label}: ${token}`);
   }
   return parsed;
@@ -1012,6 +1231,9 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     number: null,
     fromPr: null,
     expectedHeadSha: '',
+    operationLocal: false,
+    priorTotalItemCount: null,
+    priorMaxActivityAt: '',
     apply: false,
     owner: '',
     repo: '',
@@ -1028,6 +1250,10 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     }
     if (token === '--apply') {
       args.apply = true;
+      continue;
+    }
+    if (token === '--operation-local') {
+      args.operationLocal = true;
       continue;
     }
     if (!token.startsWith('--')) {
@@ -1054,6 +1280,13 @@ export function parseArgs(rawArgv: string[]): CliArgs {
       args.fromPr = parsePositiveIntToken(value, 'invalid --from-pr number');
     } else if (token === '--expected-head-sha') {
       args.expectedHeadSha = value;
+    } else if (token === '--prior-total-item-count') {
+      args.priorTotalItemCount = parseNonNegativeIntToken(
+        value,
+        'invalid --prior-total-item-count',
+      );
+    } else if (token === '--prior-max-activity-at') {
+      args.priorMaxActivityAt = value;
     } else if (token === '--owner') {
       args.owner = value;
     } else if (token === '--repo') {
@@ -1083,8 +1316,8 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   --target <issue|pr>  the comment target kind (both use the issues comments API)
   <number>             issue or PR number (positional; required unless --from-pr)
   --from-pr <n>        watermark: derive --head-sha / --max-activity-at /
-                       --total-item-count / --ci-completed-at from the live
-                       review-activity-snapshot of PR <n>. The advisory-family
+                       --total-item-count / --ci-completed-at from one live
+                       review-activity capture of PR <n>. The advisory-family
                        types (advisory / advisory-recovery / advisory-reroll,
                        #1889; review-ack, #2050): derive only --head-sha from
                        PR <n>'s live current head commit (a single
@@ -1290,8 +1523,8 @@ function postMarker(
  * view` call -- the `--from-pr` derivation path for the advisory-family
  * marker types (#1889: `advisory` / `advisory-recovery` / `advisory-reroll`;
  * #2050: `review-ack`), which need only `--head-sha`, unlike `watermark`'s
- * `--from-pr`, which composes the full four-field snapshot via
- * {@link runReviewActivitySnapshot}. This is deliberately network-lighter
+ * `--from-pr`, which collects one in-process review-activity snapshot.
+ * This is deliberately network-lighter
  * than that snapshot: no CI checks, review threads, or comment pagination,
  * just the one `headRefOid` field.
  *
@@ -1317,47 +1550,6 @@ function headShaFromPr(prNumber: number, owner: string, repo: string): string {
     );
   }
   return headSha;
-}
-
-/**
- * Run the sibling read-only `review-activity-snapshot.mjs` for a PR and return
- * its parsed JSON. This is the `--from-pr` half of the "compose the two existing
- * helpers" path; the snapshot stays the single source of the activity/CI metrics
- * and this write-side helper only renders+posts the watermark over them.
- *
- * The sibling is resolved relative to this module (both generated artifacts live
- * in `scripts/`), so it works from any cwd. `--owner` / `--repo` are forwarded
- * to avoid an extra `gh repo view` in the child, and the optional marker-actor
- * lists are forwarded so the child's `totalItemCount` / `maxActivityUpdatedAt`
- * filtering matches the manual `review-activity-snapshot` invocation.
- */
-function runReviewActivitySnapshot(
-  prNumber: number,
-  owner: string,
-  repo: string,
-  trustedMarkerLogins: string,
-  advisoryBotLogins: string,
-): unknown {
-  const script = resolve(import.meta.dirname, 'review-activity-snapshot.mjs');
-  const snapshotArgs = [
-    script,
-    '--pr',
-    String(prNumber),
-    '--owner',
-    owner,
-    '--repo',
-    repo,
-  ];
-  if (trustedMarkerLogins) {
-    snapshotArgs.push('--trusted-marker-logins', trustedMarkerLogins);
-  }
-  if (advisoryBotLogins) {
-    snapshotArgs.push('--advisory-bot-logins', advisoryBotLogins);
-  }
-  const out = execFileSync(process.execPath, snapshotArgs, {
-    encoding: 'utf8',
-  });
-  return JSON.parse(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1742,6 +1934,7 @@ function main(): HelperCliResult {
   // #1833: populated only by the `--from-pr` snapshot-derivation branch
   // below; carried into both the dry-run and `--apply` result envelopes.
   let warnings: string[] = [];
+  let operationLocalEnvelope: OperationLocalWatermarkView | null = null;
 
   if (args.help) {
     process.stdout.write(USAGE);
@@ -1770,6 +1963,29 @@ function main(): HelperCliResult {
   ) {
     const message =
       '--expected-head-sha is only valid together with --from-pr --type watermark';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  if (
+    args.operationLocal &&
+    (args.type !== 'watermark' || args.fromPr === null)
+  ) {
+    const message =
+      '--operation-local is only valid with --type watermark --from-pr';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  const hasPriorCount = args.priorTotalItemCount !== null;
+  const hasPriorMax = args.priorMaxActivityAt !== '';
+  if (hasPriorCount !== hasPriorMax) {
+    const message =
+      '--prior-total-item-count and --prior-max-activity-at must be passed together';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  if ((hasPriorCount || hasPriorMax) && !args.operationLocal) {
+    const message =
+      '--prior-total-item-count is only valid with --operation-local';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
@@ -1834,15 +2050,76 @@ function main(): HelperCliResult {
       args.owner = args.owner || currentRepo?.owner || '';
       args.repo = args.repo || currentRepo?.repo || '';
       if (isWatermark) {
-        const snapshot = runReviewActivitySnapshot(
-          args.fromPr,
-          args.owner,
-          args.repo,
-          args.trustedMarkerLogins,
-          args.advisoryBotLogins,
-        );
-        Object.assign(args.fields, watermarkFieldsFromSnapshot(snapshot));
-        warnings = describeUnaddressedActivity(snapshot);
+        const local = runOperationLocalSnapshotWatermark({
+          prNumber: args.fromPr,
+          expectedHeadSha: args.expectedHeadSha || undefined,
+          priorBoundary:
+            args.priorTotalItemCount === null
+              ? null
+              : {
+                  totalItemCount: args.priorTotalItemCount,
+                  maxActivityUpdatedAt: args.priorMaxActivityAt,
+                },
+          collectRichActivity: () =>
+            collectReviewActivitySnapshot({
+              prNumber: args.fromPr ?? 0,
+              owner: args.owner,
+              repo: args.repo,
+              trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+              advisoryBotLoginsFlag: args.advisoryBotLogins,
+              envTrustedMarkerActors: process.env.IDD_TRUSTED_MARKER_ACTORS,
+              envAdvisoryBotLogins: process.env.IDD_ADVISORY_BOT_LOGINS,
+              port: createGithubProviderAdapter(args.owner, args.repo),
+            }),
+          readRequiredCiAgreement: () =>
+            requiredCiHeadAgreementFromSummary(
+              collectCiWaitState([
+                '--pr',
+                String(args.fromPr),
+                '--owner',
+                args.owner,
+                '--repo',
+                args.repo,
+              ]),
+            ),
+        });
+        if (local.decision !== 'publish') {
+          const message = local.reason ?? 'refusing to post watermark';
+          if (args.operationLocal && local.decision === 'defer') {
+            const deferred: PostIddMarkerResult = {
+              mode: 'dry-run',
+              type: 'watermark',
+              target: 'pr',
+              number: args.number ?? args.fromPr,
+              operationLocal: operationLocalView(local),
+              ...(local.warnings.length > 0
+                ? { warnings: local.warnings }
+                : {}),
+            };
+            process.stdout.write(`${JSON.stringify(deferred, null, 2)}\n`);
+            return 0;
+          }
+          process.stderr.write(`${message}\n`);
+          if (args.operationLocal) {
+            const refused: PostIddMarkerResult = {
+              mode: 'dry-run',
+              type: 'watermark',
+              target: 'pr',
+              number: args.number ?? args.fromPr,
+              operationLocal: operationLocalView(local),
+              ...(local.warnings.length > 0
+                ? { warnings: local.warnings }
+                : {}),
+            };
+            process.stdout.write(`${JSON.stringify(refused, null, 2)}\n`);
+          }
+          return { exitCode: 1, kind: 'gate', message };
+        }
+        Object.assign(args.fields, local.watermarkFields);
+        warnings = local.warnings;
+        if (args.operationLocal) {
+          operationLocalEnvelope = operationLocalView(local);
+        }
       } else {
         args.fields['head-sha'] = headShaFromPr(
           args.fromPr,
@@ -1851,74 +2128,10 @@ function main(): HelperCliResult {
         );
       }
     } catch (error) {
+      const cause = (error as { cause?: unknown }).cause ?? error;
       const message = `failed to derive ${isWatermark ? 'watermark fields' : 'head-sha'} from PR ${args.fromPr}: ${(error as Error).message}`;
       process.stderr.write(`${message}\n`);
-      return { exitCode: 1, ...classifyHelperError(error), message };
-    }
-    // Fail closed (this repository's fail-closed default) when the branch
-    // moved between E1 Step 1 (which stored {head-SHA} and must not re-read
-    // HEAD through Step 3) and this Step 2 call: posting a watermark keyed to
-    // a HEAD newer than the one E1 Step 1 actually snapshotted would silently
-    // violate that single-stored-value invariant. Refuse to post; the caller
-    // reruns E1 from Step 1 against the moved branch instead. Watermark-only:
-    // --expected-head-sha is rejected above for the advisory --from-pr types,
-    // so this never fires for them.
-    const liveHeadSha = args.fields['head-sha'];
-    if (
-      isWatermark &&
-      args.expectedHeadSha &&
-      liveHeadSha.toLowerCase() !== args.expectedHeadSha.toLowerCase()
-    ) {
-      const message = `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.`;
-      process.stderr.write(`${message}\n`);
-      return { exitCode: 1, kind: 'gate', message };
-    }
-    // #3465: a --from-pr watermark must not post while the required-check
-    // predicate pre-merge readiness already uses is false. Pending and
-    // failure are the same refusal. The disposition-evidence warning above
-    // stays a warning and is only emitted on the success path below.
-    // Advisory-family --from-pr types derive only head-sha and are not gated.
-    if (isWatermark) {
-      let requiredChecksPassing = false;
-      let ciHead = '';
-      let livePassingCompletedAt = 'none';
-      try {
-        const ciSummary = collectCiWaitState([
-          '--pr',
-          String(args.fromPr),
-          '--owner',
-          args.owner,
-          '--repo',
-          args.repo,
-        ]);
-        ciHead = ciSummary.headRefOid.trim();
-        livePassingCompletedAt = latestPassingCompletedAt(ciSummary);
-        requiredChecksPassing = ciWaitSummaryIsPreMergeCiPassing(ciSummary);
-      } catch (error) {
-        const message = `refusing to post watermark: could not read required-check state for PR ${args.fromPr}: ${(error as Error).message}`;
-        process.stderr.write(`${message}\n`);
-        return { exitCode: 1, ...classifyHelperError(error), message };
-      }
-      // A second live read can observe a newer HEAD than the activity
-      // snapshot already copied into the watermark fields. A passing
-      // result for that newer HEAD must not authorize a marker whose
-      // head-sha and ci-completed-at still belong to the snapshot.
-      if (ciHead.toLowerCase() !== liveHeadSha.toLowerCase()) {
-        const message = `refusing to post watermark: PR ${args.fromPr}'s required-check read is for HEAD ${ciHead || '(empty)'}, which does not match the activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.`;
-        process.stderr.write(`${message}\n`);
-        return { exitCode: 1, kind: 'gate', message };
-      }
-      if (!requiredChecksPassing) {
-        const message = `refusing to post watermark: PR ${args.fromPr}'s required checks are not passing. Re-run --from-pr once they pass.`;
-        process.stderr.write(`${message}\n`);
-        return { exitCode: 1, kind: 'gate', message };
-      }
-      const snapshotPassingCompletedAt = args.fields['ci-completed-at'];
-      if (livePassingCompletedAt !== snapshotPassingCompletedAt) {
-        const message = `refusing to post watermark: PR ${args.fromPr}'s live passing completion ${livePassingCompletedAt} does not match the activity snapshot ci-completed-at ${snapshotPassingCompletedAt}. Re-run --from-pr.`;
-        process.stderr.write(`${message}\n`);
-        return { exitCode: 1, kind: 'gate', message };
-      }
+      return { exitCode: 1, ...classifyHelperError(cause), message };
     }
   }
 
@@ -2399,6 +2612,9 @@ function main(): HelperCliResult {
       number,
       body,
       ...(warnings.length > 0 ? { warnings } : {}),
+      ...(operationLocalEnvelope
+        ? { operationLocal: operationLocalEnvelope }
+        : {}),
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
@@ -2430,6 +2646,9 @@ function main(): HelperCliResult {
     commentId: posted.id,
     url: posted.html_url,
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(operationLocalEnvelope
+      ? { operationLocal: operationLocalEnvelope }
+      : {}),
   };
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;

@@ -3788,10 +3788,15 @@ still fails closed:
   is rejected). It maps the snapshot's
   `latestPassingCiCompletedAt` to `--ci-completed-at` (the latest _passing_ CI
   completion, matching the E1 `{latest-ci-completed-at}` contract), forwards
-  optional `--trusted-marker-logins` / `--advisory-bot-logins` to the snapshot
-  child so its counts match the manual path, and rejects the four manual
+  optional `--trusted-marker-logins` / `--advisory-bot-logins` to that
+  capture so its counts match the manual path, and rejects the four manual
   snapshot fields as ambiguous. Unlike the manual dry-run it reads from GitHub
-  (it spawns the snapshot), but still posts nothing without `--apply`.
+  (one in-process capture, then a separate required-CI/HEAD read), but still
+  posts nothing without `--apply`. `--operation-local` returns that capture
+  when required CI is incomplete and defers only the post. Pass
+  `--prior-total-item-count` with `--prior-max-activity-at` from an earlier
+  watermark so newer undispositioned same-HEAD activity refuses publication
+  instead of reusing the old boundary. A saved snapshot file is not an input.
 - `--from-pr` HEAD pin (`--expected-head-sha <sha>`): optional, `--from-pr`
   only. Pass the E1 Step 1 stored `{head-SHA}` here to guard against the
   branch moving between Step 1 and the Step 2 post: if the fresh snapshot's

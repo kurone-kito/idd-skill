@@ -58,6 +58,36 @@
       "items": {
         "type": "string"
       }
+    },
+    "operationLocal": {
+      "type": "object",
+      "description": "Present for --operation-local. watermarkFields describe snapshot from the same capture. A saved snapshot is not an input.",
+      "additionalProperties": false,
+      "required": ["decision", "snapshot", "watermarkFields", "warnings"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["publish", "defer", "refuse"],
+          "description": "Whether this capture may publish a watermark, defer it because required CI is incomplete, or refuse it."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Human-readable refusal or deferral text. Null when decision is publish."
+        },
+        "snapshot": {
+          "description": "The review-activity snapshot collected in this operation. Watermark fields are derived from this object."
+        },
+        "watermarkFields": {
+          "type": ["object", "null"],
+          "additionalProperties": { "type": "string" },
+          "description": "Watermark field strings derived from snapshot. Null only when derivation did not complete."
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Disposition warnings for this same capture. They do not by themselves publish or suppress the marker."
+        }
+      }
     }
   },
   "additionalProperties": false

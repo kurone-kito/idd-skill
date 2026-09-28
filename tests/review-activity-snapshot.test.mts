@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  collectReviewActivitySnapshot,
   normalizeComment,
   normalizeThread,
   parseArgs,
@@ -33,6 +34,59 @@ test('importing review-activity-snapshot.mts has no import-time side effect', as
   } finally {
     process.env.PATH = originalPath;
   }
+});
+
+test('collectReviewActivitySnapshot calls each rich loader once', () => {
+  const calls: string[] = [];
+  const snapshot = collectReviewActivitySnapshot({
+    prNumber: 3592,
+    owner: 'o',
+    repo: 'r',
+    trustedMarkerLoginsFlag: '',
+    advisoryBotLoginsFlag: '',
+    envTrustedMarkerActors: '',
+    envAdvisoryBotLogins: '',
+    port: {
+      resolveViewerLoginSafe: () => {
+        calls.push('viewer');
+        return { viewerLogin: '', viewerLoginUnavailable: true };
+      },
+      getChangeRequestHeadShaAndAuthor: () => {
+        calls.push('head');
+        return { headSha: 'c'.repeat(40), authorLogin: 'someone' };
+      },
+      listChangeRequestChecks: () => {
+        calls.push('checks');
+        return [];
+      },
+      listReviews: () => {
+        calls.push('reviews');
+        return [];
+      },
+      listWorkItemComments: () => {
+        calls.push('comments');
+        return [];
+      },
+      listChangeRequestReviewThreadsWithComments: () => {
+        calls.push('threads');
+        return [];
+      },
+    },
+  });
+  assert.deepEqual(calls, [
+    'viewer',
+    'head',
+    'checks',
+    'reviews',
+    'comments',
+    'threads',
+  ]);
+  assert.equal(snapshot.headSha, 'c'.repeat(40));
+  assert.equal(
+    (snapshot.dispositionEvidence as { missingRegularCommentCount: number })
+      .missingRegularCommentCount,
+    0,
+  );
 });
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------

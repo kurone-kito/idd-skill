@@ -700,12 +700,14 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
     presentRunConclusion,
   });
 }
-/**
- * Latest completion among pass-equivalent checks, or `none`. Mirrors the
- * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
- * can refuse when the live read has moved past the snapshot it is about
- * to record.
- */
+/** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
+export function requiredCiHeadAgreementFromSummary(summary) {
+  return {
+    headRefOid: summary.headRefOid.trim(),
+    requiredChecksPassing: ciWaitSummaryIsPreMergeCiPassing(summary),
+    latestPassingCompletedAt: latestPassingCompletedAt(summary),
+  };
+}
 export function latestPassingCompletedAt(summary) {
   let latest = '';
   for (const check of summary.checks) {

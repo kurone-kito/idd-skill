@@ -19,6 +19,7 @@ import {
   MARKER_TYPES,
   parseArgs,
   parseIssueReference,
+  runOperationLocalSnapshotWatermark,
   validateAuthoringOwnerModeDigestCoupling,
   validateAuthoringOwnerSupersedesModeCoupling,
   validateAuthoringPublicationIntentStateIssueCoupling,
@@ -1507,9 +1508,9 @@ test('#3465: a non-required failure does not refuse a passing required check', (
 });
 
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
-  // Stub `gh` on PATH so the real subprocess composition runs offline: the
-  // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
-  // which makes the read calls below; the stub answers each by argv.
+  // Stub `gh` on PATH so the in-process activity capture and the separate
+  // required-CI/HEAD agreement read both run offline. The stub answers each
+  // `gh` argv shape those two reads make.
   const restore = stubExecutable('gh', REVIEW_ACTIVITY_SNAPSHOT_GH_STUB(SHA));
   try {
     const output = execFileSync(
@@ -5294,4 +5295,207 @@ test('authoring-publication-intent dry-run does not check --actor against the au
   } finally {
     restore();
   }
+});
+
+const OPERATION_LOCAL_SHA = 'a'.repeat(40);
+
+function operationLocalSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    headSha: OPERATION_LOCAL_SHA,
+    totalItemCount: 1,
+    maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    latestPassingCiCompletedAt: '2026-06-25T11:00:00Z',
+    dispositionEvidence: {
+      missingRegularCommentCount: 0,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+    ...overrides,
+  };
+}
+
+function passingAgreement(head = OPERATION_LOCAL_SHA) {
+  return {
+    headRefOid: head,
+    requiredChecksPassing: true,
+    latestPassingCompletedAt: '2026-06-25T11:00:00Z',
+  };
+}
+
+test('operation-local watermark uses one rich capture and one CI agreement read', () => {
+  let rich = 0;
+  let agreement = 0;
+  const snapshot = operationLocalSnapshot();
+  const first = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => {
+      rich += 1;
+      return snapshot;
+    },
+    readRequiredCiAgreement: () => {
+      agreement += 1;
+      return passingAgreement();
+    },
+  });
+  assert.equal(rich, 1);
+  assert.equal(agreement, 1);
+  assert.equal(first.decision, 'publish');
+  assert.equal(first.watermarkFields?.['head-sha'], OPERATION_LOCAL_SHA);
+  assert.equal(first.watermarkFields?.['total-item-count'], '1');
+  assert.equal(
+    first.watermarkFields?.['max-activity-at'],
+    '2026-06-25T10:30:00Z',
+  );
+  assert.equal(
+    first.watermarkFields?.['ci-completed-at'],
+    '2026-06-25T11:00:00Z',
+  );
+  assert.equal(first.snapshot, snapshot);
+  runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => {
+      rich += 1;
+      return snapshot;
+    },
+    readRequiredCiAgreement: () => {
+      agreement += 1;
+      return passingAgreement();
+    },
+  });
+  assert.equal(rich, 2);
+  assert.equal(agreement, 2);
+});
+
+test('operation-local incomplete collection does not call the CI agreement read', () => {
+  let agreement = 0;
+  assert.throws(
+    () =>
+      runOperationLocalSnapshotWatermark({
+        prNumber: 3592,
+        collectRichActivity: () => {
+          throw new Error('pagination stopped');
+        },
+        readRequiredCiAgreement: () => {
+          agreement += 1;
+          return passingAgreement();
+        },
+      }),
+    /incomplete review-activity collection: pagination stopped/,
+  );
+  assert.equal(agreement, 0);
+  assert.throws(
+    () =>
+      runOperationLocalSnapshotWatermark({
+        prNumber: 3592,
+        collectRichActivity: () => ({ totalItemCount: 0 }),
+        readRequiredCiAgreement: () => {
+          agreement += 1;
+          return passingAgreement();
+        },
+      }),
+    /incomplete review-activity collection: review-activity-snapshot is missing a usable headSha/,
+  );
+  assert.equal(agreement, 0);
+});
+
+test('operation-local refuses a new HEAD, a moved expected HEAD, and CI completion drift', () => {
+  const other = 'b'.repeat(40);
+  const moved = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(other),
+  });
+  assert.equal(moved.decision, 'refuse');
+  assert.equal(moved.reasonCode, 'new-head');
+  assert.match(moved.reason ?? '', /Re-run --from-pr/);
+
+  const expected = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: other,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(expected.reasonCode, 'expected-head');
+  assert.match(expected.reason ?? '', /Re-run E1 from Step 1/);
+
+  const completion = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => ({
+      ...passingAgreement(),
+      latestPassingCompletedAt: '2026-06-25T12:00:00Z',
+    }),
+  });
+  assert.equal(completion.reasonCode, 'ci-completion');
+});
+
+test('operation-local defers the watermark when required CI is not passing', () => {
+  for (const passing of [false]) {
+    const result = runOperationLocalSnapshotWatermark({
+      prNumber: 3592,
+      collectRichActivity: () => operationLocalSnapshot(),
+      readRequiredCiAgreement: () => ({
+        ...passingAgreement(),
+        requiredChecksPassing: passing,
+      }),
+    });
+    assert.equal(result.decision, 'defer');
+    assert.equal(result.reasonCode, 'required-checks');
+    assert.equal(result.snapshot !== null, true);
+  }
+});
+
+test('operation-local refuses newly actionable same-HEAD activity past a stored boundary', () => {
+  const undispositioned = operationLocalSnapshot({
+    totalItemCount: 2,
+    maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+  });
+  const refused = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () => undispositioned,
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(refused.decision, 'refuse');
+  assert.equal(refused.reasonCode, 'same-head-activity');
+  assert.match(refused.reason ?? '', /fresh triage/);
+
+  const handled = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(handled.decision, 'publish');
+});
+
+test('operation-local CI agreement failure keeps the capture and does not publish', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => {
+      throw new Error('rules unreadable');
+    },
+  });
+  assert.equal(result.decision, 'refuse');
+  assert.equal(result.reasonCode, 'ci-read');
+  assert.equal(
+    (result.snapshot as { headSha: string }).headSha,
+    OPERATION_LOCAL_SHA,
+  );
 });
