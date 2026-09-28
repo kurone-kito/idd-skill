@@ -58,12 +58,13 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Before Step 2, run the profile-selected advisory command with `--pr`,
-`--claim-id`, `--agent-id`, and `--trusted-marker-logins`, then
-profile-selected `ci-wait-state --pr {pr-number}`. Require
+Run profile-selected advisory with `--pr`, `--claim-id`, `--agent-id`,
+and `--trusted-marker-logins`, then `ci-wait-state --pr {pr-number}`.
+Require
 `requiredChecks.status: success`; `no-required-checks` only passes with
 non-empty `checks[]` all `success`; `pending`/`failing`/`missing` defer
-Step 2; otherwise stop/ask. Require `outcome: SATISFIED`; same-head:
+Step 2; otherwise stop/ask. Require `outcome: SATISFIED` and
+`copilotRecovery.activeClaimProvided: true`; same-head:
 `lastCopilotCommit == prHeadSha`, off-head needs
 `staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
 `attempt` hands off and `hold` defers. Take 1/3;

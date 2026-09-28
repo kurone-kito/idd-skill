@@ -423,8 +423,8 @@ the first request, not the last).
 
 Take an E1-scope activity snapshot (excluding trusted markers) and
 record highest `updatedAt` as **polling watermark** — never post it as a
-`review-watermark`. If newer than deferred baseline, return E1 before
-setting. If empty, use latest trusted same-claim watermark
+`review-watermark`. If a deferred baseline is older, return E1; otherwise
+use this maximum. If empty, use latest trusted same-claim watermark
 `createdAt`, then deferred E1 baseline, then `review-baseline`
 `createdAt`; otherwise E1.
 

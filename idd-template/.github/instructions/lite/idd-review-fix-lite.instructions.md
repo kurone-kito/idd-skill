@@ -363,9 +363,9 @@ self-critique and record risk.
    marker already exists; reuse the one with the earliest `createdAt`
    (the helper's `earliestSameHeadAt` already gives you this). Take a
    fresh activity snapshot (same scope as E1 Step 1) and record its
-   highest `updatedAt` as a temporary polling watermark. If newer than
-   the carried deferred E1 activity baseline, return to E1 before setting
-   it, even when non-empty. Never post it. For an empty snapshot, use the
+   highest `updatedAt` as a temporary polling watermark. If a deferred
+   baseline exists and this is newer, return to E1; otherwise use the fresh
+   maximum as the watermark. Never post it. For an empty snapshot, use the
    latest trusted same-claim watermark `createdAt`, then the deferred E1
    baseline, then the same-claim `review-baseline` `createdAt`; never use
    a marker-shaped comment as that baseline. If none exists, return E1.
