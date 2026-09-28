@@ -2642,6 +2642,7 @@ test('forced retry uses the identity-bound removal guard', () => {
 
 test('forced retry re-verifies preservation after the final identity checks', () => {
   let firstRemovalAttempt = false;
+  let statusCalls = 0;
   let guardCalls = 0;
   let stashListCalls = 0;
   const tag = 'idd-lwr claim-x';
@@ -2652,10 +2653,12 @@ test('forced retry re-verifies preservation after the final identity checks', ()
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
       if (argv[0] === 'status') {
+        statusCalls += 1;
         return {
           ok: true,
           status: 0,
-          stdout: firstRemovalAttempt ? '' : ' M tracked.txt\n',
+          stdout:
+            !firstRemovalAttempt && statusCalls === 1 ? ' M tracked.txt\n' : '',
           stderr: '',
         };
       }
@@ -2668,7 +2671,7 @@ test('forced retry re-verifies preservation after the final identity checks', ()
           ok: true,
           status: 0,
           stdout:
-            stashListCalls === 1 || stashListCalls === 10
+            stashListCalls === 1 || stashListCalls === 17
               ? ''
               : `${stashEntry}\n`,
           stderr: '',
@@ -2694,10 +2697,13 @@ test('forced retry re-verifies preservation after the final identity checks', ()
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(stashListCalls, 10);
+  assert.equal(stashListCalls, 17);
   assert.equal(guardCalls, 1);
   assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /forced-removal preservation artifact/);
+  assert.match(
+    verdict.result,
+    /final preservation artifact disappeared after final forced-removal identity checks/,
+  );
 });
 
 test('forced retry accepts sequential stashes with the same recovery tag', () => {
@@ -2708,6 +2714,8 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
   const first = `stash@{0}: On issue/1-task: ${tag}`;
   const both = `${first}\nstash@{1}: On issue/1-task: ${tag}`;
   const all = `${both}\nstash@{2}: On issue/1-task: ${tag}`;
+  const allFour = `${all}\nstash@{3}: On issue/1-task: ${tag}`;
+  const allFive = `${allFour}\nstash@{4}: On issue/1-task: ${tag}`;
   const deps = fakeDeps({
     runGit: (argv) => {
       if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
@@ -2730,13 +2738,17 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
           ok: true,
           status: 0,
           stdout:
-            stashPushCount >= 3
-              ? `${all}\n`
-              : stashPushCount >= 2
-                ? `${both}\n`
-                : stashPushCount === 1
-                  ? `${first}\n`
-                  : '',
+            stashPushCount >= 5
+              ? `${allFive}\n`
+              : stashPushCount >= 4
+                ? `${allFour}\n`
+                : stashPushCount >= 3
+                  ? `${all}\n`
+                  : stashPushCount >= 2
+                    ? `${both}\n`
+                    : stashPushCount === 1
+                      ? `${first}\n`
+                      : '',
           stderr: '',
         };
       }
@@ -2760,7 +2772,7 @@ test('forced retry accepts sequential stashes with the same recovery tag', () =>
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(stashPushCount, 3);
+  assert.equal(stashPushCount, 5);
   assert.equal(guardCalls, 2);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -3057,7 +3069,7 @@ test('retains a partial uninitialized-submodule copy and blocks removal', () => 
 
 test('excludes uninitialized submodule contents from the parent stash', () => {
   const stashCalls: string[][] = [];
-  let stashPushed = false;
+  let stashPushCount = 0;
   const sha = '0'.repeat(40);
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
@@ -3085,14 +3097,17 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
         return {
           ok: true,
           status: 0,
-          stdout: stashPushed
-            ? 'stash@{0}: On issue/1-task: idd-lwr claim-x\n'
-            : '',
+          stdout:
+            Array.from(
+              { length: stashPushCount },
+              (_, index) =>
+                `stash@{${index}}: On issue/1-task: idd-lwr claim-x`,
+            ).join('\n') + (stashPushCount > 0 ? '\n' : ''),
           stderr: '',
         };
       }
       if (argv[0] === 'stash' && argv[1] === 'push') {
-        stashPushed = true;
+        stashPushCount += 1;
         stashCalls.push(argv);
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
@@ -3104,6 +3119,16 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
     deps,
   );
   assert.deepEqual(stashCalls, [
+    [
+      'stash',
+      'push',
+      '--include-untracked',
+      '-m',
+      'idd-lwr claim-x',
+      '--',
+      '.',
+      ':(exclude,literal)uninitialized*',
+    ],
     [
       'stash',
       'push',
@@ -3326,7 +3351,7 @@ test('uses collision-safe destinations for uninitialized submodule paths', () =>
     deps,
   );
   assert.equal(verdict.plan.removal?.ran, true);
-  assert.equal(copiedTo.length, 4);
+  assert.equal(copiedTo.length, 6);
   assert.equal(new Set(copiedTo).size, 2);
 });
 
@@ -3574,7 +3599,10 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(copied, ['/tmp/preserve/submodule-gitdir/c3VibW9kdWxl']);
+  assert.deepEqual(copied, [
+    '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+    '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+  ]);
   assert.equal(
     verdict.plan.stashes.find((stash) => stash.scope === 'submodule')
       ?.hasChanges,
@@ -3681,7 +3709,7 @@ test('late preservation rescans initialized submodule ignored files before remov
       ],
     },
   ]);
-  assert.equal(submoduleIgnoredScans, 7);
+  assert.equal(submoduleIgnoredScans, 8);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -3764,12 +3792,15 @@ test('late preservation refreshes uninitialized submodule copies before removal'
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(copied.length, 2);
+  assert.equal(copied.length, 3);
   assert.equal(copied[0]?.to, copied[1]?.to);
   assert.deepEqual(copied[0]?.additionalSourceRoots, [
     '/repo/primary/.git/worktrees/linked',
   ]);
   assert.deepEqual(copied[1]?.additionalSourceRoots, [
+    '/repo/primary/.git/worktrees/linked',
+  ]);
+  assert.deepEqual(copied[2]?.additionalSourceRoots, [
     '/repo/primary/.git/worktrees/linked',
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
@@ -3815,8 +3846,8 @@ test('late preservation discovers an uninitialized submodule that appears after 
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(submoduleStatusCalls, 2);
-  assert.equal(copied.length, 1);
+  assert.equal(submoduleStatusCalls, 3);
+  assert.equal(copied.length, 2);
   assert.equal(verdict.plan.uninitializedSubmodules[0]?.path, 'late-submodule');
   assert.equal(verdict.plan.uninitializedSubmodules[0]?.copiedTo, copied[0]);
   assert.equal(verdict.plan.removal?.ran, true);
@@ -4184,7 +4215,9 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
                   ? '!! final.env\0'
                   : ignoredScanCalls <= 7
                     ? '!! after-confirm.env\0'
-                    : '',
+                    : ignoredScanCalls === 9
+                      ? '!! after-final-confirmation.env\0'
+                      : '',
           stderr: '',
         };
       }
@@ -4205,15 +4238,16 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(ignoredScanCalls, 8);
+  assert.equal(ignoredScanCalls, 9);
   assert.deepEqual(copied, [
     '/tmp/preserve/ignored/late.env',
     '/tmp/preserve/ignored/final-removal/final.env',
     '/tmp/preserve/ignored/final-removal-after-confirm/after-confirm.env',
+    '/tmp/preserve/ignored/after-final-confirmation.env',
   ]);
   assert.equal(
     verdict.plan.ignoredFilesCopied.at(-1)?.path,
-    'after-confirm.env',
+    'after-final-confirmation.env',
   );
   assert.equal(removalAttempted, true);
   assert.equal(verdict.plan.removal?.ran, true);
@@ -6857,6 +6891,8 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
 
 test('primary-worktree release rechecks the complete status immediately before lock removal', () => {
   let lockRemoved = false;
+  let checkoutDone = false;
+  let finalStatusProbes = 0;
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
@@ -6895,11 +6931,21 @@ test('primary-worktree release rechecks the complete status immediately before l
       };
     })(),
     runGit: (argv) => {
-      if (argv[0] === 'status' && argv.includes('--untracked-files=all')) {
+      if (argv[0] === 'checkout') checkoutDone = true;
+      if (
+        checkoutDone &&
+        argv[0] === 'status' &&
+        argv[1] === '--porcelain' &&
+        argv.includes('--untracked-files=all')
+      ) {
+        finalStatusProbes += 1;
         return {
           ok: true,
           status: 0,
-          stdout: ' M created-after-final-scan.txt\n',
+          stdout:
+            finalStatusProbes === 1
+              ? ''
+              : ' M created-after-final-confirmation.txt\n',
           stderr: '',
         };
       }
@@ -6918,9 +6964,10 @@ test('primary-worktree release rechecks the complete status immediately before l
     }),
     deps,
   );
+  assert.equal(finalStatusProbes, 2);
   assert.equal(lockRemoved, false);
   assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /final primary-worktree status/);
+  assert.match(verdict.result, /after the last routing confirmation/);
 });
 
 test('primary-worktree release rechecks claim identity after the final status probe', () => {
@@ -7553,7 +7600,7 @@ test('unmerged initialized-submodule fallback uses the parent worktree as symlin
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(sourceRoots, ['/repo/linked']);
+  assert.deepEqual(sourceRoots, ['/repo/linked', '/repo/linked']);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -7652,7 +7699,7 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   );
   assert.equal(
     verdict.plan.submoduleAdminCopies.length,
-    1,
+    2,
     'pre-existing submodule admin data must be copied before removal',
   );
   assert.equal(
@@ -7662,7 +7709,7 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
   );
   assert.equal(verdict.plan.submoduleAdminCopies[0]?.path, 'submodule');
   assert.equal(verdict.plan.submoduleAdminCopies[0]?.copiedTo !== null, true);
-  assert.equal(copied.length, 1);
+  assert.equal(copied.length, 2);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -7741,6 +7788,10 @@ test('copies linked worktree admin data for top-level local refs', () => {
       from: '/repo/primary/.git/worktrees/linked',
       to: '/tmp/preserve/worktree-gitdir',
     },
+    {
+      from: '/repo/primary/.git/worktrees/linked',
+      to: '/tmp/preserve/worktree-gitdir',
+    },
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -7814,6 +7865,10 @@ test('copies linked worktree admin data for top-level private bisect refs', () =
   assert.equal(queriedBisectRefs, true);
   assert.notEqual(verdict.plan.worktreeAdminCopy, null);
   assert.deepEqual(copied, [
+    {
+      from: '/repo/primary/.git/worktrees/linked',
+      to: '/tmp/preserve/worktree-gitdir',
+    },
     {
       from: '/repo/primary/.git/worktrees/linked',
       to: '/tmp/preserve/worktree-gitdir',

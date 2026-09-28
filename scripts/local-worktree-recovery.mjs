@@ -5080,6 +5080,30 @@ export function runLocalWorktreeRecovery(args, deps) {
           `checked out ${developmentBranch}, but the final status probe changed the resume-claim-routing result; stopping before removing the lock file`,
         );
       }
+      // The routing confirmation above is network-backed. Re-run the full
+      // local status probe after that call and before compare-and-delete so a
+      // writer in the confirmation window cannot make the development branch
+      // look clean while the lock is removed (Codex review #4125222149).
+      const finalPrimaryStatusAfterConfirmation = deps.runGit(
+        [
+          'status',
+          '--porcelain',
+          '--ignored',
+          '--untracked-files=all',
+          '--ignore-submodules=none',
+        ],
+        targetPath,
+      );
+      if (
+        !finalPrimaryStatusAfterConfirmation.ok ||
+        finalPrimaryStatusAfterConfirmation.stdout.length > 0
+      ) {
+        return recordRemovalFailure(
+          finalPrimaryStatusAfterConfirmation.ok
+            ? `the final primary-worktree status after checkout ${developmentBranch} was not clean after the last routing confirmation; stopping before removing the lock`
+            : `could not verify the final primary-worktree status after the last routing confirmation for checkout ${developmentBranch}: ${finalPrimaryStatusAfterConfirmation.stderr}`,
+        );
+      }
       const finalPrimaryLockAfterStatus = deps.checkLock(targetPath);
       if (
         finalPrimaryLockAfterStatus.malformed ||
@@ -6084,6 +6108,48 @@ export function runLocalWorktreeRecovery(args, deps) {
           'the linked-worktree routing/claim identity changed after the final post-confirmation preservation; stopping before removal',
         );
       }
+      // The final routing confirmation above is itself a network-backed
+      // concurrency window. Run the complete local preservation/status pass
+      // after it, so a newly dirty or ignored path is preserved before the
+      // local lock-bound removal (Codex review #4125222136).
+      const finalLinkedPreserveAfterFinalConfirm = planAndMaybePreserve(
+        targetPath,
+        recoveredBranch ?? '',
+        tag,
+        true,
+        deps,
+        applyPreserveDir,
+        targetGitDir,
+      );
+      incorporatePreservation(finalLinkedPreserveAfterFinalConfirm, true);
+      if (
+        !preservationVerified(
+          finalLinkedPreserveAfterFinalConfirm,
+          deps.pathExists,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the final linked preservation/status pass after routing confirmation could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a preservation artifact disappeared after the final linked preservation/status pass; stopping before removal',
+        );
+      }
       finalLinkedLock = deps.checkLock(targetPath);
       if (
         !lockMatchesRecoveredClaim(
@@ -6314,6 +6380,47 @@ export function runLocalWorktreeRecovery(args, deps) {
       ) {
         return recordRemovalFailure(
           'the forced-removal routing/claim identity changed after final preservation; stopping before removal',
+        );
+      }
+      // finalForceConfirm is another network-backed concurrency window. Make
+      // the complete local preservation/status pass the last local operation
+      // before the forced lock-bound removal (Codex review #4125222136).
+      const finalForcePreserveAfterFinalConfirm = planAndMaybePreserve(
+        targetPath,
+        recoveredBranch ?? '',
+        tag,
+        true,
+        deps,
+        applyPreserveDir,
+        targetGitDir,
+      );
+      incorporatePreservation(finalForcePreserveAfterFinalConfirm, true);
+      if (
+        !preservationVerified(
+          finalForcePreserveAfterFinalConfirm,
+          deps.pathExists,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the final forced-removal preservation/status pass after routing confirmation could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a preservation artifact disappeared after the final forced-removal preservation/status pass; stopping before removal',
         );
       }
       const finalForceLock = deps.checkLock(targetPath);
