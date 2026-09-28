@@ -81,15 +81,14 @@ Also fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot advisory safety net.** Snapshot and Step 2
-watermark cover non-Copilot bots in this phase. Not exclusive:
-configured F2 `secondaryQuietWindow` waits until `elapsed`
-since last substantive review activity, not until every login
-configured under `secondaryBotLogin` reviews HEAD.
+**Non-Copilot advisory safety net.** Snapshot/watermark cover these
+bots; F2 `secondaryQuietWindow` waits for `elapsed` after substantive
+activity, not every configured login.
 
-**CI precondition.** Run
-`advisory-wait-state --pr {pr-number} --claim-id {claim-id}
---agent-id {agent-id}`; require
+**CI precondition.** Use the profile-selected AW1
+`advisory-wait-state` command with `--pr {pr-number}`, `--claim-id
+{claim-id}`, `--agent-id {agent-id}`, and
+`--trusted-marker-logins <trusted-logins>`; require
 `copilotRecovery.activeClaimProvided: true` and
 `staleRequestRecovery.action`; missing/unbound fails closed. Without
 helper,
