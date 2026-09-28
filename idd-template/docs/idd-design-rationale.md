@@ -869,6 +869,25 @@ non-blocking).
 
 ## Review triage
 
+### E1 Step ordering made review triage wait for CI (2026-09-28)
+
+An operator report from an unnamed adopter described E-phase leaving
+unresolved review items while the loop waited for CI. Investigation of
+the current corpus found a verified textual/logical gap, rather than
+adopter-side confirmation: full-profile E1's opening sentence and the
+lite profile's precondition led workers to wait before fetching, while
+the full profile's actual CI condition only gates Step 2's watermark
+(issue kurone-kito/idd-skill#3577). The drift traces through
+kurone-kito/idd-skill#988, #1297, and #3465, which progressively
+delayed Step 2 without stating that Steps 1 and 3 were independent;
+the lite profile's 2026-07-22 authoring commit `9a95e5858` also placed
+the condition before Step 1.
+
+The correction keeps the watermark safety gate and lets review snapshot
+and triage proceed while CI or the expected advisory re-review is
+incomplete. The next full E1 entry records the deferred watermark after
+those signals resolve.
+
 ### Merge-main livelock under fast-moving `main`
 
 Under heavy concurrent-session load, `main` can advance before one

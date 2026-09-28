@@ -302,6 +302,7 @@ self-critique and record risk.
    canonical evidence collector per
    `idd-advisory-wait-lite.instructions.md`'s helper-first path (`node
    scripts/advisory-wait-state.mjs --pr {pr-number}
+   --claim-id {claim-id} --agent-id {agent-id}
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
    the source/vendored profile; resolve the package-manager /
    ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
@@ -310,11 +311,13 @@ self-critique and record risk.
    stop and ask — do not fall back to a manual per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
-   - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
-     `false` (settled by elapsed time alone, never proven the request
-     reached Copilot, `#2327`): lite has no bounded recovery cycle to
-     run here — apply step 10 first, then continue to E15 the same as
-     an ordinary `SATISFIED`.
+   - Off-head `SATISFIED` with `staleRequestRecovery.action ==
+     "attempt"` → hand off for AW3-S; never E15.
+   - Off-head `SATISFIED` with recovery `cap-exhausted` → follow
+     `capExhaustedRoute`: `phase-specific` → E15; `hold` → stop/ask.
+   - `SATISFIED`, `copilotPending` `false`,
+     `copilotPendingCoversHead` `false` (elapsed-only, `#2327`) → apply
+     step 10, then E15.
    - `SATISFIED` (otherwise) → apply step 10 first, then continue to
      E15.
    - `RECOVERY_NEEDED`: post the recovery marker
@@ -360,12 +363,12 @@ self-critique and record risk.
    marker already exists; reuse the one with the earliest `createdAt`
    (the helper's `earliestSameHeadAt` already gives you this). Take a
    fresh activity snapshot (same scope as E1 Step 1) and record its
-   highest `updatedAt` as a temporary polling watermark — do not post
-   it as a `review-watermark` comment. If the snapshot is empty, use
-   the `createdAt` of the latest `review-watermark` comment whose
-   `{claim-id}` matches the current active claim and whose author is a
-   trusted marker actor instead. If no trusted same-claim watermark
-   exists, stop polling and return to E1 to create one.
+   highest `updatedAt` as a temporary polling watermark. If a deferred
+   baseline exists and this is newer, return to E1; otherwise use the fresh
+   maximum as the watermark. Never post it. For an empty snapshot, use the
+   latest trusted same-claim watermark `createdAt`, then the deferred E1
+   baseline, then the same-claim `review-baseline` `createdAt`; never use
+   a marker-shaped comment as that baseline. If none exists, return E1.
 8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
    cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
    stop polling and return to `idd-review-snapshot-lite.instructions.md`
@@ -376,9 +379,10 @@ self-critique and record risk.
    JSON, or is missing required fields, stop and ask — do not fall back
    to a manual per-field fetch. If `earliestSameHeadAt` is now empty,
    post a hold comment noting the advisory-wait marker for
-   `PR_HEAD_SHA` disappeared during polling and stop. If `outcome` is
-   now `SATISFIED`, apply step 10 first, then exit polling and continue
-   to E15.
+   `PR_HEAD_SHA` disappeared during polling and stop. Before a terminal
+   result, reapply step 4's first-match table: off-head `SATISFIED` with
+   `attempt` hands off for AW3-S; `cap-exhausted` follows
+   `capExhaustedRoute`. Only then may `SATISFIED` apply step 10 and go E15.
 9. Otherwise keep polling — the helper already folds
    `pendingWindowMinutes`/`settledWindowMinutes` into `outcome` on
    every call, so a stalled or silent advisory bot still ends the loop
@@ -412,8 +416,8 @@ self-critique and record risk.
    shared `ciWait.runningTimeout` / `ciWait.generationTimeout` /
    `ciWait.rerunPolicy` values). The outcomes below override its generic
    routing for this phase.
-3. If new review threads or comments arrive during the wait, note them
-   but keep waiting for CI.
+3. If new review threads/comments arrive, return to E1 immediately;
+   otherwise continue waiting for CI.
 4. On success: return to `idd-review-snapshot-lite.instructions.md`
    (E1) — do not skip triage.
 5. On failure that is code-caused: fix it, run `fix-validate`, commit

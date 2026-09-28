@@ -345,8 +345,10 @@ login).
    PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
    ```
 
-2. Run **AW1** (`idd-advisory-wait.instructions.md`). **SATISFIED** →
-   E14 advisory-bot processing is done; proceed to E15.
+2. Run **AW1** using the profile-selected command from
+   `docs/idd-helper-scripts.md` with `--pr`, `--claim-id`, `--agent-id`,
+   and `--trusted-marker-logins`. **SATISFIED** → E14 advisory-bot
+   processing is done; proceed to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
    - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
@@ -421,11 +423,12 @@ Do not post a new marker if a same-head one already exists — reuse the
 **earliest** `createdAt` among same-head markers (the clock starts at
 the first request, not the last).
 
-Take a fresh activity snapshot (E1 Step 1's scope, excluding only
-trusted operational markers) and record its highest `updatedAt` as the
-**temporary polling watermark** — never post it as a `review-watermark`
-comment. If empty, use the latest trusted same-claim `review-watermark`
-comment's `createdAt` instead, or stop and return to E1 if none exists.
+Take an E1-scope activity snapshot (excluding trusted markers) and
+record highest `updatedAt` as **polling watermark** — never post it as a
+`review-watermark`. If a deferred baseline is older, return E1; otherwise
+use this maximum. If empty, use latest trusted same-claim watermark
+`createdAt`, then deferred E1 baseline, then latest trusted same-claim
+`review-baseline` `createdAt`; otherwise E1.
 
 Poll every `POLL_INTERVAL_MINUTES` minutes:
 
@@ -468,9 +471,9 @@ keys preserve the distributed defaults. The outcome paths below are
 authoritative and override the shared helper's generic outcomes for this
 phase:
 
-**While polling**: if new review threads or comments arrive during the
-CI wait, note them. After CI resolves (any outcome), return to E1 before
-proceeding to F — do not skip triage.
+**While polling**: new review threads/comments → return to E1
+immediately; otherwise, after CI resolves (any outcome), return to E1
+before F — never skip triage.
 
 - **On success** → return to `idd-review-snapshot.instructions.md` (E1)
 - **On failure / code-caused**: fix, run **fix-validate**, commit

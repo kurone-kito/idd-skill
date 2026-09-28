@@ -1,21 +1,20 @@
 # IDD — Review Snapshot Phase (Lite) (E1-E3)
 
-Lite helper profile; claimed open PRs after CI/reviews. `instructions-only`
-uses the standard file.
+Lite profile for claimed PRs; `instructions-only` uses standard file.
 
 ## Helper runtime contract
 
-- Use every named helper or command set. Missing, failing, or disagreeing
-  helpers are stop-and-ask conditions; never fall back silently to prose.
+- Missing, failing, or disagreeing helpers: stop and ask; never fall back
+  silently to prose.
 - `instructions-only` uses `idd-review-snapshot.instructions.md`.
 
 ## Triage hand-off boundary (E4-E8 excluded)
 
-This file only fetches, freezes, and routes ReviewItems_snapshot; it
-never classifies, scores severity, assigns a PATH, or decides
-Accept/Reject. A non-empty E3 result hands off to
-`idd-review-triage.instructions.md` (E4-E8) for a stronger session or a
-human; never run E4-E8 here, even for a trivial finding.
+Fetch/route; never classify/decide. Non-empty E3 hands off to
+`idd-review-triage.instructions.md`. Deferred Step 2 carries the E1
+SHA, activity baseline, `watermark deferred`, and reason; E14 uses it
+temporarily, never as a `review-watermark`. Missing: rerun E1; never
+branch-sync/F1/F2 unverified.
 
 ## Stop-and-ask conditions
 
@@ -51,36 +50,38 @@ GitHub side effect, confirm all of the following:
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
-### CI-completion precondition (before Step 1)
+### CI-completion precondition (for Step 2)
 
-Before taking the Step 1 snapshot, confirm every CI run counting toward
-the merge gate has completed, including any opt-in/label-triggered job
-enabled here. If the primary advisory bot already reviewed an earlier
-head, expect an automatic same-head re-review — run the
-advisory-wait-state helper and check its `lastCopilotCommit ==
-prHeadSha` fast-path fields (from
-`idd-advisory-wait-lite.instructions.md`; read fresh from the helper,
-not Step 1's `{head-SHA}` below, not yet captured here), and wait,
-bounded by that file's advisory-wait windows if it never lands. Only
-then continue to Step 1.
+Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
+`--trusted-marker-logins`, then profile-selected `ci-wait-state` with
+`--pr` (see `docs/idd-helper-scripts.md`).
+`requiredChecks.status: success`; `no-required-checks` only with
+non-empty all-success `checks[]`; `pending`/`failing`/`missing` defer
+Step 2. Require `outcome: SATISFIED`, or `CAP_EXHAUSTED` with
+`capExhaustedRoute: phase-specific`; otherwise stop/ask. Require
+`copilotRecovery.activeClaimProvided: true`; same-head:
+`lastCopilotCommit == prHeadSha`, off-head needs
+`staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
+`attempt`: stop and hand off to full; never E15; `hold` defers. Take
+Steps 1 and 3;
+use E15 for CI, E14 for advisory (E14 first when both pending).
+If incomplete, skip Step 2, wait before branch-sync/F2, then post from
+E1.
 
 ### Step 1 — Snapshot the activity universe
 
 1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
    headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
-   re-read it elsewhere in E1 — reuse this value.
-2. Run the profile-selected `review-activity-snapshot` helper to collect
+   re-read it elsewhere in E1 — reuse this value, except for the
+   deferred E3 check below.
+2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
-   `{latest-ci-completed-at}`: `node scripts/review-activity-snapshot.mjs
-   --pr {pr-number} --trusted-marker-logins
-   "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
-   equivalent — this is
-   Step 2's watermark data source and exposes `embeddedFindings` for
-   Step 3; raw triage fetch remains required. The helper emits
-   both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
-   `{latest-ci-completed-at}` is always the latter — the latest
-   _passing_ (or treated-as-passed) completion, never the latest
-   completion regardless of outcome.
+   `{latest-ci-completed-at}`: `node
+   scripts/review-activity-snapshot.mjs --pr {pr-number}
+   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`, or its
+   package-manager equivalent. It supplies Step 2 data and
+   `embeddedFindings` for Step 3; raw triage fetch remains required.
+   Use `latestPassingCiCompletedAt`, not the latest completion.
 3. Independently fetch, in one pass before filtering: every review
    thread (resolved or not — paginate until `hasNextPage` is `false`,
    never stop at a fixed page size), every review body submission, and
@@ -108,16 +109,16 @@ then continue to Step 1.
 
    Never exclude an untrusted-author marker-shaped comment; flag it as
    suspicious if it affects a decision.
-5. Non-Copilot advisory safety net: snapshot plus Step 2
-   watermark is the safety net here, not exclusive. Configured
-   F2 `secondaryQuietWindow` is the full-size helper's
-   `secondary-quiet-window` blocker (until `elapsed`); lite F2
-   does not poll it. Never skip this fetch when Copilot's window
-   looks satisfied.
+5. Fetch bot activity; lite F2 skips
+   `secondaryQuietWindow`.
 
 ### Step 2 — Record the watermark
 
-Post one marker per E1 pass. Prefer the one-command path: `node
+After deferral, rerun Step 1 for fresh `latest-ci-completed-at`; never
+reuse deferred value.
+
+Post a marker per E1 pass when satisfied. Prefer
+the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
@@ -130,7 +131,10 @@ The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run.
+--apply` — stays available when `--from-pr` cannot run. Before using it,
+require each required `(checkName, workflowName)`
+producer to pass for `{head-SHA}` and verify advisory identity/event;
+raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
 The rendered body is exactly:
 
@@ -226,14 +230,14 @@ author, or claim. ReviewItems_snapshot is session-local — do not inherit
 a previous claim's critique findings unless persisted as reviewer-visible
 comments.
 
-After the critique pass completes, re-read the current PR HEAD SHA —
-`gh pr view {pr-number} --json headRefOid --jq '.headRefOid'` — and
-store it as `{e2-head-SHA}` (it can differ from Step 1's `{head-SHA}` if
-the branch moved during E1/E2; the baseline must record what was
-actually reviewed). Post a new baseline with `{e2-head-SHA}`: `node
+Before critique, set `{e2-review-head-SHA}` to Step 1's `{head-SHA}`;
+do not capture another HEAD. Reread HEAD before posting. If it changed,
+discard the pass and return to E1; otherwise post a baseline pinned to
+the captured SHA: `node
 scripts/post-idd-marker.mjs --type baseline --target pr {pr-number}
---agent-id <id> --claim-id <id> --sha {e2-head-SHA} --apply`, or the
-package-manager equivalent. Rendered body:
+--agent-id <id> --claim-id <id> --sha {e2-review-head-SHA} --apply`, or
+the package-manager equivalent. Never record a newer SHA; reread HEAD
+after posting and return to E1 if it changed. Rendered body:
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
@@ -246,20 +250,23 @@ follow the note here either.
 
 ## E3 — Empty/non-empty routing
 
-- **ReviewItems_snapshot is empty** → proceed to
-  `idd-pre-merge-lite.instructions.md` (F1, branch-sync decision).
-  Never route this to the excluded `idd-review-triage.instructions.md`.
-- **ReviewItems_snapshot is non-empty** → this session's job ends here
-  (see Triage hand-off boundary); hand off to
-  `idd-review-triage.instructions.md` (E4) for a stronger session or a
-  human to run.
+When Step 2 was deferred, reread the live PR HEAD before E3. A mismatch
+with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
+stale items into E3/E4.
+
+- **Empty, Step 2 ready** → `idd-pre-merge-lite.instructions.md` (F1);
+  not triage.
+- **Empty, Step 2 deferred** → E15 for CI or E14 for advisory; both:
+  E14 first, then E1 before F1/F2.
+- **Non-empty** → stop; hand off to `idd-review-triage.instructions.md`
+  (E4).
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
 Read this entering E4/E9 without this episode's ReviewItems_snapshot
 (lost/restarted session, or mid-review delegation hand-off).
 
-**Procedure**: rerun Step 1-3 (Step 2 already posts the watermark —
+**Procedure**: rerun Step 1-3 (Step 2 posts the watermark when eligible —
 never a second one), then edge case 2's steps 1-3 unconditionally
 before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8
 fully before E9. An edge-case-1 item routed to E14 runs E14 after edge

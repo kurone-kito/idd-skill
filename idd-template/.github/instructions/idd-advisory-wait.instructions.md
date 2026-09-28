@@ -52,22 +52,17 @@ Batch post-wait actions into one turn.
 
 ## 1. Canonical path (helper-first)
 
-When helper support is installed, this is the canonical evidence
-collector (resolve `<profile-selected-advisory-wait-command>` from
-`docs/idd-helper-scripts.md`; never hardcode `node scripts/...` for
-non-vendored profiles):
+When helper support is installed, use the profile-selected command from
+`docs/idd-helper-scripts.md`; it always takes the four options below.
 
 ```sh
-# source repo / vendored-node profile
 node scripts/advisory-wait-state.mjs \
   --pr <pr-number> \
-  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
-
-# package-manager / ephemeral-npx profile
-<profile-selected-advisory-wait-command> \
-  --pr <pr-number> \
+  --claim-id <claim-id> --agent-id <agent-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
+
+The package-manager / ephemeral-npx equivalent takes the same options.
 
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
