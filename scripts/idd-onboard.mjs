@@ -2788,6 +2788,15 @@ function resolveBoundDirectoryScanAlias(
   ) {
     return boundSource[2];
   }
+  const directBoundSource = /^([\w$]+)(?:\.|\?\.)bind\([\s\S]*\)$/u.exec(
+    sourceName,
+  );
+  if (
+    directBoundSource !== null &&
+    knownNames.has(directBoundSource[1] ?? '')
+  ) {
+    return directBoundSource[1];
+  }
   return undefined;
 }
 function findDirectoryScanAliases(text) {
