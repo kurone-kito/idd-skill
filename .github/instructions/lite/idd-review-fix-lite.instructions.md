@@ -317,13 +317,12 @@ self-critique and record risk.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
    - Off-head `SATISFIED` with `staleRequestRecovery.action ==
-     "attempt"` → stop and hand off to a stronger session for AW3-S; do
-     not continue to E15.
-   - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
-     `false` (settled by elapsed time alone, never proven the request
-     reached Copilot, `#2327`): lite has no bounded recovery cycle to
-     run here — apply step 10 first, then continue to E15 the same as
-     an ordinary `SATISFIED`.
+     "attempt"` → hand off for AW3-S; never E15.
+   - Off-head `SATISFIED` with recovery `cap-exhausted` → follow
+     `capExhaustedRoute`: `phase-specific` → E15; `hold` → stop/ask.
+   - `SATISFIED`, `copilotPending` `false`,
+     `copilotPendingCoversHead` `false` (elapsed-only, `#2327`) → apply
+     step 10, then E15.
    - `SATISFIED` (otherwise) → apply step 10 first, then continue to
      E15.
    - `RECOVERY_NEEDED`: post the recovery marker
