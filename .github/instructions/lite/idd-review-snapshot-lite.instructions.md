@@ -17,9 +17,8 @@ Lite profile for claimed PRs; `instructions-only` uses standard file.
 
 Fetch/route; never classify/decide. Non-empty E3 hands off to
 `idd-review-triage.instructions.md`. Deferred Step 2 carries the E1
-SHA, activity baseline, `watermark deferred`, and reason; E14 uses that
-baseline (or an empty-baseline marker timestamp) only temporarily, never
-as a `review-watermark`. Missing: rerun E1. Never
+SHA, activity baseline, `watermark deferred`, and reason; E14 uses it
+temporarily, never as a `review-watermark`. Missing: rerun E1; never
 branch-sync/F1/F2 unverified.
 
 ## Stop-and-ask conditions
@@ -59,7 +58,8 @@ GitHub side effect, confirm all of the following:
 ### CI-completion precondition (for Step 2)
 
 Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
-`--trusted-marker-logins`, then `ci-wait-state --pr {pr-number}`.
+`--trusted-marker-logins`, then profile-selected `ci-wait-state` with
+`--pr {pr-number}` (resolve via `docs/idd-helper-scripts.md`).
 Require
 `requiredChecks.status: success`; `no-required-checks` only with
 non-empty all-success `checks[]`; `pending`/`failing`/`missing` defer
@@ -79,18 +79,15 @@ E1.
    headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
    re-read it elsewhere in E1 — reuse this value, except for the
    deferred E3 check below.
-2. Run the profile-selected `review-activity-snapshot` helper to collect
+2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
-   `{latest-ci-completed-at}`: `node scripts/review-activity-snapshot.mjs
-   --pr {pr-number} --trusted-marker-logins
-   "<trusted-login-1>,<trusted-login-2>"`, or the package-manager
-   equivalent — this is
-   Step 2's watermark data source and exposes `embeddedFindings` for
-   Step 3; raw triage fetch remains required. The helper emits
-   both `latestCiCompletedAt` and `latestPassingCiCompletedAt`;
-   `{latest-ci-completed-at}` is always the latter — the latest
-   _passing_ (or treated-as-passed) completion, never the latest
-   completion regardless of outcome.
+   `{latest-ci-completed-at}`: `node
+   scripts/review-activity-snapshot.mjs --pr {pr-number}
+   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`, or its
+   package-manager equivalent. It supplies Step 2 data and
+   `embeddedFindings` for Step 3; raw triage fetch remains required.
+   Use its `latestPassingCiCompletedAt` (passing or treated-as-passed),
+   never the latest completion regardless of outcome.
 3. Independently fetch, in one pass before filtering: every review
    thread (resolved or not — paginate until `hasNextPage` is `false`,
    never stop at a fixed page size), every review body submission, and
@@ -123,7 +120,10 @@ E1.
 
 ### Step 2 — Record the watermark
 
-Post one marker per E1 pass when the precondition is satisfied. Prefer
+After deferral, rerun Step 1; use fresh `latest-ci-completed-at`, never
+deferred value.
+
+Post a marker per E1 pass when satisfied. Prefer
 the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
@@ -138,8 +138,9 @@ The manual six-field fallback — `--type watermark --target pr
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
 --apply` — stays available when `--from-pr` cannot run. Before using it,
-apply the full-profile producer-aware predicate; raw display names are
-insufficient. Otherwise skip Step 2 and use E15/E14.
+Before fallback, require each required `(checkName, workflowName)`
+producer to pass for `{head-SHA}` and verify advisory identity/event;
+raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
 The rendered body is exactly:
 

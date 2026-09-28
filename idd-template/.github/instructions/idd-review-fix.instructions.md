@@ -340,8 +340,10 @@ login).
    PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
    ```
 
-2. Run **AW1** (`idd-advisory-wait.instructions.md`). **SATISFIED** →
-   E14 advisory-bot processing is done; proceed to E15.
+2. Run **AW1** using the profile-selected command from
+   `docs/idd-helper-scripts.md` with `--pr`, `--claim-id`, `--agent-id`,
+   and `--trusted-marker-logins`. **SATISFIED** → E14 advisory-bot
+   processing is done; proceed to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
    - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`

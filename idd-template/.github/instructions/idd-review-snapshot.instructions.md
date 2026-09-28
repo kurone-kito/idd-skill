@@ -78,23 +78,23 @@ CI pass exists yet for this HEAD.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
-**CI precondition.** Use the profile-selected AW1
-`advisory-wait-state` command with `--pr {pr-number}`, `--claim-id
-{claim-id}`, `--agent-id {agent-id}`, and
-`--trusted-marker-logins <trusted-logins>`; also run its
-`ci-wait-state --pr {pr-number}`. Require `outcome: SATISFIED`,
-`copilotRecovery.activeClaimProvided: true`, and
+**CI precondition.** Run profile-selected AW1 `advisory-wait-state` with
+`--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
+and `--trusted-marker-logins <trusted-logins>`; then profile-selected
+`ci-wait-state` with `--pr {pr-number}` (see
+`docs/idd-helper-scripts.md`). Require `outcome: SATISFIED`,
+`copilotRecovery.activeClaimProvided: true`,
 `staleRequestRecovery.action`, and `requiredChecks.status: success` (or
 `no-required-checks` with non-empty all-success `checks[]`). For
 `CAP_EXHAUSTED`, only `capExhaustedRoute: phase-specific` passes;
-otherwise defer. No helper: finish AW1-AW3; missing CI contract:
-stop/ask; else use tables: read
-rulesets/protection, run `gh pr checks {pr-number} --json
-name,state,bucket,startedAt,completedAt,link`, and normalize against
-their union including opt-in steps; unreadable/missing policy or
-non-pass defers. Empty output is not `no-required-checks`. Post after
-CI. Earlier heads need `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
-`SATISFIED` uses `not-applicable`/AW3-S `attempt`/cap route.
+else defer. No helper: finish AW1-AW3; missing CI contract:
+stop/ask; else read rulesets/protection and normalize
+`gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link`
+against their union, including opt-in steps; unreadable policy/non-pass
+defers; empty output is not `no-required-checks`. Post after CI. Old
+heads need `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head `SATISFIED`
+requires fresh AW1 and `staleRequestRecovery.action`
+`not-applicable`/completed AW3-S/cap; `attempt` defers.
 Incomplete: Steps 1/3, E2, E3—not F1/F2; E14 then E15. Empty
 E3/E8-zero-A: wait, re-snapshot E1, post without review; CI after
 watermark forces E1↔F2.
@@ -116,11 +116,10 @@ with the exact `{head-SHA}` from Step 1** — the helper fails closed
 (posts nothing) if it disagrees with the fresh snapshot's live HEAD,
 rather than silently keying the watermark to a moved HEAD; on that
 failure, return to Step 1 and re-snapshot, do not retry Step 2 as-is.
-The manual six-field form requires helper-free `idd-ci` producer-aware
-proof: use `(checkName, workflowName)`, require all required producers to
-pass, and verify advisory identity/event. Otherwise defer; raw
-`gh pr checks` is insufficient. `emit-marker` and manual `POST` inherit
-this rule; see `docs/idd-helper-scripts.md`):
+The manual six-field fallback requires `idd-ci` producer-aware proof:
+required `(checkName, workflowName)` producers pass and advisory
+identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
+POST inherit it (see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
