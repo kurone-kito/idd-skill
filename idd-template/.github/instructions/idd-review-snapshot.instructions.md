@@ -82,15 +82,16 @@ configured F2 `secondaryQuietWindow` waits until `elapsed`
 since last substantive review activity, not until every login
 configured under `secondaryBotLogin` reviews HEAD.
 
-**CI precondition.** Run claim-bound
-`advisory-wait-state` with `--claim-id {claim-id} --agent-id {agent-id}`;
-require `copilotRecovery.activeClaimProvided: true` and
+**CI precondition.** Run
+`advisory-wait-state --pr {pr-number} --claim-id {claim-id}
+--agent-id {agent-id}`; require
+`copilotRecovery.activeClaimProvided: true` and
 `staleRequestRecovery.action`; missing/unbound fails closed. Without
 helper,
-finish AW1-AW3 before terminal outcomes. Post after CI. Earlier
+run AW1-AW3 before terminal outcomes. Post after CI. Earlier
 heads require matching `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
 `SATISFIED`: `not-applicable` may proceed, `attempt` runs AW3-S, and
-`cap-exhausted` uses the cap route.
+`cap-exhausted` uses cap route.
 While incomplete, run Steps 1/3, E2,
 E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
 with zero Accepted PATH A items), run the waits, then return to E1,
@@ -252,8 +253,8 @@ before baseline; if changed, return to E1 without posting. Otherwise
 post baseline pinned to it:
 `post-idd-marker --type baseline --target pr <pr-number> --agent-id
 <id> --claim-id <id> --sha {e2-review-head-SHA} --apply` (see
-`docs/idd-helper-scripts.md`). Never record newer SHA; posting
-identity mismatch returns E1.
+`docs/idd-helper-scripts.md`). After posting, reread HEAD; if changed,
+return to E1 before E3.
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->

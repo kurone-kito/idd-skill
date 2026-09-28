@@ -55,8 +55,8 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Run `advisory-wait-state --claim-id {claim-id} --agent-id {agent-id}`;
-bad: stop and ask. Use
+Run `advisory-wait-state --pr {pr-number} --claim-id {claim-id}
+--agent-id {agent-id}`; use
 `staleRequestRecovery`. Take Steps 1/3;
 use E15 for CI and E14 for advisory, E14 first when both are pending.
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
@@ -234,8 +234,8 @@ discard the pass and return to E1; otherwise post a baseline pinned to
 the captured SHA: `node
 scripts/post-idd-marker.mjs --type baseline --target pr {pr-number}
 --agent-id <id> --claim-id <id> --sha {e2-review-head-SHA} --apply`, or
-the package-manager equivalent. Never record a newer SHA as reviewed;
-if posting cannot preserve the identity, return to E1. Rendered body:
+the package-manager equivalent. Never record a newer SHA; reread HEAD
+after posting and return to E1 if it changed. Rendered body:
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
