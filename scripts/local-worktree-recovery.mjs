@@ -1373,6 +1373,36 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
   }
   for (const [scope, paths] of pathsByScope) {
     const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
+    const currentStatus = deps.runGit(
+      [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--ignored',
+        '--untracked-files=all',
+        '--ignore-submodules=none',
+      ],
+      scopePath,
+    );
+    if (!currentStatus.ok) {
+      return `could not revalidate preserved ignored paths in ${scope} before cleanup: ${currentStatus.stderr}`;
+    }
+    const currentIgnoredPaths = new Set(
+      extractIgnoredPaths(currentStatus.stdout),
+    );
+    for (const path of paths) {
+      // An already-removed path is safe: an earlier cleanup may have handled
+      // it. A path that still exists but is no longer reported as ignored may
+      // have been replaced with new untracked or tracked content, so do not
+      // let the path-scoped clean delete that unpreserved content (Copilot
+      // review #4120862945).
+      if (
+        deps.pathExists(join(scopePath, path)) &&
+        !currentIgnoredPaths.has(path)
+      ) {
+        return `preserved ignored path ${scope}/${path} changed status before cleanup`;
+      }
+    }
     const cleaned = deps.runGit(
       ['clean', '-fdx', '--', ...Array.from(paths, literalGitPathspec)],
       scopePath,
@@ -4723,6 +4753,56 @@ export function runLocalWorktreeRecovery(args, deps) {
       ) {
         return recordRemovalFailure(
           'a final ignored-file preservation artifact disappeared before linked-worktree removal; stopping before removal',
+        );
+      }
+      // The final scan and cleanup above are themselves a concurrency window:
+      // a replacement claim can be posted while they run. Reconfirm routing
+      // and the worktree-local lock after that scan, immediately before the
+      // identity-bound removal (Copilot review #4120863032).
+      const finalLinkedConfirmAfterIgnored = deps.confirmBlock(cwd);
+      const finalLinkedRoutingAfterIgnored =
+        finalLinkedConfirmAfterIgnored.routing;
+      const finalLinkedRecoveredAfterIgnored = finalLinkedRoutingAfterIgnored
+        ? extractRecoveredClaim(finalLinkedRoutingAfterIgnored)
+        : null;
+      const finalLinkedReleasedAfterIgnored =
+        finalLinkedRoutingAfterIgnored !== null &&
+        isReleasedClaimRouting(finalLinkedRoutingAfterIgnored);
+      const finalLinkedReportsTargetAfterIgnored =
+        finalLinkedRoutingAfterIgnored !== null &&
+        finalLinkedRoutingAfterIgnored.state === 'local_worktree_occupied' &&
+        isAcceptedBlockReason(finalLinkedRoutingAfterIgnored.reason) &&
+        !finalLinkedRoutingAfterIgnored.reason.endsWith(
+          '-local-worktree-unreadable',
+        ) &&
+        (
+          finalLinkedRoutingAfterIgnored.evidence?.local_worktree?.paths ?? []
+        ).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      if (
+        !finalLinkedConfirmAfterIgnored.ok ||
+        !finalLinkedReportsTargetAfterIgnored ||
+        finalLinkedRecoveredAfterIgnored?.claimId !== recoveredClaimId ||
+        finalLinkedRecoveredAfterIgnored.branch !== recoveredBranch ||
+        finalLinkedReleasedAfterIgnored !== recoveredFromReleasedClaim
+      ) {
+        return recordRemovalFailure(
+          'the linked-worktree routing/claim identity changed after final ignored-file cleanup; stopping before removal',
+        );
+      }
+      finalLinkedLock = deps.checkLock(targetPath);
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLinkedLock,
+          recoveredClaimId,
+          finalLinkedReleasedAfterIgnored,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed after final ignored-file cleanup; stopping before removal',
         );
       }
     }

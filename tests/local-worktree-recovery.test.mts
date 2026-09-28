@@ -1061,12 +1061,13 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
     'confirm-recheck',
     'confirm-recheck',
     'confirm-recheck',
+    'confirm-recheck',
     'remove',
     'release',
   ]);
 });
 
-test('linked cleanup removes ignored paths reclassified by stash before removal', () => {
+test('linked cleanup stops when an ignored path is reclassified by stash', () => {
   let ignoredStatusCalls = 0;
   let stashListCalls = 0;
   let cleanCalled = false;
@@ -1133,8 +1134,10 @@ test('linked cleanup removes ignored paths reclassified by stash before removal'
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(events, ['copy', 'stash', 'clean', 'remove']);
-  assert.equal(verdict.plan.removal?.ran, true);
+  assert.deepEqual(events, ['copy', 'stash']);
+  assert.equal(cleanCalled, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /changed status before cleanup/);
 });
 
 test('step 4 stops when the target worktree is replaced while waiting for the clone lock', () => {
@@ -3412,7 +3415,7 @@ test('late preservation rescans initialized submodule ignored files before remov
             stdout:
               submoduleIgnoredScans === 1
                 ? ''
-                : submoduleIgnoredScans === 2
+                : submoduleIgnoredScans <= 3
                   ? '!! cache.tmp\0'
                   : '!! final-cache.tmp\0',
             stderr: '',
@@ -3477,7 +3480,7 @@ test('late preservation rescans initialized submodule ignored files before remov
       ],
     },
   ]);
-  assert.equal(submoduleIgnoredScans, 3);
+  assert.equal(submoduleIgnoredScans, 5);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -3973,7 +3976,7 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
           stdout:
             ignoredScanCalls === 1
               ? ''
-              : ignoredScanCalls === 2
+              : ignoredScanCalls <= 3
                 ? '!! late.env\0'
                 : '!! final.env\0',
           stderr: '',
@@ -3993,13 +3996,77 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(ignoredScanCalls, 3);
+  assert.equal(ignoredScanCalls, 5);
   assert.deepEqual(copied, [
     '/tmp/preserve/ignored/late.env',
     '/tmp/preserve/ignored/final-removal/final.env',
   ]);
   assert.equal(verdict.plan.ignoredFilesCopied.at(-1)?.path, 'final.env');
   assert.equal(verdict.plan.removal?.ran, true);
+});
+
+test('linked removal rechecks routing after final ignored-file cleanup', () => {
+  let ignoredScanCalls = 0;
+  let finalScanComplete = false;
+  let removalAttempted = false;
+  const cleanedPaths = new Set<string>();
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: {
+          claim_id: finalScanComplete ? 'claim-y' : 'claim-x',
+          branch: finalScanComplete ? 'issue/2-other' : 'issue/1-task',
+        },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/linked'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        ignoredScanCalls += 1;
+        if (ignoredScanCalls === 4) finalScanComplete = true;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            ignoredScanCalls === 1
+              ? ''
+              : ignoredScanCalls <= 3
+                ? '!! late.env\0'
+                : '!! final.env\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'clean') {
+        cleanedPaths.add(
+          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+        );
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: () => {},
+    pathExists: (path) => !cleanedPaths.has(path),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(ignoredScanCalls, 5);
+  assert.equal(removalAttempted, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /changed after final ignored-file cleanup/);
 });
 
 test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {
@@ -5447,17 +5514,17 @@ test('primary recovery removes late ignored files before reporting release', () 
       runGit: (argv, cwd) => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
           ignoredScanCalls += 1;
-          if (ignoredScanCalls === 3) postCheckoutIgnoredPresent = true;
-          if (ignoredScanCalls === 4) finalIgnoredPresent = true;
+          if (ignoredScanCalls === 4) postCheckoutIgnoredPresent = true;
+          if (ignoredScanCalls === 6) finalIgnoredPresent = true;
           return {
             ok: true,
             status: 0,
             stdout:
               ignoredScanCalls === 1
                 ? ''
-                : ignoredScanCalls === 2
+                : ignoredScanCalls <= 3
                   ? '!! stale*\0'
-                  : ignoredScanCalls === 3
+                  : ignoredScanCalls <= 5
                     ? '!! generated-during-checkout*\0'
                     : '!! generated-before-release*\0',
             stderr: '',
@@ -5508,7 +5575,7 @@ test('primary recovery removes late ignored files before reporting release', () 
       }),
       deps,
     );
-    assert.equal(ignoredScanCalls, 4);
+    assert.equal(ignoredScanCalls, 7);
     assert.equal(events.includes(`copy:${preserveDir}/ignored/stale*`), true);
     assert.equal(
       events.includes(
