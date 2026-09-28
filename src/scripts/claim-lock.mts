@@ -807,9 +807,18 @@ function createLockFileExclusively(
   path: string,
   agentId: string,
   claimId: string,
+  primaryRecovery?: PrimaryRecoveryLockMarker,
 ): 'created' | 'exists' {
   const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
+  const body: ClaimLockBody = {
+    agentId,
+    claimId,
+    acquiredAt: new Date().toISOString(),
+  };
+  if (primaryRecovery !== undefined) {
+    body.primaryRecovery = primaryRecovery;
+  }
+  writeFileSync(tmpPath, JSON.stringify(body), { flag: 'wx' });
   try {
     linkSync(tmpPath, path);
     return 'created';
@@ -1088,6 +1097,24 @@ export function updatePrimaryRecoveryLockMarker(
   marker: PrimaryRecoveryLockMarker | null,
 ): boolean {
   const current = checkClaimLock(worktree);
+  if (
+    current.path === expected.path &&
+    !current.present &&
+    !current.malformed &&
+    !expected.present &&
+    !expected.malformed &&
+    marker !== null &&
+    marker.claimId === '' &&
+    marker.releasedClaim
+  ) {
+    try {
+      return (
+        createLockFileExclusively(current.path, '', '', marker) === 'created'
+      );
+    } catch {
+      return false;
+    }
+  }
   if (
     current.path !== expected.path ||
     !current.present ||

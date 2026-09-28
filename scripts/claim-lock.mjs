@@ -704,9 +704,17 @@ function overwriteLockAtomically(path, agentId, claimId) {
  * hard-link support) fails this call loudly instead of silently
  * reintroducing the exact torn-read race this function exists to close.
  */
-function createLockFileExclusively(path, agentId, claimId) {
+function createLockFileExclusively(path, agentId, claimId, primaryRecovery) {
   const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
+  const body = {
+    agentId,
+    claimId,
+    acquiredAt: new Date().toISOString(),
+  };
+  if (primaryRecovery !== undefined) {
+    body.primaryRecovery = primaryRecovery;
+  }
+  writeFileSync(tmpPath, JSON.stringify(body), { flag: 'wx' });
   try {
     linkSync(tmpPath, path);
     return 'created';
@@ -933,6 +941,24 @@ export function checkClaimLock(worktree) {
  */
 export function updatePrimaryRecoveryLockMarker(worktree, expected, marker) {
   const current = checkClaimLock(worktree);
+  if (
+    current.path === expected.path &&
+    !current.present &&
+    !current.malformed &&
+    !expected.present &&
+    !expected.malformed &&
+    marker !== null &&
+    marker.claimId === '' &&
+    marker.releasedClaim
+  ) {
+    try {
+      return (
+        createLockFileExclusively(current.path, '', '', marker) === 'created'
+      );
+    } catch {
+      return false;
+    }
+  }
   if (
     current.path !== expected.path ||
     !current.present ||

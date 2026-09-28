@@ -5003,6 +5003,19 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
 
     firstAttempt = false;
     assert.equal(primaryMarker?.preserveDir, preserveDir);
+    const savedPreservation = primaryMarker?.preservation;
+    const dryRunVerdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: false,
+        worktree: root,
+        preserveDir,
+      }),
+      deps,
+    );
+    assert.equal(dryRunVerdict.step1.outcome, 'blocked-primary-resume');
+    assert.equal(dryRunVerdict.preserveDir, preserveDir);
+    assert.equal(dryRunVerdict.plan.removal?.ran, false);
+    assert.equal(primaryMarker?.preservation, savedPreservation);
     const resumedVerdict = runLocalWorktreeRecovery(
       baseArgs({
         apply: true,
@@ -5022,6 +5035,115 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     rmSync(root, { recursive: true, force: true });
     rmSync(preserveDir, { recursive: true, force: true });
   }
+});
+
+test('primary legacy recovery reserves an absent lock before checkout', () => {
+  const root = '/repo/primary';
+  let checkoutDone = false;
+  let lockPresent = false;
+  let primaryMarker: PrimaryRecoveryLockMarker | null = null;
+  let lockRemoved = false;
+  const deps = fakeDeps({
+    cwd: () => root,
+    listWorktreeRecords: () => [
+      {
+        path: root,
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    pathExists: (path) => path === root || path === `${root}/.git`,
+    confirmBlock: () => ({
+      ok: true,
+      routing: checkoutDone
+        ? {
+            state: 'unclaimed',
+            reason: 'legacy-released',
+            active_claim: null,
+            evidence: {
+              local_worktree: {
+                status: 'absent',
+                paths: [],
+                reason: null,
+              },
+              released_claim: {
+                claim_id: null,
+                branch: 'legacy-task',
+              },
+            },
+          }
+        : {
+            state: 'local_worktree_occupied',
+            reason: 'released-claim-local-worktree-occupied',
+            active_claim: null,
+            evidence: {
+              local_worktree: {
+                status: 'occupied',
+                paths: [root],
+                reason: null,
+              },
+              released_claim: {
+                claim_id: null,
+                branch: 'legacy-task',
+              },
+            },
+          },
+      error: null,
+    }),
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'checkout') checkoutDone = true;
+      return cleanRepoRunGit(argv, cwd);
+    },
+    checkLock: () =>
+      lockPresent
+        ? {
+            path: `${root}/.git/idd-claim.lock`,
+            present: true,
+            holder: {
+              agentId: '',
+              claimId: '',
+              acquiredAt: '2026-09-28T00:00:00Z',
+              ...(primaryMarker === null
+                ? {}
+                : { primaryRecovery: primaryMarker }),
+            },
+          }
+        : {
+            path: `${root}/.git/idd-claim.lock`,
+            present: false,
+          },
+    updatePrimaryRecoveryLockMarker: (_path, expected, marker) => {
+      if (!expected.present && marker !== null) {
+        assert.equal(marker.claimId, '');
+        assert.equal(marker.releasedClaim, true);
+        lockPresent = true;
+      }
+      if (marker === null) {
+        lockPresent = false;
+      } else {
+        primaryMarker = marker;
+      }
+      return true;
+    },
+    removeLockIfMatches: () => {
+      lockRemoved = true;
+      return true;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: root,
+    }),
+    deps,
+  );
+  assert.equal(checkoutDone, true);
+  assert.equal(lockRemoved, true);
+  assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
 });
 
 test('primary recovery rechecks claim and lock identity immediately before checkout', () => {

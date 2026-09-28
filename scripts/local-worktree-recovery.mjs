@@ -381,7 +381,14 @@ function isTakeoverEligibleAbsentRouting(routing) {
 function lockMatchesRecoveredClaim(lock, recoveredClaimId, legacyRelease) {
   if (lock.malformed) return false;
   if (recoveredClaimId === null) {
-    return legacyRelease && (!lock.present || lock.holder?.claimId === null);
+    return (
+      legacyRelease &&
+      (!lock.present ||
+        lock.holder?.claimId === null ||
+        (lock.holder?.claimId === '' &&
+          lock.holder.primaryRecovery?.claimId === '' &&
+          lock.holder.primaryRecovery.releasedClaim))
+    );
   }
   return lock.present && lock.holder?.claimId === recoveredClaimId;
 }
@@ -2853,18 +2860,6 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.step1.reason;
       return verdict;
     }
-    if (!args.apply) {
-      const preserveDirPresence = pathPresenceForDeps(
-        deps,
-        preserveDirResolved,
-      );
-      if (preserveDirPresence !== 'absent') {
-        verdict.step1.outcome = 'preserve-dir-exists';
-        verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must name a new directory; the destination already exists or cannot be inspected during dry-run`;
-        verdict.result = verdict.step1.reason;
-        return verdict;
-      }
-    }
   }
   // Step 1: confirm-the-block ALWAYS runs first, per the written procedure
   // ("Run the profile-selected resume-claim-routing helper... If <path> no
@@ -2941,10 +2936,15 @@ export function runLocalWorktreeRecovery(args, deps) {
     const routingClaimConflicts =
       (recovered.claimId !== null && recovered.claimId !== marker?.claimId) ||
       (recovered.branch !== null && recovered.branch !== marker?.branch);
+    const markerIsLegacyReleased =
+      marker !== undefined &&
+      marker.claimId === '' &&
+      marker.releasedClaim &&
+      recovered.claimId === null;
     if (
       marker !== undefined &&
       marker.worktree === targetPath &&
-      marker.claimId.length > 0 &&
+      (marker.claimId.length > 0 || markerIsLegacyReleased) &&
       marker.branch.length > 0 &&
       marker.developmentBranch.length > 0 &&
       markerPreservationManifest !== null &&
@@ -2960,7 +2960,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         marker.releasedClaim,
       )
     ) {
-      recoveredClaimId = marker.claimId;
+      recoveredClaimId = marker.claimId.length > 0 ? marker.claimId : null;
       recoveredBranch = marker.branch;
       primaryRecoveryMarker = marker;
       primaryRecoveryManifest = markerPreservationManifest;
@@ -2977,6 +2977,76 @@ export function runLocalWorktreeRecovery(args, deps) {
         ensurePreserveDir: () => primaryRecoveryPreserveDir,
       }
     : deps;
+  const restorePrimaryRecoveryPlan = () => {
+    if (primaryRecoveryMarker === null || primaryRecoveryManifest === null) {
+      return false;
+    }
+    // A resumed invocation must use the exact preservation plan that was
+    // recorded before the first checkout. Replanning here would lose the
+    // original stash/ref/copy destinations and could make a missing artifact
+    // look like a clean, empty plan.
+    verdict.preserveDir = primaryRecoveryMarker.preserveDir ?? null;
+    verdict.plan.inProgressOperation =
+      primaryRecoveryManifest.inProgressOperation;
+    verdict.plan.submoduleInProgressOperations =
+      primaryRecoveryManifest.submoduleInProgressOperations;
+    verdict.plan.stashes = primaryRecoveryManifest.stashes;
+    verdict.plan.uninitializedSubmodules =
+      primaryRecoveryManifest.uninitializedSubmodules;
+    verdict.plan.backupRefs = primaryRecoveryManifest.backupRefs;
+    verdict.plan.ignoredFilesCopied =
+      primaryRecoveryManifest.ignoredFilesCopied;
+    verdict.plan.ignoredFilesScanFailed =
+      primaryRecoveryManifest.ignoredFilesScanFailed;
+    verdict.plan.submoduleListFailed =
+      primaryRecoveryManifest.submoduleListFailed;
+    verdict.plan.submoduleAdminCopies =
+      primaryRecoveryManifest.submoduleAdminCopies;
+    verdict.plan.worktreeAdminCopy = primaryRecoveryManifest.worktreeAdminCopy;
+    verdict.mutated =
+      verdict.plan.stashes.some((stash) => stash.stashed) ||
+      verdict.plan.backupRefs.some((ref) => ref.written) ||
+      verdict.plan.uninitializedSubmodules.some(
+        (entry) => entry.copiedTo !== null,
+      ) ||
+      verdict.plan.ignoredFilesCopied.some(
+        (entry) => entry.copiedTo !== null,
+      ) ||
+      verdict.plan.submoduleAdminCopies.some(
+        (entry) => entry.copiedTo !== null,
+      ) ||
+      verdict.plan.worktreeAdminCopy?.copiedTo !== null;
+    return preservationVerified(
+      {
+        ...primaryRecoveryManifest,
+        submoduleAdminCopyFailed: false,
+        worktreeAdminCopyFailed: false,
+      },
+      deps.pathExists,
+    );
+  };
+  const updatePrimaryRecoveryMarkerFromPlan = (developmentBranch) => {
+    if (deps.updatePrimaryRecoveryLockMarker === undefined) return true;
+    const currentLock = deps.checkLock(targetPath);
+    const marker = {
+      phase: 'primary-checkout',
+      worktree: targetPath,
+      claimId: recoveredClaimId ?? '',
+      branch: recoveredBranch ?? '',
+      developmentBranch,
+      releasedClaim:
+        primaryRecoveryMarker?.releasedClaim ?? recoveredFromReleasedClaim,
+      preserveDir: verdict.preserveDir,
+      preservation: JSON.stringify(
+        primaryRecoveryManifestFromPlan(verdict.plan),
+      ),
+    };
+    return deps.updatePrimaryRecoveryLockMarker(
+      targetPath,
+      currentLock,
+      marker,
+    );
+  };
   const routingReportsExplicitAbsence =
     isPrunableShortcutRouting(routing) &&
     routing.evidence?.local_worktree?.status === 'absent' &&
@@ -3065,8 +3135,28 @@ export function runLocalWorktreeRecovery(args, deps) {
   // `--operator-confirmed-no-live-session` and `--apply`. The operator-flag
   // gate below applies to the ACTUAL mutation only.
   if (!args.apply) {
+    if (args.preserveDir && !primaryRecoveryResume) {
+      const preserveDirResolved = resolve(cwd, args.preserveDir);
+      const preserveDirPresence = pathPresenceForDeps(
+        deps,
+        preserveDirResolved,
+      );
+      if (preserveDirPresence !== 'absent') {
+        verdict.ready = false;
+        verdict.step1.outcome = 'preserve-dir-exists';
+        verdict.step1.reason = `--preserve-dir (${preserveDirResolved}) must name a new directory; the destination already exists or cannot be inspected during dry-run`;
+        verdict.result = verdict.step1.reason;
+        return verdict;
+      }
+    }
     const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
-    if (shortcut.eligible) {
+    if (primaryRecoveryResume) {
+      if (!restorePrimaryRecoveryPlan()) {
+        return recordRemovalFailure(
+          'a primary-worktree preservation artifact from the interrupted recovery is missing or incomplete; stopping before resume',
+        );
+      }
+    } else if (shortcut.eligible) {
       const adminLookup = deps.findWorktreeAdminDir
         ? deps.findWorktreeAdminDir(verdict.primaryWorktree ?? cwd, targetPath)
         : { path: null, error: null };
@@ -3161,56 +3251,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     );
   }
   if (primaryRecoveryResume) {
-    // A resumed invocation must use the exact preservation plan that was
-    // recorded before the first checkout. Replanning here would lose the
-    // original stash/ref/copy destinations and could make a missing artifact
-    // look like a clean, empty plan.
-    if (primaryRecoveryMarker === null || primaryRecoveryManifest === null) {
-      return recordRemovalFailure(
-        'the primary-worktree recovery marker did not contain a valid preservation manifest; stopping before resume',
-      );
-    }
-    verdict.preserveDir = primaryRecoveryMarker.preserveDir ?? null;
-    verdict.plan.inProgressOperation =
-      primaryRecoveryManifest.inProgressOperation;
-    verdict.plan.submoduleInProgressOperations =
-      primaryRecoveryManifest.submoduleInProgressOperations;
-    verdict.plan.stashes = primaryRecoveryManifest.stashes;
-    verdict.plan.uninitializedSubmodules =
-      primaryRecoveryManifest.uninitializedSubmodules;
-    verdict.plan.backupRefs = primaryRecoveryManifest.backupRefs;
-    verdict.plan.ignoredFilesCopied =
-      primaryRecoveryManifest.ignoredFilesCopied;
-    verdict.plan.ignoredFilesScanFailed =
-      primaryRecoveryManifest.ignoredFilesScanFailed;
-    verdict.plan.submoduleListFailed =
-      primaryRecoveryManifest.submoduleListFailed;
-    verdict.plan.submoduleAdminCopies =
-      primaryRecoveryManifest.submoduleAdminCopies;
-    verdict.plan.worktreeAdminCopy = primaryRecoveryManifest.worktreeAdminCopy;
-    verdict.mutated =
-      verdict.plan.stashes.some((stash) => stash.stashed) ||
-      verdict.plan.backupRefs.some((ref) => ref.written) ||
-      verdict.plan.uninitializedSubmodules.some(
-        (entry) => entry.copiedTo !== null,
-      ) ||
-      verdict.plan.ignoredFilesCopied.some(
-        (entry) => entry.copiedTo !== null,
-      ) ||
-      verdict.plan.submoduleAdminCopies.some(
-        (entry) => entry.copiedTo !== null,
-      ) ||
-      verdict.plan.worktreeAdminCopy?.copiedTo !== null;
-    if (
-      !preservationVerified(
-        {
-          ...primaryRecoveryManifest,
-          submoduleAdminCopyFailed: false,
-          worktreeAdminCopyFailed: false,
-        },
-        deps.pathExists,
-      )
-    ) {
+    if (!restorePrimaryRecoveryPlan()) {
       return recordRemovalFailure(
         'a primary-worktree preservation artifact from the interrupted recovery is missing or incomplete; stopping before resume',
       );
@@ -4003,6 +4044,19 @@ export function runLocalWorktreeRecovery(args, deps) {
       // false release with stale generated data left behind (Copilot review).
       const postCheckoutIgnoredEntries = [];
       let postCheckoutIgnoredScanFailed = false;
+      let persistedPostCheckoutEntries = 0;
+      const persistPostCheckoutPlan = () => {
+        const newEntries = postCheckoutIgnoredEntries.slice(
+          persistedPostCheckoutEntries,
+        );
+        verdict.plan.ignoredFilesCopied.push(...newEntries);
+        verdict.plan.ignoredFilesScanFailed ||= postCheckoutIgnoredScanFailed;
+        verdict.mutated ||= newEntries.some(
+          (ignored) => ignored.copiedTo !== null,
+        );
+        persistedPostCheckoutEntries = postCheckoutIgnoredEntries.length;
+        return updatePrimaryRecoveryMarkerFromPlan(developmentBranch);
+      };
       const postCheckoutIgnored = scanAndMaybeCopyIgnoredFiles(
         targetPath,
         '.',
@@ -4015,6 +4069,11 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
       postCheckoutIgnoredEntries.push(...postCheckoutIgnored.copied);
       postCheckoutIgnoredScanFailed ||= postCheckoutIgnored.scanFailed;
+      if (!persistPostCheckoutPlan()) {
+        return recordRemovalFailure(
+          `could not update the primary-worktree recovery marker after preserving files created during checkout ${developmentBranch}; stopping before lock removal`,
+        );
+      }
       const postCheckoutSubmodules = deps.runGit(
         ['submodule', 'status', '--recursive'],
         targetPath,
@@ -4065,11 +4124,11 @@ export function runLocalWorktreeRecovery(args, deps) {
         postCheckoutIgnoredScanFailed ||=
           postCheckoutSubmoduleIgnored.scanFailed;
       }
-      verdict.plan.ignoredFilesCopied.push(...postCheckoutIgnoredEntries);
-      verdict.plan.ignoredFilesScanFailed ||= postCheckoutIgnoredScanFailed;
-      verdict.mutated ||= postCheckoutIgnoredEntries.some(
-        (ignored) => ignored.copiedTo !== null,
-      );
+      if (!persistPostCheckoutPlan()) {
+        return recordRemovalFailure(
+          `could not update the primary-worktree recovery marker after preserving submodule files created during checkout ${developmentBranch}; stopping before lock removal`,
+        );
+      }
       if (
         postCheckoutIgnoredScanFailed ||
         postCheckoutIgnoredEntries.some(
@@ -4320,6 +4379,19 @@ export function runLocalWorktreeRecovery(args, deps) {
       let lockForDeletion = immediatelyBeforeDeleteLock;
       const finalPrimaryIgnoredEntries = [];
       let finalPrimaryIgnoredScanFailed = false;
+      let persistedFinalPrimaryEntries = 0;
+      const persistFinalPrimaryPlan = () => {
+        const newEntries = finalPrimaryIgnoredEntries.slice(
+          persistedFinalPrimaryEntries,
+        );
+        verdict.plan.ignoredFilesCopied.push(...newEntries);
+        verdict.plan.ignoredFilesScanFailed ||= finalPrimaryIgnoredScanFailed;
+        verdict.mutated ||= newEntries.some(
+          (ignored) => ignored.copiedTo !== null,
+        );
+        persistedFinalPrimaryEntries = finalPrimaryIgnoredEntries.length;
+        return updatePrimaryRecoveryMarkerFromPlan(developmentBranch);
+      };
       const finalPrimaryIgnored = scanAndMaybeCopyIgnoredFiles(
         targetPath,
         '.',
@@ -4332,6 +4404,11 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
       finalPrimaryIgnoredEntries.push(...finalPrimaryIgnored.copied);
       finalPrimaryIgnoredScanFailed ||= finalPrimaryIgnored.scanFailed;
+      if (!persistFinalPrimaryPlan()) {
+        return recordRemovalFailure(
+          `could not update the primary-worktree recovery marker after preserving files created before lock removal after checkout ${developmentBranch}; stopping`,
+        );
+      }
       const finalPrimarySubmodules = deps.runGit(
         ['submodule', 'status', '--recursive'],
         targetPath,
@@ -4375,11 +4452,11 @@ export function runLocalWorktreeRecovery(args, deps) {
         finalPrimaryIgnoredEntries.push(...finalSubmoduleIgnored.copied);
         finalPrimaryIgnoredScanFailed ||= finalSubmoduleIgnored.scanFailed;
       }
-      verdict.plan.ignoredFilesCopied.push(...finalPrimaryIgnoredEntries);
-      verdict.plan.ignoredFilesScanFailed ||= finalPrimaryIgnoredScanFailed;
-      verdict.mutated ||= finalPrimaryIgnoredEntries.some(
-        (ignored) => ignored.copiedTo !== null,
-      );
+      if (!persistFinalPrimaryPlan()) {
+        return recordRemovalFailure(
+          `could not update the primary-worktree recovery marker after preserving submodule files created before lock removal after checkout ${developmentBranch}; stopping`,
+        );
+      }
       if (
         finalPrimaryIgnoredScanFailed ||
         finalPrimaryIgnoredEntries.some(

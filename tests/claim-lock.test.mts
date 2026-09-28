@@ -839,6 +839,38 @@ test('primary recovery marker update preserves ownership and rejects a stale loc
   }
 });
 
+test('primary recovery marker update reserves an absent legacy lock exclusively', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: '',
+      branch: 'legacy-task',
+      developmentBranch: 'main',
+      releasedClaim: true,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+    const marked = checkClaimLock(fixture.worktree);
+    assert.equal(marked.present, true);
+    assert.equal(marked.holder?.claimId, '');
+    assert.deepEqual(marked.holder?.primaryRecovery, marker);
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    const cleared = checkClaimLock(fixture.worktree);
+    assert.equal(cleared.present, true);
+    assert.equal(cleared.holder?.primaryRecovery, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('check/acquire: an unreadable lock path is a malformed collision', () => {
   const fixture = setupLinkedWorktree();
   try {
