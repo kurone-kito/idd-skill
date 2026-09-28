@@ -238,6 +238,17 @@ function pathFingerprintOnDisk(path: string): string | null {
         return false;
       }
       hash.update(`link:${linkText}\0`);
+      let resolvedTarget: string | null = null;
+      try {
+        resolvedTarget = realpathSync(candidate);
+      } catch {
+        // A dangling link has no target contents to fingerprint. Its own
+        // lstat metadata and link text still provide the identity evidence.
+      }
+      if (resolvedTarget !== null) {
+        hash.update(`resolved:${resolvedTarget}\0`);
+        if (!visit(resolvedTarget)) return false;
+      }
       try {
         return sameStat(before, lstatSync(candidate));
       } catch {
@@ -2141,10 +2152,12 @@ function scanAndMaybeCopyIgnoredFiles(
           ignoredPath,
         )
       : null;
+    const source = join(scopePath, ignoredPath);
+    let sourceFingerprintBeforeCopy: string | null = null;
     if (apply && destination) {
       if (
         !isCopyDestinationOutsideTarget(destination, targetPath, deps) ||
-        !deps.pathExists(join(scopePath, ignoredPath))
+        !deps.pathExists(source)
       ) {
         // If the source disappeared or a symlinked destination redirects
         // into the target, do not remove the worktree without a verified
@@ -2159,13 +2172,20 @@ function scanAndMaybeCopyIgnoredFiles(
         });
         continue;
       }
+      sourceFingerprintBeforeCopy = deps.readPathFingerprint(source);
+      if (sourceFingerprintBeforeCopy === null) {
+        scanFailed = true;
+        copied.push({
+          scope: scopeLabel,
+          path: ignoredPath,
+          copiedTo: null,
+          sourceFingerprint: null,
+          copyFailed: false,
+        });
+        continue;
+      }
       try {
-        deps.copyPath(
-          join(scopePath, ignoredPath),
-          destination,
-          targetPath,
-          sourceRoots,
-        );
+        deps.copyPath(source, destination, targetPath, sourceRoots);
       } catch {
         // Earlier entries may already have landed and the preserve directory
         // may already exist. Keep those entries in the returned plan, mark
@@ -2182,10 +2202,10 @@ function scanAndMaybeCopyIgnoredFiles(
         continue;
       }
     }
-    const sourceFingerprint = apply
-      ? deps.readPathFingerprint(join(scopePath, ignoredPath))
-      : null;
-    if (apply && sourceFingerprint === null) {
+    const sourceFingerprint = apply ? deps.readPathFingerprint(source) : null;
+    const sourceChangedDuringCopy =
+      apply && sourceFingerprintBeforeCopy !== sourceFingerprint;
+    if (apply && (sourceFingerprint === null || sourceChangedDuringCopy)) {
       scanFailed = true;
     }
     copied.push({
@@ -2193,7 +2213,8 @@ function scanAndMaybeCopyIgnoredFiles(
       path: ignoredPath,
       copiedTo: destination,
       sourceFingerprint,
-      copyFailed: apply && sourceFingerprint === null,
+      copyFailed:
+        apply && (sourceFingerprint === null || sourceChangedDuringCopy),
     });
   }
   return { copied, scanFailed };

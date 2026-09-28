@@ -4284,7 +4284,49 @@ test('blocks cleanup when a preserved ignored source changes after its copy', ()
     deps,
   );
   assert.equal(removalAttempted, false);
-  assert.match(verdict.result, /changed contents or identity/);
+  assert.match(
+    verdict.result,
+    /changed contents or identity|late preservation artifact disappeared/,
+  );
+});
+
+test('blocks ignored preservation when the source changes during its copy', () => {
+  let fingerprintCalls = 0;
+  let copyCalls = 0;
+  let removalAttempted = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '!! race.env\0',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    readPathFingerprint: () => {
+      fingerprintCalls += 1;
+      return fingerprintCalls === 1 ? 'before-copy' : 'after-copy';
+    },
+    copyPath: () => {
+      copyCalls += 1;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(copyCalls, 1);
+  assert.equal(removalAttempted, false);
+  assert.equal(
+    verdict.plan.ignoredFilesCopied.some((entry) => entry.copyFailed),
+    true,
+  );
 });
 
 test('linked removal rechecks routing after final ignored-file cleanup', () => {

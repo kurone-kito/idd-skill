@@ -1033,6 +1033,9 @@ export function acquireClaimLock(
     // so a transiently absent lock is not reported as a false collision.
     const finalRead = readLock(path);
     if (finalRead.status === 'present' && finalRead.lock.claimId === claimId) {
+      if (finalRead.lock.primaryRecovery !== undefined) {
+        return { mode: 'collision', path, holder: finalRead.lock };
+      }
       return { mode: 'acquired', path, reacquired: true, racedCreate: true };
     }
     if (finalRead.status === 'absent') {
@@ -1052,6 +1055,9 @@ export function acquireClaimLock(
         racedRead.status === 'present' &&
         racedRead.lock.claimId === claimId
       ) {
+        if (racedRead.lock.primaryRecovery !== undefined) {
+          return { mode: 'collision', path, holder: racedRead.lock };
+        }
         return { mode: 'acquired', path, reacquired: true, racedCreate: true };
       }
       return {
