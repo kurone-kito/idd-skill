@@ -229,18 +229,14 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
-   For an unborn target, inspect contents and record a baseline only then:
+   Unborn:
 
    ```sh
    git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
      git -C <target-repo> status --short --untracked-files=all
    ```
 
-   After reviewing the printed paths and confirming that every file should
-   be included in the baseline, stage and commit them. The two steps are
-   intentionally separate: a 2026-09-28 review of PR #3574 found that
-   combining the inspection with `git add -A` committed every untracked file
-   before the operator could review it.
+   Review before staging; PR #3574 (2026-09-28) found it unsafe.
 
    ```sh
    git -C <target-repo> add -A
