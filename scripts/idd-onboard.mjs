@@ -2745,6 +2745,17 @@ function isStaticTrueExpression(expression) {
   }
   return candidate === 'true';
 }
+function stripStaticTypeAssertions(expression) {
+  let candidate = expression.trim();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const assertion = /^(.*?)\s+(?:as|satisfies)\s+[\s\S]+$/u.exec(candidate);
+    if (assertion === null) {
+      break;
+    }
+    candidate = assertion[1]?.trim() ?? '';
+  }
+  return candidate;
+}
 function isFunctionValuedExpression(text) {
   const expression = maskJavaScriptStringContents(text).trim();
   return /=>/u.test(expression) || /^(?:async\s+)?function\b/u.test(expression);
@@ -2806,7 +2817,9 @@ function findDirectoryScanAliases(text) {
         declarator.slice(0, equals).trim(),
       );
       const aliasName = aliasNameMatch?.groups?.name ?? '';
-      const sourceName = declarator.slice(equals + 1).trim();
+      const sourceName = stripStaticTypeAssertions(
+        declarator.slice(equals + 1),
+      );
       if (!/^[\w$]+$/u.test(aliasName)) {
         continue;
       }
@@ -3114,12 +3127,11 @@ function pathExpressionCandidates(text) {
   }
   const conditionalIndex = findTopLevelCharacter(expression, '?');
   if (conditionalIndex !== -1 && expression[conditionalIndex + 1] !== '.') {
-    const alternateOffset = findTopLevelCharacter(
-      expression.slice(conditionalIndex + 1),
-      ':',
+    const alternateIndex = findConditionalAlternateIndex(
+      expression,
+      conditionalIndex,
     );
-    if (alternateOffset !== -1) {
-      const alternateIndex = conditionalIndex + 1 + alternateOffset;
+    if (alternateIndex !== -1) {
       return [
         ...pathExpressionCandidates(
           expression.slice(conditionalIndex + 1, alternateIndex),
@@ -3143,6 +3155,49 @@ function pathExpressionCandidates(text) {
     return literals.length === 0 ? [] : [literals.join('/')];
   }
   return literals;
+}
+function findConditionalAlternateIndex(expression, questionIndex) {
+  let quote = null;
+  let escaped = false;
+  let delimiterDepth = 0;
+  let nestedConditionalDepth = 0;
+  for (let index = questionIndex + 1; index < expression.length; index += 1) {
+    const character = expression[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') {
+      delimiterDepth += 1;
+      continue;
+    }
+    if (character === ')' || character === ']' || character === '}') {
+      delimiterDepth = Math.max(0, delimiterDepth - 1);
+      continue;
+    }
+    if (delimiterDepth !== 0) {
+      continue;
+    }
+    if (character === '?' && expression[index + 1] !== '.') {
+      nestedConditionalDepth += 1;
+    } else if (character === ':') {
+      if (nestedConditionalDepth === 0) {
+        return index;
+      }
+      nestedConditionalDepth -= 1;
+    }
+  }
+  return -1;
 }
 function normalizeManifestScanPath(
   path,
@@ -3716,7 +3771,8 @@ function globPatternToRegex(
       } else if (segmentStart && index + 1 === pattern.length) {
         expression += '(?:(?!\\.)[^/]+(?:/|$))*';
       } else {
-        expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+        const wildcard = pattern[index + 1] === '?' ? '[^/]*?' : '[^/]*';
+        expression += `${segmentStart ? '(?!\\.)' : ''}${wildcard}`;
       }
     } else if (character === '*') {
       const questionRunFollows = pattern[index + 1] === '?';

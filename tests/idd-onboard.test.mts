@@ -4086,6 +4086,21 @@ test('checkHeldSchemaDrift preserves conditional path branches before concatenat
   ]);
 });
 
+test('checkHeldSchemaDrift matches the outer colon in nested conditionals', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync(enabled ? nested ? 'schemas/' + '*.json' : 'fixtures/' + '*.json' : 'other/' + '*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift detects multiline directory scans', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5317,6 +5332,7 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
     'const find = globSync;',
     'const unused = 1, find = globSync;',
     'const find: typeof globSync = globSync;',
+    'const find = globSync as typeof globSync;',
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
@@ -6157,6 +6173,26 @@ test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', 
     });
     assert.deepEqual(result.findings, expected);
   }
+});
+
+test('checkHeldSchemaDrift backtracks mid-segment globstars before question runs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/**??.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/ab.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/ab.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/ab.json', heldModulePath: DRIFT_MODULE },
+  ]);
 });
 
 test('checkHeldSchemaDrift keeps fixed-width question globs beyond the risk cap', () => {
