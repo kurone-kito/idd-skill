@@ -4226,6 +4226,39 @@ test('malformed `git submodule status` output blocks removal instead of dropping
   assert.match(verdict.result, /could not be fully verified/);
 });
 
+test('unsafe `git submodule status` paths fail closed before preservation mutation (Copilot review finding)', () => {
+  let removeCalled = false;
+  let stashPushCalled = false;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'submodule' && argv[1] === 'status') {
+        return {
+          ok: true,
+          status: 0,
+          stdout: ' abc123def456abc123def456abc123def456abcd ../../outside\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        stashPushCalled = true;
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalled = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.submoduleListFailed, true);
+  assert.equal(stashPushCalled, false);
+  assert.equal(removeCalled, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /could not be fully verified/);
+});
+
 test('step 4 stops removal when the fresh claim/branch identity no longer matches step 1 (Copilot review finding)', () => {
   const deps = fakeDeps({
     confirmBlock: (() => {

@@ -839,6 +839,57 @@ test('primary recovery marker update preserves ownership and rejects a stale loc
   }
 });
 
+test('acquire: a primary recovery marker blocks matching-claim reacquire', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: 'claim-a',
+      branch: 'issue/1-test',
+      developmentBranch: 'main',
+      releasedClaim: false,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+
+    const blocked = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(blocked.mode, 'collision');
+    assert.deepEqual(blocked.holder?.primaryRecovery, marker);
+
+    const marked = checkClaimLock(fixture.worktree);
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    const reacquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(reacquired.mode, 'acquired');
+    assert.equal(reacquired.reacquired, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('primary recovery marker update reserves an absent legacy lock exclusively', () => {
   const fixture = setupLinkedWorktree();
   try {
@@ -864,8 +915,7 @@ test('primary recovery marker update reserves an absent legacy lock exclusively'
       true,
     );
     const cleared = checkClaimLock(fixture.worktree);
-    assert.equal(cleared.present, true);
-    assert.equal(cleared.holder?.primaryRecovery, undefined);
+    assert.equal(cleared.present, false);
   } finally {
     teardown(fixture);
   }

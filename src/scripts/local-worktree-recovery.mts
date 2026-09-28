@@ -1581,11 +1581,19 @@ export function submoduleStatusEntries(
 }
 
 function submoduleStatusOutputIsValid(raw: string): boolean {
-  return raw
-    .split(/\r?\n/)
-    .every(
-      (line) => line.length === 0 || SUBMODULE_STATUS_LINE_PATTERN.test(line),
-    );
+  return raw.split(/\r?\n/).every((line) => {
+    if (line.length === 0) return true;
+    const match = SUBMODULE_STATUS_LINE_PATTERN.exec(line);
+    if (match === null) return false;
+    let path = match[3];
+    if (match[1] !== '-') {
+      path = stripSubmoduleDescribeSuffix(path);
+    }
+    // The parsed path is joined to the target worktree by every caller.
+    // Reject hostile or malformed status output before any preservation or
+    // cleanup mutation can consume it (Copilot review).
+    return isSafeRelativePath(path);
+  });
 }
 
 /** Convert recursive repository-relative submodule paths into paths relative

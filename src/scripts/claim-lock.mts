@@ -986,6 +986,14 @@ export function acquireClaimLock(
       }
 
       if (read.status === 'present' && read.lock.claimId === claimId) {
+        // A primary-worktree recovery marker reserves the lock for the
+        // recovery/cleanup protocol. A delayed invocation with the same
+        // claim-id must not re-enter while the checkout is in that
+        // intermediate state and potentially operate on the development
+        // branch before cleanup finishes (Copilot review).
+        if (read.lock.primaryRecovery !== undefined) {
+          return { mode: 'collision', path, holder: read.lock };
+        }
         return attempt === 0
           ? { mode: 'acquired', path, reacquired: true }
           : { mode: 'acquired', path, reacquired: true, racedCreate: true };
@@ -1128,6 +1136,25 @@ export function updatePrimaryRecoveryLockMarker(
       JSON.stringify(expected.holder?.primaryRecovery)
   ) {
     return false;
+  }
+  // The lockless legacy-primary path temporarily creates a synthetic lock
+  // solely to reserve the checkout while recovery is in progress. If
+  // checkout fails, restoring the true pre-recovery state means deleting
+  // that exact synthetic lock, not replacing it with an unmarked empty lock
+  // that the next retry would (correctly) reject as a mismatch.
+  if (
+    marker === null &&
+    current.holder?.agentId === '' &&
+    current.holder.claimId === '' &&
+    current.holder.primaryRecovery?.claimId === '' &&
+    current.holder.primaryRecovery.releasedClaim
+  ) {
+    try {
+      unlinkSync(current.path);
+      return true;
+    } catch {
+      return false;
+    }
   }
   const body: ClaimLockBody = {
     agentId: current.holder?.agentId ?? '',
