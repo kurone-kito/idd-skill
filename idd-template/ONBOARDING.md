@@ -263,7 +263,7 @@ below instead.
    git -C <target-repo> commit --allow-empty -m "chore: record idd template mirror"
    ```
 
-   Keep the pre-import commit reachable; pass its ref (normally `HEAD^`) as
+   Keep a baseline commit reachable; pass its ref `HEAD^` as
    `--target-base-ref`.
 
 4. Replace the seven placeholders from the confirmed transcript.
