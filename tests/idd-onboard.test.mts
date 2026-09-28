@@ -5677,6 +5677,16 @@ test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', 
       ],
     ],
     [
+      'schemas/*?.json',
+      'schemas/🙂.json',
+      [
+        {
+          schemaOrFixturePath: 'schemas/🙂.json',
+          heldModulePath: DRIFT_MODULE,
+        },
+      ],
+    ],
+    [
       'schemas/??.json',
       'schemas/ab.json',
       [
@@ -5819,6 +5829,24 @@ test('checkHeldSchemaDrift excludes dotfiles from leading negated classes', () =
   });
   writeDriftManifest(targetRoot, {
     'schemas/.hidden.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
+test('checkHeldSchemaDrift keeps glob classes within one path segment', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('fixtures/*[!a]*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'fixtures/x/a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'fixtures/x/a.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {

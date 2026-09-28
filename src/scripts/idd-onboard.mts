@@ -4220,9 +4220,10 @@ function globPatternToRegex(
         }
         const classPrefix =
           segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : '';
+        const segmentCharacterClassPrefix = `${classPrefix}(?!/)`;
         const hasPosixClass = /\\p\{|\\s/u.test(characterClass);
         if (hasPosixClass) {
-          expression += `${classPrefix}[${characterClass}]`;
+          expression += `${segmentCharacterClassPrefix}[${characterClass}]`;
         } else {
           const captureName = `__iddQuestion${questionCaptures.length}`;
           questionCaptures.push({
@@ -4230,7 +4231,7 @@ function globPatternToRegex(
             codeUnitCount: 1,
             allowsAstralCodePoint: pattern[closing + 1] === '*',
           });
-          expression += `(?<${captureName}>${classPrefix}[${characterClass}])`;
+          expression += `(?<${captureName}>${segmentCharacterClassPrefix}[${characterClass}])`;
         }
         index = closing;
       }
@@ -4319,26 +4320,33 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
   const expression = globPatternToRegex(pattern, true, '', questionCaptures);
   try {
     const regexSource = `^${expression}$`;
-    let match = new RegExp(regexSource, 'u').exec(targetPath);
-    if (match === null && !/\\p\{/u.test(expression)) {
+    const capturesHaveExpectedWidth = (
+      match: RegExpExecArray | null,
+    ): boolean =>
+      match !== null &&
+      questionCaptures.every(
+        ({ name, codeUnitCount, allowsAstralCodePoint }) => {
+          const captured = match.groups?.[name];
+          return (
+            captured === undefined ||
+            captured.length === codeUnitCount ||
+            (allowsAstralCodePoint && captured.length === 2)
+          );
+        },
+      );
+    const unicodeMatch = new RegExp(regexSource, 'u').exec(targetPath);
+    if (capturesHaveExpectedWidth(unicodeMatch)) {
+      return true;
+    }
+    if (!/\\p\{/u.test(expression)) {
       // Node's glob implementation counts UTF-16 code units for adjacent
       // fixed-width wildcards. Retry without Unicode mode so a surrogate
       // pair can be consumed by two neighboring classes or wildcards.
-      match = new RegExp(regexSource).exec(targetPath);
+      return capturesHaveExpectedWidth(
+        new RegExp(regexSource).exec(targetPath),
+      );
     }
-    if (match === null) {
-      return false;
-    }
-    return questionCaptures.every(
-      ({ name, codeUnitCount, allowsAstralCodePoint }) => {
-        const captured = match.groups?.[name];
-        return (
-          captured === undefined ||
-          captured.length === codeUnitCount ||
-          (allowsAstralCodePoint && captured.length === 2)
-        );
-      },
-    );
+    return false;
   } catch {
     return false;
   }
