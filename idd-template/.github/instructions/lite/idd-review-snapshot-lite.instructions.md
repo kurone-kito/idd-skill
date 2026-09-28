@@ -1,22 +1,21 @@
 # IDD — Review Snapshot Phase (Lite) (E1-E3)
 
-Lite profile for claimed PRs; `instructions-only` uses the standard file.
+Lite profile for claimed PRs; `instructions-only` uses standard file.
 
 ## Helper runtime contract
 
-- Use every named helper or command set. Missing, failing, or disagreeing
-  helpers are stop-and-ask conditions; never fall back silently to prose.
+- Missing, failing, or disagreeing helpers: stop and ask; never fall back
+  silently to prose.
 - `instructions-only` uses `idd-review-snapshot.instructions.md`.
 
 ## Triage hand-off boundary (E4-E8 excluded)
 
-Only fetch/routes ReviewItems_snapshot; never classify or decide
-Accept/Reject. Non-empty E3 hands off to
-`idd-review-triage.instructions.md` (E4-E8). A deferred Step 2 handoff
-carries E1 Step 1 SHA, its activity baseline, `watermark deferred`, and
-reason; E14 uses that baseline (or its marker timestamp if empty) only as
-a temporary polling watermark, never a `review-watermark`. Missing
-evidence: rerun E1 before E8. Never branch-sync/F1/F2 unverified.
+Fetch/route; never classify/decide. Non-empty E3 hands off to
+`idd-review-triage.instructions.md`. Deferred Step 2 carries the E1
+SHA, activity baseline, `watermark deferred`, and reason; E14 uses that
+baseline (or an empty-baseline marker timestamp) only temporarily, never
+as a `review-watermark`. Missing: rerun E1. Never
+branch-sync/F1/F2 unverified.
 
 ## Stop-and-ask conditions
 
@@ -59,8 +58,10 @@ Before Step 2, run the profile-selected advisory command with `--pr`,
 profile-selected `ci-wait-state --pr {pr-number}`. Require
 `requiredChecks.status: success`; `no-required-checks` only passes with
 non-empty `checks[]` all `success`; `pending`/`missing` defer, others
-stop and ask. Use
-`staleRequestRecovery`. Take Steps 1/3;
+stop and ask. Require `outcome: SATISFIED`; same-head needs
+`lastCopilotCommit == prHeadSha`, off-head needs
+`staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
+`attempt` hands off and `hold` defers. Take Steps 1/3;
 use E15 for CI and E14 for advisory, E14 first when both are pending.
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
 E1.
