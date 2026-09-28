@@ -422,8 +422,8 @@ Take an E1-scope activity snapshot (excluding trusted markers) and
 record highest `updatedAt` as **polling watermark** — never post it as a
 `review-watermark`. If a deferred baseline is older, return E1; otherwise
 use this maximum. If empty, use latest trusted same-claim watermark
-`createdAt`, then deferred E1 baseline, then `review-baseline`
-`createdAt`; otherwise E1.
+`createdAt`, then deferred E1 baseline, then latest trusted same-claim
+`review-baseline` `createdAt`; otherwise E1.
 
 Poll every `POLL_INTERVAL_MINUTES` minutes:
 
