@@ -2516,6 +2516,42 @@ test('dry-run plans a prunable worktree private admin-directory backup without c
   assert.equal(verdict.plan.removal?.ran, false);
 });
 
+test('dry-run rejects an existing explicit preserve directory for a prunable shortcut', () => {
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    findWorktreeAdminDir: () => ({
+      path: '/repo/primary/.git/worktrees/linked',
+      error: null,
+    }),
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    deps,
+  );
+  assert.equal(verdict.step1.outcome, 'preserve-dir-exists');
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /must name a new directory/);
+});
+
 test('prunable shortcut stops when the record becomes locked immediately before force removal', () => {
   let listCalls = 0;
   let removeCalled = false;
@@ -5852,6 +5888,94 @@ test('primary recovery does not abort a merge already cleared by stash', () => {
     assert.equal(abortCalled, false);
     assert.equal(submoduleUpdateCalled, true);
     assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('primary recovery retains its marker when checkout returns a failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-checkout-failure-'));
+  mkdirSync(join(root, '.git'), { recursive: true });
+  let primaryMarker: PrimaryRecoveryLockMarker | null = null;
+  let checkoutAttempted = false;
+  let markerClearAttempts = 0;
+  let lockRemoved = false;
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) => path === root || existsSync(path),
+      confirmBlock: () => ({
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: 'occupied',
+              paths: [root],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      }),
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'checkout') {
+          checkoutAttempted = true;
+          return {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr: 'post-checkout hook failed',
+          };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+          ...(primaryMarker === null ? {} : { primaryRecovery: primaryMarker }),
+        },
+      }),
+      updatePrimaryRecoveryLockMarker: (_path, _expected, marker) => {
+        if (marker === null) markerClearAttempts += 1;
+        primaryMarker = marker;
+        return true;
+      },
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(checkoutAttempted, true);
+    assert.equal(markerClearAttempts, 0);
+    assert.notEqual(primaryMarker, null);
+    assert.equal(lockRemoved, false);
+    assert.equal(verdict.plan.removal?.ran, false);
+    assert.match(verdict.result, /recovery marker was retained for resume/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

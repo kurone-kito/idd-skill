@@ -3505,7 +3505,7 @@ export function runLocalWorktreeRecovery(args, deps) {
   // `--operator-confirmed-no-live-session` and `--apply`. The operator-flag
   // gate below applies to the ACTUAL mutation only.
   if (!args.apply) {
-    if (args.preserveDir && !primaryRecoveryResume && !shortcut.eligible) {
+    if (args.preserveDir && !primaryRecoveryResume) {
       const preserveDirResolved = resolve(cwd, args.preserveDir);
       const preserveDirPresence = pathPresenceForDeps(
         deps,
@@ -4467,18 +4467,17 @@ export function runLocalWorktreeRecovery(args, deps) {
           targetPath,
         );
         if (!checkout.ok) {
-          const currentLock = deps.checkLock(targetPath);
-          const markerCleared =
-            deps.updatePrimaryRecoveryLockMarker === undefined ||
-            deps.updatePrimaryRecoveryLockMarker(targetPath, currentLock, null);
+          // A checkout can switch HEAD and still return nonzero, for example
+          // when a post-checkout hook fails. Keep the marker for every failed
+          // checkout so a later invocation can verify the resulting branch
+          // and finish the interrupted recovery instead of losing the only
+          // resume evidence.
           verdict.plan.removal = {
             kind: 'primary',
             developmentBranch,
             wouldRun: true,
             ran: false,
-            detail: markerCleared
-              ? `checkout ${developmentBranch} failed: ${checkout.stderr}`
-              : `checkout ${developmentBranch} failed and the recovery marker could not be cleared: ${checkout.stderr}`,
+            detail: `checkout ${developmentBranch} failed; the recovery marker was retained for resume: ${checkout.stderr}`,
           };
           verdict.result = verdict.plan.removal.detail;
           return verdict;
