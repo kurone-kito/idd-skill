@@ -3143,7 +3143,7 @@ export function runLocalWorktreeRecovery(args, deps) {
   // `--operator-confirmed-no-live-session` and `--apply`. The operator-flag
   // gate below applies to the ACTUAL mutation only.
   if (!args.apply) {
-    if (args.preserveDir && !primaryRecoveryResume) {
+    if (args.preserveDir && !primaryRecoveryResume && !shortcut.eligible) {
       const preserveDirResolved = resolve(cwd, args.preserveDir);
       const preserveDirPresence = pathPresenceForDeps(
         deps,
@@ -3177,14 +3177,34 @@ export function runLocalWorktreeRecovery(args, deps) {
         const plannedPreserveDir = args.preserveDir
           ? resolve(cwd, args.preserveDir)
           : null;
+        const plannedDestination = plannedPreserveDir
+          ? join(plannedPreserveDir, 'prunable-gitdir')
+          : null;
+        if (
+          plannedDestination !== null &&
+          !isCopyDestinationOutsideKnownPaths(
+            plannedDestination,
+            [targetPath, adminLookup.path],
+            deps,
+          )
+        ) {
+          verdict.preserveDir = plannedPreserveDir;
+          verdict.plan.prunableAdminCopy = {
+            source: adminLookup.path,
+            copiedTo: null,
+            copyFailed: false,
+            plannedTo: plannedDestination,
+          };
+          return recordRemovalFailure(
+            'the prunable worktree admin-data backup destination is inside the vanished worktree or its private admin directory; stopping before removal',
+          );
+        }
         verdict.preserveDir = plannedPreserveDir;
         verdict.plan.prunableAdminCopy = {
           source: adminLookup.path,
           copiedTo: null,
           copyFailed: false,
-          plannedTo: plannedPreserveDir
-            ? join(plannedPreserveDir, 'prunable-gitdir')
-            : null,
+          plannedTo: plannedDestination,
         };
       }
     } else {
@@ -3521,7 +3541,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     // until the first filesystem copy could leave earlier Git mutations
     // unreported when that later copy needs the destination (Codex review).
     let applyPreserveDir = null;
-    if (args.preserveDir && !primaryRecoveryResume) {
+    if (args.preserveDir && !primaryRecoveryResume && !shortcut.eligible) {
       try {
         applyPreserveDir = deps.ensurePreserveDir();
         verdict.preserveDir = applyPreserveDir;
@@ -4915,6 +4935,35 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
       if (adminLookup.path !== null) {
+        const requestedPreserveDir = args.preserveDir
+          ? resolve(cwd, args.preserveDir)
+          : null;
+        const plannedDestination = requestedPreserveDir
+          ? join(requestedPreserveDir, 'prunable-gitdir')
+          : null;
+        // A prunable target no longer has a resolvable target gitdir, so the
+        // general upfront containment check cannot see that an explicit
+        // destination is inside the private admin directory we just found.
+        // Validate before ensurePreserveDir() creates anything there.
+        if (
+          plannedDestination !== null &&
+          !isCopyDestinationOutsideKnownPaths(
+            plannedDestination,
+            [targetPath, adminLookup.path],
+            deps,
+          )
+        ) {
+          verdict.preserveDir = requestedPreserveDir;
+          verdict.plan.prunableAdminCopy = {
+            source: adminLookup.path,
+            copiedTo: null,
+            copyFailed: false,
+            plannedTo: plannedDestination,
+          };
+          return recordRemovalFailure(
+            'the prunable worktree admin-data backup destination is inside the vanished worktree or its private admin directory; stopping before removal',
+          );
+        }
         const preserveDir = deps.ensurePreserveDir();
         const destination = join(preserveDir, 'prunable-gitdir');
         const entry = {

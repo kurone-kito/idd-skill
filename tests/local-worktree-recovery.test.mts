@@ -1862,6 +1862,66 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('prunable shortcut validates explicit preserve-dir before creating it inside the vanished admin directory (Copilot review finding)', () => {
+  const adminPath = '/repo/primary/.git/worktrees/linked';
+  const unsafePreserveDir = `${adminPath}/preserve`;
+  let ensurePreserveDirCalls = 0;
+  let copyCalled = false;
+  const deps = fakeDeps({
+    pathExists: (path) => path !== '/repo/linked',
+    realpathOrNull: (path) => path,
+    findWorktreeAdminDir: () => ({ path: adminPath, error: null }),
+    runGit: (argv, cwd) => {
+      if (
+        argv[0] === 'rev-parse' &&
+        argv.includes('--absolute-git-dir') &&
+        cwd === '/repo/linked'
+      ) {
+        return { ok: false, status: 1, stdout: '', stderr: 'vanished' };
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    ensurePreserveDir: () => {
+      ensurePreserveDirCalls += 1;
+      return unsafePreserveDir;
+    },
+    copyPath: () => {
+      copyCalled = true;
+    },
+  });
+  deps.listWorktreeRecords = () => [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      preserveDir: unsafePreserveDir,
+    }),
+    deps,
+  );
+  assert.equal(ensurePreserveDirCalls, 0);
+  assert.equal(copyCalled, false);
+  assert.equal(verdict.mutated, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /admin-data backup destination is inside/);
+});
+
 test('retains a partial prunable admin copy and blocks removal', () => {
   const deps = fakeDeps({
     pathExists: (path) => path !== '/repo/linked',
