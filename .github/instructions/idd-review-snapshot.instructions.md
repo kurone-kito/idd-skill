@@ -89,10 +89,10 @@ CI pass exists yet for this HEAD.
 `--trusted-marker-logins <trusted-logins>`; also run its
 `ci-wait-state --pr {pr-number}`. Require `outcome: SATISFIED`,
 `copilotRecovery.activeClaimProvided: true`, and
-`staleRequestRecovery.action`, plus `requiredChecks.status: success` (or
-`no-required-checks` only when `checks[]` is non-empty and every entry
-is `success`).
-Missing/unbound/non-SATISFIED: defer. Without helper, finish AW1-AW3; for
+`staleRequestRecovery.action`, and `requiredChecks.status: success` (or
+`no-required-checks` with non-empty all-success `checks[]`). Only
+`capExhaustedRoute: phase-specific` passes; otherwise defer. Without
+helper, finish AW1-AW3; for
 CI, follow `idd-ci.instructions.md`'s required-check tables: read
 rulesets/protection, run `gh pr checks {pr-number} --json
 name,state,bucket,startedAt,completedAt,link`, and normalize against
