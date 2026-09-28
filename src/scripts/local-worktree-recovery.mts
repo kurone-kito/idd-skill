@@ -337,6 +337,10 @@ export interface StashPlanEntry {
   /** Every individual destination attempted by the unmerged-path fallback.
    * The directory itself is not proof that each dirty path survived. */
   unmergedFallbackCopiedFiles: string[];
+  /** Source paths that were successfully copied by the unmerged-path
+   * fallback. These are revalidated and removed before a primary checkout so
+   * ordinary untracked files cannot block or leak into the development branch. */
+  unmergedFallbackCopiedSources: string[];
   /** True only once every dirty path in this scope (not just the
    * `--diff-filter=U` conflicted subset) was confirmed copied out, when the
    * `stash push` fallback ran. `null` when the fallback never ran. */
@@ -542,6 +546,11 @@ function isStashPlanEntry(value: unknown): value is StashPlanEntry {
     value.unmergedFallbackCopiedFiles.every(
       (entry) => typeof entry === 'string',
     ) &&
+    (value.unmergedFallbackCopiedSources === undefined ||
+      (Array.isArray(value.unmergedFallbackCopiedSources) &&
+        value.unmergedFallbackCopiedSources.every(
+          (entry) => typeof entry === 'string',
+        ))) &&
     (value.unmergedFallbackAllPreserved === null ||
       typeof value.unmergedFallbackAllPreserved === 'boolean') &&
     typeof value.hardStashFailure === 'boolean'
@@ -635,6 +644,14 @@ function parsePrimaryRecoveryPreservationManifest(
       // Older interrupted recoveries did not persist this process-local
       // snapshot. Treat those markers as having an unknown snapshot so they
       // remain resumable without weakening the post-checkout verification.
+      stashes: parsed.stashes.map((entry) => ({
+        ...entry,
+        // Older interrupted recoveries did not persist the unmerged-fallback
+        // source paths. Keep them readable, but the primary cleanup gate will
+        // stop safely rather than deleting an unverified source.
+        unmergedFallbackCopiedSources:
+          entry.unmergedFallbackCopiedSources ?? [],
+      })),
       backupRefs: parsed.backupRefs.map((entry) => ({
         ...entry,
         localRefsSnapshot: entry.localRefsSnapshot ?? null,
@@ -1697,6 +1714,7 @@ function planAndMaybeStashScope(
     createdStashEntry: null,
     unmergedFallbackCopiedTo: null,
     unmergedFallbackCopiedFiles: [],
+    unmergedFallbackCopiedSources: [],
     unmergedFallbackAllPreserved: null,
     hardStashFailure: false,
   };
@@ -1789,6 +1807,8 @@ function planAndMaybeStashScope(
         }
         if (!deps.pathExists(to)) {
           allLanded = false;
+        } else {
+          entry.unmergedFallbackCopiedSources.push(from);
         }
       }
       entry.unmergedFallbackCopiedTo = destination;
@@ -2134,6 +2154,108 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     for (const path of paths) {
       if (deps.pathExists(join(scopePath, path))) {
         return `preserved ignored path ${scope}/${path} remained after cleanup`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Remove source paths copied by the unmerged-path fallback before a primary
+ * checkout. A plain copy preserves the working-tree bytes but leaves the
+ * original path in place; in particular, an ordinary untracked file can then
+ * make checkout refuse or leak recovered data into the development branch.
+ * Re-read status for each scope and remove only the exact source paths that
+ * are still dirty or ignored. A path that an operation cleanup already
+ * removed or restored is left alone, while unreadable state fails closed. */
+function cleanPreservedUnmergedFallbackFilesBeforePrimaryCheckout(
+  stashes: readonly StashPlanEntry[],
+  targetPath: string,
+  deps: Pick<
+    LocalWorktreeRecoveryDeps,
+    'runGit' | 'pathExists' | 'pathPresence' | 'removePath'
+  >,
+  activeSubmoduleScopes: ReadonlySet<string> | null = null,
+): string | null {
+  const sourcesByScope = new Map<string, string[]>();
+  for (const stash of stashes) {
+    if (
+      stash.scope !== '.' &&
+      activeSubmoduleScopes !== null &&
+      !activeSubmoduleScopes.has(stash.scope)
+    ) {
+      continue;
+    }
+    if (stash.unmergedFallbackCopiedTo === null) {
+      if (stash.unmergedFallbackCopiedSources.length > 0) {
+        return `unmerged fallback sources for ${stash.scope} have no verified destination`;
+      }
+      continue;
+    }
+    if (stash.unmergedFallbackAllPreserved !== true) {
+      return `unmerged fallback for ${stash.scope} was not fully preserved`;
+    }
+    if (
+      stash.unmergedFallbackCopiedSources.length !==
+      stash.unmergedFallbackCopiedFiles.length
+    ) {
+      return `unmerged fallback source paths for ${stash.scope} are incomplete`;
+    }
+    const sources = sourcesByScope.get(stash.scope) ?? [];
+    sources.push(...stash.unmergedFallbackCopiedSources);
+    sourcesByScope.set(stash.scope, sources);
+  }
+
+  for (const [scope, sources] of sourcesByScope) {
+    const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
+    const currentStatus = deps.runGit(
+      [
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=normal',
+        '--ignore-submodules=none',
+      ],
+      scopePath,
+    );
+    if (!currentStatus.ok) {
+      return `could not revalidate unmerged fallback sources in ${scope} before cleanup: ${currentStatus.stderr}`;
+    }
+    const normalizeStatusPath = (path: string): string =>
+      path.replaceAll('\\', '/').replace(/\/+$/, '');
+    const currentPaths = new Set([
+      ...extractDirtyPaths(currentStatus.stdout).map(normalizeStatusPath),
+      ...extractIgnoredPaths(currentStatus.stdout).map(normalizeStatusPath),
+    ]);
+    for (const source of new Set(sources)) {
+      const relativeSource = relative(scopePath, source);
+      if (
+        !isPathContainedIn(source, scopePath) ||
+        !isSafeRelativePath(relativeSource)
+      ) {
+        return `unmerged fallback source ${source} is outside its recovery scope`;
+      }
+      const presence = pathPresenceForDeps(deps, source);
+      if (presence === 'unknown') {
+        return `could not verify unmerged fallback source ${source} before cleanup`;
+      }
+      if (presence === 'absent') continue;
+      if (!currentPaths.has(normalizeStatusPath(relativeSource))) {
+        // The operation cleanup may have restored a tracked path since the
+        // fallback copy was made. It is no longer a checkout blocker, so do
+        // not remove content that is now clean.
+        continue;
+      }
+      try {
+        deps.removePath(source);
+      } catch (error) {
+        return `could not remove preserved unmerged fallback source ${source}: ${errorMessageForProduction(error)}`;
+      }
+      const after = pathPresenceForDeps(deps, source);
+      if (after === 'unknown') {
+        return `could not verify cleanup of unmerged fallback source ${source}`;
+      }
+      if (after === 'present') {
+        return `preserved unmerged fallback source ${source} remained before checkout`;
       }
     }
   }
@@ -2744,6 +2866,12 @@ function preservationVerified(
       // Copilot review: a non-null destination alone is not proof every
       // dirty path actually landed there.
       if (stash.unmergedFallbackAllPreserved !== true) return false;
+      if (
+        stash.unmergedFallbackCopiedSources.length !==
+        stash.unmergedFallbackCopiedFiles.length
+      ) {
+        return false;
+      }
       if (
         stash.unmergedFallbackCopiedFiles.some(
           (destination) => !pathExists(destination),
@@ -4607,6 +4735,23 @@ export function runLocalWorktreeRecovery(
         if (initializedRefresh.error !== null) {
           return recordRemovalFailure(initializedRefresh.error);
         }
+        const unmergedFallbackCleanupError =
+          cleanPreservedUnmergedFallbackFilesBeforePrimaryCheckout(
+            verdict.plan.stashes,
+            targetPath,
+            deps,
+          );
+        if (unmergedFallbackCleanupError !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `before checkout ${developmentBranch}, ${unmergedFallbackCleanupError}; stopping`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
         // Remove initialized submodule checkouts that the development branch
         // deletes before the final claim/lock confirmation below. The final
         // confirmation must remain immediately before `checkout`; otherwise a
@@ -4626,6 +4771,26 @@ export function runLocalWorktreeRecovery(
             wouldRun: true,
             ran: false,
             detail: `before checkout ${developmentBranch}, ${initializedSubmoduleCleanupError}; stopping`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+      }
+      if (primaryRecoveryResume) {
+        const unmergedFallbackCleanupError =
+          cleanPreservedUnmergedFallbackFilesBeforePrimaryCheckout(
+            verdict.plan.stashes,
+            targetPath,
+            deps,
+            resumedInitializedSubmodulePaths ?? new Set(),
+          );
+        if (unmergedFallbackCleanupError !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `before checkout ${developmentBranch}, ${unmergedFallbackCleanupError}; stopping`,
           };
           verdict.result = verdict.plan.removal.detail;
           return verdict;

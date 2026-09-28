@@ -6333,6 +6333,130 @@ test('primary recovery removes late ignored files before reporting release', () 
   }
 });
 
+test('primary recovery removes unmerged fallback sources before checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-unmerged-'));
+  const preserveDir = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-primary-unmerged-preserve-'),
+  );
+  const conflictPath = join(root, 'conflict.txt');
+  const untrackedPath = join(root, 'ordinary.txt');
+  let checkedOut = false;
+  let confirmCalls = 0;
+  const events: string[] = [];
+  try {
+    mkdirSync(join(root, '.git'), { recursive: true });
+    writeFileSync(conflictPath, 'conflict\n');
+    writeFileSync(untrackedPath, 'untracked\n');
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) =>
+        path === root || path.startsWith(preserveDir) || existsSync(path),
+      ensurePreserveDir: () => preserveDir,
+      confirmBlock: () => {
+        confirmCalls += 1;
+        const occupied = confirmCalls < 4;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'stale',
+            reason: occupied
+              ? 'stale-claim-local-worktree-occupied'
+              : 'active-claim-stale',
+            active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+            evidence: {
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? [root] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      copyPath: (from, to) => {
+        events.push(`copy:${from}`);
+        copyPathWithSafeSymlinks(from, to, root);
+      },
+      removePath: (path) => {
+        events.push(`remove:${path}`);
+        rmSync(path, { recursive: true, force: true });
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'status') {
+          const status =
+            checkedOut || argv[1] === '--porcelain=v1'
+              ? ''
+              : 'UU conflict.txt\n?? ordinary.txt\n';
+          return { ok: true, status: 0, stdout: status, stderr: '' };
+        }
+        if (argv[0] === 'stash' && argv[1] === 'push') {
+          return {
+            ok: false,
+            status: 1,
+            stdout: 'conflict.txt: needs merge\n',
+            stderr: '',
+          };
+        }
+        if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
+          return { ok: true, status: 0, stdout: `${root}/.git\n`, stderr: '' };
+        }
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'checkout') {
+          events.push('checkout');
+          checkedOut = true;
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      }),
+      removeLockIfMatches: () => true,
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+        preserveDir,
+      }),
+      deps,
+    );
+    assert.equal(verdict.plan.removal?.ran, true, JSON.stringify(verdict));
+    assert.equal(existsSync(conflictPath), false);
+    assert.equal(existsSync(untrackedPath), false);
+    assert.ok(events.indexOf(`remove:${untrackedPath}`) >= 0);
+    assert.ok(
+      events.indexOf(`remove:${untrackedPath}`) < events.indexOf('checkout'),
+    );
+    assert.equal(
+      verdict.plan.stashes[0]?.unmergedFallbackCopiedSources.length,
+      2,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(preserveDir, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery removes preserved deinitialized submodule paths before checkout', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-submodule-'));
   const preserveDir = mkdtempSync(
