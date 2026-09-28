@@ -3835,48 +3835,55 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
-      const lateUninitialized = refreshUninitializedSubmoduleCopies(
-        verdict.plan.uninitializedSubmodules,
-        targetPath,
-        targetGitDir,
-        primaryRecoveryDeps,
-      );
-      if (lateUninitialized.preserveDir !== null) {
-        verdict.preserveDir ??= lateUninitialized.preserveDir;
-      }
-      if (lateUninitialized.added.length > 0) {
-        verdict.plan.uninitializedSubmodules.push(...lateUninitialized.added);
-        verdict.mutated ||= lateUninitialized.added.some(
-          (entry) => entry.copiedTo !== null,
-        );
-      }
-      if (lateUninitialized.error !== null) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `before checkout ${developmentBranch}, ${lateUninitialized.error}; stopping`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const uninitializedCleanupError =
-        cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
+      // A resumed recovery is already on the development branch. The saved
+      // uninitialized-submodule entries describe the issue-branch checkout;
+      // refreshing or deleting those paths here could remove an ordinary
+      // development-branch directory that now occupies the same path. The
+      // post-checkout scans below cover the current tree instead.
+      if (!primaryRecoveryResume) {
+        const lateUninitialized = refreshUninitializedSubmoduleCopies(
           verdict.plan.uninitializedSubmodules,
           targetPath,
-          deps,
+          targetGitDir,
+          primaryRecoveryDeps,
         );
-      if (uninitializedCleanupError !== null) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `before checkout ${developmentBranch}, ${uninitializedCleanupError}; stopping`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
+        if (lateUninitialized.preserveDir !== null) {
+          verdict.preserveDir ??= lateUninitialized.preserveDir;
+        }
+        if (lateUninitialized.added.length > 0) {
+          verdict.plan.uninitializedSubmodules.push(...lateUninitialized.added);
+          verdict.mutated ||= lateUninitialized.added.some(
+            (entry) => entry.copiedTo !== null,
+          );
+        }
+        if (lateUninitialized.error !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `before checkout ${developmentBranch}, ${lateUninitialized.error}; stopping`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const uninitializedCleanupError =
+          cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
+            verdict.plan.uninitializedSubmodules,
+            targetPath,
+            deps,
+          );
+        if (uninitializedCleanupError !== null) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `before checkout ${developmentBranch}, ${uninitializedCleanupError}; stopping`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
       }
       // A resumed recovery is already on the development branch. The
       // pre-checkout refresh compares the current submodule tree with the
@@ -5500,61 +5507,63 @@ export function runLocalWorktreeRecovery(args, deps) {
             'a preservation artifact disappeared after the final linked confirmation scan; stopping before removal',
           );
         }
-        const finalLinkedConfirmAfterPostConfirmIgnored =
-          deps.confirmBlock(cwd);
-        const finalLinkedRoutingAfterPostConfirmIgnored =
-          finalLinkedConfirmAfterPostConfirmIgnored.routing;
-        const finalLinkedRecoveredAfterPostConfirmIgnored =
-          finalLinkedRoutingAfterPostConfirmIgnored
-            ? extractRecoveredClaim(finalLinkedRoutingAfterPostConfirmIgnored)
-            : null;
-        const finalLinkedReleasedAfterPostConfirmIgnored =
-          finalLinkedRoutingAfterPostConfirmIgnored !== null &&
-          isReleasedClaimRouting(finalLinkedRoutingAfterPostConfirmIgnored);
-        const finalLinkedReportsTargetAfterPostConfirmIgnored =
-          finalLinkedRoutingAfterPostConfirmIgnored !== null &&
-          finalLinkedRoutingAfterPostConfirmIgnored.state ===
-            'local_worktree_occupied' &&
-          isAcceptedBlockReason(
-            finalLinkedRoutingAfterPostConfirmIgnored.reason,
-          ) &&
-          !finalLinkedRoutingAfterPostConfirmIgnored.reason.endsWith(
-            '-local-worktree-unreadable',
-          ) &&
-          (
-            finalLinkedRoutingAfterPostConfirmIgnored.evidence?.local_worktree
-              ?.paths ?? []
-          ).some(
-            (reportedPath) =>
-              normalizeGitWorktreePathForComparison(reportedPath) ===
-              targetComparisonPath,
-          );
-        if (
-          !finalLinkedConfirmAfterPostConfirmIgnored.ok ||
-          !finalLinkedReportsTargetAfterPostConfirmIgnored ||
-          finalLinkedRecoveredAfterPostConfirmIgnored?.claimId !==
-            recoveredClaimId ||
-          finalLinkedRecoveredAfterPostConfirmIgnored.branch !==
-            recoveredBranch ||
-          finalLinkedReleasedAfterPostConfirmIgnored !==
-            recoveredFromReleasedClaim
-        ) {
-          return recordRemovalFailure(
-            'the linked-worktree routing/claim identity changed after the final confirmation preservation; stopping before removal',
-          );
-        }
-        finalLinkedLock = deps.checkLock(targetPath);
-        if (
-          !lockMatchesRecoveredClaim(
-            finalLinkedLock,
-            recoveredClaimId,
-            finalLinkedReleasedAfterPostConfirmIgnored,
-          )
-        ) {
-          return recordRemovalFailure(
-            'the worktree-local claim lock changed after the final confirmation preservation; stopping before removal',
-          );
-        }
+      }
+      // The final preservation scan is a concurrency window even when it
+      // finds no ignored files. Reconfirm ownership after every scan, not
+      // only after a copy was needed, before the identity-bound removal.
+      const finalLinkedConfirmAfterPostConfirmIgnored = deps.confirmBlock(cwd);
+      const finalLinkedRoutingAfterPostConfirmIgnored =
+        finalLinkedConfirmAfterPostConfirmIgnored.routing;
+      const finalLinkedRecoveredAfterPostConfirmIgnored =
+        finalLinkedRoutingAfterPostConfirmIgnored
+          ? extractRecoveredClaim(finalLinkedRoutingAfterPostConfirmIgnored)
+          : null;
+      const finalLinkedReleasedAfterPostConfirmIgnored =
+        finalLinkedRoutingAfterPostConfirmIgnored !== null &&
+        isReleasedClaimRouting(finalLinkedRoutingAfterPostConfirmIgnored);
+      const finalLinkedReportsTargetAfterPostConfirmIgnored =
+        finalLinkedRoutingAfterPostConfirmIgnored !== null &&
+        finalLinkedRoutingAfterPostConfirmIgnored.state ===
+          'local_worktree_occupied' &&
+        isAcceptedBlockReason(
+          finalLinkedRoutingAfterPostConfirmIgnored.reason,
+        ) &&
+        !finalLinkedRoutingAfterPostConfirmIgnored.reason.endsWith(
+          '-local-worktree-unreadable',
+        ) &&
+        (
+          finalLinkedRoutingAfterPostConfirmIgnored.evidence?.local_worktree
+            ?.paths ?? []
+        ).some(
+          (reportedPath) =>
+            normalizeGitWorktreePathForComparison(reportedPath) ===
+            targetComparisonPath,
+        );
+      if (
+        !finalLinkedConfirmAfterPostConfirmIgnored.ok ||
+        !finalLinkedReportsTargetAfterPostConfirmIgnored ||
+        finalLinkedRecoveredAfterPostConfirmIgnored?.claimId !==
+          recoveredClaimId ||
+        finalLinkedRecoveredAfterPostConfirmIgnored.branch !==
+          recoveredBranch ||
+        finalLinkedReleasedAfterPostConfirmIgnored !==
+          recoveredFromReleasedClaim
+      ) {
+        return recordRemovalFailure(
+          'the linked-worktree routing/claim identity changed after the final confirmation preservation; stopping before removal',
+        );
+      }
+      finalLinkedLock = deps.checkLock(targetPath);
+      if (
+        !lockMatchesRecoveredClaim(
+          finalLinkedLock,
+          recoveredClaimId,
+          finalLinkedReleasedAfterPostConfirmIgnored,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the worktree-local claim lock changed after the final confirmation preservation; stopping before removal',
+        );
       }
     }
     let remove;

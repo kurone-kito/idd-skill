@@ -1120,6 +1120,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
     'confirm-recheck',
     'confirm-recheck',
     'confirm-recheck',
+    'confirm-recheck',
     'remove',
     'release',
   ]);
@@ -4241,6 +4242,55 @@ test('linked removal rechecks routing after final ignored-file cleanup', () => {
   assert.match(verdict.result, /changed after final ignored-file cleanup/);
 });
 
+test('linked removal rechecks routing after an empty final confirmation scan', () => {
+  let ignoredScanCalls = 0;
+  let finalScanComplete = false;
+  let removalAttempted = false;
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: {
+          claim_id: finalScanComplete ? 'claim-y' : 'claim-x',
+          branch: finalScanComplete ? 'issue/2-other' : 'issue/1-task',
+        },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/linked'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        ignoredScanCalls += 1;
+        if (ignoredScanCalls === 4) finalScanComplete = true;
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(ignoredScanCalls, 4);
+  assert.equal(removalAttempted, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(
+    verdict.result,
+    /changed after the final confirmation preservation/,
+  );
+});
+
 test('a failed stash-list probe blocks removal before trusting clean or stashed state', () => {
   let stashListCalls = 0;
   const deps = fakeDeps({
@@ -4994,7 +5044,9 @@ test('primary recovery refuses a fresh claim during post-checkout absence confir
 test('primary recovery resumes after a post-checkout confirmation failure', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-resume-'));
   const preserveDir = `${root}-preserve`;
+  const deinitializedSubmodulePath = join(root, 'vendor');
   mkdirSync(join(root, '.git'), { recursive: true });
+  mkdirSync(deinitializedSubmodulePath);
   let checkoutDone = false;
   let firstAttempt = true;
   let primaryMarker: PrimaryRecoveryLockMarker | null = {
@@ -5009,6 +5061,7 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
   let submoduleUpdateCalls = 0;
   let ensurePreserveDirCalls = 0;
   let lockRemoved = false;
+  const events: string[] = [];
   try {
     const deps = fakeDeps({
       cwd: () => root,
@@ -5027,10 +5080,7 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
       pathExists: (path) => path === root || existsSync(path),
       ensurePreserveDir: () => {
         ensurePreserveDirCalls += 1;
-        if (existsSync(preserveDir)) {
-          throw new Error('preserve directory already exists');
-        }
-        mkdirSync(preserveDir);
+        if (!existsSync(preserveDir)) mkdirSync(preserveDir);
         return preserveDir;
       },
       confirmBlock: () => {
@@ -5082,6 +5132,17 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
         };
       },
       runGit: (argv, cwd) => {
+        if (argv[0] === 'submodule' && argv[1] === 'status') {
+          return {
+            ok: true,
+            status: 0,
+            stdout:
+              cwd === root
+                ? '-0000000000000000000000000000000000000000 vendor\n'
+                : '',
+            stderr: '',
+          };
+        }
         if (argv[0] === 'checkout') {
           checkoutDone = true;
           return { ok: true, status: 0, stdout: '', stderr: '' };
@@ -5093,6 +5154,14 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
           submoduleUpdateCalls += 1;
         }
         return cleanRepoRunGit(argv, cwd);
+      },
+      copyPath: (_from, to) => {
+        events.push(`copy:${to}`);
+        mkdirSync(to, { recursive: true });
+      },
+      removePath: (path) => {
+        events.push(`remove:${path}`);
+        rmSync(path, { recursive: true, force: true });
       },
       checkLock: () => ({
         path: join(root, '.git/idd-claim.lock'),
@@ -5125,11 +5194,13 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     assert.equal(firstVerdict.plan.removal?.ran, false);
     assert.match(firstVerdict.result, /same recovered claim\/branch absent/);
     assert.equal(firstVerdict.preserveDir, preserveDir);
-    assert.equal(ensurePreserveDirCalls, 1);
+    assert.equal(ensurePreserveDirCalls, 2);
     assert.notEqual(primaryMarker, null);
     assert.equal(typeof primaryMarker?.preservation, 'string');
 
     firstAttempt = false;
+    mkdirSync(deinitializedSubmodulePath);
+    const eventsBeforeResume = events.length;
     assert.equal(primaryMarker?.preserveDir, preserveDir);
     const savedPreservation = primaryMarker?.preservation;
     const dryRunVerdict = runLocalWorktreeRecovery(
@@ -5160,7 +5231,14 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     assert.equal(lockRemoved, true);
     assert.equal(submoduleSyncCalls, 2);
     assert.equal(submoduleUpdateCalls, 2);
-    assert.equal(ensurePreserveDirCalls, 1);
+    assert.equal(
+      events
+        .slice(eventsBeforeResume)
+        .includes(`remove:${deinitializedSubmodulePath}`),
+      false,
+      'resume must not delete a development-branch directory for an issue-branch deinitialized submodule',
+    );
+    assert.equal(existsSync(deinitializedSubmodulePath), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(preserveDir, { recursive: true, force: true });
