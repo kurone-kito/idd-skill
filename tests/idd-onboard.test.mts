@@ -4411,6 +4411,24 @@ test('checkHeldSchemaDrift ignores regex literals after block-nested function de
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores newline-formatted method declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "class Scanner { globSync(pattern = 'schemas/*')\n{} }\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/widget.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/widget.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after typed function declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5707,6 +5725,29 @@ test('checkHeldSchemaDrift preserves Unicode POSIX alpha matches', () => {
   ]);
 });
 
+test('checkHeldSchemaDrift preserves astral question matches after POSIX classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[[:alpha:]]?.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/a🙂.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/a🙂.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/a🙂.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift preserves Unicode POSIX digit matches', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -6191,6 +6232,26 @@ test('checkHeldSchemaDrift preserves question runs before optional extglobs', ()
   });
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: 'schemas/a.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift backtracks optional extglobs before question runs', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?(a|b)??.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/aa.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/aa.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/aa.json', heldModulePath: DRIFT_MODULE },
   ]);
 });
 

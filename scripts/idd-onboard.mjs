@@ -2532,6 +2532,9 @@ function isTypedMethodDeclarationPrefix(text, index) {
     prefix.lastIndexOf(';'),
     prefix.lastIndexOf(','),
   );
+  if (boundary === -1) {
+    return false;
+  }
   return /^(?:(?:public|private|protected|static|readonly|abstract|async|get|set|override|declare)\s+|\*\s*)*$/u.test(
     prefix.slice(boundary + 1).trim(),
   );
@@ -2903,7 +2906,8 @@ function findDirectoryScanCalls(text) {
           );
           const isDeclaration =
             (normalizedText[afterCall] === '{' &&
-              !/[\r\n]/u.test(gap.slice(0, afterCall - index - 1))) ||
+              (!/[\r\n]/u.test(gap.slice(0, afterCall - index - 1)) ||
+                isTypedMethodDeclarationPrefix(normalizedText, matchIndex))) ||
             (normalizedText[afterCall] === ':' &&
               isTypedMethodDeclarationPrefix(normalizedText, matchIndex)) ||
             /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
@@ -3632,7 +3636,12 @@ function globPatternToRegex(
           );
           return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures)}(?=$|/))[^/]*`;
         }
-        const quantifier = character === '@' ? '' : character;
+        const quantifier =
+          character === '@'
+            ? ''
+            : /^\?/u.test(trailingPattern)
+              ? `${character}?`
+              : character;
         return `(?:${inner})${quantifier}`;
       });
       expression +=
@@ -3670,8 +3679,10 @@ function globPatternToRegex(
         codeUnitCount: questionEnd - index,
         allowsAstralCodePoint:
           questionEnd - index === 1 &&
-          pattern[questionEnd] === '*' &&
-          pattern[questionEnd + 1] !== '(',
+          ((pattern[questionEnd] === '*' && pattern[questionEnd + 1] !== '(') ||
+            /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u.test(
+              pattern.slice(0, index),
+            )),
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
       index = questionEnd - 1;
