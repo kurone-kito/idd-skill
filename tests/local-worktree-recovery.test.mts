@@ -6411,6 +6411,94 @@ test('primary-worktree release rechecks the complete status immediately before l
   assert.match(verdict.result, /final primary-worktree status/);
 });
 
+test('primary-worktree release rechecks claim identity after the final status probe', () => {
+  let checkLockCalls = 0;
+  let finalStatusProbe = false;
+  let checkoutDone = false;
+  let lockRemoved = false;
+  const deps = fakeDeps({
+    listWorktreeRecords: () => [
+      {
+        path: '/repo/primary',
+        branchRef: 'refs/heads/main',
+        detached: false,
+        bare: false,
+        locked: false,
+        prunable: false,
+      },
+    ],
+    cwd: () => '/repo/primary',
+    confirmBlock: (() => {
+      let calls = 0;
+      return () => {
+        calls += 1;
+        const occupied = calls <= 3;
+        return {
+          ok: true,
+          routing: {
+            state: occupied ? 'local_worktree_occupied' : 'unclaimed',
+            reason: occupied
+              ? 'released-claim-local-worktree-occupied'
+              : 'no-active-claim',
+            active_claim: null,
+            evidence: {
+              released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+              local_worktree: {
+                status: occupied ? 'occupied' : 'absent',
+                paths: occupied ? ['/repo/primary'] : [],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      };
+    })(),
+    checkLock: () => {
+      checkLockCalls += 1;
+      const claimId = finalStatusProbe ? 'claim-y' : 'claim-x';
+      return {
+        path: '/repo/primary/.git/idd-claim.lock',
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId,
+          acquiredAt: '2026-09-27T00:00:00Z',
+        },
+      };
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'checkout') checkoutDone = true;
+      if (
+        checkoutDone &&
+        argv[0] === 'status' &&
+        argv[1] === '--porcelain' &&
+        argv.includes('--untracked-files=all')
+      ) {
+        finalStatusProbe = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeLockIfMatches: () => {
+      lockRemoved = true;
+      return true;
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(finalStatusProbe, true);
+  assert.equal(checkLockCalls, 7);
+  assert.equal(lockRemoved, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /after the final status probe/);
+});
+
 test('primary-worktree release accepts a new-format claim after checkout', () => {
   // confirmBlock call sequence: 1 = step 1 (occupied, path included);
   // 2 = step 4's first recheck (still occupied, path included);
@@ -6422,9 +6510,10 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
   // pre-checkout identity recheck; 4 = the FINAL, post-checkout check, which
   // must see a lock created DURING the checkout window (simulating
   // another session racing in); 5 = the immediately-before-delete check; 6 =
-  // the final ignored-file preservation check after those identity checks.
-  // The post-checkout and immediately-before-delete checks must see the
-  // current lock, not skip deletion based on a stale pre-checkout observation.
+  // the final ignored-file preservation check; 7 = the final status-probe
+  // check. The post-checkout and immediately-before-delete checks must see
+  // the current lock, not skip deletion based on a stale pre-checkout
+  // observation.
   let confirmCalls = 0;
   let checkLockCalls = 0;
   let unlinkAttempted = false;
@@ -6445,8 +6534,9 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
       // Calls 1-3 are step 1, step 4's first recheck, and the immediate
       // pre-checkout recheck. Call 4 is the FINAL, post-checkout check and
       // call 5 is the immediately-before-delete check; call 6 is the final
-      // ignored-file preservation check. All six must observe the recovered
-      // claim's lock before deletion is authorized.
+      // ignored-file preservation check; call 7 is the final status-probe
+      // check. All seven must observe the recovered claim's lock before
+      // deletion is authorized.
       return {
         path: '/repo/primary/.git/idd-claim.lock',
         present: true,
@@ -6505,7 +6595,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 6);
+  assert.equal(checkLockCalls, 7);
   assert.equal(
     unlinkAttempted,
     true,

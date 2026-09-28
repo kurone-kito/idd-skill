@@ -5279,6 +5279,43 @@ export function runLocalWorktreeRecovery(
             : `could not verify the final primary-worktree status after checkout ${developmentBranch}: ${finalPrimaryStatus.stderr}`,
         );
       }
+      // The final status probe can itself be delayed while a competing claim
+      // replaces the lock. Re-run routing and lock identity after that probe,
+      // immediately before compare-and-delete, so a clean status cannot make
+      // this recovery remove a newer claim's lock (Copilot review).
+      const finalPrimaryConfirmAfterStatus = deps.confirmBlock(cwd);
+      const finalPrimaryRoutingAfterStatus =
+        finalPrimaryConfirmAfterStatus.routing;
+      const finalPrimaryRecoveredAfterStatus = finalPrimaryRoutingAfterStatus
+        ? extractRecoveredClaim(finalPrimaryRoutingAfterStatus)
+        : null;
+      const finalPrimaryStillEligibleAfterStatus =
+        finalPrimaryConfirmAfterStatus.ok &&
+        finalPrimaryRoutingAfterStatus !== null &&
+        isTakeoverEligibleAbsentRouting(finalPrimaryRoutingAfterStatus) &&
+        finalPrimaryRecoveredAfterStatus?.claimId === recoveredClaimId &&
+        finalPrimaryRecoveredAfterStatus.branch === recoveredBranch &&
+        isReleasedClaimRouting(finalPrimaryRoutingAfterStatus) ===
+          recoveredFromReleasedClaim;
+      if (!finalPrimaryStillEligibleAfterStatus) {
+        return recordRemovalFailure(
+          `checked out ${developmentBranch}, but the final status probe changed the resume-claim-routing result; stopping before removing the lock file`,
+        );
+      }
+      const finalPrimaryLockAfterStatus = deps.checkLock(targetPath);
+      if (
+        finalPrimaryLockAfterStatus.malformed ||
+        !lockMatchesRecoveredClaim(
+          finalPrimaryLockAfterStatus,
+          recoveredClaimId,
+          isReleasedClaimRouting(finalPrimaryRoutingAfterStatus),
+        )
+      ) {
+        return recordRemovalFailure(
+          `the primary-worktree lock changed after the final status probe; stopping before removing the lock after checkout ${developmentBranch}`,
+        );
+      }
+      lockForDeletion = finalPrimaryLockAfterStatus;
       try {
         if (!deps.removeLockIfMatches(targetPath, lockForDeletion)) {
           verdict.plan.removal = {
