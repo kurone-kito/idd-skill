@@ -25,7 +25,8 @@ before E8 when it is missing.
 **Step 1 — Snapshot the activity universe.** First, read the current PR
 HEAD SHA from the GitHub API and store it as `{head-SHA}`. Do not
 re-read the HEAD SHA during Steps 1–3; use this single stored value
-throughout. Then fetch all of the following from GitHub in a single pass
+throughout; E3 rereads. Then fetch all of the following from GitHub
+in a single pass
 (before applying any exclusion filters):
 
 - All review threads (resolved or not) — paginate until `hasNextPage` is
@@ -137,8 +138,9 @@ no-code-fence note.
 
 Use server-reported timestamps, not the local wall clock.
 
-**CI-completion precondition.** This gates only Step 2. Post the
-`review-watermark` after all merge-gate CI runs complete, including
+**CI precondition (Step 2 only).** Run AW1/helper
+`advisory-wait-state` before an off-head decision. Post the
+`review-watermark` after merge-gate CI runs complete, including
 opt-in or label-triggered jobs enabled before pre-merge. If the primary
 advisory bot reviewed an earlier head, post after
 `LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
@@ -243,13 +245,13 @@ Do not infer edit state from the body, `updatedAt`, author, or claim.
 ReviewItems_snapshot is session-local; don't inherit a previous claim's
 critique findings unless persisted as reviewer-visible comments.
 
-Before critique, capture PR HEAD as `{e2-review-head-SHA}` and review
-it. Reread HEAD before posting. If changed, discard the pass and return
-to E1; otherwise post a baseline pinned to it:
+Capture `{e2-review-head-SHA}` before critique; review it. Reread HEAD
+before baseline; if changed, return to E1 without posting. Otherwise
+post baseline pinned to it:
 `post-idd-marker --type baseline --target pr <pr-number> --agent-id
 <id> --claim-id <id> --sha {e2-review-head-SHA} --apply` (see
-`docs/idd-helper-scripts.md`). Never record a newer SHA as reviewed;
-if posting cannot preserve identity, return to E1.
+`docs/idd-helper-scripts.md`). Never record newer SHA; posting
+identity mismatch returns E1.
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->

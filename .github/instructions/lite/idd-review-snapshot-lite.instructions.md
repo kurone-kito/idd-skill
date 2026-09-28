@@ -72,7 +72,8 @@ the watermark.
 
 1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
    headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
-   re-read it elsewhere in E1 — reuse this value.
+   re-read it elsewhere in E1 — reuse this value, except for the
+   deferred E3 check below.
 2. Run the profile-selected `review-activity-snapshot` helper to collect
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
    `{latest-ci-completed-at}`: `node scripts/review-activity-snapshot.mjs
