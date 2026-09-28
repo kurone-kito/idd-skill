@@ -6671,9 +6671,10 @@ test('unchanged pending-review watches skip rich collection until the last in-bu
   assert.deepEqual(verdict?.reasons, [
     'copilot has not reviewed this pull request yet',
   ]);
-  // Baseline, one unchanged tick, and the terminal tick. Only the initial
-  // verdict and that terminal recheck collect. The watch never sets ready.
-  assert.equal(watches, 3);
+  // Anchor, one unchanged tick, the terminal tick, and a re-anchor after
+  // that still-pending recheck. Only the initial verdict and the terminal
+  // recheck collect. The watch never sets ready.
+  assert.equal(watches, 4);
   assert.equal(collectCalls(), 2);
 });
 
@@ -6721,6 +6722,159 @@ test('unknown pending-review watch evidence collects again and stays not ready',
   assert.equal(exitCode, 1);
   assert.equal(verdict?.ready, false);
   assert.equal(collectCalls(), 3);
+});
+
+test('a baseline watch newer than the verdict does not skip later collection', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now } = fakeClock();
+  deps.watchPendingReview = () => ({
+    kind: 'unchanged',
+    fingerprint: 'with-review',
+    reviews: [
+      {
+        user: { login: 'copilot-pull-request-reviewer[bot]' },
+        state: 'COMMENTED',
+        commit_id: 'abc',
+        submitted_at: '2026-09-28T00:00:00Z',
+        body: 'arrived during the gap',
+      },
+    ],
+  });
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  // The no-watch cadence: initial verdict plus both in-budget rechecks.
+  assert.equal(collectCalls(), 3);
+});
+
+test('a changed watch does not become the baseline when the fresh verdict missed it', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const extra = {
+    user: { login: 'copilot-pull-request-reviewer[bot]' },
+    state: 'COMMENTED',
+    commit_id: 'abc',
+    submitted_at: '2026-09-28T00:00:00Z',
+    body: 'landed after the verdict',
+  };
+  const { sleep, now } = fakeClock();
+  let watches = 0;
+  deps.watchPendingReview = (_argv, previous) => {
+    watches += 1;
+    if (watches === 1) {
+      return { kind: 'unchanged', fingerprint: 'empty', reviews: [] };
+    }
+    const fingerprint = 'new-review';
+    return {
+      kind:
+        previous === null || previous === fingerprint ? 'unchanged' : 'changed',
+      fingerprint,
+      reviews: [extra],
+    };
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 40_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  // 40s / 7.5s is six collect calls when nothing is skipped. Adopting the
+  // changed watch as the baseline would skip the middle ticks and stop at 3.
+  assert.equal(collectCalls(), 6);
+});
+
+test('a GraphQL verdict and a REST watch with the same review still skip', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({
+        reviews: [
+          {
+            id: 'PRR_1',
+            author: { login: 'coderabbitai[bot]' },
+            submittedAt: '2026-09-28T00:00:00Z',
+            commitId: 'ABC',
+            body: 'note',
+          },
+        ],
+      }),
+    ],
+    baseOptions(),
+  );
+  let watches = 0;
+  deps.watchPendingReview = (_argv, previous) => {
+    watches += 1;
+    return {
+      kind: 'unchanged',
+      fingerprint: previous ?? 'matched',
+      reviews: [
+        {
+          id: 99,
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'abc',
+          submitted_at: '2026-09-28T00:00:00.000Z',
+          body: 'note',
+        },
+      ],
+    };
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(watches, 4);
+  assert.equal(collectCalls(), 2);
+});
+
+test('a pending-review watch that exhausts the deadline does not start a full collection', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now } = fakeClock();
+  let watches = 0;
+  deps.watchPendingReview = () => {
+    watches += 1;
+    if (watches === 1) {
+      return { kind: 'unchanged', fingerprint: 'baseline', reviews: [] };
+    }
+    sleep(20_000);
+    return {
+      kind: 'changed',
+      fingerprint: 'late-review',
+      reviews: [
+        {
+          user: { login: 'copilot-pull-request-reviewer[bot]' },
+          submitted_at: '2026-09-28T00:00:00Z',
+          commit_id: 'abc',
+          body: 'late',
+        },
+      ],
+    };
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(watches, 2);
+  assert.equal(collectCalls(), 1);
 });
 
 test('pending-review fingerprint changes on HEAD movement, a new review, and a body edit', () => {

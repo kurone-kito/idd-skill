@@ -2338,6 +2338,51 @@ export function classifyPendingReviewWatch(
   if (previousFingerprint === null) return 'unchanged';
   return previousFingerprint === nextFingerprint ? 'unchanged' : 'changed';
 }
+/**
+ * Identity shared by a GraphQL verdict row and a REST watch row. Those
+ * two GitHub APIs do not use the same review id, so a baseline check
+ * compares author, submission time, commit, and body.
+ */
+function reviewIdentityKeys(reviews) {
+  return reviews
+    .map((review) => {
+      const row = review ?? {};
+      const user = row.user;
+      const author = row.author;
+      const login = String(user?.login ?? author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      const submittedRaw = String(
+        row.submitted_at ?? row.submittedAt ?? '',
+      ).trim();
+      const submittedMs = Date.parse(submittedRaw);
+      const submittedAt = Number.isNaN(submittedMs)
+        ? submittedRaw
+        : String(submittedMs);
+      const commitId = String(row.commit_id ?? row.commitId ?? '')
+        .trim()
+        .toLowerCase();
+      const body = row.body == null ? '' : String(row.body);
+      return JSON.stringify({ login, submittedAt, commitId, body });
+    })
+    .sort();
+}
+function sameReviewIdentity(left, right) {
+  const leftKeys = reviewIdentityKeys(left);
+  const rightKeys = reviewIdentityKeys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((value, index) => value === rightKeys[index])
+  );
+}
+/** True when the watch reported reviews that are not the verdict's set.
+ * An omitted `reviews` array keeps the fingerprint-only test contract.
+ */
+function baselineReviewSetDiffers(baseline, inputs) {
+  if (!Array.isArray(baseline.reviews)) return false;
+  if (!inputs || !Array.isArray(inputs.reviews)) return true;
+  return !sameReviewIdentity(inputs.reviews, baseline.reviews);
+}
 function readPendingReviewWatch(watch, argv, previousFingerprint) {
   try {
     return watch(argv, previousFingerprint);
@@ -2367,6 +2412,7 @@ export function watchPendingReviewFromGitHub(argv, previousFingerprint) {
     return {
       kind: classifyPendingReviewWatch(previousFingerprint, fingerprint),
       fingerprint,
+      reviews,
     };
   } catch {
     return { kind: 'unknown', fingerprint: null };
@@ -2378,7 +2424,16 @@ export function runAdvisoryConvergenceWithPoll(
   deps = defaultDeps,
   pollOptions = {},
 ) {
-  let result = runAdvisoryConvergence(argv, deps);
+  let lastInputs = null;
+  const collectingDeps = {
+    ...deps,
+    collect: (args) => {
+      const collected = deps.collect(args);
+      lastInputs = collected.inputs;
+      return collected;
+    },
+  };
+  let result = runAdvisoryConvergence(argv, collectingDeps);
   if (
     result.exitCode !== 0 &&
     result.verdict &&
@@ -2395,19 +2450,35 @@ export function runAdvisoryConvergenceWithPoll(
     const sleep = pollOptions.sleep ?? sleepSync;
     const now = pollOptions.now ?? Date.now;
     const deadline = now() + maxWaitMs;
-    // Baseline the watch after the initial full verdict. A later null
-    // fingerprint means that baseline failed and must not count as unchanged.
     let fingerprint = null;
     let watchBaselineOk = false;
-    if (deps.watchPendingReview) {
+    // Re-anchor after every still-pending verdict. A watch read can see a
+    // review the verdict's own collection missed; that read must not become
+    // the unchanged baseline, or later ticks skip until the terminal recheck.
+    const anchorBaseline = () => {
+      if (!deps.watchPendingReview) {
+        watchBaselineOk = false;
+        fingerprint = null;
+        return;
+      }
       const baseline = readPendingReviewWatch(
         deps.watchPendingReview,
         argv,
         null,
       );
+      if (
+        baseline.kind === 'unknown' ||
+        baseline.fingerprint === null ||
+        baselineReviewSetDiffers(baseline, lastInputs)
+      ) {
+        watchBaselineOk = false;
+        fingerprint = null;
+        return;
+      }
       fingerprint = baseline.fingerprint;
-      watchBaselineOk = baseline.kind !== 'unknown' && fingerprint !== null;
-    }
+      watchBaselineOk = true;
+    };
+    anchorBaseline();
     while (now() < deadline) {
       sleep(Math.min(pollIntervalMs, deadline - now()));
       // #2023 review round 2: don't launch a re-check once the sleep above
@@ -2421,12 +2492,14 @@ export function runAdvisoryConvergenceWithPoll(
           argv,
           fingerprint,
         );
-        if (watched.fingerprint) fingerprint = watched.fingerprint;
+        // The watch itself is unbounded gh I/O. Once it has crossed the
+        // deadline, do not start the full collection (#2023).
+        if (now() >= deadline) break;
         const terminalRecheck = deadline - now() <= pollIntervalMs;
         if (watched.kind === 'unchanged' && !terminalRecheck) continue;
         if (watched.kind === 'unknown') watchBaselineOk = false;
       }
-      result = runAdvisoryConvergence(argv, deps);
+      result = runAdvisoryConvergence(argv, collectingDeps);
       if (
         result.exitCode === 0 ||
         !result.verdict ||
@@ -2434,6 +2507,7 @@ export function runAdvisoryConvergenceWithPoll(
       ) {
         break;
       }
+      anchorBaseline();
     }
   }
   return result;
