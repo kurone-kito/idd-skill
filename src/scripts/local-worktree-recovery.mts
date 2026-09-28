@@ -557,7 +557,8 @@ function isBackupRefPlanEntry(value: unknown): value is BackupRefPlanEntry {
     isNullableString(value.tipSha) &&
     typeof value.hasLocalOnlyRefs === 'boolean' &&
     typeof value.localRefsQueryFailed === 'boolean' &&
-    isNullableString(value.localRefsSnapshot) &&
+    (value.localRefsSnapshot === undefined ||
+      isNullableString(value.localRefsSnapshot)) &&
     typeof value.written === 'boolean' &&
     isNullableString(value.verifiedOid)
   );
@@ -627,7 +628,17 @@ function parsePrimaryRecoveryPreservationManifest(
   if (encoded === undefined) return null;
   try {
     const parsed: unknown = JSON.parse(encoded);
-    return isPrimaryRecoveryPreservationManifest(parsed) ? parsed : null;
+    if (!isPrimaryRecoveryPreservationManifest(parsed)) return null;
+    return {
+      ...parsed,
+      // Older interrupted recoveries did not persist this process-local
+      // snapshot. Treat those markers as having an unknown snapshot so they
+      // remain resumable without weakening the post-checkout verification.
+      backupRefs: parsed.backupRefs.map((entry) => ({
+        ...entry,
+        localRefsSnapshot: entry.localRefsSnapshot ?? null,
+      })),
+    };
   } catch {
     return null;
   }
