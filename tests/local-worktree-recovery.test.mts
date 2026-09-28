@@ -2508,7 +2508,7 @@ test('forced retry re-verifies preservation after the final identity checks', ()
           ok: true,
           status: 0,
           stdout:
-            stashListCalls === 1 || stashListCalls === 8
+            stashListCalls === 1 || stashListCalls === 9
               ? ''
               : `${stashEntry}\n`,
           stderr: '',
@@ -2534,7 +2534,7 @@ test('forced retry re-verifies preservation after the final identity checks', ()
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(stashListCalls, 8);
+  assert.equal(stashListCalls, 9);
   assert.equal(guardCalls, 1);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /forced-removal preservation artifact/);
@@ -3409,7 +3409,12 @@ test('late preservation rescans initialized submodule ignored files before remov
           return {
             ok: true,
             status: 0,
-            stdout: submoduleIgnoredScans === 1 ? '' : '!! cache.tmp\0',
+            stdout:
+              submoduleIgnoredScans === 1
+                ? ''
+                : submoduleIgnoredScans === 2
+                  ? '!! cache.tmp\0'
+                  : '!! final-cache.tmp\0',
             stderr: '',
           };
         }
@@ -3424,7 +3429,9 @@ test('late preservation rescans initialized submodule ignored files before remov
         };
       }
       if (argv[0] === 'clean') {
-        cleanedPaths.add('/repo/linked/submodule/cache.tmp');
+        cleanedPaths.add(
+          `/repo/linked/submodule/${String(argv.at(-1)).replace(':(literal)', '')}`,
+        );
       }
       if (
         cwd === '/repo/linked/submodule' &&
@@ -3459,8 +3466,18 @@ test('late preservation rescans initialized submodule ignored files before remov
         '/repo/primary/.git/modules/submodule',
       ],
     },
+    {
+      to: '/tmp/preserve/ignored/final-removal/submodule/final-cache.tmp',
+      sourceRoot: '/repo/linked',
+      additionalSourceRoots: [
+        '/repo/linked',
+        '/repo/linked/submodule',
+        '/repo/primary/.git/worktrees/linked',
+        '/repo/primary/.git/modules/submodule',
+      ],
+    },
   ]);
-  assert.equal(submoduleIgnoredScans, 2);
+  assert.equal(submoduleIgnoredScans, 3);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -3953,12 +3970,19 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
         return {
           ok: true,
           status: 0,
-          stdout: ignoredScanCalls === 1 ? '' : '!! late.env\0',
+          stdout:
+            ignoredScanCalls === 1
+              ? ''
+              : ignoredScanCalls === 2
+                ? '!! late.env\0'
+                : '!! final.env\0',
           stderr: '',
         };
       }
       if (argv[0] === 'clean') {
-        cleanedPaths.add('/repo/linked/late.env');
+        cleanedPaths.add(
+          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+        );
       }
       return cleanRepoRunGit(argv);
     },
@@ -3969,9 +3993,12 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.equal(ignoredScanCalls, 2);
-  assert.deepEqual(copied, ['/tmp/preserve/ignored/late.env']);
-  assert.equal(verdict.plan.ignoredFilesCopied.at(-1)?.path, 'late.env');
+  assert.equal(ignoredScanCalls, 3);
+  assert.deepEqual(copied, [
+    '/tmp/preserve/ignored/late.env',
+    '/tmp/preserve/ignored/final-removal/final.env',
+  ]);
+  assert.equal(verdict.plan.ignoredFilesCopied.at(-1)?.path, 'final.env');
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -5360,8 +5387,10 @@ test('primary recovery removes late ignored files before reporting release', () 
   );
   const ignoredPath = join(root, 'stale*');
   const postCheckoutIgnoredPath = join(root, 'generated-during-checkout*');
+  const finalIgnoredPath = join(root, 'generated-before-release*');
   let ignoredPresent = true;
   let postCheckoutIgnoredPresent = false;
+  let finalIgnoredPresent = false;
   let ignoredScanCalls = 0;
   let confirmCalls = 0;
   let submoduleUpdateArgs: string[] = [];
@@ -5386,6 +5415,7 @@ test('primary recovery removes late ignored files before reporting release', () 
         path.startsWith(preserveDir) ||
         (ignoredPresent && path === ignoredPath) ||
         (postCheckoutIgnoredPresent && path === postCheckoutIgnoredPath) ||
+        (finalIgnoredPresent && path === finalIgnoredPath) ||
         existsSync(path),
       ensurePreserveDir: () => preserveDir,
       confirmBlock: () => {
@@ -5418,6 +5448,7 @@ test('primary recovery removes late ignored files before reporting release', () 
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
           ignoredScanCalls += 1;
           if (ignoredScanCalls === 3) postCheckoutIgnoredPresent = true;
+          if (ignoredScanCalls === 4) finalIgnoredPresent = true;
           return {
             ok: true,
             status: 0,
@@ -5426,7 +5457,9 @@ test('primary recovery removes late ignored files before reporting release', () 
                 ? ''
                 : ignoredScanCalls === 2
                   ? '!! stale*\0'
-                  : '!! generated-during-checkout*\0',
+                  : ignoredScanCalls === 3
+                    ? '!! generated-during-checkout*\0'
+                    : '!! generated-before-release*\0',
             stderr: '',
           };
         }
@@ -5436,6 +5469,7 @@ test('primary recovery removes late ignored files before reporting release', () 
           );
           ignoredPresent = false;
           postCheckoutIgnoredPresent = false;
+          finalIgnoredPresent = false;
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
         if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
@@ -5474,7 +5508,7 @@ test('primary recovery removes late ignored files before reporting release', () 
       }),
       deps,
     );
-    assert.equal(ignoredScanCalls, 3);
+    assert.equal(ignoredScanCalls, 4);
     assert.equal(events.includes(`copy:${preserveDir}/ignored/stale*`), true);
     assert.equal(
       events.includes(
@@ -5482,7 +5516,14 @@ test('primary recovery removes late ignored files before reporting release', () 
       ),
       true,
     );
+    assert.equal(
+      events.includes(
+        `copy:${preserveDir}/ignored/final-lock/generated-before-release*`,
+      ),
+      true,
+    );
     assert.equal(ignoredPresent, false);
+    assert.equal(finalIgnoredPresent, false);
     assert.deepEqual(submoduleUpdateArgs, [
       'submodule',
       'update',
@@ -5703,7 +5744,8 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
   // call sequence: 1 = step 1; 2 = step 4's first recheck; 3 = immediate
   // pre-checkout identity recheck; 4 = the FINAL, post-checkout check, which
   // must see a lock created DURING the checkout window (simulating
-  // another session racing in); 5 = the immediately-before-delete check.
+  // another session racing in); 5 = the immediately-before-delete check; 6 =
+  // the final ignored-file preservation check after those identity checks.
   // The post-checkout and immediately-before-delete checks must see the
   // current lock, not skip deletion based on a stale pre-checkout observation.
   let confirmCalls = 0;
@@ -5725,8 +5767,9 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
       checkLockCalls += 1;
       // Calls 1-3 are step 1, step 4's first recheck, and the immediate
       // pre-checkout recheck. Call 4 is the FINAL, post-checkout check and
-      // call 5 is the immediately-before-delete check. All five must observe the
-      // recovered claim's lock before deletion is authorized.
+      // call 5 is the immediately-before-delete check; call 6 is the final
+      // ignored-file preservation check. All six must observe the recovered
+      // claim's lock before deletion is authorized.
       return {
         path: '/repo/primary/.git/idd-claim.lock',
         present: true,
@@ -5785,7 +5828,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
     }),
     deps,
   );
-  assert.equal(checkLockCalls, 5);
+  assert.equal(checkLockCalls, 6);
   assert.equal(
     unlinkAttempted,
     true,

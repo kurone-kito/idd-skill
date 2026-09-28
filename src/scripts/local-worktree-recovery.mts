@@ -4546,10 +4546,147 @@ export function runLocalWorktreeRecovery(
         verdict.result = verdict.plan.removal.detail;
         return verdict;
       }
+      let lockForDeletion = immediatelyBeforeDeleteLock;
+      const finalPrimaryIgnoredEntries: IgnoredFileEntry[] = [];
+      let finalPrimaryIgnoredScanFailed = false;
+      const finalPrimaryIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        null,
+        [targetPath, ...(targetGitDir ? [targetGitDir] : [])],
+        deps,
+        'final-lock',
+      );
+      finalPrimaryIgnoredEntries.push(...finalPrimaryIgnored.copied);
+      finalPrimaryIgnoredScanFailed ||= finalPrimaryIgnored.scanFailed;
+      const finalPrimarySubmodules = deps.runGit(
+        ['submodule', 'status', '--recursive'],
+        targetPath,
+      );
+      if (
+        !finalPrimarySubmodules.ok ||
+        !submoduleStatusOutputIsValid(finalPrimarySubmodules.stdout)
+      ) {
+        return recordRemovalFailure(
+          `could not inspect submodules for ignored files before removing the primary lock after checkout ${developmentBranch}; stopping before lock removal`,
+        );
+      }
+      for (const submodule of submoduleStatusEntries(
+        finalPrimarySubmodules.stdout,
+      )) {
+        if (submodule.status === '-') continue;
+        const submodulePath = join(targetPath, submodule.path);
+        const submoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          submodulePath,
+        );
+        const submoduleGitDir =
+          submoduleGitDirResult.ok && submoduleGitDirResult.stdout.trim()
+            ? submoduleGitDirResult.stdout.trim()
+            : null;
+        const finalSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          submodulePath,
+          submodule.path,
+          true,
+          targetPath,
+          null,
+          [
+            targetPath,
+            submodulePath,
+            ...(targetGitDir ? [targetGitDir] : []),
+            ...(submoduleGitDir ? [submoduleGitDir] : []),
+          ],
+          deps,
+          'final-lock',
+        );
+        finalPrimaryIgnoredEntries.push(...finalSubmoduleIgnored.copied);
+        finalPrimaryIgnoredScanFailed ||= finalSubmoduleIgnored.scanFailed;
+      }
+      verdict.plan.ignoredFilesCopied.push(...finalPrimaryIgnoredEntries);
+      verdict.plan.ignoredFilesScanFailed ||= finalPrimaryIgnoredScanFailed;
+      verdict.mutated ||= finalPrimaryIgnoredEntries.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      if (
+        finalPrimaryIgnoredScanFailed ||
+        finalPrimaryIgnoredEntries.some(
+          (ignored) =>
+            ignored.copyFailed ||
+            ignored.copiedTo === null ||
+            !deps.pathExists(ignored.copiedTo),
+        )
+      ) {
+        return recordRemovalFailure(
+          `ignored files created after the final primary confirmation could not be fully preserved; stopping before removing the lock after checkout ${developmentBranch}`,
+        );
+      }
+      const finalPrimaryIgnoredCleanupError =
+        cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+          finalPrimaryIgnoredEntries,
+          targetPath,
+          deps,
+        );
+      if (finalPrimaryIgnoredCleanupError !== null) {
+        return recordRemovalFailure(
+          `before removing the primary lock after checkout ${developmentBranch}, ${finalPrimaryIgnoredCleanupError}; stopping`,
+        );
+      }
+      const finalPrimaryConfirmAfterIgnored = deps.confirmBlock(cwd);
+      const finalPrimaryRoutingAfterIgnored =
+        finalPrimaryConfirmAfterIgnored.routing;
+      const finalPrimaryRecoveredAfterIgnored = finalPrimaryRoutingAfterIgnored
+        ? extractRecoveredClaim(finalPrimaryRoutingAfterIgnored)
+        : null;
+      const finalPrimaryAbsentAfterIgnored =
+        finalPrimaryConfirmAfterIgnored.ok &&
+        finalPrimaryRoutingAfterIgnored !== null &&
+        isTakeoverEligibleAbsentRouting(finalPrimaryRoutingAfterIgnored) &&
+        finalPrimaryRecoveredAfterIgnored?.claimId === recoveredClaimId &&
+        finalPrimaryRecoveredAfterIgnored.branch === recoveredBranch &&
+        isReleasedClaimRouting(finalPrimaryRoutingAfterIgnored) ===
+          recoveredFromReleasedClaim;
+      if (!finalPrimaryAbsentAfterIgnored) {
+        return recordRemovalFailure(
+          `checked out ${developmentBranch}, but the final ignored-file scan changed the resume-claim-routing result; stopping before removing the lock file`,
+        );
+      }
+      const finalPrimaryLockAfterIgnored = deps.checkLock(targetPath);
+      if (
+        finalPrimaryLockAfterIgnored.malformed ||
+        !lockMatchesRecoveredClaim(
+          finalPrimaryLockAfterIgnored,
+          recoveredClaimId,
+          isReleasedClaimRouting(finalPrimaryRoutingAfterIgnored),
+        )
+      ) {
+        return recordRemovalFailure(
+          `the primary-worktree lock changed after the final ignored-file scan; stopping before removing the lock after checkout ${developmentBranch}`,
+        );
+      }
+      lockForDeletion = finalPrimaryLockAfterIgnored;
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+          scopesMissingFromCurrentTree,
+        )
+      ) {
+        return recordRemovalFailure(
+          `a preservation artifact disappeared after the final ignored-file scan; stopping before removing the lock after checkout ${developmentBranch}`,
+        );
+      }
       try {
-        if (
-          !deps.removeLockIfMatches(targetPath, immediatelyBeforeDeleteLock)
-        ) {
+        if (!deps.removeLockIfMatches(targetPath, lockForDeletion)) {
           verdict.plan.removal = {
             kind: 'primary',
             developmentBranch,
@@ -5094,6 +5231,131 @@ export function runLocalWorktreeRecovery(
       ) {
         return recordRemovalFailure(
           'the worktree-local claim lock changed immediately before removal; stopping before removal',
+        );
+      }
+    }
+
+    // The final identity checks above are network-backed and can leave a
+    // watcher window before `git worktree remove`. Scan ignored files after
+    // those checks and clean only the entries found by this final scan, so
+    // ordinary removal cannot silently delete a late ignored file (Codex
+    // review #4120561218).
+    if (!shortcut.eligible) {
+      const finalLateTargetGitDirResult = deps.runGit(
+        ['rev-parse', '--absolute-git-dir'],
+        targetPath,
+      );
+      const finalLateTargetGitDir =
+        finalLateTargetGitDirResult.ok &&
+        finalLateTargetGitDirResult.stdout.trim()
+          ? finalLateTargetGitDirResult.stdout.trim()
+          : null;
+      const finalLateIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        null,
+        [targetPath, ...(finalLateTargetGitDir ? [finalLateTargetGitDir] : [])],
+        deps,
+        'final-removal',
+      );
+      const finalIgnoredEntries: IgnoredFileEntry[] = [
+        ...finalLateIgnored.copied,
+      ];
+      verdict.plan.ignoredFilesCopied.push(...finalIgnoredEntries);
+      verdict.plan.ignoredFilesScanFailed ||= finalLateIgnored.scanFailed;
+      verdict.mutated ||= finalLateIgnored.copied.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      for (const stash of verdict.plan.stashes) {
+        if (stash.scope === '.') continue;
+        const finalSubmodulePath = join(targetPath, stash.scope);
+        const finalSubmoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          finalSubmodulePath,
+        );
+        const finalSubmoduleGitDir =
+          finalSubmoduleGitDirResult.ok &&
+          finalSubmoduleGitDirResult.stdout.trim()
+            ? finalSubmoduleGitDirResult.stdout.trim()
+            : null;
+        const finalSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          finalSubmodulePath,
+          stash.scope,
+          true,
+          targetPath,
+          null,
+          [
+            targetPath,
+            finalSubmodulePath,
+            ...(finalLateTargetGitDir ? [finalLateTargetGitDir] : []),
+            ...(finalSubmoduleGitDir ? [finalSubmoduleGitDir] : []),
+          ],
+          deps,
+          'final-removal',
+        );
+        finalIgnoredEntries.push(...finalSubmoduleIgnored.copied);
+        verdict.plan.ignoredFilesCopied.push(...finalSubmoduleIgnored.copied);
+        verdict.plan.ignoredFilesScanFailed ||=
+          finalSubmoduleIgnored.scanFailed;
+        verdict.mutated ||= finalSubmoduleIgnored.copied.some(
+          (ignored) => ignored.copiedTo !== null,
+        );
+        if (
+          finalSubmoduleIgnored.scanFailed ||
+          finalSubmoduleIgnored.copied.some(
+            (ignored) =>
+              ignored.copyFailed ||
+              ignored.copiedTo === null ||
+              !deps.pathExists(ignored.copiedTo),
+          )
+        ) {
+          return recordRemovalFailure(
+            `final preservation for initialized submodule ${stash.scope} could not be fully verified; stopping before removal`,
+          );
+        }
+      }
+      if (
+        finalLateIgnored.scanFailed ||
+        finalLateIgnored.copied.some(
+          (ignored) =>
+            ignored.copyFailed ||
+            ignored.copiedTo === null ||
+            !deps.pathExists(ignored.copiedTo),
+        )
+      ) {
+        return recordRemovalFailure(
+          'final ignored-file preservation before linked-worktree removal could not be fully verified; stopping before removal',
+        );
+      }
+      const finalIgnoredCleanupError =
+        cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+          finalIgnoredEntries,
+          targetPath,
+          deps,
+        );
+      if (finalIgnoredCleanupError !== null) {
+        return recordRemovalFailure(
+          `before final linked-worktree removal, ${finalIgnoredCleanupError}; stopping before removal`,
+        );
+      }
+      if (
+        !reverifyPreservationArtifactsFresh(
+          {
+            stashes: verdict.plan.stashes,
+            backupRefs: verdict.plan.backupRefs,
+            uninitializedSubmodules: verdict.plan.uninitializedSubmodules,
+            ignoredFilesCopied: verdict.plan.ignoredFilesCopied,
+            submoduleAdminCopies: verdict.plan.submoduleAdminCopies,
+            worktreeAdminCopy: verdict.plan.worktreeAdminCopy,
+          },
+          targetPath,
+          deps,
+        )
+      ) {
+        return recordRemovalFailure(
+          'a final ignored-file preservation artifact disappeared before linked-worktree removal; stopping before removal',
         );
       }
     }
